@@ -141,3 +141,14 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# TraceRoot CLI
+# Project-local credentials written by `traceroot login` (contains the API key).
+.traceroot/
+# Local reference checkouts used while developing (other CLIs/SDKs).
+reference/
+# Personal Claude Code settings (shared config, if any, is committed explicitly).
+.claude/settings.local.json
+# Local working notes / PR drafts (scratch; not part of the published package).
+pr-draft-*.md
+traceroot-cli-dx-v1-implementation.md

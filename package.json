@@ -1,8 +1,8 @@
 {
   "name": "traceroot-cli",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=20"
   },
