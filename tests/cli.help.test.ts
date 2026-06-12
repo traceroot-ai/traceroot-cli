@@ -12,3 +12,15 @@ describe("traceroot --help", () => {
     expect(stderr).toBe("");
   });
 });
+
+describe("traceroot (no command)", () => {
+  it("prints help to stderr and exits non-zero", () => {
+    const { stdout, stderr, status } = runCli();
+    expect(status).not.toBe(0);
+    // Help is human text, so it goes to stderr; stdout stays clean.
+    expect(stdout).toBe("");
+    expect(stderr).toContain("Usage: traceroot");
+    expect(stderr).toContain("login");
+    expect(stderr).toContain("traces");
+  });
+});
