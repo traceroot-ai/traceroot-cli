@@ -1,0 +1,46 @@
+ci:
+  autofix_prs: true
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit suggestions'
+  autoupdate_schedule: monthly
+
+# The vendored OpenAPI schema is kept byte-identical to the backend artifact
+# (see .gitattributes), so file-hygiene hooks must never rewrite it.
+exclude: '^(openapi\.json|src/api/generated/)'
+
+repos:
+  # General file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, main]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix, lf]
+      - id: trailing-whitespace
+      - id: check-json
+      - id: check-yaml
+
+  # JS/TS/JSON: Biome (lint + format)
+  - repo: local
+    hooks:
+      - id: biome-check
+        name: biome check (lint + format)
+        entry: npx --no-install biome check --write
+        language: system
+        files: '\.(js|jsx|ts|tsx|mjs|cjs|json|jsonc)$'
+        pass_filenames: true
+
+      - id: typecheck
+        name: tsc --noEmit
+        entry: npm run typecheck
+        language: system
+        files: '\.ts$'
+        pass_filenames: false
+
+      - id: codegen-check
+        name: openapi codegen drift check
+        entry: npm run codegen:check
+        language: system
+        files: '^(openapi\.json|src/api/generated/.*)$'
+        pass_filenames: false
