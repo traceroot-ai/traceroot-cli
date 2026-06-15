@@ -1,2 +1,2 @@
-// Default public API host. Update when the production host is confirmed (open question).
-export const DEFAULT_HOST = "https://api.traceroot.ai";
+// Default public API host (TraceRoot Cloud).
+export const DEFAULT_HOST = "https://app.traceroot.ai";
