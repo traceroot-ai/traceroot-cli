@@ -1,0 +1,4 @@
+# Vendored upstream snapshot: preserve exact bytes so its sha256 stays
+# identical to the backend artifact (see OPENAPI.md) on every checkout.
+openapi.json -text
+src/api/generated/schema.ts text eol=lf

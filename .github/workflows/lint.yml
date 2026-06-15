@@ -1,0 +1,36 @@
+name: Lint & Format
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: OpenAPI codegen drift check
+        # Skipped on early branches that don't vendor the schema yet; runs once
+        # the codegen:check script exists.
+        run: npm run codegen:check --if-present
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Biome lint
+        run: npm run lint
+
+      - name: Biome format check
+        run: npm run format:check
