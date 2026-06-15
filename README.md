@@ -84,7 +84,3 @@ npm ci
 npm run build
 npm test
 ```
-
-## License
-
-[Apache License 2.0](./LICENSE) © TraceRoot.AI
