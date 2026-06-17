@@ -2,7 +2,26 @@
   "name": "traceroot-cli",
   "version": "0.0.1",
   "type": "module",
+  "description": "Read your TraceRoot traces from the terminal — list, inspect, and export traces from the TraceRoot public API.",
   "license": "Apache-2.0",
+  "author": "TraceRoot (https://traceroot.ai)",
+  "homepage": "https://github.com/traceroot-ai/traceroot-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/traceroot-ai/traceroot-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/traceroot-ai/traceroot-cli/issues"
+  },
+  "keywords": [
+    "traceroot",
+    "cli",
+    "tracing",
+    "traces",
+    "observability",
+    "debugging",
+    "opentelemetry"
+  ],
   "engines": {
     "node": ">=20"
   },
