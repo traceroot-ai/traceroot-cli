@@ -5,8 +5,6 @@ inspect, and export traces from the TraceRoot public API.
 
 ## Install
 
-Requires **Node.js ≥ 20**.
-
 ```sh
 npx traceroot-cli --help        # run without installing
 npm install -g traceroot-cli    # or install the `traceroot` command
@@ -65,22 +63,3 @@ traceroot traces export <trace-id> --output ./out
 traceroot traces list --limit 5 --json | jq '.data[].trace_id'
 ```
 
-## JSON output
-
-The CLI follows a strict, pipe-friendly output contract:
-
-- `--json` prints **exactly one JSON document to stdout** — nothing else.
-- Human text, progress, and errors go to **stderr**.
-- Failures exit **non-zero** and write nothing to stdout.
-- Color is disabled when output isn't a TTY or `NO_COLOR` is set.
-
-## Development
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, the check suite, and
-conventions.
-
-```sh
-npm ci
-npm run build
-npm test
-```
