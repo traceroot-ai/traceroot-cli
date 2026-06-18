@@ -50,7 +50,10 @@ export interface paths {
         };
         /**
          * Get Trace
-         * @description Get a single trace (full payload, including spans) for the key's project.
+         * @description Get a single trace for the key's project.
+         *
+         *     Defaults to the lightweight `skeleton` projection (no per-span I/O); pass
+         *     `fields=full` (or `fields=io,metadata`) for per-span input/output/metadata.
          */
         get: operations["get_trace_api_v1_public_traces__trace_id__get"];
         put?: never;
@@ -72,7 +75,10 @@ export interface paths {
          * Export Trace
          * @description Export the V1 bundle (trace + spans + git_context + manifest) for the key's project.
          *
-         *     `bundle.trace` is identical to the `traces get` payload for the same trace.
+         *     Defaults to the `full` projection — an export is explicit intent to take the
+         *     complete trace, so per-span input/output/metadata are included unless the
+         *     caller narrows `fields`. `bundle.trace` equals the `traces get` payload at the
+         *     same projection.
          */
         get: operations["export_trace_api_v1_public_traces__trace_id__export_get"];
         put?: never;
@@ -279,11 +285,27 @@ export interface components {
         };
         /**
          * SpanResponse
-         * @description Single span in a trace.
+         * @description A span skeleton plus its per-span I/O blobs (``input``/``output``/``metadata``).
+         *
+         *     The projection-capable superset returned by the trace get/export endpoints.
+         *     The blobs default to ``None`` and are populated only when the caller requests
+         *     the matching field group (``io``/``metadata``; see
+         *     ``rest.projection``). The default ``skeleton`` projection leaves them ``None``
+         *     and never runs the bulk span-I/O query, so there is no payload or query-cost
+         *     regression for the dashboard. Keeping the fields present (as ``null``) rather
+         *     than omitting them is additive: a few bytes per span, and it matches the
+         *     fields the shipped CLI's generated types already declare.
          */
         SpanResponse: {
             /** Cost */
             cost: number | null;
+            /**
+             * Cost Details
+             * @default {}
+             */
+            cost_details: {
+                [key: string]: number;
+            };
             /** Git Source File */
             git_source_file?: string | null;
             /** Git Source Function */
@@ -291,17 +313,17 @@ export interface components {
             /** Git Source Line */
             git_source_line?: number | null;
             /** Input */
-            input: string | null;
+            input?: string | null;
             /** Input Tokens */
             input_tokens: number | null;
             /** Metadata */
-            metadata: string | null;
+            metadata?: string | null;
             /** Model Name */
             model_name: string | null;
             /** Name */
             name: string;
             /** Output */
-            output: string | null;
+            output?: string | null;
             /** Output Tokens */
             output_tokens: number | null;
             /** Parent Span Id */
@@ -325,9 +347,20 @@ export interface components {
             total_tokens: number | null;
             /** Trace Id */
             trace_id: string;
+            /**
+             * Usage Details
+             * @default {}
+             */
+            usage_details: {
+                [key: string]: number;
+            };
         };
         /** ValidationError */
         ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */
@@ -536,7 +569,10 @@ export interface operations {
     };
     get_trace_api_v1_public_traces__trace_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400. */
+                fields?: string | null;
+            };
             header?: never;
             path: {
                 trace_id: string;
@@ -552,6 +588,17 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicTraceDetailResponse"];
+                };
+            };
+            /** @description Invalid fields parameter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
                 };
             };
             /** @description Authentication failed */
@@ -611,7 +658,10 @@ export interface operations {
     };
     export_trace_api_v1_public_traces__trace_id__export_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400. */
+                fields?: string | null;
+            };
             header?: never;
             path: {
                 trace_id: string;
@@ -627,6 +677,17 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicTraceExportResponse"];
+                };
+            };
+            /** @description Invalid fields parameter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
                 };
             };
             /** @description Authentication failed */

@@ -499,7 +499,7 @@
         "type": "object"
       },
       "SpanResponse": {
-        "description": "Single span in a trace.",
+        "description": "A span skeleton plus its per-span I/O blobs (``input``/``output``/``metadata``).\n\nThe projection-capable superset returned by the trace get/export endpoints.\nThe blobs default to ``None`` and are populated only when the caller requests\nthe matching field group (``io``/``metadata``; see\n``rest.projection``). The default ``skeleton`` projection leaves them ``None``\nand never runs the bulk span-I/O query, so there is no payload or query-cost\nregression for the dashboard. Keeping the fields present (as ``null``) rather\nthan omitting them is additive: a few bytes per span, and it matches the\nfields the shipped CLI's generated types already declare.",
         "properties": {
           "cost": {
             "anyOf": [
@@ -511,6 +511,14 @@
               }
             ],
             "title": "Cost"
+          },
+          "cost_details": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "default": {},
+            "title": "Cost Details",
+            "type": "object"
           },
           "git_source_file": {
             "anyOf": [
@@ -680,6 +688,14 @@
           "trace_id": {
             "title": "Trace Id",
             "type": "string"
+          },
+          "usage_details": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Usage Details",
+            "type": "object"
           }
         },
         "required": [
@@ -696,16 +712,20 @@
           "cost",
           "input_tokens",
           "output_tokens",
-          "total_tokens",
-          "input",
-          "output",
-          "metadata"
+          "total_tokens"
         ],
         "title": "SpanResponse",
         "type": "object"
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
@@ -1064,7 +1084,7 @@
     },
     "/api/v1/public/traces/{trace_id}": {
       "get": {
-        "description": "Get a single trace (full payload, including spans) for the key's project.",
+        "description": "Get a single trace for the key's project.\n\nDefaults to the lightweight `skeleton` projection (no per-span I/O); pass\n`fields=full` (or `fields=io,metadata`) for per-span input/output/metadata.",
         "operationId": "get_trace_api_v1_public_traces__trace_id__get",
         "parameters": [
           {
@@ -1074,6 +1094,24 @@
             "schema": {
               "title": "Trace Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400.",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400.",
+              "title": "Fields"
             }
           }
         ],
@@ -1087,6 +1125,21 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid fields parameter"
           },
           "401": {
             "content": {
@@ -1172,7 +1225,7 @@
     },
     "/api/v1/public/traces/{trace_id}/export": {
       "get": {
-        "description": "Export the V1 bundle (trace + spans + git_context + manifest) for the key's project.\n\n`bundle.trace` is identical to the `traces get` payload for the same trace.",
+        "description": "Export the V1 bundle (trace + spans + git_context + manifest) for the key's project.\n\nDefaults to the `full` projection \u2014 an export is explicit intent to take the\ncomplete trace, so per-span input/output/metadata are included unless the\ncaller narrows `fields`. `bundle.trace` equals the `traces get` payload at the\nsame projection.",
         "operationId": "export_trace_api_v1_public_traces__trace_id__export_get",
         "parameters": [
           {
@@ -1182,6 +1235,24 @@
             "schema": {
               "title": "Trace Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400.",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400.",
+              "title": "Fields"
             }
           }
         ],
@@ -1195,6 +1266,21 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid fields parameter"
           },
           "401": {
             "content": {
