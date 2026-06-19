@@ -52,8 +52,20 @@ function fakeClient(res: TraceList, state: FakeState = {}): ApiClient {
 
 const META: TraceList["meta"] = { page: 1, limit: 50, total: 2 };
 
+/**
+ * Extracts one column's cell from a rendered data row. Columns are width-aligned,
+ * so a header's start offset on the header line marks that cell's start on every
+ * row; the next header's offset marks its end. This verifies a value lands in the
+ * intended column rather than merely appearing somewhere on the line.
+ */
+function cellAt(dataLine: string, headerLine: string, header: string, nextHeader?: string): string {
+  const start = headerLine.indexOf(header);
+  const end = nextHeader === undefined ? dataLine.length : headerLine.indexOf(nextHeader);
+  return dataLine.slice(start, end).trim();
+}
+
 describe("runList (human)", () => {
-  it("renders a table with SPANS/ERRORS counts and trace ids present", async () => {
+  it("renders ERRORS/SPANS columns in order with no STATUS column", async () => {
     const res: TraceList = {
       data: [
         listItem({ trace_id: "ok-1", span_count: 4, error_count: 0 }),
@@ -64,20 +76,21 @@ describe("runList (human)", () => {
     const { writers: w, out, err } = writers();
     await runList({ client: fakeClient(res), json: false, writers: w });
 
-    expect(out.data).toContain("TRACE ID");
-    expect(out.data).toContain("SPANS");
-    expect(out.data).toContain("ERRORS");
-    expect(out.data).toContain("ok-1");
-    expect(out.data).toContain("err-1");
-    // No STATUS column: errors surface via the ERRORS count and red row, not a
-    // status string. No lowercase "error"/"ok" status text is rendered.
-    expect(out.data).not.toContain("STATUS");
-    expect(out.data).not.toMatch(/\berror\b/);
-    // Error counts surface as their own column.
-    const errLine = out.data.split("\n").find((l) => l.includes("err-1")) as string;
-    expect(errLine).toContain("2");
-    const okLine = out.data.split("\n").find((l) => l.includes("ok-1")) as string;
-    expect(okLine).toContain("4");
+    const lines = out.data.split("\n");
+    const headerLine = lines.find((l) => l.includes("STARTED")) as string;
+    // Column order matches the cloud UI; the STATUS column is gone.
+    expect(headerLine).not.toContain("STATUS");
+    expect(headerLine).toMatch(/STARTED\s+DURATION\s+NAME\s+ERRORS\s+SPANS\s+TRACE ID/);
+
+    // Counts land in their own columns (checked by column offset, not by the
+    // digit merely appearing somewhere on the line).
+    const okLine = lines.find((l) => l.includes("ok-1")) as string;
+    const errLine = lines.find((l) => l.includes("err-1")) as string;
+    expect(cellAt(okLine, headerLine, "ERRORS", "SPANS")).toBe("0");
+    expect(cellAt(okLine, headerLine, "SPANS", "TRACE ID")).toBe("4");
+    expect(cellAt(errLine, headerLine, "ERRORS", "SPANS")).toBe("2");
+    expect(cellAt(errLine, headerLine, "SPANS", "TRACE ID")).toBe("7");
+
     // No JSON written to stdout in human mode.
     expect(out.data.trimStart().startsWith("{")).toBe(false);
     expect(err.data).not.toContain("{");
@@ -90,17 +103,17 @@ describe("runList (human)", () => {
     expect(out.data).not.toContain("\x1b[");
   });
 
-  it("renders an unfinished trace (duration_ms null) with no status label", async () => {
+  it("renders an unfinished trace (duration_ms null) with no STATUS column", async () => {
     const res: TraceList = {
       data: [listItem({ trace_id: "unfin-1", duration_ms: null, error_count: 0 })],
       meta: META,
     };
     const { writers: w, out } = writers();
     await runList({ client: fakeClient(res), json: false, writers: w });
+    const headerLine = out.data.split("\n").find((l) => l.includes("STARTED")) as string;
+    // The row renders; liveness is no longer expressed as a STATUS label.
     expect(out.data).toContain("unfin-1");
-    // STATUS column removed: no "live"/"ok" status text is rendered.
-    expect(out.data).not.toContain("live");
-    expect(out.data).not.toMatch(/\bok\b/);
+    expect(headerLine).not.toContain("STATUS");
   });
 
   it("bolds the header row on a TTY", async () => {
@@ -128,6 +141,19 @@ describe("runList (human)", () => {
     const okLine = out.data.split("\n").find((l) => l.includes("ok-1")) as string;
     expect(errLine).toContain("\x1b[91m"); // bright red
     expect(okLine).not.toContain("\x1b[91m");
+  });
+
+  it("does not red an unfinished trace row (error_count 0) on a TTY", async () => {
+    const res: TraceList = {
+      data: [listItem({ trace_id: "unfin-1", duration_ms: null, error_count: 0 })],
+      meta: META,
+    };
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    await runList({ client: fakeClient(res), json: false, writers: { out, err } });
+    const row = out.data.split("\n").find((l) => l.includes("unfin-1")) as string;
+    // Red is keyed on error_count, not liveness, so a live row stays uncolored.
+    expect(row).not.toContain("\x1b[91m");
   });
 });
 
