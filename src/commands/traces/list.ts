@@ -48,18 +48,11 @@ type ListItem = Awaited<ReturnType<ApiClient["listTraces"]>>["data"][number];
 
 /**
  * A trace whose duration the backend hasn't finalized (`duration_ms` is null) is
- * treated as still running ("live"): its status shows `live` and its duration is
- * the elapsed time so far rather than a final value.
+ * treated as still running: its `DURATION` shows the elapsed time so far rather
+ * than a final value.
  */
 function isLiveItem(item: ListItem): boolean {
   return item.duration_ms === null;
-}
-
-function statusOf(item: ListItem): string {
-  if (isLiveItem(item)) {
-    return "live";
-  }
-  return item.error_count > 0 ? "error" : "ok";
 }
 
 function durationOf(item: ListItem): string {
@@ -80,12 +73,13 @@ export async function runList(deps: RunListDeps): Promise<void> {
     return;
   }
 
-  const headers = ["STARTED", "STATUS", "DURATION", "NAME", "TRACE ID"];
+  const headers = ["STARTED", "DURATION", "NAME", "ERRORS", "SPANS", "TRACE ID"];
   const rows = res.data.map((item) => [
     formatTimestamp(item.trace_start_time),
-    statusOf(item),
     durationOf(item),
     item.name ?? "",
+    String(item.error_count),
+    String(item.span_count),
     item.trace_id,
   ]);
 
@@ -95,7 +89,7 @@ export async function runList(deps: RunListDeps): Promise<void> {
   const rendered = renderTable(headers, rows, {
     headerStyle: styler.bold,
     rowStyle: (line, i) =>
-      color && rows[i]?.[1] === "error" ? `${ANSI_RED}${line}${ANSI_RESET}` : line,
+      color && (res.data[i]?.error_count ?? 0) > 0 ? `${ANSI_RED}${line}${ANSI_RESET}` : line,
   });
   writers.out.write(`${rendered}\n`);
   logProgress(`${res.data.length} trace(s)`, writers);

@@ -53,11 +53,11 @@ function fakeClient(res: TraceList, state: FakeState = {}): ApiClient {
 const META: TraceList["meta"] = { page: 1, limit: 50, total: 2 };
 
 describe("runList (human)", () => {
-  it("renders a table with STATUS derived per item and trace ids present", async () => {
+  it("renders a table with SPANS/ERRORS counts and trace ids present", async () => {
     const res: TraceList = {
       data: [
-        listItem({ trace_id: "ok-1", error_count: 0 }),
-        listItem({ trace_id: "err-1", error_count: 2 }),
+        listItem({ trace_id: "ok-1", span_count: 4, error_count: 0 }),
+        listItem({ trace_id: "err-1", span_count: 7, error_count: 2 }),
       ],
       meta: META,
     };
@@ -65,11 +65,19 @@ describe("runList (human)", () => {
     await runList({ client: fakeClient(res), json: false, writers: w });
 
     expect(out.data).toContain("TRACE ID");
-    expect(out.data).toContain("STATUS");
+    expect(out.data).toContain("SPANS");
+    expect(out.data).toContain("ERRORS");
     expect(out.data).toContain("ok-1");
     expect(out.data).toContain("err-1");
-    expect(out.data).toContain("error");
-    expect(out.data).toContain("ok");
+    // No STATUS column: errors surface via the ERRORS count and red row, not a
+    // status string. No lowercase "error"/"ok" status text is rendered.
+    expect(out.data).not.toContain("STATUS");
+    expect(out.data).not.toMatch(/\berror\b/);
+    // Error counts surface as their own column.
+    const errLine = out.data.split("\n").find((l) => l.includes("err-1")) as string;
+    expect(errLine).toContain("2");
+    const okLine = out.data.split("\n").find((l) => l.includes("ok-1")) as string;
+    expect(okLine).toContain("4");
     // No JSON written to stdout in human mode.
     expect(out.data.trimStart().startsWith("{")).toBe(false);
     expect(err.data).not.toContain("{");
@@ -82,15 +90,17 @@ describe("runList (human)", () => {
     expect(out.data).not.toContain("\x1b[");
   });
 
-  it("shows 'live' status for an unfinished trace (duration_ms null)", async () => {
+  it("renders an unfinished trace (duration_ms null) with no status label", async () => {
     const res: TraceList = {
-      data: [listItem({ trace_id: "live-1", duration_ms: null, error_count: 0 })],
+      data: [listItem({ trace_id: "unfin-1", duration_ms: null, error_count: 0 })],
       meta: META,
     };
     const { writers: w, out } = writers();
     await runList({ client: fakeClient(res), json: false, writers: w });
-    expect(out.data).toContain("live");
-    expect(out.data).toContain("live-1");
+    expect(out.data).toContain("unfin-1");
+    // STATUS column removed: no "live"/"ok" status text is rendered.
+    expect(out.data).not.toContain("live");
+    expect(out.data).not.toMatch(/\bok\b/);
   });
 
   it("bolds the header row on a TTY", async () => {
