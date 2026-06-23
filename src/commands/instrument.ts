@@ -13,7 +13,7 @@ import {
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
-import { withGlobalJsonHelp } from "./shared.js";
+import { JSON_OPTION_DESC } from "./shared.js";
 
 /** Default location for the generated prompt when neither --print nor --output is given. */
 const DEFAULT_PROMPT_PATH = join(".traceroot", "prompts", "instrument-repo.md");
@@ -108,13 +108,14 @@ export function runInstrument(deps: RunInstrumentDeps): void {
 }
 
 export function registerInstrument(program: Command): void {
-  const instrument = program
+  program
     .command("instrument")
     .description("Generate an agent prompt to instrument this repo with TraceRoot")
     .option("--agent <id>", "target agent: claude, codex, or generic", "claude")
     .option("--print", "print the prompt to stdout instead of writing a file")
     .option("--output <path>", "write the prompt to this path")
     .option("--force", "overwrite an existing prompt file")
+    .option("--json", JSON_OPTION_DESC)
     .action((_opts, command: Command) => {
       const opts = command.optsWithGlobals();
       runInstrument({
@@ -127,5 +128,4 @@ export function registerInstrument(program: Command): void {
         writers: defaultWriters,
       });
     });
-  withGlobalJsonHelp(instrument);
 }

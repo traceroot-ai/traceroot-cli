@@ -3,7 +3,6 @@ import { basename, dirname, join } from "node:path";
 import { claudeAdapter } from "../agents/claude.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
-import { BUILTIN_SKILLS } from "../skills/registry.js";
 import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
 
 /** Inputs for {@link buildDoctorReport}. All IO results are passed in pre-resolved. */
@@ -126,25 +125,34 @@ function localFileChecks(input: DoctorInput): DoctorCheck[] {
 }
 
 /**
- * Concise skill-readiness signal. Detailed per-skill status (which skills, where)
- * is owned by `traceroot skills list --agent <agent>`; doctor only answers
- * "are TraceRoot skills installed for the recommended agent yet?".
+ * Readiness-oriented skill checks (not a full inventory — that's
+ * `traceroot skills list --agent <agent>`). The instrumentation skill is the one
+ * that matters for getting started, so its absence is an actionable warning; the
+ * quickstart skill is explicitly optional.
  */
 function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
-  const { cwd } = input;
-  const skillsDir = claudeAdapter.detect(cwd).skillsDir;
-  const anyInstalled = BUILTIN_SKILLS.some((skill) =>
-    existsSync(join(skillsDir, skill.name, "SKILL.md")),
-  );
+  const skillsDir = claudeAdapter.detect(input.cwd).skillsDir;
+  const installed = (name: string): boolean => existsSync(join(skillsDir, name, "SKILL.md"));
+
+  const hasInstrument = installed("traceroot-instrument-repo");
+  const hasQuickstart = installed("traceroot-quickstart");
 
   return [
     {
-      name: "skills_installed",
+      name: "skill_instrument",
       category: "agent_skills",
-      status: anyInstalled ? "pass" : "warn",
-      message: anyInstalled
-        ? "TraceRoot skills installed for Claude Code (run `traceroot skills list` for details)"
-        : "No TraceRoot skills installed for Claude Code. Run `traceroot skills install traceroot-instrument-repo --agent claude`.",
+      status: hasInstrument ? "pass" : "warn",
+      message: hasInstrument
+        ? "Instrumentation skill installed for Claude Code"
+        : "Instrumentation skill not installed; run `traceroot skills install traceroot-instrument-repo --agent claude`",
+    },
+    {
+      name: "skill_quickstart",
+      category: "agent_skills",
+      status: hasQuickstart ? "pass" : "warn",
+      message: hasQuickstart
+        ? "Quickstart skill installed for Claude Code"
+        : "Quickstart skill not installed; optional",
     },
   ];
 }
@@ -206,38 +214,41 @@ function repoChecks(input: DoctorInput): DoctorCheck[] {
   return checks;
 }
 
+/**
+ * Reports whether the runtime env vars an instrumented app reads are exported in
+ * THIS shell. This is distinct from CLI auth/config readiness (covered under
+ * Credentials): a var absent from the shell is a neutral warning, never a green
+ * pass — even when the CLI itself resolves the value from config. That avoids the
+ * confusing "✓ … is not set" rows.
+ */
 function runtimeEnvChecks(input: DoctorInput): DoctorCheck[] {
   const { env, auth } = input;
   const hasKeyEnv =
     typeof env.TRACEROOT_API_KEY === "string" && env.TRACEROOT_API_KEY.trim() !== "";
   const hasHostEnv =
     typeof env.TRACEROOT_HOST_URL === "string" && env.TRACEROOT_HOST_URL.trim() !== "";
-  const cliAuthAvailable = auth.apiKey.value !== undefined;
-
-  // Distinguish "the CLI can authenticate" (config/flags) from "the env var is
-  // exported in this shell" — the instrumented app reads the latter at runtime,
-  // so an absent env var is not contradictory with resolved CLI credentials.
-  const keyMessage = hasKeyEnv
-    ? "TRACEROOT_API_KEY is set in this shell"
-    : cliAuthAvailable
-      ? "TRACEROOT_API_KEY is not set in this shell. CLI auth is available from config, but instrumented apps may need this env var at runtime."
-      : "TRACEROOT_API_KEY is not set in this shell; instrumented apps need it at runtime.";
+  const cliKeyResolved = auth.apiKey.value !== undefined;
+  const cliHostResolved = auth.hostUrl.value !== undefined;
 
   return [
     {
       name: "env_api_key",
       category: "runtime_env",
       status: hasKeyEnv ? "pass" : "warn",
-      message: keyMessage,
+      message: hasKeyEnv
+        ? "TRACEROOT_API_KEY is set in this shell"
+        : cliKeyResolved
+          ? "TRACEROOT_API_KEY is not set in this shell; instrumented apps may need it at runtime (CLI auth is resolved from config)."
+          : "TRACEROOT_API_KEY is not set in this shell; instrumented apps may need it at runtime.",
     },
     {
       name: "env_host",
       category: "runtime_env",
-      status: hasHostEnv || auth.hostUrl.value !== undefined ? "pass" : "warn",
+      status: hasHostEnv ? "pass" : "warn",
       message: hasHostEnv
         ? "TRACEROOT_HOST_URL is set in this shell"
-        : auth.hostUrl.value !== undefined
-          ? "TRACEROOT_HOST_URL is not set in this shell (host resolved from config for CLI use)."
+        : cliHostResolved
+          ? "TRACEROOT_HOST_URL is not set in this shell; CLI host is resolved from config."
           : "TRACEROOT_HOST_URL is not set in this shell.",
     },
   ];

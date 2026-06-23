@@ -33,7 +33,6 @@ describe("runSkillsList (human)", () => {
   it("lists both skills with an Install hint when none are installed", () => {
     const { writers, out } = makeWriters();
     runSkillsList({ agentId: "claude", cwd, json: false, writers });
-    expect(out.data).toContain("TraceRoot skills");
     expect(out.data).toContain("traceroot-instrument-repo");
     expect(out.data).toContain("traceroot-quickstart");
     expect(out.data).toContain("Best for:");

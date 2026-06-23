@@ -11,6 +11,36 @@ describe("traceroot --help", () => {
     expect(stdout).toContain("traces");
     expect(stderr).toBe("");
   });
+
+  it("describes --json as applying to supported commands (not root/help itself)", () => {
+    const { stdout } = runCli("--help");
+    // commander wraps the long description across lines; collapse whitespace first.
+    expect(stdout.replace(/\s+/g, " ")).toContain(
+      "emit machine-readable JSON output for supported commands",
+    );
+  });
+});
+
+describe("--json help on new commands", () => {
+  for (const cmd of [["skills", "list"], ["skills", "install"], ["instrument"], ["doctor"]]) {
+    it(`shows --json in the Options section of \`${cmd.join(" ")}\` (no separate Global block)`, () => {
+      const { stdout } = runCli(...cmd, "--help");
+      expect(stdout).toContain("--json");
+      expect(stdout.replace(/\s+/g, " ")).toContain(
+        "emit machine-readable JSON output for supported commands",
+      );
+      expect(stdout).not.toContain("Global option");
+    });
+  }
+});
+
+describe("traceroot --json (root)", () => {
+  it("prints normal help rather than JSON, since root has no JSON data operation", () => {
+    const { stdout, stderr } = runCli("--json");
+    // Acceptable: root --json yields help (on stderr per the output contract).
+    expect(stdout).toBe("");
+    expect(stderr).toContain("Usage: traceroot");
+  });
 });
 
 describe("traceroot (no command)", () => {

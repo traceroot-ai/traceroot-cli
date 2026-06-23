@@ -3,9 +3,10 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import { displaySkillPath, requireAgent } from "../../agents/index.js";
 import { type Writers, defaultWriters, writeJson } from "../../output.js";
+import { statusSymbol } from "../../render/status.js";
 import { createStyler } from "../../render/style.js";
 import { BUILTIN_SKILLS } from "../../skills/registry.js";
-import { withGlobalJsonHelp } from "../shared.js";
+import { JSON_OPTION_DESC } from "../shared.js";
 
 /** Dependencies for the testable core of `skills list`. */
 export interface RunSkillsListDeps {
@@ -54,7 +55,7 @@ export function runSkillsList(deps: RunSkillsListDeps): void {
 
   const blocks = rows.map(({ skill, installed, path }) => {
     const lines = [
-      `${installed ? "✓" : "-"} ${label(skill.name)}`,
+      `${statusSymbol(installed ? "pass" : "warn", writers.out)} ${label(skill.name)}`,
       `  ${skill.description}`,
       `  ${label("Best for:")} ${skill.bestFor.join(", ")}`,
       installed
@@ -64,27 +65,27 @@ export function runSkillsList(deps: RunSkillsListDeps): void {
     return lines.join("\n");
   });
 
-  writers.out.write(`TraceRoot skills\n\n${blocks.join("\n\n")}\n`);
+  // No standalone title — like `status`/`traces get`, output starts with content.
+  writers.out.write(`${blocks.join("\n\n")}\n`);
 }
 
 export function registerSkillsList(skills: Command): void {
-  withGlobalJsonHelp(
-    skills
-      .command("list")
-      .description("List available TraceRoot skills and their install status")
-      .option(
-        "--agent <id>",
-        "agent to check install status for: claude, codex, or generic",
-        "claude",
-      )
-      .action((_opts, command: Command) => {
-        const opts = command.optsWithGlobals();
-        runSkillsList({
-          agentId: opts.agent as string,
-          cwd: process.cwd(),
-          json: opts.json === true,
-          writers: defaultWriters,
-        });
-      }),
-  );
+  skills
+    .command("list")
+    .description("List available TraceRoot skills and their install status")
+    .option(
+      "--agent <id>",
+      "agent to check install status for: claude, codex, or generic",
+      "claude",
+    )
+    .option("--json", JSON_OPTION_DESC)
+    .action((_opts, command: Command) => {
+      const opts = command.optsWithGlobals();
+      runSkillsList({
+        agentId: opts.agent as string,
+        cwd: process.cwd(),
+        json: opts.json === true,
+        writers: defaultWriters,
+      });
+    });
 }

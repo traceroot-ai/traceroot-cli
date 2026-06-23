@@ -4,10 +4,11 @@ import { configPath } from "../config/manager.js";
 import type { Context } from "../context.js";
 import { buildDoctorReport } from "../doctor/checks.js";
 import type { DoctorCheck, DoctorReport } from "../doctor/types.js";
-import { type Writers, colorizeError, defaultWriters, writeJson } from "../output.js";
+import { type Writers, defaultWriters, writeJson } from "../output.js";
 import { createStyler } from "../render/style.js";
+import { statusSymbol } from "../render/status.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
-import { contextFromCommand, withGlobalJsonHelp } from "./shared.js";
+import { JSON_OPTION_DESC, contextFromCommand } from "./shared.js";
 
 /** Ordered category → human heading. */
 const CATEGORY_HEADINGS: ReadonlyArray<[DoctorCheck["category"], string]> = [
@@ -38,7 +39,7 @@ function recommendedNextStep(report: DoctorReport): string {
   if (find("api_key_resolved")?.status !== "pass") {
     return "traceroot login";
   }
-  if (find("skills_installed")?.status !== "pass") {
+  if (find("skill_instrument")?.status !== "pass") {
     return "traceroot skills install traceroot-instrument-repo --agent claude";
   }
   return "traceroot instrument --agent claude --print";
@@ -76,23 +77,19 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
   }
 
   const styler = createStyler(writers.out);
-  // Markers stay in the CLI's existing grammar: plain glyphs, with error-red the
-  // only color (no new green). `-` is a neutral "not yet" marker, kept full
-  // contrast (not dimmed) since the status is meaningful.
-  const symbol = (check: DoctorCheck): string => {
-    if (check.status === "fail") {
-      return colorizeError("✗", writers.out);
-    }
-    return check.status === "warn" ? "-" : "✓";
-  };
-
-  const sections: string[] = ["TraceRoot doctor"];
+  // Status grammar shared with `skills list`: green ✓ (pass), gray - (neutral/
+  // optional), red ✗ (fail); color only when the sink allows it. No standalone
+  // command title — like `status`/`traces get`, sections start directly.
+  const sections: string[] = [];
   for (const [category, heading] of CATEGORY_HEADINGS) {
     const checks = report.checks.filter((c) => c.category === category);
     if (checks.length === 0) {
       continue;
     }
-    const lines = [styler.bold(heading), ...checks.map((c) => `  ${symbol(c)} ${c.message}`)];
+    const lines = [
+      styler.bold(heading),
+      ...checks.map((c) => `  ${statusSymbol(c.status, writers.out)} ${c.message}`),
+    ];
     sections.push(lines.join("\n"));
   }
   sections.push(
@@ -104,9 +101,10 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
 }
 
 export function registerDoctor(program: Command): void {
-  const doctor = program
+  program
     .command("doctor")
     .description("Diagnose credentials, repo shape, and installed skills")
+    .option("--json", JSON_OPTION_DESC)
     .action(async (_opts, command: Command) => {
       const ctx = contextFromCommand(command);
       const report = await runDoctor({
@@ -129,5 +127,4 @@ export function registerDoctor(program: Command): void {
         process.exitCode = 1;
       }
     });
-  withGlobalJsonHelp(doctor);
 }

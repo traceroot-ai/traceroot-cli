@@ -73,13 +73,25 @@ describe("runDoctor", () => {
       ctx: makeCtx({}),
     });
     const key = report.checks.find((c) => c.name === "api_key_resolved");
-    const skill = report.checks.find((c) => c.name === "skills_installed");
+    const skill = report.checks.find((c) => c.name === "skill_instrument");
     expect(key?.status).toBe("warn");
     expect(skill?.status).toBe("warn");
     expect(report.summary.fail).toBe(0);
   });
 
-  it("clarifies the runtime-env message when CLI auth is from config but the env var is unset", async () => {
+  it("treats the quickstart skill as optional and the instrumentation skill as the readiness signal", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+    const instrument = report.checks.find((c) => c.name === "skill_instrument");
+    const quickstart = report.checks.find((c) => c.name === "skill_quickstart");
+    expect(instrument?.message).toContain("Instrumentation skill");
+    expect(quickstart?.message).toContain("optional");
+    // Both warn when absent; neither implies the other is installed.
+    expect(instrument?.status).toBe("warn");
+    expect(quickstart?.status).toBe("warn");
+  });
+
+  it("reports runtime env as a neutral warning (not pass) when the var is unset but CLI auth is from config", async () => {
     const { writers } = makeWriters();
     const report = await runDoctor({
       ...baseDeps(cwd, writers),
@@ -87,9 +99,13 @@ describe("runDoctor", () => {
       verifyCredentials: async () => true,
     });
     const envKey = report.checks.find((c) => c.name === "env_api_key");
+    const envHost = report.checks.find((c) => c.name === "env_host");
+    // No green "✓ ... is not set": shell-env checks warn, even though CLI auth resolved.
     expect(envKey?.status).toBe("warn");
-    expect(envKey?.message).toContain("CLI auth is available from config");
+    expect(envHost?.status).toBe("warn");
+    expect(envKey?.message).toContain("CLI auth is resolved from config");
     expect(envKey?.message).toContain("runtime");
+    expect(envHost?.message).toContain("CLI host is resolved from config");
   });
 
   it("does not warn about absent Python files in a Node/TypeScript repo", async () => {

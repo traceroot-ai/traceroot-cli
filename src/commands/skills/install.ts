@@ -6,7 +6,7 @@ import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
 import { type BuiltinSkill, requireBuiltinSkill } from "../../skills/registry.js";
-import { withGlobalJsonHelp } from "../shared.js";
+import { JSON_OPTION_DESC } from "../shared.js";
 
 /** Dependencies for the testable core of `skills install`. */
 export interface RunSkillsInstallDeps {
@@ -112,25 +112,24 @@ export function runSkillsInstall(deps: RunSkillsInstallDeps): void {
 }
 
 export function registerSkillsInstall(skills: Command): void {
-  withGlobalJsonHelp(
-    skills
-      .command("install")
-      .argument("<skill>", "skill name (see `traceroot skills list`)")
-      .requiredOption("--agent <id>", "target agent: claude, codex, or generic")
-      .option("--force", "overwrite an existing skill directory")
-      .option("--dry-run", "show what would happen without writing files")
-      .description("Install a TraceRoot skill into an agent's skill directory")
-      .action((skillName: string, _opts, command: Command) => {
-        const opts = command.optsWithGlobals();
-        runSkillsInstall({
-          skillName,
-          agentId: opts.agent as string,
-          cwd: process.cwd(),
-          force: opts.force === true,
-          dryRun: opts.dryRun === true,
-          json: opts.json === true,
-          writers: defaultWriters,
-        });
-      }),
-  );
+  skills
+    .command("install")
+    .argument("<skill>", "skill name (see `traceroot skills list`)")
+    .requiredOption("--agent <id>", "target agent: claude, codex, or generic")
+    .option("--force", "overwrite an existing skill directory")
+    .option("--dry-run", "show what would happen without writing files")
+    .option("--json", JSON_OPTION_DESC)
+    .description("Install a TraceRoot skill into an agent's skill directory")
+    .action((skillName: string, _opts, command: Command) => {
+      const opts = command.optsWithGlobals();
+      runSkillsInstall({
+        skillName,
+        agentId: opts.agent as string,
+        cwd: process.cwd(),
+        force: opts.force === true,
+        dryRun: opts.dryRun === true,
+        json: opts.json === true,
+        writers: defaultWriters,
+      });
+    });
 }
