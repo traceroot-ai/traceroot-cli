@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import type { Command } from "commander";
-import { requireAgent } from "../agents/index.js";
+import { displaySkillPath, requireAgent } from "../agents/index.js";
 import { CliError, type Writers, defaultWriters, logProgress, writeJson } from "../output.js";
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
@@ -55,7 +55,11 @@ export function runInstrument(deps: RunInstrumentDeps): void {
 
   const agent = requireAgent(agentId);
   const detection = deps.detection ?? detectRepo(cwd);
-  const prompt = buildInstrumentPrompt(detection);
+  const skillPath = displaySkillPath(
+    cwd,
+    agent.getSkillInstallPath(cwd, "traceroot-instrument-repo"),
+  );
+  const prompt = buildInstrumentPrompt(detection, { agentId: agent.id, skillPath });
   const bytes = Buffer.byteLength(prompt, "utf8");
 
   if (print) {
@@ -100,7 +104,7 @@ export function registerInstrument(program: Command): void {
   program
     .command("instrument")
     .description("Generate an agent prompt to instrument this repo with TraceRoot")
-    .option("--agent <id>", "target agent: claude or generic", "claude")
+    .option("--agent <id>", "target agent: claude, codex, or generic", "claude")
     .option("--print", "print the prompt to stdout instead of writing a file")
     .option("--output <path>", "write the prompt to this path")
     .option("--force", "overwrite an existing prompt file")

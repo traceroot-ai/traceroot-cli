@@ -19,13 +19,26 @@ function languageSummary(detection: RepoDetection): string {
   return "unknown";
 }
 
+/** Optional agent context so the prompt references the right skill location. */
+export interface InstrumentPromptOptions {
+  /** Agent id used in the example install command (defaults to `claude`). */
+  agentId?: string;
+  /** Display path of the installed skill directory (defaults to the Claude path). */
+  skillPath?: string;
+}
+
 /**
- * Builds the Claude Code-ready instrumentation prompt for the current repo. The
- * prompt instructs the agent to drive the change (the CLI never edits app code
- * itself) and embeds the detected repo facts. It contains no credentials — only
+ * Builds the agent-ready instrumentation prompt for the current repo. The prompt
+ * instructs the agent to drive the change (the CLI never edits app code itself)
+ * and embeds the detected repo facts. It contains no credentials — only
  * instructions to read them from the environment.
  */
-export function buildInstrumentPrompt(detection: RepoDetection): string {
+export function buildInstrumentPrompt(
+  detection: RepoDetection,
+  options: InstrumentPromptOptions = {},
+): string {
+  const agentId = options.agentId ?? "claude";
+  const skillPath = options.skillPath ?? ".claude/skills/traceroot-instrument-repo";
   const facts = [
     "Detected repository facts:",
     `- package.json: ${presence(detection.hasPackageJson)}`,
@@ -45,7 +58,7 @@ ${facts}
 
 ## Instructions
 
-1. **Use the installed TraceRoot skill if available.** If \`.claude/skills/traceroot-instrument-repo/SKILL.md\` exists, follow it — it is the source of truth for SDK details. (Install it with \`traceroot skills install traceroot-instrument-repo --agent claude\`.)
+1. **Use the installed TraceRoot skill if available.** If \`${skillPath}/SKILL.md\` exists, follow it — it is the source of truth for SDK details. (Install it with \`traceroot skills install traceroot-instrument-repo --agent ${agentId}\`.)
 2. **Detect the stack.** Confirm the language, framework, and package manager from the manifests above and the actual imports in use.
 3. **Add the TraceRoot SDK.** Python → the \`traceroot\` package; TypeScript/Node.js → \`@traceroot-ai/traceroot\` (Mastra apps → \`@traceroot-ai/mastra\`). Use the detected package manager.
 4. **Initialize auto-instrumentation as early as possible** in app startup — before the LLM/agent libraries are imported.

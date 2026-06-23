@@ -149,3 +149,33 @@ describe("runSkillsInstall (--json)", () => {
     expect(existsSync(join(cwd, ".claude", "skills", "traceroot-quickstart"))).toBe(false);
   });
 });
+
+describe("runSkillsInstall (codex)", () => {
+  it("installs into $CODEX_HOME/skills/<name> (not a project dir)", () => {
+    const prev = process.env.CODEX_HOME;
+    const codexHome = join(cwd, "codex-home");
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const { writers } = makeWriters();
+      runSkillsInstall({
+        ...base,
+        agentId: "codex",
+        skillName: "traceroot-quickstart",
+        cwd,
+        json: false,
+        writers,
+      });
+      expect(existsSync(join(codexHome, "skills", "traceroot-quickstart", "SKILL.md"))).toBe(true);
+      // Nothing is written under the project's .claude / .agents directories.
+      expect(existsSync(join(cwd, ".claude"))).toBe(false);
+      expect(existsSync(join(cwd, ".agents"))).toBe(false);
+    } finally {
+      if (prev === undefined) {
+        // biome-ignore lint/performance/noDelete: restoring an env var; assigning undefined would stringify it
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = prev;
+      }
+    }
+  });
+});

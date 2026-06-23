@@ -1,6 +1,5 @@
-import { relative } from "node:path";
 import type { Command } from "commander";
-import { requireAgent } from "../../agents/index.js";
+import { displaySkillPath, requireAgent } from "../../agents/index.js";
 import type { AgentAdapter } from "../../agents/types.js";
 import { type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
@@ -42,7 +41,7 @@ export function runSkillsInstall(deps: RunSkillsInstallDeps): void {
   const targetDir = agent.getSkillInstallPath(cwd, skill.name);
 
   const result = installBundledSkill({ sourceDir, targetDir, force, dryRun });
-  const displayPath = relative(cwd, targetDir) || targetDir;
+  const displayPath = displaySkillPath(cwd, targetDir);
 
   if (json) {
     if (dryRun) {
@@ -119,7 +118,7 @@ export function registerSkillsInstall(skills: Command): void {
   skills
     .command("install")
     .argument("<skill>", "skill name (see `traceroot skills list`)")
-    .requiredOption("--agent <id>", "target agent: claude or generic")
+    .requiredOption("--agent <id>", "target agent: claude, codex, or generic")
     .option("--force", "overwrite an existing skill directory")
     .option("--dry-run", "show what would happen without writing files")
     .description("Install a TraceRoot skill into an agent's skill directory")
