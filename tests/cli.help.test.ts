@@ -13,6 +13,26 @@ describe("traceroot --help", () => {
   });
 });
 
+describe("global --json discoverability in help", () => {
+  it("traces list --help shows the global --json flag", () => {
+    const { stdout, status } = runCli("traces", "list", "--help");
+    expect(status).toBe(0);
+    expect(stdout).toContain("--json");
+    expect(stdout).toContain("Global Options");
+  });
+
+  it("traces --help shows the global --json flag", () => {
+    const { stdout, status } = runCli("traces", "--help");
+    expect(status).toBe(0);
+    expect(stdout).toContain("--json");
+  });
+
+  it("top-level --help shows --json", () => {
+    const { stdout } = runCli("--help");
+    expect(stdout).toContain("--json");
+  });
+});
+
 describe("traceroot (no command)", () => {
   it("prints help to stderr and exits non-zero", () => {
     const { stdout, stderr, status } = runCli();

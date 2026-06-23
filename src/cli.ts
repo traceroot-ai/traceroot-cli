@@ -13,6 +13,10 @@ export function buildProgram(): Command {
   program.configureOutput({
     outputError: (str, write) => write(colorizeError(str)),
   });
+  // Surface program-wide global options (e.g. `--json`) in every subcommand's
+  // `--help` under a "Global Options" section, so they're discoverable where
+  // users look for them (e.g. `traceroot traces list --help`).
+  program.configureHelp({ showGlobalOptions: true });
   // Global options (long-flag only to avoid clashing with -V/-h). Registered
   // before subcommands so they apply program-wide.
   program

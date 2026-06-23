@@ -399,17 +399,11 @@ export async function runList(deps: RunListDeps): Promise<void> {
   });
   writers.out.write(`${rendered}\n`);
 
-  // Compact one-line footer: "<n> trace(s) | <range>"
+  // Compact one-line footer: "<n> trace(s) | <range>". Copy/paste guidance lives
+  // in `--help`, the README, and the actionable errors for bad timestamps — not
+  // in normal success output, where a repeated tip is just noise.
   const rangeText = renderRangeSummary({ startAfter, endBefore, sinceLabel }, timeZone);
   logProgress(`${res.data.length} trace(s) | ${rangeText}`, writers);
-
-  // Copy-paste tip shown only when no time filter was applied.
-  if (startAfter === undefined && endBefore === undefined) {
-    logProgress(
-      'Tip: use ISO 8601 or quote copied STARTED values, e.g. --from "2026-06-23 14:31:02 MDT".',
-      writers,
-    );
-  }
 }
 
 export function registerTracesList(traces: Command): void {

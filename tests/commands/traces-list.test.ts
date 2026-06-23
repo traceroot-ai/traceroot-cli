@@ -735,22 +735,10 @@ describe("runList compact footer (one-line stderr)", () => {
 describe("runList tip line", () => {
   const res: TraceList = { data: [], meta: META };
 
-  it("shows a tip mentioning quoted STARTED values and ISO 8601 when no time flag is set", async () => {
+  it("does not print a Tip line in normal output (no time flag)", async () => {
     const { writers: w, err } = writers();
     await runList({ client: fakeClient(res), json: false, writers: w });
-    expect(err.data).toContain("Tip:");
-    expect(err.data).toContain("ISO 8601");
-    // Updated tip mentions quoting copied STARTED values
-    expect(err.data).toContain("STARTED");
-    // Must NOT mention --wide (removed)
-    expect(err.data).not.toContain("--wide");
-  });
-
-  it("tip mentions the quoted display format example", async () => {
-    const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
-    // The tip should show the quoted display format example
-    expect(err.data).toContain('"2026-');
+    expect(err.data).not.toContain("Tip:");
   });
 
   it("does NOT show the tip when startAfter is set", async () => {
