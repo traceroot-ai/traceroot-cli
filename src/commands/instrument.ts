@@ -2,10 +2,18 @@ import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:f
 import { dirname, join, relative, resolve } from "node:path";
 import type { Command } from "commander";
 import { displaySkillPath, requireAgent } from "../agents/index.js";
-import { CliError, type Writers, defaultWriters, logProgress, writeJson } from "../output.js";
+import {
+  CliError,
+  type Writers,
+  defaultWriters,
+  logInfo,
+  logProgress,
+  writeJson,
+} from "../output.js";
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
+import { withGlobalJsonHelp } from "./shared.js";
 
 /** Default location for the generated prompt when neither --print nor --output is given. */
 const DEFAULT_PROMPT_PATH = join(".traceroot", "prompts", "instrument-repo.md");
@@ -89,19 +97,18 @@ export function runInstrument(deps: RunInstrumentDeps): void {
   const styler = createStyler(writers.out);
   const label = (text: string): string => styler.bold(text);
   const lines = [
-    label("Wrote instrument prompt"),
+    "Wrote instrument prompt",
     "",
     `${label("Agent:")} ${agent.displayName}`,
     `${label("Path:")}  ${displayPath}`,
-    "",
-    `${label("Next:")} review the prompt, then run it in ${agent.displayName}.`,
   ];
   writers.out.write(`${lines.join("\n")}\n`);
   logProgress(`Wrote ${bytes} bytes to ${displayPath}`, writers);
+  logInfo(`\nNext: review the prompt, then run it in ${agent.displayName}.`, writers);
 }
 
 export function registerInstrument(program: Command): void {
-  program
+  const instrument = program
     .command("instrument")
     .description("Generate an agent prompt to instrument this repo with TraceRoot")
     .option("--agent <id>", "target agent: claude, codex, or generic", "claude")
@@ -120,4 +127,5 @@ export function registerInstrument(program: Command): void {
         writers: defaultWriters,
       });
     });
+  withGlobalJsonHelp(instrument);
 }
