@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { registerCommands } from "./commands/index.js";
-import { colorizeError, reportError } from "./output.js";
+import { colorizeError, handlePipeError, reportError } from "./output.js";
 import { getVersion } from "./version.js";
 
 export function buildProgram(): Command {
@@ -38,6 +38,10 @@ export function buildProgram(): Command {
 }
 
 export async function run(argv: string[]): Promise<void> {
+  // Exit cleanly when a downstream reader (e.g. `head`, `jq`) closes the pipe:
+  // turn the resulting EPIPE into a quiet exit instead of a Node stack trace.
+  process.stdout.on("error", (err: NodeJS.ErrnoException) => handlePipeError(err));
+  process.stderr.on("error", (err: NodeJS.ErrnoException) => handlePipeError(err));
   try {
     await buildProgram().parseAsync(argv);
   } catch (err) {

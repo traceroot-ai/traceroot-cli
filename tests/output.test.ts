@@ -3,6 +3,7 @@ import {
   CliError,
   type Writers,
   colorEnabled,
+  handlePipeError,
   isCliError,
   logInfo,
   logProgress,
@@ -11,6 +12,20 @@ import {
   writeJson,
 } from "../src/output.js";
 import { StringSink } from "./helpers/stringSink.js";
+
+describe("handlePipeError", () => {
+  it("exits cleanly (code 0) on EPIPE — a downstream reader closed the pipe", () => {
+    const codes: number[] = [];
+    const err: NodeJS.ErrnoException = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    handlePipeError(err, (code) => codes.push(code));
+    expect(codes).toEqual([0]);
+  });
+
+  it("rethrows any non-EPIPE stream error", () => {
+    const err: NodeJS.ErrnoException = Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    expect(() => handlePipeError(err, () => {})).toThrow(/disk full/);
+  });
+});
 
 function writers(
   outTTY?: boolean,
