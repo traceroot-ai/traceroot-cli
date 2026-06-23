@@ -33,12 +33,12 @@ async function main() {
 }
 
 await main();
-await TraceRoot.flush(); // required in short-lived scripts
+await TraceRoot.shutdown(); // required in short-lived scripts
 ```
 
 ## Notes
 
-- `await TraceRoot.flush()` is required at the end of scripts — without it, spans may not be exported before the process exits.
+- `await TraceRoot.shutdown()` is required at the end of scripts — without it, spans may not be exported before the process exits. The exact lifecycle method can vary by SDK version; if `shutdown` is unavailable, inspect the installed package's exports/types (`node_modules/@traceroot-ai/traceroot`) for the equivalent flush call.
 - `instrumentModules: {}` disables auto-instrumentation; this demo only uses manual `observe()` spans.
 - `observe()` is a function wrapper (not a decorator): pass options and an async callback.
 - To target a self-hosted instance, set `TRACEROOT_HOST_URL` in `.env`.

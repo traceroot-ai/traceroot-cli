@@ -115,10 +115,14 @@ updateCurrentTrace({
 
 ## Flush in short-lived scripts
 
+For scripts/CLIs/serverless, flush before the process exits (never for long-running servers):
+
 ```typescript
 await runMyScript();
-await TraceRoot.flush(); // export all buffered spans before exit
+await TraceRoot.shutdown(); // export all buffered spans before exit
 ```
+
+> Verify the exact export before editing — the lifecycle method can vary by SDK version. Check the installed package's types/exports (e.g. inspect `node_modules/@traceroot-ai/traceroot`) and use what it provides (`TraceRoot.shutdown()` in current versions).
 
 ## What to instrument
 

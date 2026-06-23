@@ -35,8 +35,8 @@ Turn the workflow below into a checklist (TodoWrite) and execute it in order. Do
 
 ## Workflow
 
-### 1. Precondition — API key
-Confirm `TRACEROOT_API_KEY` is set (environment or `.env`). If not, ask the user to add it (found in the TraceRoot UI under project settings), then stop until it is present.
+### 1. API key (non-blocking)
+TraceRoot reads `TRACEROOT_API_KEY` from the environment (or `.env`). If it is **not** set, do not stop: still add the instrumentation (it reads the key from the environment at runtime), and tell the user they must set `TRACEROOT_API_KEY` — found in the TraceRoot UI under project settings — before running the verification step. Never hardcode or print the key. Only stop early if you cannot determine which service/runtime to instrument (see step 3).
 
 ### 2. Analyze (read-only — do not edit yet)
 - Detect the runtime (Python or TypeScript/Node.js). Read the dependency manifest (`pyproject.toml`/`requirements.txt` or `package.json`) and scan imports to see what is actually used.
