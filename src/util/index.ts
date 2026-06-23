@@ -45,17 +45,6 @@ export function formatDuration(durationMs: number | null): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-/**
- * Converts a backend timestamp (which may be naive UTC or already carry a Z
- * suffix) into a canonical UTC ISO string ending with `Z`, suitable for copying
- * into `--from`/`--to` flags. Returns an empty string when the value cannot be
- * parsed.
- */
-export function formatIsoUtc(raw: string): string {
-  const date = parseBackendTime(raw);
-  return date === null ? "" : date.toISOString();
-}
-
 /** Treats a zone-less backend timestamp as UTC and returns a Date (or null). */
 function parseBackendTime(raw: string): Date | null {
   // Backend timestamps are naive UTC, e.g. "2026-06-04T23:43:13.590000" (no

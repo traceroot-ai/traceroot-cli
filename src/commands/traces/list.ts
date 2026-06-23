@@ -10,7 +10,7 @@ import {
 } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { formatDuration, formatIsoUtc, formatTimestamp, parseDuration } from "../../util/index.js";
+import { formatDuration, formatTimestamp, parseDuration } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** Dependencies for the testable core of `traces list`. */
@@ -31,8 +31,6 @@ export interface RunListDeps {
    * for deterministic output.
    */
   timeZone?: string;
-  /** When true, adds a `STARTED ISO` column (UTC Z) for copy/paste. */
-  wide?: boolean;
 }
 
 /** Resolved, backend-ready ISO time bounds derived from the CLI time flags. */
@@ -44,13 +42,139 @@ export interface TimeRange {
 }
 
 /**
- * Treats a CLI-supplied timestamp as ISO 8601 and normalizes it to a UTC instant
- * string. A bare date (`2026-06-01`) becomes midnight UTC; a zone-less datetime
- * is interpreted as UTC. Throws a {@link CliError} when the value is not a
- * parseable timestamp.
+ * Converts a wall-clock datetime (Y, M, D, h, m, s) interpreted in the given
+ * IANA timezone to a UTC instant (ms since epoch). Uses a two-pass approach to
+ * resolve DST ambiguities correctly.
  */
-function normalizeTimestamp(raw: string, flag: string): string {
+function wallClockToUtc(
+  Y: number,
+  M: number,
+  D: number,
+  h: number,
+  m: number,
+  s: number,
+  timeZone: string,
+): number {
+  // Step 1: naive UTC guess
+  const guess = Date.UTC(Y, M - 1, D, h, m, s);
+
+  // Helper: given a UTC instant, compute the zone offset as (local wall-clock
+  // interpreted as UTC) minus (the UTC instant). When zone is west of UTC (e.g.
+  // MDT = UTC-6), the local wall clock is behind UTC, so localMs < utcMs and the
+  // offset is negative. We subtract this offset from guess to get real UTC.
+  //
+  // Example: guess = 14:31Z (wall clock treated as UTC).
+  // At 14:31Z Denver is 08:31 MDT. localMs = 08:31Z. offset = 08:31 - 14:31 = -6h.
+  // real_utc = guess - offset = 14:31 - (-6h) = 20:31Z. ✓
+  function offsetAt(utcMs: number): number {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = fmt.formatToParts(new Date(utcMs));
+    const pick = (type: Intl.DateTimeFormatPartTypes): number =>
+      Number.parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+    // hour12:false can return "24" for midnight; normalize to 0.
+    const hour = pick("hour") % 24;
+    const localMs = Date.UTC(
+      pick("year"),
+      pick("month") - 1,
+      pick("day"),
+      hour,
+      pick("minute"),
+      pick("second"),
+    );
+    return localMs - utcMs; // negative for zones west of UTC
+  }
+
+  // DST disambiguation policy:
+  // - Fall-back (fold): an ambiguous wall-clock time (one that occurs twice) resolves to
+  //   the EARLIER (pre-transition) occurrence. The two-pass correction converges on the
+  //   first offset seen at the naive UTC guess, which is the pre-transition offset.
+  // - Spring-forward (gap): a nonexistent wall-clock time resolves to the post-shift instant
+  //   because the corrected UTC lands after the transition.
+  const offset1 = offsetAt(guess);
+  let utc = guess - offset1;
+  const offset2 = offsetAt(utc);
+  if (offset2 !== offset1) {
+    utc = guess - offset2;
+  }
+  return utc;
+}
+
+/**
+ * Resolves the abbreviation produced by Intl for a given UTC instant and zone.
+ * Returns the short timezone name (e.g. "MDT").
+ */
+function resolveAbbreviation(utcMs: number, timeZone: string): string {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "short",
+  });
+  const parts = fmt.formatToParts(new Date(utcMs));
+  return parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+}
+
+/**
+ * Treats a CLI-supplied timestamp as ISO 8601 and normalizes it to a UTC instant
+ * string. Also accepts the exact display format `YYYY-MM-DD HH:mm:ss <TZ_ABBR>`
+ * (a quoted single arg), validating the abbreviation against the local zone.
+ * A bare date (`2026-06-01`) becomes midnight UTC; a zone-less datetime is
+ * interpreted as UTC. Throws a {@link CliError} when the value is not a
+ * parseable timestamp or when the abbreviation doesn't match the local zone.
+ */
+function normalizeTimestamp(raw: string, flag: string, timeZone: string): string {
   const trimmed = raw.trim();
+
+  // Try the quoted display format: "YYYY-MM-DD HH:mm:ss TZ_ABBR"
+  const displayMatch = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) ([A-Za-z]{2,5})$/.exec(
+    trimmed,
+  );
+  if (displayMatch !== null) {
+    const [, ys, ms, ds, hs, mins, ss, abbr] = displayMatch as unknown as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    const Y = Number.parseInt(ys, 10);
+    const Mo = Number.parseInt(ms, 10);
+    const D = Number.parseInt(ds, 10);
+    const h = Number.parseInt(hs, 10);
+    const mi = Number.parseInt(mins, 10);
+    const s = Number.parseInt(ss, 10);
+
+    const utcMs = wallClockToUtc(Y, Mo, D, h, mi, s, timeZone);
+    const localAbbr = resolveAbbreviation(utcMs, timeZone);
+
+    if (localAbbr !== abbr) {
+      // Build a suggested ISO-with-offset string using the wall clock and the
+      // computed UTC offset, so the example is concrete and copy-pasteable.
+      const offsetMins = Math.round((utcMs - Date.UTC(Y, Mo - 1, D, h, mi, s)) / 60_000);
+      const sign = offsetMins <= 0 ? "+" : "-";
+      const absMin = Math.abs(offsetMins);
+      const offH = String(Math.floor(absMin / 60)).padStart(2, "0");
+      const offM = String(absMin % 60).padStart(2, "0");
+      const suggestion = `${ys}-${ms}-${ds}T${hs}:${mins}:${ss}${sign}${offH}:${offM}`;
+      throw new CliError(
+        `${flag} "${trimmed}": timezone "${abbr}" doesn't match your local timezone (${timeZone} → ${localAbbr}). Use ISO 8601 with an explicit offset instead, e.g. ${flag} ${suggestion}.`,
+      );
+    }
+
+    return new Date(utcMs).toISOString();
+  }
+
+  // Standard ISO 8601 paths
   let candidate: string;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     candidate = `${trimmed}T00:00:00Z`;
@@ -72,11 +196,13 @@ function normalizeTimestamp(raw: string, flag: string): string {
  * Resolves `--since`, `--from`, and `--to` into absolute ISO bounds. `--since
  * <dur>` is a window ending now, so it sets only `startAfter`; `--from`/`--to`
  * set the bounds directly. `--since` cannot be combined with `--from`/`--to`.
- * Returns an empty range when no flag is given. `now` is injectable for tests.
+ * Returns an empty range when no flag is given. `now` and `timeZone` are
+ * injectable for tests.
  */
 export function resolveTimeRange(
   opts: { since?: string; from?: string; to?: string },
   now: () => number = Date.now,
+  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
 ): TimeRange {
   const { since, from, to } = opts;
   if (since !== undefined && (from !== undefined || to !== undefined)) {
@@ -91,10 +217,10 @@ export function resolveTimeRange(
   }
   const range: TimeRange = {};
   if (from !== undefined) {
-    range.startAfter = normalizeTimestamp(from, "--from");
+    range.startAfter = normalizeTimestamp(from, "--from", timeZone);
   }
   if (to !== undefined) {
-    range.endBefore = normalizeTimestamp(to, "--to");
+    range.endBefore = normalizeTimestamp(to, "--to", timeZone);
   }
   if (
     range.startAfter !== undefined &&
@@ -155,7 +281,7 @@ export function formatLocalDisplay(iso: string, timeZone?: string): string {
 }
 
 /**
- * Returns the `<range>` portion of the compact footer line.
+ * Returns the `<range>` portion of the compact footer line (human-mode, local TZ).
  * Priority: sinceLabel → both bounds → from-only → to-only → all traces.
  */
 export function renderRangeSummary(
@@ -175,6 +301,30 @@ export function renderRangeSummary(
   }
   if (range.endBefore !== undefined) {
     return `before ${formatLocalDisplay(range.endBefore, timeZone)}`;
+  }
+  return "all traces";
+}
+
+/**
+ * Returns the TZ-independent range label for use in --json output.
+ * Uses ISO strings directly (no local-time formatting).
+ */
+function renderRangeLabel(range: {
+  startAfter?: string;
+  endBefore?: string;
+  sinceLabel?: string;
+}): string {
+  if (range.sinceLabel !== undefined) {
+    return `since ${range.sinceLabel}`;
+  }
+  if (range.startAfter !== undefined && range.endBefore !== undefined) {
+    return `from ${range.startAfter} to before ${range.endBefore}`;
+  }
+  if (range.startAfter !== undefined) {
+    return `from ${range.startAfter}`;
+  }
+  if (range.endBefore !== undefined) {
+    return `before ${range.endBefore}`;
   }
   return "all traces";
 }
@@ -200,7 +350,7 @@ function durationOf(item: ListItem): string {
 
 /** Core, network-free logic for `traces list`. Tests inject a fake client. */
 export async function runList(deps: RunListDeps): Promise<void> {
-  const { client, json, writers, limit, startAfter, endBefore, sinceLabel, timeZone, wide } = deps;
+  const { client, json, writers, limit, startAfter, endBefore, sinceLabel, timeZone } = deps;
   const params: { limit?: number; startAfter?: string; endBefore?: string } = {};
   if (limit !== undefined) {
     params.limit = limit;
@@ -214,35 +364,31 @@ export async function runList(deps: RunListDeps): Promise<void> {
   const res = await client.listTraces(Object.keys(params).length > 0 ? params : undefined);
 
   if (json) {
-    writeJson(res, writers);
+    const rangeInfo = { startAfter, endBefore, sinceLabel };
+    writeJson(
+      {
+        ...res,
+        count: res.data.length,
+        range: {
+          label: renderRangeLabel(rangeInfo),
+          startAfter: startAfter ?? null,
+          endBefore: endBefore ?? null,
+        },
+      },
+      writers,
+    );
     return;
   }
 
-  let headers: string[];
-  let rows: string[][];
-
-  if (wide) {
-    headers = ["STARTED", "STARTED ISO", "DURATION", "NAME", "ERRORS", "SPANS", "TRACE ID"];
-    rows = res.data.map((item) => [
-      formatTimestamp(item.trace_start_time),
-      formatIsoUtc(item.trace_start_time),
-      durationOf(item),
-      item.name ?? "",
-      String(item.error_count),
-      String(item.span_count),
-      item.trace_id,
-    ]);
-  } else {
-    headers = ["STARTED", "DURATION", "NAME", "ERRORS", "SPANS", "TRACE ID"];
-    rows = res.data.map((item) => [
-      formatTimestamp(item.trace_start_time),
-      durationOf(item),
-      item.name ?? "",
-      String(item.error_count),
-      String(item.span_count),
-      item.trace_id,
-    ]);
-  }
+  const headers = ["STARTED", "DURATION", "NAME", "ERRORS", "SPANS", "TRACE ID"];
+  const rows = res.data.map((item) => [
+    formatTimestamp(item.trace_start_time),
+    durationOf(item),
+    item.name ?? "",
+    String(item.error_count),
+    String(item.span_count),
+    item.trace_id,
+  ]);
 
   const styler = createStyler(writers.out);
   // Whole-row bright red for errored traces, via the shared error-color helper.
@@ -257,10 +403,10 @@ export async function runList(deps: RunListDeps): Promise<void> {
   const rangeText = renderRangeSummary({ startAfter, endBefore, sinceLabel }, timeZone);
   logProgress(`${res.data.length} trace(s) | ${rangeText}`, writers);
 
-  // ISO copy-paste tip shown only when no time filter was applied.
+  // Copy-paste tip shown only when no time filter was applied.
   if (startAfter === undefined && endBefore === undefined) {
     logProgress(
-      "Tip: STARTED is shown in local time; copy exact ISO with --wide or --json, then filter with --from/--to (ISO 8601, e.g. 2026-06-23T14:29:54Z).",
+      'Tip: use ISO 8601 or quote copied STARTED values, e.g. --from "2026-06-23 14:31:02 MDT".',
       writers,
     );
   }
@@ -274,13 +420,12 @@ export function registerTracesList(traces: Command): void {
     .option("--since <duration>", "only traces within a window ending now, e.g. 30m, 6h, 7d, 2w")
     .option(
       "--from <timestamp>",
-      "only traces at or after this ISO 8601 time, e.g. 2026-06-23T14:29:54Z (inclusive)",
+      'only traces at or after this time. Accepts ISO 8601 (e.g. 2026-06-23T14:31:02Z or 2026-06-23T14:31:02-06:00) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted. (inclusive)',
     )
     .option(
       "--to <timestamp>",
-      "only traces before this ISO 8601 time, e.g. 2026-06-23T14:29:54-06:00 (exclusive)",
+      'only traces before this time. Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted. (exclusive)',
     )
-    .option("--wide", "add a STARTED ISO column showing UTC ISO timestamps for copy/paste")
     .action(async (_opts, command: Command) => {
       // 1. Reject stray positional operands FIRST (before any API call).
       //    This catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
@@ -311,7 +456,6 @@ export function registerTracesList(traces: Command): void {
         startAfter: range.startAfter,
         endBefore: range.endBefore,
         sinceLabel: range.sinceLabel,
-        wide: Boolean(command.opts().wide),
       });
     });
 }
