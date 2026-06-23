@@ -3,6 +3,19 @@ import { type ApiClient, createApiClient } from "../api/client.js";
 import { type Context, buildContext } from "../context.js";
 import { CliError } from "../output.js";
 
+/**
+ * Help text appended to the new commands so the inherited program-wide `--json`
+ * flag is discoverable from each subcommand's `--help` (commander does not list
+ * root options under subcommands).
+ */
+const GLOBAL_JSON_HELP = "\nGlobal option:\n  --json  emit a single machine-readable JSON document";
+
+/** Appends {@link GLOBAL_JSON_HELP} to a command's help and returns it (chainable). */
+export function withGlobalJsonHelp<T extends Command>(command: T): T {
+  command.addHelpText("after", GLOBAL_JSON_HELP);
+  return command;
+}
+
 /** Build the per-invocation Context from a command's merged (global+local) options. */
 export function contextFromCommand(command: Command): Context {
   const opts = command.optsWithGlobals();

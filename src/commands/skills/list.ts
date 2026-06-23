@@ -1,29 +1,47 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Command } from "commander";
+import { displaySkillPath, requireAgent } from "../../agents/index.js";
 import { type Writers, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { BUILTIN_SKILLS } from "../../skills/registry.js";
+import { withGlobalJsonHelp } from "../shared.js";
 
 /** Dependencies for the testable core of `skills list`. */
 export interface RunSkillsListDeps {
+  /** Agent whose install status is reported (defaults to `claude` at the CLI layer). */
+  agentId: string;
+  cwd: string;
   json: boolean;
   writers: Writers;
 }
 
 /**
- * Lists the built-in TraceRoot skills. In `--json` mode writes a single
- * `{ data: [...] }` document to stdout; otherwise writes a readable block. No
- * network or filesystem access.
+ * Lists the built-in TraceRoot skills and whether each is installed for the
+ * chosen agent. In `--json` mode writes a single `{ data: [...] }` document;
+ * otherwise writes a readable block matching the CLI's label/value style. No
+ * network access.
  */
 export function runSkillsList(deps: RunSkillsListDeps): void {
-  const { json, writers } = deps;
+  const { agentId, cwd, json, writers } = deps;
+  const agent = requireAgent(agentId);
+
+  const rows = BUILTIN_SKILLS.map((skill) => {
+    const targetDir = agent.getSkillInstallPath(cwd, skill.name);
+    const installed = existsSync(join(targetDir, "SKILL.md"));
+    return { skill, installed, path: displaySkillPath(cwd, targetDir) };
+  });
 
   if (json) {
     writeJson(
       {
-        data: BUILTIN_SKILLS.map((skill) => ({
+        data: rows.map(({ skill, installed, path }) => ({
           name: skill.name,
           description: skill.description,
           bestFor: skill.bestFor,
+          agent: agent.id,
+          installed,
+          path,
         })),
       },
       writers,
@@ -32,22 +50,41 @@ export function runSkillsList(deps: RunSkillsListDeps): void {
   }
 
   const styler = createStyler(writers.out);
-  const blocks = BUILTIN_SKILLS.map((skill) =>
-    [
-      styler.bold(skill.name),
+  const label = (text: string): string => styler.bold(text);
+
+  const blocks = rows.map(({ skill, installed, path }) => {
+    const lines = [
+      `${installed ? "✓" : "-"} ${label(skill.name)}`,
       `  ${skill.description}`,
-      `  ${styler.dim(`Best for: ${skill.bestFor.join(", ")}.`)}`,
-    ].join("\n"),
-  );
-  writers.out.write(`${styler.bold("Available TraceRoot skills")}\n\n${blocks.join("\n\n")}\n`);
+      `  ${label("Best for:")} ${skill.bestFor.join(", ")}`,
+      installed
+        ? `  ${label(`Installed for ${agent.displayName}:`)} ${path}`
+        : `  ${label("Install:")} traceroot skills install ${skill.name} --agent ${agent.id}`,
+    ];
+    return lines.join("\n");
+  });
+
+  writers.out.write(`TraceRoot skills\n\n${blocks.join("\n\n")}\n`);
 }
 
 export function registerSkillsList(skills: Command): void {
-  skills
-    .command("list")
-    .description("List available TraceRoot skills")
-    .action((_opts, command: Command) => {
-      const json = command.optsWithGlobals().json === true;
-      runSkillsList({ json, writers: defaultWriters });
-    });
+  withGlobalJsonHelp(
+    skills
+      .command("list")
+      .description("List available TraceRoot skills and their install status")
+      .option(
+        "--agent <id>",
+        "agent to check install status for: claude, codex, or generic",
+        "claude",
+      )
+      .action((_opts, command: Command) => {
+        const opts = command.optsWithGlobals();
+        runSkillsList({
+          agentId: opts.agent as string,
+          cwd: process.cwd(),
+          json: opts.json === true,
+          writers: defaultWriters,
+        });
+      }),
+  );
 }

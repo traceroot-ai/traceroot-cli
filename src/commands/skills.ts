@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { withGlobalJsonHelp } from "./shared.js";
 import { registerSkillsInstall } from "./skills/install.js";
 import { registerSkillsList } from "./skills/list.js";
 
@@ -9,6 +10,7 @@ export function registerSkills(program: Command): void {
     .command("skills")
     .description("List and install TraceRoot skills")
     .helpCommand(false);
+  withGlobalJsonHelp(skills);
   registerSkillsList(skills);
   registerSkillsInstall(skills);
 }

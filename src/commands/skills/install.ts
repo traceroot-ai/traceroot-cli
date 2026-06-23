@@ -6,6 +6,7 @@ import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
 import { type BuiltinSkill, requireBuiltinSkill } from "../../skills/registry.js";
+import { withGlobalJsonHelp } from "../shared.js";
 
 /** Dependencies for the testable core of `skills install`. */
 export interface RunSkillsInstallDeps {
@@ -79,17 +80,17 @@ export function runSkillsInstall(deps: RunSkillsInstallDeps): void {
   const styler = createStyler(writers.out);
   const label = (text: string): string => styler.bold(text);
 
+  // Label/value block matching `status`/`get`/`login`: bold labels, values on
+  // the same line, aligned. Next-step hint goes to stderr like `login`.
   if (dryRun) {
     const lines = [
-      label("Dry run — no files would be written"),
+      "Dry run: would install TraceRoot skill",
       "",
-      `${label("Skill:")}`,
-      `  ${skill.name}`,
-      `${label("Agent:")}`,
-      `  ${agent.displayName}`,
-      `${label("Would install to:")}`,
-      `  ${displayPath}${result.overwritten ? " (exists; --force required)" : ""}`,
-      `${label("Files:")}`,
+      `${label("Skill:")}  ${skill.name}`,
+      `${label("Agent:")}  ${agent.displayName}`,
+      `${label("Path:")}   ${displayPath}${result.overwritten ? " (exists; --force required)" : ""}`,
+      "",
+      label("Files:"),
       ...result.files.map((f) => `  ${f}`),
     ];
     writers.out.write(`${lines.join("\n")}\n`);
@@ -97,41 +98,39 @@ export function runSkillsInstall(deps: RunSkillsInstallDeps): void {
   }
 
   const lines = [
-    label("Installed TraceRoot skill"),
+    "Installed TraceRoot skill",
     "",
-    `${label("Skill:")}`,
-    `  ${skill.name}`,
-    `${label("Agent:")}`,
-    `  ${agent.displayName}`,
-    `${label("Path:")}`,
-    `  ${displayPath}`,
-    `${label("Next:")}`,
-    `  ${nextStep(skill, agent)}`,
+    `${label("Skill:")}  ${skill.name}`,
+    `${label("Agent:")}  ${agent.displayName}`,
+    `${label("Path:")}   ${displayPath}`,
   ];
   writers.out.write(`${lines.join("\n")}\n`);
   if (result.overwritten) {
     logInfo("Overwrote an existing skill directory.", writers);
   }
+  logInfo(`\nNext: ${nextStep(skill, agent)}`, writers);
 }
 
 export function registerSkillsInstall(skills: Command): void {
-  skills
-    .command("install")
-    .argument("<skill>", "skill name (see `traceroot skills list`)")
-    .requiredOption("--agent <id>", "target agent: claude, codex, or generic")
-    .option("--force", "overwrite an existing skill directory")
-    .option("--dry-run", "show what would happen without writing files")
-    .description("Install a TraceRoot skill into an agent's skill directory")
-    .action((skillName: string, _opts, command: Command) => {
-      const opts = command.optsWithGlobals();
-      runSkillsInstall({
-        skillName,
-        agentId: opts.agent as string,
-        cwd: process.cwd(),
-        force: opts.force === true,
-        dryRun: opts.dryRun === true,
-        json: opts.json === true,
-        writers: defaultWriters,
-      });
-    });
+  withGlobalJsonHelp(
+    skills
+      .command("install")
+      .argument("<skill>", "skill name (see `traceroot skills list`)")
+      .requiredOption("--agent <id>", "target agent: claude, codex, or generic")
+      .option("--force", "overwrite an existing skill directory")
+      .option("--dry-run", "show what would happen without writing files")
+      .description("Install a TraceRoot skill into an agent's skill directory")
+      .action((skillName: string, _opts, command: Command) => {
+        const opts = command.optsWithGlobals();
+        runSkillsInstall({
+          skillName,
+          agentId: opts.agent as string,
+          cwd: process.cwd(),
+          force: opts.force === true,
+          dryRun: opts.dryRun === true,
+          json: opts.json === true,
+          writers: defaultWriters,
+        });
+      }),
+  );
 }
