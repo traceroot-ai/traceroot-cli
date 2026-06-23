@@ -54,6 +54,22 @@ export interface paths {
          *
          *     Defaults to the lightweight `skeleton` projection (no per-span I/O); pass
          *     `fields=full` (or `fields=io,metadata`) for per-span input/output/metadata.
+         *
+         *     Args:
+         *         auth (StampedAuth): Resolved API-key context; scopes the read to its
+         *             project and stamps the rate-limit identity.
+         *         trace_id (str): Trace to fetch.
+         *         fields (str | None): Comma-separated projection groups (e.g. ``io``,
+         *             ``metadata``) or an alias (``skeleton``/``full``). ``None`` selects
+         *             the default `skeleton` projection.
+         *
+         *     Returns:
+         *         PublicTraceDetailResponse: The trace with span skeletons, plus per-span
+         *             I/O when the projection requests it.
+         *
+         *     Raises:
+         *         HTTPException: 400 if `fields` is invalid, 404 if the trace is missing
+         *             or outside the key's project, 500 on a reader failure.
          */
         get: operations["get_trace_api_v1_public_traces__trace_id__get"];
         put?: never;
@@ -79,6 +95,25 @@ export interface paths {
          *     complete trace, so per-span input/output/metadata are included unless the
          *     caller narrows `fields`. `bundle.trace` equals the `traces get` payload at the
          *     same projection.
+         *
+         *     Rate limited on its own `export` bucket because it builds and serializes the
+         *     full bundle.
+         *
+         *     Args:
+         *         auth (StampedAuth): Resolved API-key context; scopes the read to its
+         *             project and stamps the rate-limit identity.
+         *         trace_id (str): Trace to export.
+         *         fields (str | None): Comma-separated projection groups or an alias
+         *             (``skeleton``/``full``). ``None`` selects the default `full`
+         *             projection.
+         *
+         *     Returns:
+         *         PublicTraceExportResponse: The V1 export bundle (manifest, trace, spans,
+         *             git_context) at the requested projection.
+         *
+         *     Raises:
+         *         HTTPException: 400 if `fields` is invalid, 404 if the trace is missing
+         *             or outside the key's project, 500 on a reader failure.
          */
         get: operations["export_trace_api_v1_public_traces__trace_id__export_get"];
         put?: never;
@@ -408,6 +443,10 @@ export interface operations {
             query?: {
                 /** @description Items per page */
                 limit?: number;
+                /** @description Only traces that started at or after this time (inclusive, ISO 8601) */
+                start_after?: string | null;
+                /** @description Only traces that started before this time (exclusive, ISO 8601) */
+                end_before?: string | null;
             };
             header?: never;
             path?: never;
