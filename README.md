@@ -53,7 +53,7 @@ traceroot traces list
 | `traces list` | List traces for your project, newest first. `--limit <n>` |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
-| `skills list` | List the first-party TraceRoot skills the CLI can install. |
+| `skills list` | List the first-party TraceRoot skills and whether each is installed for an agent. `--agent <claude\|codex\|generic>` (default `claude`) |
 | `skills install <skill>` | Copy a bundled skill into an agent's skill directory. `--agent <claude\|codex\|generic>`, `--force`, `--dry-run` |
 | `instrument` | Generate a Claude Code-ready prompt to add TraceRoot tracing to this repo. `--agent <id>`, `--print`, `--output <path>`, `--force` |
 | `doctor` | Diagnose credentials, repo shape, and installed skills (`pass`/`warn`/`fail`). |
@@ -78,7 +78,8 @@ scripts are run. Install targets depend on the agent:
 - `--agent generic` → project-local `.agents/skills/<skill>/`
 
 ```sh
-traceroot skills list                                              # see what's available
+traceroot skills list                                              # see what's available + install status
+traceroot skills list --agent codex                                # install status for Codex
 traceroot skills install traceroot-instrument-repo --agent claude  # add tracing to an app
 traceroot skills install traceroot-quickstart --agent codex        # install for Codex (~/.codex/skills)
 traceroot instrument --agent claude --print                        # print an instrument prompt
