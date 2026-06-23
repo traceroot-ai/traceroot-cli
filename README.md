@@ -18,13 +18,18 @@ traceroot status                      # confirm who you are
 traceroot traces list --limit 10      # list recent traces
 traceroot traces list --since 24h     # traces from the last 24 hours
 traceroot traces list --from "2026-06-23T14:29:54Z" --to "2026-06-23T20:00:00-06:00"  # explicit time range
+traceroot traces list --wide                          # add STARTED ISO column for copy/paste
+traceroot traces list --from 2026-06-23T20:31:02Z    # filter by UTC ISO timestamp
+traceroot traces list --from 2026-06-23T14:31:02-06:00  # filter by offset timestamp
 traceroot traces get <trace-id>       # inspect one
 traceroot traces export <trace-id>    # export its bundle to a directory
 ```
 
-> The `STARTED` column shows times in your local timezone. `--from`/`--to` require
-> ISO 8601 timestamps (no spaces); quote values to avoid shell splitting, e.g.
-> `--from "2026-06-23T14:29:54Z"` or `--from "2026-06-23T14:29:54-06:00"`.
+> The `STARTED` column shows times in your local timezone; `--from`/`--to` require
+> ISO 8601 timestamps (no spaces). Copy exact ISO values with `--wide` (adds a
+> `STARTED ISO` column in UTC `Z` form) or `--json` (exposes `trace_start_time`).
+> Quote values to avoid shell splitting, e.g. `--from "2026-06-23T14:29:54Z"` or
+> `--from "2026-06-23T14:29:54-06:00"`.
 
 ## Configuration
 
@@ -56,7 +61,7 @@ traceroot traces list
 | :-- | :-- |
 | `login` | Authenticate and save credentials (validates before writing). |
 | `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
-| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (ISO 8601, e.g. `"2026-06-23T14:29:54Z"`) |
+| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (ISO 8601, e.g. `"2026-06-23T14:29:54Z"`), `--wide` (adds UTC ISO column for copy/paste) |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
 

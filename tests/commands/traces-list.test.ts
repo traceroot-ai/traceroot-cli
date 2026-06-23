@@ -2,7 +2,13 @@ import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import type { ApiClient, TraceList } from "../../src/api/client.js";
 import { buildProgram } from "../../src/cli.js";
-import { parseLimit, resolveTimeRange, runList } from "../../src/commands/traces/list.js";
+import {
+  formatLocalDisplay,
+  parseLimit,
+  renderRangeSummary,
+  resolveTimeRange,
+  runList,
+} from "../../src/commands/traces/list.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { runCli } from "../helpers/runCli.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -168,6 +174,21 @@ describe("runList (--json)", () => {
     expect(JSON.parse(docs[0] as string)).toEqual(res);
     expect(err.data).not.toContain("{");
   });
+
+  it("exposes trace_start_time as a copyable ISO field in each trace", async () => {
+    // Confirm --json exposes the backend canonical field (no footer/tip on stdout).
+    const trace = listItem({ trace_id: "j-ts", trace_start_time: "2026-06-23T20:31:02.000000" });
+    const res: TraceList = { data: [trace], meta: META };
+    const { writers: w, out, err } = writers();
+    await runList({ client: fakeClient(res), json: true, writers: w });
+
+    const parsed = JSON.parse(out.data.trim()) as TraceList;
+    expect(parsed.data[0]).toHaveProperty("trace_start_time");
+    // No footer on stderr in JSON mode
+    expect(err.data).toBe("");
+    // stdout is ONLY the JSON, no extra lines
+    expect(out.data.trim().split("\n")).toHaveLength(1);
+  });
 });
 
 describe("runList (--limit forwarding)", () => {
@@ -217,6 +238,7 @@ describe("resolveTimeRange", () => {
   it("turns --since into a startAfter window ending now (no endBefore)", () => {
     expect(resolveTimeRange({ since: "24h" }, fixedNow)).toEqual({
       startAfter: "2024-06-14T12:00:00.000Z",
+      sinceLabel: "24h",
     });
   });
 
@@ -295,6 +317,7 @@ describe("traces list command surface", () => {
     expect(optionNames).toContain("--since");
     expect(optionNames).toContain("--from");
     expect(optionNames).toContain("--to");
+    expect(optionNames).toContain("--wide");
     expect(optionNames).not.toContain("--status");
   });
 
@@ -339,65 +362,171 @@ describe("traces list command surface", () => {
   });
 });
 
-describe("runList footer (Range: line)", () => {
-  const res: TraceList = { data: [], meta: META };
+// ─── renderRangeSummary (pure unit tests) ──────────────────────────────────
 
-  it("emits 'Range: all traces' when no bounds are set", async () => {
-    const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
-    expect(err.data).toContain("Range: all traces");
+describe("renderRangeSummary", () => {
+  const TZ = "America/Denver"; // MDT in June (UTC-6)
+
+  it("returns 'all traces' when no bounds are set", () => {
+    expect(renderRangeSummary({})).toBe("all traces");
   });
 
-  it("emits lower-bound-only Range line when only startAfter is set", async () => {
-    const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res),
-      json: false,
-      writers: w,
-      startAfter: "2026-06-01T00:00:00.000Z",
-    });
-    expect(err.data).toContain("Range: started_at >= 2026-06-01T00:00:00.000Z");
-  });
-
-  it("emits upper-bound-only Range line when only endBefore is set", async () => {
-    const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res),
-      json: false,
-      writers: w,
-      endBefore: "2026-06-15T00:00:00.000Z",
-    });
-    expect(err.data).toContain("Range: started_at < 2026-06-15T00:00:00.000Z");
-  });
-
-  it("emits both-bounds Range line when startAfter and endBefore are set", async () => {
-    const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res),
-      json: false,
-      writers: w,
-      startAfter: "2026-06-01T00:00:00.000Z",
-      endBefore: "2026-06-15T00:00:00.000Z",
-    });
-    expect(err.data).toContain(
-      "Range: 2026-06-01T00:00:00.000Z <= started_at < 2026-06-15T00:00:00.000Z",
+  it("returns 'since <label>' when sinceLabel is set (ignores bounds)", () => {
+    expect(renderRangeSummary({ sinceLabel: "2m" })).toBe("since 2m");
+    expect(renderRangeSummary({ sinceLabel: "24h", startAfter: "2026-06-23T20:00:00.000Z" })).toBe(
+      "since 24h",
     );
   });
 
-  it("does NOT emit Range line in --json mode", async () => {
-    const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res), json: true, writers: w });
-    expect(err.data).not.toContain("Range:");
+  it("returns 'from <human-local>' for startAfter-only (Denver/MDT)", () => {
+    // 2026-06-23T20:29:54Z = 2:29:54 PM MDT
+    const result = renderRangeSummary({ startAfter: "2026-06-23T20:29:54.000Z" }, TZ);
+    expect(result).toBe("from Jun 23, 2026 2:29:54 PM MDT");
+  });
+
+  it("returns 'before <human-local>' for endBefore-only (Denver/MDT)", () => {
+    // 2026-06-23T20:31:02Z = 2:31:02 PM MDT
+    const result = renderRangeSummary({ endBefore: "2026-06-23T20:31:02.000Z" }, TZ);
+    expect(result).toBe("before Jun 23, 2026 2:31:02 PM MDT");
+  });
+
+  it("returns 'from … to before …' for both bounds (Denver/MDT)", () => {
+    const result = renderRangeSummary(
+      {
+        startAfter: "2026-06-23T20:28:35.000Z", // 2:28:35 PM MDT
+        endBefore: "2026-06-23T20:31:02.000Z", // 2:31:02 PM MDT
+      },
+      TZ,
+    );
+    expect(result).toBe("from Jun 23, 2026 2:28:35 PM MDT to before Jun 23, 2026 2:31:02 PM MDT");
   });
 });
+
+// ─── formatLocalDisplay (pure unit tests) ──────────────────────────────────
+
+describe("formatLocalDisplay", () => {
+  it("formats a UTC ISO string as local Mon DD, YYYY h:MM:SS AM/PM TZ", () => {
+    // 2026-06-23T20:29:54Z = 2:29:54 PM MDT
+    expect(formatLocalDisplay("2026-06-23T20:29:54.000Z", "America/Denver")).toBe(
+      "Jun 23, 2026 2:29:54 PM MDT",
+    );
+  });
+
+  it("formats midnight correctly (AM)", () => {
+    // 2026-06-23T06:00:00Z = midnight MDT
+    expect(formatLocalDisplay("2026-06-23T06:00:00.000Z", "America/Denver")).toBe(
+      "Jun 23, 2026 12:00:00 AM MDT",
+    );
+  });
+
+  it("formats noon correctly (PM)", () => {
+    // 2026-06-23T18:00:00Z = noon MDT
+    expect(formatLocalDisplay("2026-06-23T18:00:00.000Z", "America/Denver")).toBe(
+      "Jun 23, 2026 12:00:00 PM MDT",
+    );
+  });
+});
+
+// ─── runList compact footer (one-line stderr) ──────────────────────────────
+
+describe("runList compact footer (one-line stderr)", () => {
+  const res0: TraceList = { data: [], meta: META };
+  const res2: TraceList = {
+    data: [listItem({ trace_id: "a-1" }), listItem({ trace_id: "a-2" })],
+    meta: META,
+  };
+
+  it("emits '<n> trace(s) | all traces' when no bounds (0 traces)", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res0), json: false, writers: w });
+    expect(err.data).toContain("0 trace(s) | all traces");
+  });
+
+  it("emits '<n> trace(s) | all traces' when no bounds (2 traces)", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res2), json: false, writers: w });
+    expect(err.data).toContain("2 trace(s) | all traces");
+  });
+
+  it("does NOT emit two separate lines (old format gone)", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res0), json: false, writers: w });
+    // Old format had "Range:" on a separate line — should not appear
+    expect(err.data).not.toContain("Range: all traces");
+    // The count and range should be on the SAME line
+    const lines = err.data.split("\n").filter((l) => l.trim() !== "");
+    // At most 2 lines: footer + optional tip (no time flags → tip shown)
+    expect(lines.length).toBeLessThanOrEqual(2);
+  });
+
+  it("emits '<n> trace(s) | since 2m' for sinceLabel", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res0),
+      json: false,
+      writers: w,
+      startAfter: "2026-06-23T20:28:00.000Z",
+      sinceLabel: "2m",
+    });
+    expect(err.data).toContain("0 trace(s) | since 2m");
+  });
+
+  it("emits 'from <human-local>' footer for startAfter-only (Denver TZ)", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res0),
+      json: false,
+      writers: w,
+      startAfter: "2026-06-23T20:29:54.000Z",
+      timeZone: "America/Denver",
+    });
+    expect(err.data).toContain("0 trace(s) | from Jun 23, 2026 2:29:54 PM MDT");
+  });
+
+  it("emits 'before <human-local>' footer for endBefore-only (Denver TZ)", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res0),
+      json: false,
+      writers: w,
+      endBefore: "2026-06-23T20:31:02.000Z",
+      timeZone: "America/Denver",
+    });
+    expect(err.data).toContain("0 trace(s) | before Jun 23, 2026 2:31:02 PM MDT");
+  });
+
+  it("emits 'from … to before …' footer for both bounds (Denver TZ)", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res0),
+      json: false,
+      writers: w,
+      startAfter: "2026-06-23T20:28:35.000Z",
+      endBefore: "2026-06-23T20:31:02.000Z",
+      timeZone: "America/Denver",
+    });
+    expect(err.data).toContain(
+      "0 trace(s) | from Jun 23, 2026 2:28:35 PM MDT to before Jun 23, 2026 2:31:02 PM MDT",
+    );
+  });
+
+  it("does NOT emit footer in --json mode", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res0), json: true, writers: w });
+    expect(err.data).toBe("");
+  });
+});
+
+// ─── runList tip line ──────────────────────────────────────────────────────
 
 describe("runList tip line", () => {
   const res: TraceList = { data: [], meta: META };
 
-  it("shows a tip when no time flag is set (no bounds)", async () => {
+  it("shows a tip mentioning --wide and ISO 8601 when no time flag is set", async () => {
     const { writers: w, err } = writers();
     await runList({ client: fakeClient(res), json: false, writers: w });
     expect(err.data).toContain("Tip:");
+    expect(err.data).toContain("--wide");
     expect(err.data).toContain("ISO 8601");
   });
 
@@ -413,17 +542,15 @@ describe("runList tip line", () => {
   });
 
   it("suppresses the tip for a --since-style lower-bound-only range", async () => {
-    // --since always produces { startAfter: <iso>, endBefore: undefined }.
-    // The tip must be suppressed and the Range footer must be present.
     const { writers: w, err } = writers();
     await runList({
       client: fakeClient(res),
       json: false,
       writers: w,
       startAfter: "2026-06-22T00:00:00.000Z",
-      endBefore: undefined,
+      sinceLabel: "1d",
     });
-    expect(err.data).toContain("Range: started_at >= 2026-06-22T00:00:00.000Z");
+    expect(err.data).toContain("since 1d");
     expect(err.data).not.toContain("Tip:");
   });
 
@@ -442,5 +569,79 @@ describe("runList tip line", () => {
     const { writers: w, err } = writers();
     await runList({ client: fakeClient(res), json: true, writers: w });
     expect(err.data).not.toContain("Tip:");
+  });
+});
+
+// ─── runList --wide flag ───────────────────────────────────────────────────
+
+describe("runList --wide flag", () => {
+  it("default (no --wide) does NOT include STARTED ISO column", async () => {
+    const res: TraceList = {
+      data: [listItem({ trace_start_time: "2026-06-23T20:31:02.000000" })],
+      meta: META,
+    };
+    const { writers: w, out } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w });
+    expect(out.data).not.toContain("STARTED ISO");
+  });
+
+  it("--wide adds STARTED ISO column with UTC Z value", async () => {
+    const res: TraceList = {
+      data: [listItem({ trace_start_time: "2026-06-23T20:31:02.000000" })],
+      meta: META,
+    };
+    const { writers: w, out } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w, wide: true });
+    expect(out.data).toContain("STARTED ISO");
+    expect(out.data).toContain("2026-06-23T20:31:02.000Z");
+  });
+
+  it("--wide STARTED ISO column appears after STARTED column in header", async () => {
+    const res: TraceList = {
+      data: [listItem({ trace_start_time: "2026-06-23T20:31:02.000000" })],
+      meta: META,
+    };
+    const { writers: w, out } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w, wide: true });
+    const headerLine = out.data.split("\n")[0] as string;
+    const cols = headerLine.trim().split(/\s{2,}/);
+    expect(cols).toEqual(["STARTED", "STARTED ISO", "STATUS", "DURATION", "NAME", "TRACE ID"]);
+  });
+
+  it("reds the whole row for an errored trace on a TTY in --wide mode", async () => {
+    const res: TraceList = {
+      data: [
+        listItem({ trace_id: "ok-1", error_count: 0 }),
+        listItem({ trace_id: "err-1", error_count: 3 }),
+      ],
+      meta: META,
+    };
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    await runList({ client: fakeClient(res), json: false, writers: { out, err }, wide: true });
+    const errLine = out.data.split("\n").find((l) => l.includes("err-1")) as string;
+    const okLine = out.data.split("\n").find((l) => l.includes("ok-1")) as string;
+    expect(errLine).toContain("\x1b[91m"); // bright red
+    expect(okLine).not.toContain("\x1b[91m");
+  });
+
+  it("--wide shows Z-suffixed ISO for a naive backend timestamp", async () => {
+    const res: TraceList = {
+      data: [listItem({ trace_start_time: "2026-06-23T20:31:02.500000" })],
+      meta: META,
+    };
+    const { writers: w, out } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w, wide: true });
+    expect(out.data).toContain("2026-06-23T20:31:02.500Z");
+  });
+
+  it("--wide shows Z-suffixed ISO for an already-Z timestamp", async () => {
+    const res: TraceList = {
+      data: [listItem({ trace_start_time: "2026-06-23T20:31:02.000Z" })],
+      meta: META,
+    };
+    const { writers: w, out } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w, wide: true });
+    expect(out.data).toContain("2026-06-23T20:31:02.000Z");
   });
 });

@@ -10,7 +10,7 @@ import {
 } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { formatDuration, formatTimestamp, parseDuration } from "../../util/index.js";
+import { formatDuration, formatIsoUtc, formatTimestamp, parseDuration } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** Dependencies for the testable core of `traces list`. */
@@ -23,12 +23,24 @@ export interface RunListDeps {
   startAfter?: string;
   /** ISO 8601 upper bound (exclusive) forwarded as `end_before`. */
   endBefore?: string;
+  /** Original `--since` string for the footer label (e.g. `"2m"`). */
+  sinceLabel?: string;
+  /**
+   * IANA timezone override for the footer's human-local time display.
+   * Defaults to the system local zone. Tests inject `"America/Denver"` etc.
+   * for deterministic output.
+   */
+  timeZone?: string;
+  /** When true, adds a `STARTED ISO` column (UTC Z) for copy/paste. */
+  wide?: boolean;
 }
 
 /** Resolved, backend-ready ISO time bounds derived from the CLI time flags. */
 export interface TimeRange {
   startAfter?: string;
   endBefore?: string;
+  /** Original `--since` argument string (e.g. `"2m"`) for the footer. */
+  sinceLabel?: string;
 }
 
 /**
@@ -75,7 +87,7 @@ export function resolveTimeRange(
     if (Number.isNaN(startAfter.getTime())) {
       throw new CliError(`--since ${since} is too large`);
     }
-    return { startAfter: startAfter.toISOString() };
+    return { startAfter: startAfter.toISOString(), sinceLabel: since };
   }
   const range: TimeRange = {};
   if (from !== undefined) {
@@ -114,6 +126,59 @@ export function parseLimit(raw: string | undefined): number | undefined {
   return value;
 }
 
+/**
+ * Formats an ISO UTC timestamp into a human-readable local form:
+ * `Mon DD, YYYY h:MM:SS AM/PM TZ` (e.g. `Jun 23, 2026 2:29:54 PM MDT`).
+ * `timeZone` overrides the system local zone (tests inject a fixed zone for
+ * deterministic output).
+ */
+export function formatLocalDisplay(iso: string, timeZone?: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  const parts = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZone,
+    timeZoneName: "short",
+  }).formatToParts(date);
+  const pick = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  // e.g. "Jun 23, 2026 2:29:54 PM MDT"
+  return `${pick("month")} ${pick("day")}, ${pick("year")} ${pick("hour")}:${pick("minute")}:${pick("second")} ${pick("dayPeriod")} ${pick("timeZoneName")}`;
+}
+
+/**
+ * Returns the `<range>` portion of the compact footer line.
+ * Priority: sinceLabel → both bounds → from-only → to-only → all traces.
+ */
+export function renderRangeSummary(
+  range: { startAfter?: string; endBefore?: string; sinceLabel?: string },
+  timeZone?: string,
+): string {
+  if (range.sinceLabel !== undefined) {
+    return `since ${range.sinceLabel}`;
+  }
+  if (range.startAfter !== undefined && range.endBefore !== undefined) {
+    const from = formatLocalDisplay(range.startAfter, timeZone);
+    const to = formatLocalDisplay(range.endBefore, timeZone);
+    return `from ${from} to before ${to}`;
+  }
+  if (range.startAfter !== undefined) {
+    return `from ${formatLocalDisplay(range.startAfter, timeZone)}`;
+  }
+  if (range.endBefore !== undefined) {
+    return `before ${formatLocalDisplay(range.endBefore, timeZone)}`;
+  }
+  return "all traces";
+}
+
 type ListItem = Awaited<ReturnType<ApiClient["listTraces"]>>["data"][number];
 
 /**
@@ -135,7 +200,7 @@ function durationOf(item: ListItem): string {
 
 /** Core, network-free logic for `traces list`. Tests inject a fake client. */
 export async function runList(deps: RunListDeps): Promise<void> {
-  const { client, json, writers, limit, startAfter, endBefore } = deps;
+  const { client, json, writers, limit, startAfter, endBefore, sinceLabel, timeZone, wide } = deps;
   const params: { limit?: number; startAfter?: string; endBefore?: string } = {};
   if (limit !== undefined) {
     params.limit = limit;
@@ -153,15 +218,31 @@ export async function runList(deps: RunListDeps): Promise<void> {
     return;
   }
 
-  const headers = ["STARTED", "DURATION", "NAME", "ERRORS", "SPANS", "TRACE ID"];
-  const rows = res.data.map((item) => [
-    formatTimestamp(item.trace_start_time),
-    durationOf(item),
-    item.name ?? "",
-    String(item.error_count),
-    String(item.span_count),
-    item.trace_id,
-  ]);
+  let headers: string[];
+  let rows: string[][];
+
+  if (wide) {
+    headers = ["STARTED", "STARTED ISO", "DURATION", "NAME", "ERRORS", "SPANS", "TRACE ID"];
+    rows = res.data.map((item) => [
+      formatTimestamp(item.trace_start_time),
+      formatIsoUtc(item.trace_start_time),
+      durationOf(item),
+      item.name ?? "",
+      String(item.error_count),
+      String(item.span_count),
+      item.trace_id,
+    ]);
+  } else {
+    headers = ["STARTED", "DURATION", "NAME", "ERRORS", "SPANS", "TRACE ID"];
+    rows = res.data.map((item) => [
+      formatTimestamp(item.trace_start_time),
+      durationOf(item),
+      item.name ?? "",
+      String(item.error_count),
+      String(item.span_count),
+      item.trace_id,
+    ]);
+  }
 
   const styler = createStyler(writers.out);
   // Whole-row bright red for errored traces, via the shared error-color helper.
@@ -171,25 +252,15 @@ export async function runList(deps: RunListDeps): Promise<void> {
       (res.data[i]?.error_count ?? 0) > 0 ? colorizeError(line, writers.out) : line,
   });
   writers.out.write(`${rendered}\n`);
-  logProgress(`${res.data.length} trace(s)`, writers);
 
-  // Effective-range footer (stderr only, keeps stdout clean for | jq).
-  let rangeMsg: string;
-  if (startAfter !== undefined && endBefore !== undefined) {
-    rangeMsg = `Range: ${startAfter} <= started_at < ${endBefore}`;
-  } else if (startAfter !== undefined) {
-    rangeMsg = `Range: started_at >= ${startAfter}`;
-  } else if (endBefore !== undefined) {
-    rangeMsg = `Range: started_at < ${endBefore}`;
-  } else {
-    rangeMsg = "Range: all traces";
-  }
-  logProgress(rangeMsg, writers);
+  // Compact one-line footer: "<n> trace(s) | <range>"
+  const rangeText = renderRangeSummary({ startAfter, endBefore, sinceLabel }, timeZone);
+  logProgress(`${res.data.length} trace(s) | ${rangeText}`, writers);
 
   // ISO copy-paste tip shown only when no time filter was applied.
   if (startAfter === undefined && endBefore === undefined) {
     logProgress(
-      "Tip: displayed times are local; filter with --since 24h or --from/--to using ISO 8601, e.g. --from 2026-06-23T14:29:54Z",
+      "Tip: STARTED is shown in local time; copy exact ISO with --wide or --json, then filter with --from/--to (ISO 8601, e.g. 2026-06-23T14:29:54Z).",
       writers,
     );
   }
@@ -209,6 +280,7 @@ export function registerTracesList(traces: Command): void {
       "--to <timestamp>",
       "only traces before this ISO 8601 time, e.g. 2026-06-23T14:29:54-06:00 (exclusive)",
     )
+    .option("--wide", "add a STARTED ISO column showing UTC ISO timestamps for copy/paste")
     .action(async (_opts, command: Command) => {
       // 1. Reject stray positional operands FIRST (before any API call).
       //    This catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
@@ -238,6 +310,8 @@ export function registerTracesList(traces: Command): void {
         limit,
         startAfter: range.startAfter,
         endBefore: range.endBefore,
+        sinceLabel: range.sinceLabel,
+        wide: Boolean(command.opts().wide),
       });
     });
 }

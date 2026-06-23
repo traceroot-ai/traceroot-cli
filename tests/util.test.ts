@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CliError } from "../src/output.js";
-import { formatTimestamp, parseDuration } from "../src/util/index.js";
+import { formatIsoUtc, formatTimestamp, parseDuration } from "../src/util/index.js";
 
 describe("parseDuration", () => {
   it("parses each supported unit into milliseconds", () => {
@@ -45,5 +45,25 @@ describe("formatTimestamp", () => {
 
   it("falls back to the raw string when unparseable", () => {
     expect(formatTimestamp("not-a-date", "UTC")).toBe("not-a-date");
+  });
+});
+
+describe("formatIsoUtc", () => {
+  it("returns a Z-suffixed ISO string for a naive (zone-less) backend timestamp", () => {
+    // Backend sends naive UTC timestamps without suffix
+    expect(formatIsoUtc("2026-06-23T20:31:02.000000")).toBe("2026-06-23T20:31:02.000Z");
+  });
+
+  it("returns a Z-suffixed ISO string for an already-Z timestamp", () => {
+    expect(formatIsoUtc("2026-06-23T20:31:02.000Z")).toBe("2026-06-23T20:31:02.000Z");
+  });
+
+  it("normalizes microsecond precision to milliseconds", () => {
+    // Backend can send 6-decimal microseconds; output should be 3-decimal
+    expect(formatIsoUtc("2026-06-23T20:31:02.500000")).toBe("2026-06-23T20:31:02.500Z");
+  });
+
+  it("falls back to empty string for an unparseable timestamp", () => {
+    expect(formatIsoUtc("not-a-date")).toBe("");
   });
 });
