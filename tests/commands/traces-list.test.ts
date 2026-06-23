@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import type { ApiClient, TraceList } from "../../src/api/client.js";
 import { buildProgram } from "../../src/cli.js";
-import { parseLimit, runList } from "../../src/commands/traces/list.js";
+import { parseLimit, resolveTimeRange, runList } from "../../src/commands/traces/list.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { runCli } from "../helpers/runCli.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -35,13 +35,13 @@ function listItem(over: Partial<TraceList["data"][number]>): TraceList["data"][n
 }
 
 interface FakeState {
-  lastListParams?: { limit?: number };
+  lastListParams?: { limit?: number; startAfter?: string; endBefore?: string };
 }
 
 function fakeClient(res: TraceList, state: FakeState = {}): ApiClient {
   return {
     whoami: () => Promise.reject(new Error("unused")),
-    listTraces: (params?: { limit?: number }) => {
+    listTraces: (params?: { limit?: number; startAfter?: string; endBefore?: string }) => {
       state.lastListParams = params;
       return Promise.resolve(res);
     },
@@ -188,6 +188,78 @@ describe("runList (--limit forwarding)", () => {
   });
 });
 
+describe("runList (time-range forwarding)", () => {
+  it("forwards startAfter and endBefore to listTraces", async () => {
+    const state: FakeState = {};
+    const res: TraceList = { data: [], meta: META };
+    const { writers: w } = writers();
+    await runList({
+      client: fakeClient(res, state),
+      json: false,
+      writers: w,
+      startAfter: "2024-01-01T00:00:00.000Z",
+      endBefore: "2024-02-01T00:00:00.000Z",
+    });
+    expect(state.lastListParams).toEqual({
+      startAfter: "2024-01-01T00:00:00.000Z",
+      endBefore: "2024-02-01T00:00:00.000Z",
+    });
+  });
+});
+
+describe("resolveTimeRange", () => {
+  const fixedNow = () => Date.parse("2024-06-15T12:00:00.000Z");
+
+  it("returns an empty range when no flags are given", () => {
+    expect(resolveTimeRange({})).toEqual({});
+  });
+
+  it("turns --since into a startAfter window ending now (no endBefore)", () => {
+    expect(resolveTimeRange({ since: "24h" }, fixedNow)).toEqual({
+      startAfter: "2024-06-14T12:00:00.000Z",
+    });
+  });
+
+  it("maps --from/--to to startAfter/endBefore", () => {
+    expect(resolveTimeRange({ from: "2024-01-01T00:00:00Z", to: "2024-02-01T00:00:00Z" })).toEqual({
+      startAfter: "2024-01-01T00:00:00.000Z",
+      endBefore: "2024-02-01T00:00:00.000Z",
+    });
+  });
+
+  it("treats a bare date as midnight UTC and a zone-less time as UTC", () => {
+    expect(resolveTimeRange({ from: "2024-03-04" }).startAfter).toBe("2024-03-04T00:00:00.000Z");
+    expect(resolveTimeRange({ from: "2024-03-04T09:30:00" }).startAfter).toBe(
+      "2024-03-04T09:30:00.000Z",
+    );
+  });
+
+  it("rejects --from at or after --to", () => {
+    expect(() =>
+      resolveTimeRange({ from: "2024-02-01T00:00:00Z", to: "2024-01-01T00:00:00Z" }),
+    ).toThrow(CliError);
+    expect(() =>
+      resolveTimeRange({ from: "2024-01-01T00:00:00Z", to: "2024-01-01T00:00:00Z" }),
+    ).toThrow(CliError);
+  });
+
+  it("rejects combining --since with --from or --to", () => {
+    expect(() => resolveTimeRange({ since: "24h", from: "2024-01-01T00:00:00Z" })).toThrow(
+      CliError,
+    );
+    expect(() => resolveTimeRange({ since: "24h", to: "2024-01-01T00:00:00Z" })).toThrow(CliError);
+  });
+
+  it("rejects an invalid duration or timestamp", () => {
+    expect(() => resolveTimeRange({ since: "soon" })).toThrow(CliError);
+    expect(() => resolveTimeRange({ from: "not-a-date" })).toThrow(CliError);
+  });
+
+  it("rejects a --since window so large it overflows the date range", () => {
+    expect(() => resolveTimeRange({ since: "99999999w" })).toThrow(CliError);
+  });
+});
+
 describe("parseLimit", () => {
   it("returns undefined when absent", () => {
     expect(parseLimit(undefined)).toBeUndefined();
@@ -212,6 +284,9 @@ describe("traces list command surface", () => {
     const list = traces.commands.find((c) => c.name() === "list") as Command;
     const optionNames = list.options.map((o) => o.long);
     expect(optionNames).toContain("--limit");
+    expect(optionNames).toContain("--since");
+    expect(optionNames).toContain("--from");
+    expect(optionNames).toContain("--to");
     expect(optionNames).not.toContain("--status");
   });
 

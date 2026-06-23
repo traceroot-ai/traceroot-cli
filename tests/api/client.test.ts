@@ -48,6 +48,29 @@ describe("createApiClient", () => {
     expect(calls[1]?.url.includes("?limit")).toBe(false);
   });
 
+  it("sends time-range bounds as start_after/end_before", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ traces: [] }));
+    await client.listTraces({
+      limit: 10,
+      startAfter: "2024-01-01T00:00:00.000Z",
+      endBefore: "2024-02-01T00:00:00.000Z",
+    });
+    const url = new URL(calls[0]?.url as string);
+    expect(url.pathname).toBe("/api/v1/public/traces");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("start_after")).toBe("2024-01-01T00:00:00.000Z");
+    expect(url.searchParams.get("end_before")).toBe("2024-02-01T00:00:00.000Z");
+  });
+
+  it("omits a bound that is not provided", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ traces: [] }));
+    await client.listTraces({ startAfter: "2024-01-01T00:00:00.000Z" });
+    const url = new URL(calls[0]?.url as string);
+    expect(url.searchParams.get("start_after")).toBe("2024-01-01T00:00:00.000Z");
+    expect(url.searchParams.has("end_before")).toBe(false);
+    expect(url.searchParams.has("limit")).toBe(false);
+  });
+
   it("url-encodes the trace id for getTrace", async () => {
     const { client, calls } = clientWith(() => jsonResponse({ trace: {} }));
     await client.getTrace("a/b c");

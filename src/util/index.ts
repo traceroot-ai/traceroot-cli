@@ -1,3 +1,33 @@
+import { CliError } from "../output.js";
+
+const DURATION_UNITS_MS: Record<string, number> = {
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+  w: 604_800_000,
+};
+
+/**
+ * Parses a relative duration like `30m`, `6h`, `7d`, or `2w` into milliseconds.
+ * Units: `s` seconds, `m` minutes, `h` hours, `d` days, `w` weeks. Throws a
+ * {@link CliError} for anything that is not a positive integer count followed by
+ * a single supported unit.
+ */
+export function parseDuration(raw: string): number {
+  const match = /^(\d+)(s|m|h|d|w)$/.exec(raw.trim());
+  if (match === null) {
+    throw new CliError(
+      `invalid duration: "${raw}" (expected a count and unit, e.g. 30m, 6h, 7d, 2w)`,
+    );
+  }
+  const count = Number.parseInt(match[1] as string, 10);
+  if (count < 1) {
+    throw new CliError(`invalid duration: "${raw}" (must be a positive amount)`);
+  }
+  return count * (DURATION_UNITS_MS[match[2] as string] as number);
+}
+
 /**
  * Formats a millisecond duration as a compact human string: under one second
  * renders as whole milliseconds (`"850ms"`), otherwise seconds with one decimal

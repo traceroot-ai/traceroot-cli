@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { formatTimestamp } from "../src/util/index.js";
+import { CliError } from "../src/output.js";
+import { formatTimestamp, parseDuration } from "../src/util/index.js";
+
+describe("parseDuration", () => {
+  it("parses each supported unit into milliseconds", () => {
+    expect(parseDuration("45s")).toBe(45_000);
+    expect(parseDuration("30m")).toBe(30 * 60_000);
+    expect(parseDuration("6h")).toBe(6 * 3_600_000);
+    expect(parseDuration("7d")).toBe(7 * 86_400_000);
+    expect(parseDuration("2w")).toBe(2 * 604_800_000);
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseDuration("  12h  ")).toBe(12 * 3_600_000);
+  });
+
+  it("throws CliError on a missing or unknown unit", () => {
+    expect(() => parseDuration("10")).toThrow(CliError);
+    expect(() => parseDuration("10y")).toThrow(CliError);
+    expect(() => parseDuration("abc")).toThrow(CliError);
+    expect(() => parseDuration("")).toThrow(CliError);
+  });
+
+  it("throws CliError on a non-positive amount", () => {
+    expect(() => parseDuration("0h")).toThrow(CliError);
+  });
+});
 
 describe("formatTimestamp", () => {
   it("treats a zone-less backend timestamp as UTC and labels the zone", () => {
