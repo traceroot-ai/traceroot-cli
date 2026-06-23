@@ -4,13 +4,10 @@ import { configPath } from "../config/manager.js";
 import type { Context } from "../context.js";
 import { buildDoctorReport } from "../doctor/checks.js";
 import type { DoctorCheck, DoctorReport } from "../doctor/types.js";
-import { type Writers, colorEnabled, colorizeError, defaultWriters, writeJson } from "../output.js";
+import { type Writers, colorizeError, defaultWriters, writeJson } from "../output.js";
 import { createStyler } from "../render/style.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
-import { contextFromCommand } from "./shared.js";
-
-const ANSI_GREEN = "\x1b[32m";
-const ANSI_RESET = "\x1b[0m";
+import { contextFromCommand, withGlobalJsonHelp } from "./shared.js";
 
 /** Ordered category → human heading. */
 const CATEGORY_HEADINGS: ReadonlyArray<[DoctorCheck["category"], string]> = [
@@ -41,7 +38,7 @@ function recommendedNextStep(report: DoctorReport): string {
   if (find("api_key_resolved")?.status !== "pass") {
     return "traceroot login";
   }
-  if (find("skill_traceroot_instrument_repo")?.status !== "pass") {
+  if (find("skills_installed")?.status !== "pass") {
     return "traceroot skills install traceroot-instrument-repo --agent claude";
   }
   return "traceroot instrument --agent claude --print";
@@ -79,18 +76,17 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
   }
 
   const styler = createStyler(writers.out);
-  const color = colorEnabled(writers.out);
+  // Markers stay in the CLI's existing grammar: plain glyphs, with error-red the
+  // only color (no new green). `-` is a neutral "not yet" marker, kept full
+  // contrast (not dimmed) since the status is meaningful.
   const symbol = (check: DoctorCheck): string => {
     if (check.status === "fail") {
       return colorizeError("✗", writers.out);
     }
-    if (check.status === "warn") {
-      return styler.dim("-");
-    }
-    return color ? `${ANSI_GREEN}✓${ANSI_RESET}` : "✓";
+    return check.status === "warn" ? "-" : "✓";
   };
 
-  const sections: string[] = [styler.bold("TraceRoot doctor")];
+  const sections: string[] = ["TraceRoot doctor"];
   for (const [category, heading] of CATEGORY_HEADINGS) {
     const checks = report.checks.filter((c) => c.category === category);
     if (checks.length === 0) {
@@ -108,7 +104,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
 }
 
 export function registerDoctor(program: Command): void {
-  program
+  const doctor = program
     .command("doctor")
     .description("Diagnose credentials, repo shape, and installed skills")
     .action(async (_opts, command: Command) => {
@@ -133,4 +129,5 @@ export function registerDoctor(program: Command): void {
         process.exitCode = 1;
       }
     });
+  withGlobalJsonHelp(doctor);
 }

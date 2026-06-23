@@ -73,10 +73,37 @@ describe("runDoctor", () => {
       ctx: makeCtx({}),
     });
     const key = report.checks.find((c) => c.name === "api_key_resolved");
-    const skill = report.checks.find((c) => c.name === "skill_traceroot_instrument_repo");
+    const skill = report.checks.find((c) => c.name === "skills_installed");
     expect(key?.status).toBe("warn");
     expect(skill?.status).toBe("warn");
     expect(report.summary.fail).toBe(0);
+  });
+
+  it("clarifies the runtime-env message when CLI auth is from config but the env var is unset", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({
+      ...baseDeps(cwd, writers),
+      ctx: makeCtx({ apiKey: "tr_secret_value", host: "https://api.example.com" }),
+      verifyCredentials: async () => true,
+    });
+    const envKey = report.checks.find((c) => c.name === "env_api_key");
+    expect(envKey?.status).toBe("warn");
+    expect(envKey?.message).toContain("CLI auth is available from config");
+    expect(envKey?.message).toContain("runtime");
+  });
+
+  it("does not warn about absent Python files in a Node/TypeScript repo", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({
+      ...baseDeps(cwd, writers),
+      ctx: makeCtx({}),
+    });
+    const repoChecks = report.checks.filter((c) => c.category === "repo");
+    // Detected facts are reported as passes; nothing about absent pyproject/requirements.
+    expect(repoChecks.every((c) => c.status === "pass")).toBe(true);
+    expect(repoChecks.some((c) => c.message.includes("Node project detected"))).toBe(true);
+    expect(report.checks.some((c) => c.message.includes("pyproject.toml"))).toBe(false);
+    expect(report.checks.some((c) => c.message.includes("requirements.txt"))).toBe(false);
   });
 
   it("marks credentials invalid as a hard failure when verification fails", async () => {

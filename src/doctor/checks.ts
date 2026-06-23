@@ -125,66 +125,83 @@ function localFileChecks(input: DoctorInput): DoctorCheck[] {
   return checks;
 }
 
+/**
+ * Concise skill-readiness signal. Detailed per-skill status (which skills, where)
+ * is owned by `traceroot skills list --agent <agent>`; doctor only answers
+ * "are TraceRoot skills installed for the recommended agent yet?".
+ */
 function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
   const { cwd } = input;
-  const checks: DoctorCheck[] = [];
-  const detection = claudeAdapter.detect(cwd);
+  const skillsDir = claudeAdapter.detect(cwd).skillsDir;
+  const anyInstalled = BUILTIN_SKILLS.some((skill) =>
+    existsSync(join(skillsDir, skill.name, "SKILL.md")),
+  );
 
-  checks.push({
-    name: "claude_skills_dir",
-    category: "agent_skills",
-    status: existsSync(detection.skillsDir) ? "pass" : "warn",
-    message: existsSync(detection.skillsDir)
-      ? "Claude Code skills directory found"
-      : "Claude Code skills directory not found (.claude/skills).",
-  });
-
-  for (const skill of BUILTIN_SKILLS) {
-    const installed = existsSync(join(detection.skillsDir, skill.name, "SKILL.md"));
-    checks.push({
-      name: `skill_${skill.name.replace(/-/g, "_")}`,
+  return [
+    {
+      name: "skills_installed",
       category: "agent_skills",
-      status: installed ? "pass" : "warn",
-      message: installed ? `${skill.name} installed` : `${skill.name} not installed`,
+      status: anyInstalled ? "pass" : "warn",
+      message: anyInstalled
+        ? "TraceRoot skills installed for Claude Code (run `traceroot skills list` for details)"
+        : "No TraceRoot skills installed for Claude Code. Run `traceroot skills install traceroot-instrument-repo --agent claude`.",
+    },
+  ];
+}
+
+/**
+ * Summarizes the detected project shape as positive facts. Absent markers for a
+ * language the repo doesn't use are NOT warnings (a TypeScript repo shouldn't be
+ * dinged for having no pyproject.toml); only a repo with no recognized markers
+ * at all warns. JSON consumers can re-derive raw facts from `repo/detect`.
+ */
+function repoChecks(input: DoctorInput): DoctorCheck[] {
+  const { detection } = input;
+  const checks: DoctorCheck[] = [];
+
+  if (detection.hasPackageJson) {
+    checks.push({
+      name: "node_project",
+      category: "repo",
+      status: "pass",
+      message: "Node project detected: package.json",
+    });
+  }
+  if (detection.hasTsconfigJson) {
+    checks.push({
+      name: "typescript",
+      category: "repo",
+      status: "pass",
+      message: "TypeScript detected: tsconfig.json",
+    });
+  }
+  if (detection.hasPyprojectToml || detection.hasRequirementsTxt) {
+    const marker = detection.hasPyprojectToml ? "pyproject.toml" : "requirements.txt";
+    checks.push({
+      name: "python_project",
+      category: "repo",
+      status: "pass",
+      message: `Python project detected: ${marker}`,
+    });
+  }
+  if (detection.packageManager !== undefined) {
+    checks.push({
+      name: "package_manager",
+      category: "repo",
+      status: "pass",
+      message: `Package manager: ${detection.packageManager}`,
     });
   }
 
-  return checks;
-}
-
-function repoChecks(input: DoctorInput): DoctorCheck[] {
-  const { detection } = input;
-  const marker = (name: string, present: boolean, label: string): DoctorCheck => ({
-    name,
-    category: "repo",
-    status: present ? "pass" : "warn",
-    message: present ? `${label} found` : `${label} not found`,
-  });
-
-  const checks: DoctorCheck[] = [
-    marker("package_json", detection.hasPackageJson, "package.json"),
-    marker("pyproject_toml", detection.hasPyprojectToml, "pyproject.toml"),
-    marker("requirements_txt", detection.hasRequirementsTxt, "requirements.txt"),
-    marker("tsconfig_json", detection.hasTsconfigJson, "tsconfig.json"),
-  ];
-
-  const langs = detection.likelyLanguages;
-  checks.push({
-    name: "languages_detected",
-    category: "repo",
-    status: langs.length > 0 ? "pass" : "warn",
-    message: langs.length > 0 ? `Languages detected: ${langs.join(", ")}` : "No language detected",
-  });
-
-  checks.push({
-    name: "package_manager",
-    category: "repo",
-    status: detection.packageManager !== undefined ? "pass" : "warn",
-    message:
-      detection.packageManager !== undefined
-        ? `Package manager: ${detection.packageManager}`
-        : "Package manager not detected",
-  });
+  if (checks.length === 0) {
+    checks.push({
+      name: "project_markers",
+      category: "repo",
+      status: "warn",
+      message:
+        "No supported project markers found (package.json, pyproject.toml, requirements.txt).",
+    });
+  }
 
   return checks;
 }
@@ -193,22 +210,35 @@ function runtimeEnvChecks(input: DoctorInput): DoctorCheck[] {
   const { env, auth } = input;
   const hasKeyEnv =
     typeof env.TRACEROOT_API_KEY === "string" && env.TRACEROOT_API_KEY.trim() !== "";
-  const hasHost =
-    (typeof env.TRACEROOT_HOST_URL === "string" && env.TRACEROOT_HOST_URL.trim() !== "") ||
-    auth.hostUrl.value !== undefined;
+  const hasHostEnv =
+    typeof env.TRACEROOT_HOST_URL === "string" && env.TRACEROOT_HOST_URL.trim() !== "";
+  const cliAuthAvailable = auth.apiKey.value !== undefined;
+
+  // Distinguish "the CLI can authenticate" (config/flags) from "the env var is
+  // exported in this shell" — the instrumented app reads the latter at runtime,
+  // so an absent env var is not contradictory with resolved CLI credentials.
+  const keyMessage = hasKeyEnv
+    ? "TRACEROOT_API_KEY is set in this shell"
+    : cliAuthAvailable
+      ? "TRACEROOT_API_KEY is not set in this shell. CLI auth is available from config, but instrumented apps may need this env var at runtime."
+      : "TRACEROOT_API_KEY is not set in this shell; instrumented apps need it at runtime.";
 
   return [
     {
       name: "env_api_key",
       category: "runtime_env",
       status: hasKeyEnv ? "pass" : "warn",
-      message: hasKeyEnv ? "TRACEROOT_API_KEY is set" : "TRACEROOT_API_KEY is not set",
+      message: keyMessage,
     },
     {
       name: "env_host",
       category: "runtime_env",
-      status: hasHost ? "pass" : "warn",
-      message: hasHost ? "Host is available (env or config)" : "TRACEROOT_HOST_URL is not set",
+      status: hasHostEnv || auth.hostUrl.value !== undefined ? "pass" : "warn",
+      message: hasHostEnv
+        ? "TRACEROOT_HOST_URL is set in this shell"
+        : auth.hostUrl.value !== undefined
+          ? "TRACEROOT_HOST_URL is not set in this shell (host resolved from config for CLI use)."
+          : "TRACEROOT_HOST_URL is not set in this shell.",
     },
   ];
 }
