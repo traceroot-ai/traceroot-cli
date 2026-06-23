@@ -172,6 +172,27 @@ export async function runList(deps: RunListDeps): Promise<void> {
   });
   writers.out.write(`${rendered}\n`);
   logProgress(`${res.data.length} trace(s)`, writers);
+
+  // Effective-range footer (stderr only, keeps stdout clean for | jq).
+  let rangeMsg: string;
+  if (startAfter !== undefined && endBefore !== undefined) {
+    rangeMsg = `Range: ${startAfter} <= started_at < ${endBefore}`;
+  } else if (startAfter !== undefined) {
+    rangeMsg = `Range: started_at >= ${startAfter}`;
+  } else if (endBefore !== undefined) {
+    rangeMsg = `Range: started_at < ${endBefore}`;
+  } else {
+    rangeMsg = "Range: all traces";
+  }
+  logProgress(rangeMsg, writers);
+
+  // ISO copy-paste tip shown only when no time filter was applied.
+  if (startAfter === undefined && endBefore === undefined) {
+    logProgress(
+      "Tip: displayed times are local; filter with --since 24h or --from/--to using ISO 8601, e.g. --from 2026-06-23T14:29:54Z",
+      writers,
+    );
+  }
 }
 
 export function registerTracesList(traces: Command): void {
@@ -180,18 +201,36 @@ export function registerTracesList(traces: Command): void {
     .description("List traces")
     .option("--limit <n>", "maximum number of traces to return")
     .option("--since <duration>", "only traces within a window ending now, e.g. 30m, 6h, 7d, 2w")
-    .option("--from <timestamp>", "only traces at or after an ISO 8601 time (inclusive)")
-    .option("--to <timestamp>", "only traces before an ISO 8601 time (exclusive)")
+    .option(
+      "--from <timestamp>",
+      "only traces at or after this ISO 8601 time, e.g. 2026-06-23T14:29:54Z (inclusive)",
+    )
+    .option(
+      "--to <timestamp>",
+      "only traces before this ISO 8601 time, e.g. 2026-06-23T14:29:54-06:00 (exclusive)",
+    )
     .action(async (_opts, command: Command) => {
-      const ctx = contextFromCommand(command);
-      const client = requireApiClient(ctx);
+      // 1. Reject stray positional operands FIRST (before any API call).
+      //    This catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
+      if (command.args.length > 0) {
+        const joined = command.args.join(" ");
+        throw new CliError(
+          `unexpected argument(s): ${joined}. 'traces list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
+        );
+      }
       const opts = command.opts();
+      // 2. Validate --limit.
       const limit = parseLimit(opts.limit as string | undefined);
+      // 3. Resolve time range.
       const range = resolveTimeRange({
         since: opts.since as string | undefined,
         from: opts.from as string | undefined,
         to: opts.to as string | undefined,
       });
+      // 4. Require auth context and API client.
+      const ctx = contextFromCommand(command);
+      const client = requireApiClient(ctx);
+      // 5. Run the list.
       await runList({
         client,
         json: ctx.json,

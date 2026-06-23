@@ -277,6 +277,14 @@ describe("parseLimit", () => {
   });
 });
 
+describe("resolveTimeRange (additional cases)", () => {
+  it("parses an explicit UTC offset like 2026-06-23T14:29:54-06:00", () => {
+    const range = resolveTimeRange({ from: "2026-06-23T14:29:54-06:00" });
+    // -06:00 means 14:29:54 local = 20:29:54 UTC
+    expect(range.startAfter).toBe("2026-06-23T20:29:54.000Z");
+  });
+});
+
 describe("traces list command surface", () => {
   it("registers --limit and no --status option", () => {
     const program = buildProgram();
@@ -294,5 +302,145 @@ describe("traces list command surface", () => {
     const result = runCli("traces", "list", "--status", "ok");
     expect(result.status).not.toBe(0);
     expect(result.stderr.toLowerCase()).toContain("unknown option");
+  });
+
+  it("rejects stray positional args from a split local timestamp (hermetic)", () => {
+    // Simulates: traceroot traces list --from 2026-06-23 14:29:54 MDT
+    // Shell splits: --from=2026-06-23, then 14:29:54 and MDT become stray args
+    const result = runCli("traces", "list", "--from", "2026-06-23", "14:29:54", "MDT");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unexpected argument(s)");
+    expect(result.stderr).toContain("14:29:54");
+    expect(result.stderr).toContain("MDT");
+    expect(result.stderr).toContain("--from");
+    expect(result.stderr).toContain("ISO 8601");
+  });
+
+  it("rejects a generic stray positional argument (hermetic)", () => {
+    const result = runCli("traces", "list", "extra");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unexpected argument(s)");
+    expect(result.stderr).toContain("extra");
+    expect(result.stderr).toContain("ISO 8601");
+  });
+
+  it("still accepts a bare date --from with no stray args", () => {
+    // A lone --from 2026-06-23 (deliberate bare date) should NOT be rejected.
+    // Without API key it will fail on requireApiClient, not on stray-args or
+    // timestamp validation — proving the bare date was accepted as valid.
+    const result = runCli("traces", "list", "--from", "2026-06-23");
+    expect(result.status).not.toBe(0);
+    // Should NOT produce the stray-args message
+    expect(result.stderr).not.toContain("unexpected argument(s)");
+    // Should NOT produce the ISO 8601 rejection (i.e. the bare date was accepted)
+    expect(result.stderr).not.toContain("ISO 8601");
+    // Should fall through to the auth error, confirming that path was reached
+    expect(result.stderr.toLowerCase()).toContain("api key");
+  });
+});
+
+describe("runList footer (Range: line)", () => {
+  const res: TraceList = { data: [], meta: META };
+
+  it("emits 'Range: all traces' when no bounds are set", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w });
+    expect(err.data).toContain("Range: all traces");
+  });
+
+  it("emits lower-bound-only Range line when only startAfter is set", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res),
+      json: false,
+      writers: w,
+      startAfter: "2026-06-01T00:00:00.000Z",
+    });
+    expect(err.data).toContain("Range: started_at >= 2026-06-01T00:00:00.000Z");
+  });
+
+  it("emits upper-bound-only Range line when only endBefore is set", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res),
+      json: false,
+      writers: w,
+      endBefore: "2026-06-15T00:00:00.000Z",
+    });
+    expect(err.data).toContain("Range: started_at < 2026-06-15T00:00:00.000Z");
+  });
+
+  it("emits both-bounds Range line when startAfter and endBefore are set", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res),
+      json: false,
+      writers: w,
+      startAfter: "2026-06-01T00:00:00.000Z",
+      endBefore: "2026-06-15T00:00:00.000Z",
+    });
+    expect(err.data).toContain(
+      "Range: 2026-06-01T00:00:00.000Z <= started_at < 2026-06-15T00:00:00.000Z",
+    );
+  });
+
+  it("does NOT emit Range line in --json mode", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res), json: true, writers: w });
+    expect(err.data).not.toContain("Range:");
+  });
+});
+
+describe("runList tip line", () => {
+  const res: TraceList = { data: [], meta: META };
+
+  it("shows a tip when no time flag is set (no bounds)", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w });
+    expect(err.data).toContain("Tip:");
+    expect(err.data).toContain("ISO 8601");
+  });
+
+  it("does NOT show the tip when startAfter is set", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res),
+      json: false,
+      writers: w,
+      startAfter: "2026-06-01T00:00:00.000Z",
+    });
+    expect(err.data).not.toContain("Tip:");
+  });
+
+  it("suppresses the tip for a --since-style lower-bound-only range", async () => {
+    // --since always produces { startAfter: <iso>, endBefore: undefined }.
+    // The tip must be suppressed and the Range footer must be present.
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res),
+      json: false,
+      writers: w,
+      startAfter: "2026-06-22T00:00:00.000Z",
+      endBefore: undefined,
+    });
+    expect(err.data).toContain("Range: started_at >= 2026-06-22T00:00:00.000Z");
+    expect(err.data).not.toContain("Tip:");
+  });
+
+  it("does NOT show the tip when endBefore is set", async () => {
+    const { writers: w, err } = writers();
+    await runList({
+      client: fakeClient(res),
+      json: false,
+      writers: w,
+      endBefore: "2026-06-15T00:00:00.000Z",
+    });
+    expect(err.data).not.toContain("Tip:");
+  });
+
+  it("does NOT show the tip in --json mode", async () => {
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res), json: true, writers: w });
+    expect(err.data).not.toContain("Tip:");
   });
 });

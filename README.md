@@ -16,9 +16,15 @@ npm install -g traceroot-cli    # or install the `traceroot` command
 traceroot login --api-key tr_... --host https://app.traceroot.ai  # authenticate (saves ./.traceroot/config.json)
 traceroot status                      # confirm who you are
 traceroot traces list --limit 10      # list recent traces
+traceroot traces list --since 24h     # traces from the last 24 hours
+traceroot traces list --from "2026-06-23T14:29:54Z" --to "2026-06-23T20:00:00-06:00"  # explicit time range
 traceroot traces get <trace-id>       # inspect one
 traceroot traces export <trace-id>    # export its bundle to a directory
 ```
+
+> The `STARTED` column shows times in your local timezone. `--from`/`--to` require
+> ISO 8601 timestamps (no spaces); quote values to avoid shell splitting, e.g.
+> `--from "2026-06-23T14:29:54Z"` or `--from "2026-06-23T14:29:54-06:00"`.
 
 ## Configuration
 
@@ -50,7 +56,7 @@ traceroot traces list
 | :-- | :-- |
 | `login` | Authenticate and save credentials (validates before writing). |
 | `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
-| `traces list` | List traces for your project, newest first. `--limit <n>` |
+| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (ISO 8601, e.g. `"2026-06-23T14:29:54Z"`) |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
 
