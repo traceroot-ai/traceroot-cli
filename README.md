@@ -16,36 +16,9 @@ npm install -g traceroot-cli    # or install the `traceroot` command
 traceroot login --api-key tr_... --host https://app.traceroot.ai  # authenticate (saves ./.traceroot/config.json)
 traceroot status                      # confirm who you are
 traceroot traces list --limit 10      # list recent traces
-traceroot traces list --since 24h     # traces from the last 24 hours
-traceroot traces list --from 2026-06-23T20:31:02Z                # filter by UTC ISO timestamp
-traceroot traces list --from 2026-06-23T14:31:02-06:00           # filter by offset timestamp
-traceroot traces list --from "2026-06-23 14:31:02 MDT"           # quote a copied STARTED value
-traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:31:02Z  # explicit range
 traceroot traces get <trace-id>       # inspect one
 traceroot traces export <trace-id>    # export its bundle to a directory
 ```
-
-## Timestamp formats for `--from` / `--to`
-
-The `STARTED` column shows times in your local timezone. `--from` and `--to` accept three forms:
-
-| Form | Example | Notes |
-| :-- | :-- | :-- |
-| ISO 8601 UTC | `2026-06-23T20:31:02Z` | No spaces; no quoting needed |
-| ISO 8601 with offset | `2026-06-23T14:31:02-06:00` | No spaces; no quoting needed |
-| Quoted local display | `"2026-06-23 14:31:02 MDT"` | Must be quoted; copy from this CLI's `STARTED` column |
-
-**Quoted local display values** are LOCAL-zone values copied directly from this CLI's `STARTED` column. When the column shows a named abbreviation (e.g. `MDT`), the value is interpreted in your local IANA timezone and the abbreviation is verified to match — arbitrary non-local abbreviations are not supported. When the column shows a `GMT±offset` (e.g. `GMT+5:30`, as it does in some zones), the explicit offset is used directly. Values with spaces **must** be quoted as a single shell argument. Use ISO 8601 with an explicit offset for other zones or unambiguous values.
-
-```sh
-# ✓ Correct: quoted local display copied from STARTED
-traceroot traces list --from "2026-06-23 14:31:02 MDT"
-
-# ✗ Wrong: spaces without quotes cause shell splitting
-traceroot traces list --from 2026-06-23 14:31:02 MDT
-```
-
-Use `--json` to get `trace_start_time` as an unambiguous UTC ISO string.
 
 ## Configuration
 
@@ -77,7 +50,7 @@ traceroot traces list
 | :-- | :-- |
 | `login` | Authenticate and save credentials (validates before writing). |
 | `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
-| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (see [Timestamp formats](#timestamp-formats-for---from----to)) |
+| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
 
