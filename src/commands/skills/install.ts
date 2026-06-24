@@ -45,9 +45,7 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
   const skill = requireBuiltinSkill(skillName);
   const agent = await resolveAgentOrPrompt({
     agentId,
-    cwd,
     json,
-    writers,
     isInteractive: deps.isInteractive,
     prompt: deps.prompt,
     example: `traceroot skills install ${skill.name} --agent claude`,

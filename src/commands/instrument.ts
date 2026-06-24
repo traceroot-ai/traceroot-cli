@@ -69,9 +69,7 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
 
   const agent = await resolveAgentOrPrompt({
     agentId,
-    cwd,
     json,
-    writers,
     isInteractive: deps.isInteractive,
     prompt: deps.prompt,
     example: "traceroot instrument --agent claude --print",
