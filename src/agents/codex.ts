@@ -32,6 +32,6 @@ export const codexAdapter: AgentAdapter = {
     return { id: "codex", present: existsSync(home), skillsDir: join(home, SKILLS_SUBDIR) };
   },
   getUsageHint(skillName: string): string {
-    return `Codex will discover the "${skillName}" skill from its skills directory (~/.codex/skills).`;
+    return `Codex will discover the "${skillName}" skill from ${join(codexHome(), SKILLS_SUBDIR)}.`;
   },
 };
