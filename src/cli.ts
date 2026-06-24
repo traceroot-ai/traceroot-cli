@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { registerCommands } from "./commands/index.js";
 import { CliError, colorizeError, reportError } from "./output.js";
 import { getVersion } from "./version.js";
@@ -13,10 +13,35 @@ export function buildProgram(): Command {
   program.configureOutput({
     outputError: (str, write) => write(colorizeError(str)),
   });
-  // Surface program-wide global options (e.g. `--json`) in every subcommand's
+  // Surface program-wide global flags (e.g. `--json`) in every subcommand's
   // `--help` under a "Global Options" section, so they're discoverable where
-  // users look for them (e.g. `traceroot traces list --help`).
-  program.configureHelp({ showGlobalOptions: true });
+  // users look (e.g. `traceroot traces list --help`). `-h, --help` is available
+  // on every command, so it belongs there too — not repeated in each command's
+  // own "Options". The root command keeps `--help` in its "Options" (it has no
+  // "Global Options" section).
+  const notHidden = (o: Option): boolean => !(o as Option & { hidden?: boolean }).hidden;
+  const helpOption = (): Option => new Option("-h, --help", "display help for command");
+  program.configureHelp({
+    showGlobalOptions: true,
+    visibleOptions(cmd) {
+      const own = cmd.options.filter(notHidden);
+      if (cmd.parent === null) {
+        own.push(helpOption()); // root: keep `--help` in its own Options
+      }
+      return own;
+    },
+    visibleGlobalOptions(cmd) {
+      if (cmd.parent === null) {
+        return []; // root has no "Global Options" section
+      }
+      const globals: Option[] = [];
+      for (let ancestor: Command | null = cmd.parent; ancestor; ancestor = ancestor.parent) {
+        globals.push(...ancestor.options.filter(notHidden));
+      }
+      globals.push(helpOption()); // subcommands: `--help` is a global flag
+      return globals;
+    },
+  });
   // Global options (long-flag only to avoid clashing with -V/-h). Registered
   // before subcommands so they apply program-wide.
   program

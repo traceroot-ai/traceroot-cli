@@ -78,5 +78,8 @@ export function formatTimestamp(raw: string, timeZone?: string): string {
   }).formatToParts(date);
   const pick = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((p) => p.type === type)?.value ?? "";
-  return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}:${pick("second")} ${pick("timeZoneName")}`;
+  // Some ICU builds render local midnight as "24" with hour12:false — normalize
+  // to "00" so midnight is "00:00:00" consistently across platforms.
+  const hour = pick("hour") === "24" ? "00" : pick("hour");
+  return `${pick("year")}-${pick("month")}-${pick("day")} ${hour}:${pick("minute")}:${pick("second")} ${pick("timeZoneName")}`;
 }

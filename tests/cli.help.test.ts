@@ -33,6 +33,31 @@ describe("global --json discoverability in help", () => {
   });
 });
 
+describe("--help placement (Global Options for subcommands)", () => {
+  it("lists -h, --help under Global Options, not the command's own Options (traces list)", () => {
+    const { stdout } = runCli("traces", "list", "--help");
+    const idx = stdout.indexOf("Global Options");
+    expect(idx).toBeGreaterThan(-1);
+    // The command's own Options (before "Global Options") must NOT list --help.
+    expect(stdout.slice(0, idx)).not.toContain("--help");
+    // It appears in the Global Options section instead.
+    expect(stdout.slice(idx)).toContain("--help");
+  });
+
+  it("lists -h, --help under Global Options for an intermediate command (traces)", () => {
+    const { stdout } = runCli("traces", "--help");
+    const idx = stdout.indexOf("Global Options");
+    expect(idx).toBeGreaterThan(-1);
+    expect(stdout.slice(idx)).toContain("--help");
+  });
+
+  it("keeps -h, --help on the root help and gives it no Global Options section", () => {
+    const { stdout } = runCli("--help");
+    expect(stdout).toContain("--help");
+    expect(stdout).not.toContain("Global Options");
+  });
+});
+
 describe("traceroot (no command)", () => {
   it("prints help to stderr and exits non-zero", () => {
     const { stdout, stderr, status } = runCli();

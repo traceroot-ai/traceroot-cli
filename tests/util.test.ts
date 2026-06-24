@@ -46,4 +46,12 @@ describe("formatTimestamp", () => {
   it("falls back to the raw string when unparseable", () => {
     expect(formatTimestamp("not-a-date", "UTC")).toBe("not-a-date");
   });
+
+  it("renders local midnight as 00:00:00, not 24:00:00 (ICU-independent)", () => {
+    // 06:00 UTC = midnight MDT. Some ICU builds emit "24" with hour12:false.
+    expect(formatTimestamp("2026-06-23T06:00:00.000Z", "America/Denver")).toBe(
+      "2026-06-23 00:00:00 MDT",
+    );
+    expect(formatTimestamp("2026-06-23T00:00:00Z", "UTC")).toBe("2026-06-23 00:00:00 UTC");
+  });
 });
