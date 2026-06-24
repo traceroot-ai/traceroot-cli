@@ -119,6 +119,22 @@ describe("runDoctor", () => {
     expect(out.data).toContain("\x1b[91m✗\x1b[0m API key not found");
   });
 
+  it("redacts embedded credentials/query from the resolved host (shows origin only)", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({
+      ...baseDeps(cwd, writers),
+      ctx: makeCtx({
+        apiKey: "tr_x",
+        host: "https://user:pass@app.traceroot.ai:8443/p?token=SEKRET",
+      }),
+      verifyCredentials: async () => true,
+    });
+    const host = report.checks.find((c) => c.name === "host_resolved");
+    expect(host?.message).toBe("Host resolved: https://app.traceroot.ai:8443");
+    expect(host?.message).not.toContain("user:pass");
+    expect(host?.message).not.toContain("SEKRET");
+  });
+
   it("runtime-env warnings carry no semicolon explanatory clauses", async () => {
     const { writers } = makeWriters();
     const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });

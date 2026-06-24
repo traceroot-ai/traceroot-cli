@@ -16,6 +16,21 @@ export interface DoctorInput {
   env: NodeJS.ProcessEnv;
 }
 
+/**
+ * Reduces a host URL to its origin (`scheme://host[:port]`) for display, dropping
+ * any embedded userinfo (`user:pass@`), path, query, or fragment so credentials
+ * or tokens in the configured host can never leak into doctor output. Falls back
+ * to a generic phrase if the value can't be parsed as a URL.
+ */
+function safeHostOrigin(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "(set)";
+  }
+}
+
 /** Friendly description of where a credential resolved from (no secret values). */
 function describeSource(source: AuthSource, configPath: string): string {
   switch (source) {
@@ -56,7 +71,9 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     category: "credentials",
     status: host !== undefined ? "pass" : "fail",
     message:
-      host !== undefined ? `Host resolved: ${host}` : "Host not found. Run `traceroot login`.",
+      host !== undefined
+        ? `Host resolved: ${safeHostOrigin(host)}`
+        : "Host not found. Run `traceroot login`.",
   });
 
   // Only assert validity when we actually attempted a check.
