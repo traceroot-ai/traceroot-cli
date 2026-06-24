@@ -64,12 +64,15 @@ describe("resolveSkillOrPrompt (interactive)", () => {
   it("lists the available skills (name + description) before prompting", async () => {
     const { writers, err } = makeWriters();
     let asked = "";
+    let listShownBeforePrompt = false;
     await resolveSkillOrPrompt({
       skillName: undefined,
       json: false,
       isInteractive: true,
       writers,
       prompt: async (q) => {
+        // Capture whether the list was already printed when the prompt fired.
+        listShownBeforePrompt = err.data.includes("Available skills:");
         asked = q;
         return "";
       },
@@ -78,8 +81,8 @@ describe("resolveSkillOrPrompt (interactive)", () => {
     expect(err.data).toContain("traceroot-instrument-repo");
     expect(err.data).toContain("traceroot-quickstart");
     expect(err.data).toContain("Add TraceRoot tracing"); // a description snippet
-    // The list is rendered before the compact prompt.
-    expect(err.data.indexOf("Available skills:")).toBeLessThan(err.data.length);
+    // The list is rendered BEFORE the compact prompt is shown.
+    expect(listShownBeforePrompt).toBe(true);
     // ANSI-stripped so the assertion holds whether or not the default is dimmed.
     const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
     expect(asked.replace(ansi, "")).toBe("Skill (default: traceroot-instrument-repo): ");

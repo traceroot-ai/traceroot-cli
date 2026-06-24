@@ -92,6 +92,20 @@ describe("installBundledSkill", () => {
     expect(leftovers).toHaveLength(0);
   });
 
+  it("cleans up the temp dir and leaves an existing target intact when a copy fails", () => {
+    // Make the target's parent a FILE so mkdir/copy under it throws mid-install.
+    const parent = join(root, "afile");
+    writeFileSync(parent, "x", "utf8");
+    const target = join(parent, "skill");
+    expect(() =>
+      installBundledSkill({ sourceDir: source, targetDir: target, force: false, dryRun: false }),
+    ).toThrow(CliError);
+    // No stray temp directory left behind anywhere under root…
+    expect(readdirSync(root).filter((n) => n.includes(".tmp"))).toHaveLength(0);
+    // …and the pre-existing file (the "target's parent") is untouched.
+    expect(readFileSync(parent, "utf8")).toBe("x");
+  });
+
   it("refuses to install a bundle containing a symlink", () => {
     const evilSource = join(root, "evil");
     mkdirSync(evilSource, { recursive: true });

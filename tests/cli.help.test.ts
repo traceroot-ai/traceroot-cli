@@ -85,6 +85,22 @@ describe("traceroot instrument (bare, non-interactive)", () => {
   });
 });
 
+describe("global --json position for new commands (spawned)", () => {
+  it("accepts --json in the trailing position and emits one JSON document", () => {
+    const { stdout, status } = runCli("skills", "list", "--json");
+    expect(status).toBe(0);
+    expect(stdout.trimEnd().split("\n")).toHaveLength(1);
+    const parsed = JSON.parse(stdout) as { data: unknown[] };
+    expect(Array.isArray(parsed.data)).toBe(true);
+  });
+
+  it("accepts --json in the leading position too", () => {
+    const { stdout, status } = runCli("--json", "skills", "list");
+    expect(status).toBe(0);
+    expect(() => JSON.parse(stdout)).not.toThrow();
+  });
+});
+
 describe("traceroot --json (root)", () => {
   it("prints normal help rather than JSON, since root has no JSON data operation", () => {
     const { stdout, stderr } = runCli("--json");

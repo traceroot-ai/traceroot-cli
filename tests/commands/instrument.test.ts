@@ -102,7 +102,7 @@ describe("runInstrument (file write)", () => {
     expect(out.data).toContain("\x1b[2mdocs/prompt.md\x1b[0m");
   });
 
-  it("reports the written size with grouped bytes and an MB value (stderr)", async () => {
+  it("reports the written size with grouped bytes and a KB value (stderr)", async () => {
     const { writers, err } = makeWriters();
     await runInstrument({
       ...base,
