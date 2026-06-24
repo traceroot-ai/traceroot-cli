@@ -216,19 +216,16 @@ function repoChecks(input: DoctorInput): DoctorCheck[] {
 
 /**
  * Reports whether the runtime env vars an instrumented app reads are exported in
- * THIS shell. This is distinct from CLI auth/config readiness (covered under
- * Credentials): a var absent from the shell is a neutral warning, never a green
- * pass — even when the CLI itself resolves the value from config. That avoids the
- * confusing "✓ … is not set" rows.
+ * THIS shell — distinct from CLI auth/config readiness (covered under
+ * Credentials). A var absent from the shell is a neutral warning, never a green
+ * pass. Messages are kept terse (no semicolon explanations).
  */
 function runtimeEnvChecks(input: DoctorInput): DoctorCheck[] {
-  const { env, auth } = input;
+  const { env } = input;
   const hasKeyEnv =
     typeof env.TRACEROOT_API_KEY === "string" && env.TRACEROOT_API_KEY.trim() !== "";
   const hasHostEnv =
     typeof env.TRACEROOT_HOST_URL === "string" && env.TRACEROOT_HOST_URL.trim() !== "";
-  const cliKeyResolved = auth.apiKey.value !== undefined;
-  const cliHostResolved = auth.hostUrl.value !== undefined;
 
   return [
     {
@@ -237,9 +234,7 @@ function runtimeEnvChecks(input: DoctorInput): DoctorCheck[] {
       status: hasKeyEnv ? "pass" : "warn",
       message: hasKeyEnv
         ? "TRACEROOT_API_KEY is set in this shell"
-        : cliKeyResolved
-          ? "TRACEROOT_API_KEY is not set in this shell; instrumented apps may need it at runtime (CLI auth is resolved from config)."
-          : "TRACEROOT_API_KEY is not set in this shell; instrumented apps may need it at runtime.",
+        : "TRACEROOT_API_KEY is not set in this shell",
     },
     {
       name: "env_host",
@@ -247,9 +242,7 @@ function runtimeEnvChecks(input: DoctorInput): DoctorCheck[] {
       status: hasHostEnv ? "pass" : "warn",
       message: hasHostEnv
         ? "TRACEROOT_HOST_URL is set in this shell"
-        : cliHostResolved
-          ? "TRACEROOT_HOST_URL is not set in this shell; CLI host is resolved from config."
-          : "TRACEROOT_HOST_URL is not set in this shell.",
+        : "TRACEROOT_HOST_URL is not set in this shell",
     },
   ];
 }

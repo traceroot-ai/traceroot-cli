@@ -32,19 +32,6 @@ export interface RunDoctorDeps {
   detection?: RepoDetection;
 }
 
-/** Picks the single most useful follow-up command from the report. */
-function recommendedNextStep(report: DoctorReport): string {
-  const find = (name: string): DoctorCheck | undefined =>
-    report.checks.find((c) => c.name === name);
-  if (find("api_key_resolved")?.status !== "pass") {
-    return "traceroot login";
-  }
-  if (find("skill_instrument")?.status !== "pass") {
-    return "traceroot skills install traceroot-instrument-repo --agent claude";
-  }
-  return "traceroot instrument --agent claude --print";
-}
-
 /**
  * Runs all diagnostics and renders the report. Validates credentials over the
  * network only when both are present (so a fresh repo never errors). Returns the
@@ -92,9 +79,6 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
     ];
     sections.push(lines.join("\n"));
   }
-  sections.push(
-    [styler.bold("Recommended next step:"), `  ${recommendedNextStep(report)}`].join("\n"),
-  );
 
   writers.out.write(`${sections.join("\n\n")}\n`);
   return report;

@@ -103,9 +103,11 @@ describe("runDoctor", () => {
     // No green "✓ ... is not set": shell-env checks warn, even though CLI auth resolved.
     expect(envKey?.status).toBe("warn");
     expect(envHost?.status).toBe("warn");
-    expect(envKey?.message).toContain("CLI auth is resolved from config");
-    expect(envKey?.message).toContain("runtime");
-    expect(envHost?.message).toContain("CLI host is resolved from config");
+    // Terse wording: no semicolon explanatory clause.
+    expect(envKey?.message).toBe("TRACEROOT_API_KEY is not set in this shell");
+    expect(envHost?.message).toBe("TRACEROOT_HOST_URL is not set in this shell");
+    expect(envKey?.message).not.toContain(";");
+    expect(envHost?.message).not.toContain(";");
   });
 
   it("does not warn about absent Python files in a Node/TypeScript repo", async () => {
@@ -161,6 +163,12 @@ describe("runDoctor", () => {
       verifyCredentials: async () => true,
     });
     expect(jsonW.out.data).not.toContain(FULL);
+  });
+
+  it("omits the recommended-next-step block from human output", async () => {
+    const { writers, out } = makeWriters();
+    await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+    expect(out.data).not.toContain("Recommended next step");
   });
 
   it("emits valid JSON with data.checks and data.summary", async () => {
