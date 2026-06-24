@@ -38,11 +38,13 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
   const { auth, configPath, credentialsValid } = input;
   const checks: DoctorCheck[] = [];
 
+  // API key and host are required for CLI readiness, so their absence is a hard
+  // failure (red ✗ + non-zero exit), not a neutral warning.
   const hasKey = auth.apiKey.value !== undefined;
   checks.push({
     name: "api_key_resolved",
     category: "credentials",
-    status: hasKey ? "pass" : "warn",
+    status: hasKey ? "pass" : "fail",
     message: hasKey
       ? `API key resolved from ${describeSource(auth.apiKey.source, configPath)}`
       : "No API key found. Run `traceroot login`, set TRACEROOT_API_KEY, or pass --api-key.",
@@ -52,7 +54,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
   checks.push({
     name: "host_resolved",
     category: "credentials",
-    status: host !== undefined ? "pass" : "warn",
+    status: host !== undefined ? "pass" : "fail",
     message:
       host !== undefined
         ? `Host resolved: ${host}`

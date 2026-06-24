@@ -66,17 +66,20 @@ describe("runDoctor", () => {
     expect(total).toBe(report.checks.length);
   });
 
-  it("treats missing credentials and skills as warnings, never crashing", async () => {
+  it("treats missing API key and host as required failures, but a missing skill as a warning", async () => {
     const { writers } = makeWriters();
     const report = await runDoctor({
       ...baseDeps(cwd, writers),
       ctx: makeCtx({}),
     });
     const key = report.checks.find((c) => c.name === "api_key_resolved");
+    const host = report.checks.find((c) => c.name === "host_resolved");
     const skill = report.checks.find((c) => c.name === "skill_instrument");
-    expect(key?.status).toBe("warn");
+    // Required credentials → fail (red ✗); optional skill → warn (gray -).
+    expect(key?.status).toBe("fail");
+    expect(host?.status).toBe("fail");
     expect(skill?.status).toBe("warn");
-    expect(report.summary.fail).toBe(0);
+    expect(report.summary.fail).toBeGreaterThanOrEqual(2);
   });
 
   it("treats the quickstart skill as optional and the instrumentation skill as the readiness signal", async () => {
