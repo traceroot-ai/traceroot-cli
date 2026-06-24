@@ -61,7 +61,22 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
     return;
   }
 
-  const resolvedKey = deps.resolvedApiKey?.trim();
+  let resolvedKey = deps.resolvedApiKey?.trim();
+  let resolvedHost = deps.resolvedHost?.trim();
+
+  if (alreadyLoggedIn) {
+    // Interactive: warn and offer a fresh login.
+    logInfo(`Already logged in to ${currentHost}.`, writers);
+    const proceed = await deps.promptConfirm("Re-login with a different account? [y/N]: ");
+    if (!proceed) {
+      logInfo("Keeping current session.", writers);
+      return;
+    }
+    // User opted to switch: ignore persisted creds and prompt fresh below.
+    resolvedKey = undefined;
+    resolvedHost = undefined;
+  }
+
   let apiKey: string;
   if (resolvedKey !== undefined && resolvedKey !== "") {
     apiKey = resolvedKey;
@@ -74,7 +89,6 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
     throw new CliError(MISSING_KEY);
   }
 
-  const resolvedHost = deps.resolvedHost?.trim();
   let host: string;
   if (resolvedHost !== undefined && resolvedHost !== "") {
     host = resolvedHost;

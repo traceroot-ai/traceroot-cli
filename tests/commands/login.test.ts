@@ -220,3 +220,49 @@ describe("runLogin already logged in (non-interactive)", () => {
     expect(h.out.data).not.toContain(FULL_TOKEN);
   });
 });
+
+describe("runLogin already logged in (interactive)", () => {
+  it("aborts and keeps the session when the user declines re-login", async () => {
+    const h = makeHarness();
+    let confirmAsked = 0;
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://h",
+        isInteractive: true,
+        promptConfirm: () => {
+          confirmAsked += 1;
+          return Promise.resolve(false);
+        },
+      }),
+    );
+
+    expect(confirmAsked).toBe(1);
+    expect(h.writeConfigCalls).toHaveLength(0);
+    expect(h.createClientCalls).toHaveLength(0);
+    expect(h.err.data).toContain("Already logged in");
+  });
+
+  it("re-prompts for fresh credentials and writes the new account on accept", async () => {
+    const h = makeHarness();
+    const NEW_TOKEN = "tr_new_TOKEN";
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN, // persisted creds — must be ignored on accept
+        resolvedHost: "https://old-host",
+        isInteractive: true,
+        promptConfirm: () => Promise.resolve(true),
+        promptHidden: () => Promise.resolve(NEW_TOKEN),
+        promptVisible: () => Promise.resolve("https://new-host"),
+      }),
+    );
+
+    expect(h.createClientCalls[0]).toEqual({ host: "https://new-host", apiKey: NEW_TOKEN });
+    expect(h.writeConfigCalls).toHaveLength(1);
+    expect(h.writeConfigCalls[0]).toEqual({ api_key: NEW_TOKEN, host_url: "https://new-host" });
+    expect(h.out.data).not.toContain(FULL_TOKEN);
+    expect(h.out.data).not.toContain(NEW_TOKEN);
+  });
+});
