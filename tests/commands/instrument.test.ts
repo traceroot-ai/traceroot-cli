@@ -70,10 +70,19 @@ describe("runInstrument (--print)", () => {
   });
 });
 
+const DEFAULT_OUTPUT = ".traceroot/prompts/instrument-repo.md";
+
 describe("runInstrument (file write)", () => {
-  it("writes the default .traceroot/prompts/instrument-repo.md", async () => {
+  it("writes the prompt to the given --output path", async () => {
     const { writers } = makeWriters();
-    await runInstrument({ ...base, cwd, print: false, writers, detection: tsDetection });
+    await runInstrument({
+      ...base,
+      cwd,
+      print: false,
+      outputPath: DEFAULT_OUTPUT,
+      writers,
+      detection: tsDetection,
+    });
     const target = join(cwd, ".traceroot", "prompts", "instrument-repo.md");
     expect(existsSync(target)).toBe(true);
     expect(readFileSync(target, "utf8")).toContain("Instrument this repository");
@@ -81,22 +90,60 @@ describe("runInstrument (file write)", () => {
 
   it("reports the written size with grouped bytes and an MB value (stderr)", async () => {
     const { writers, err } = makeWriters();
-    await runInstrument({ ...base, cwd, print: false, writers, detection: tsDetection });
+    await runInstrument({
+      ...base,
+      cwd,
+      print: false,
+      outputPath: DEFAULT_OUTPUT,
+      writers,
+      detection: tsDetection,
+    });
     expect(err.data).toMatch(/\d,\d{3} bytes \(\d+\.\d MB\)/);
   });
 
-  it("refuses to overwrite an existing prompt without --force", async () => {
+  it("refuses to overwrite an existing prompt without --force (non-interactive)", async () => {
     const { writers } = makeWriters();
-    const args = { ...base, cwd, print: false, writers, detection: tsDetection };
+    const args = {
+      ...base,
+      cwd,
+      print: false,
+      outputPath: DEFAULT_OUTPUT,
+      isInteractive: false,
+      writers,
+      detection: tsDetection,
+    };
     await runInstrument(args);
     await expect(runInstrument(args)).rejects.toBeInstanceOf(CliError);
   });
 
   it("overwrites with --force", async () => {
     const { writers } = makeWriters();
-    const args = { ...base, cwd, print: false, writers, detection: tsDetection };
+    const args = {
+      ...base,
+      cwd,
+      print: false,
+      outputPath: DEFAULT_OUTPUT,
+      writers,
+      detection: tsDetection,
+    };
     await runInstrument(args);
     await expect(runInstrument({ ...args, force: true })).resolves.toBeUndefined();
+  });
+
+  it("requires --output when writing non-interactively (no --print)", async () => {
+    const { writers, out } = makeWriters();
+    await expect(
+      runInstrument({
+        ...base,
+        cwd,
+        print: false,
+        isInteractive: false,
+        writers,
+        detection: tsDetection,
+      }),
+    ).rejects.toThrow(/Missing required option --output/);
+    expect(existsSync(join(cwd, ".traceroot"))).toBe(false);
+    expect(out.data).toBe("");
   });
 
   it("honors a custom --output path and reports it in JSON", async () => {
@@ -121,9 +168,155 @@ describe("runInstrument (file write)", () => {
   it("derives repo facts from cwd when no detection is injected", async () => {
     writeFileSync(join(cwd, "pyproject.toml"), "", "utf8");
     const { writers } = makeWriters();
-    await runInstrument({ ...base, cwd, print: false, writers });
+    await runInstrument({ ...base, cwd, print: false, outputPath: DEFAULT_OUTPUT, writers });
     const target = join(cwd, ".traceroot", "prompts", "instrument-repo.md");
     expect(readFileSync(target, "utf8")).toContain("pyproject.toml: present");
+  });
+});
+
+/** A prompt fn keyed on the question text, returning scripted answers per field. */
+function scripted(answers: { agent?: string; output?: string; overwrite?: string }) {
+  return async (q: string): Promise<string> => {
+    if (q.includes("Overwrite?")) return answers.overwrite ?? "";
+    if (q.startsWith("Agent (")) return answers.agent ?? "";
+    if (q.startsWith("Output path")) return answers.output ?? "";
+    throw new Error(`unexpected prompt: ${q}`);
+  };
+}
+
+describe("runInstrument (interactive)", () => {
+  it("bare command prompts for agent then output path; empty input picks defaults", async () => {
+    const { writers } = makeWriters();
+    await runInstrument({
+      ...base,
+      agentId: undefined,
+      cwd,
+      print: false,
+      isInteractive: true,
+      prompt: scripted({ agent: "", output: "" }),
+      writers,
+      detection: tsDetection,
+    });
+    const target = join(cwd, ".traceroot", "prompts", "instrument-repo.md");
+    expect(existsSync(target)).toBe(true);
+    // Empty agent → claude (the prompt references the claude install command).
+    expect(readFileSync(target, "utf8")).toContain("--agent claude");
+  });
+
+  it("with --agent provided, prompts only for the output path", async () => {
+    const { writers } = makeWriters();
+    await runInstrument({
+      ...base,
+      agentId: "codex",
+      cwd,
+      print: false,
+      isInteractive: true,
+      prompt: scripted({ output: "" }),
+      writers,
+      detection: tsDetection,
+    });
+    const target = join(cwd, ".traceroot", "prompts", "instrument-repo.md");
+    expect(readFileSync(target, "utf8")).toContain("--agent codex");
+  });
+
+  it("with --output provided, prompts only for the agent", async () => {
+    const { writers } = makeWriters();
+    await runInstrument({
+      ...base,
+      agentId: undefined,
+      cwd,
+      print: false,
+      outputPath: "docs/p.md",
+      isInteractive: true,
+      prompt: scripted({ agent: "" }),
+      writers,
+      detection: tsDetection,
+    });
+    expect(existsSync(join(cwd, "docs", "p.md"))).toBe(true);
+  });
+
+  it("with explicit agent and output, prompts for nothing", async () => {
+    const { writers } = makeWriters();
+    const prompt = async (q: string): Promise<string> => {
+      throw new Error(`should not prompt: ${q}`);
+    };
+    await runInstrument({
+      ...base,
+      agentId: "claude",
+      cwd,
+      print: false,
+      outputPath: "docs/p.md",
+      isInteractive: true,
+      prompt,
+      writers,
+      detection: tsDetection,
+    });
+    expect(existsSync(join(cwd, "docs", "p.md"))).toBe(true);
+  });
+
+  it("--print prompts only for the agent (no output path prompt)", async () => {
+    const { writers, out } = makeWriters();
+    await runInstrument({
+      ...base,
+      agentId: undefined,
+      cwd,
+      print: true,
+      isInteractive: true,
+      // scripted() throws on an unexpected "Output path" question.
+      prompt: scripted({ agent: "codex" }),
+      writers,
+      detection: tsDetection,
+    });
+    expect(out.data).toContain("--agent codex");
+    expect(existsSync(join(cwd, ".traceroot"))).toBe(false);
+  });
+});
+
+describe("runInstrument (interactive overwrite)", () => {
+  const seed = {
+    ...base,
+    agentId: "claude",
+    print: false,
+    outputPath: DEFAULT_OUTPUT,
+    isInteractive: true,
+    detection: tsDetection,
+  } as const;
+
+  it("'y' overwrites an existing prompt", async () => {
+    await runInstrument({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
+    await expect(
+      runInstrument({
+        ...seed,
+        cwd,
+        prompt: scripted({ overwrite: "y" }),
+        writers: makeWriters().writers,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("declining with empty input aborts (non-zero) and keeps the file", async () => {
+    await runInstrument({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
+    const target = join(cwd, ".traceroot", "prompts", "instrument-repo.md");
+    writeFileSync(target, "ORIGINAL", "utf8");
+    await expect(
+      runInstrument({
+        ...seed,
+        cwd,
+        prompt: scripted({ overwrite: "" }),
+        writers: makeWriters().writers,
+      }),
+    ).rejects.toThrow(/Aborted/);
+    expect(readFileSync(target, "utf8")).toBe("ORIGINAL");
+  });
+
+  it("--force skips the overwrite prompt", async () => {
+    await runInstrument({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
+    const prompt = async (q: string): Promise<string> => {
+      throw new Error(`should not prompt with --force: ${q}`);
+    };
+    await expect(
+      runInstrument({ ...seed, cwd, force: true, prompt, writers: makeWriters().writers }),
+    ).resolves.toBeUndefined();
   });
 });
 

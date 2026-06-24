@@ -11,6 +11,7 @@ import {
   logProgress,
   writeJson,
 } from "../output.js";
+import { confirm, isInteractive, readLine } from "../prompt.js";
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
@@ -58,20 +59,22 @@ function atomicWrite(target: string, content: string): void {
 }
 
 /**
- * Generates the Claude Code-ready instrumentation prompt for the current repo.
- * With `--print` the prompt goes to stdout; otherwise it is written to
- * `--output` (or the default `.traceroot/prompts/instrument-repo.md`), refusing
- * to overwrite without `--force`. Never edits application source or embeds
- * secrets.
+ * Generates the agent-ready instrumentation prompt for the current repo. The
+ * agent is resolved from `--agent` or, in an interactive TTY, prompted. With
+ * `--print` the prompt goes to stdout; otherwise it is written to `--output`, or
+ * to an interactively prompted path (default `.traceroot/prompts/instrument-repo.md`),
+ * confirming before overwriting. Never edits application source or embeds secrets.
  */
 export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
   const { agentId, cwd, print, outputPath, force, json, writers } = deps;
+  const interactive = deps.isInteractive ?? isInteractive();
+  const prompt = deps.prompt ?? readLine;
 
   const agent = await resolveAgentOrPrompt({
     agentId,
     json,
-    isInteractive: deps.isInteractive,
-    prompt: deps.prompt,
+    isInteractive: interactive,
+    prompt,
     example: "traceroot instrument --agent claude --print",
   });
   const detection = deps.detection ?? detectRepo(cwd);
@@ -91,12 +94,38 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
     return;
   }
 
-  const target = outputPath ? resolve(cwd, outputPath) : resolve(cwd, DEFAULT_PROMPT_PATH);
+  // Write mode: resolve the output path — from --output, an interactive prompt
+  // (Enter accepts the default), or a clear error when neither is available.
+  let resolvedOutput: string;
+  if (outputPath !== undefined) {
+    resolvedOutput = outputPath;
+  } else if (interactive && !json) {
+    const answer = (await prompt(`Output path (default: ${DEFAULT_PROMPT_PATH}): `)).trim();
+    resolvedOutput = answer === "" ? DEFAULT_PROMPT_PATH : answer;
+  } else {
+    throw new CliError(
+      `Missing required option --output.\nProvide a path to write the prompt, or use --print.\nExample:\n  traceroot instrument --agent ${agent.id} --output ${DEFAULT_PROMPT_PATH}`,
+    );
+  }
+
+  const target = resolve(cwd, resolvedOutput);
   const overwritten = existsSync(target);
   const displayPath = relative(cwd, target) || target;
 
+  // Overwrite handling: confirm in an interactive TTY (empty/"n" aborts); keep the
+  // non-interactive "use --force" guard otherwise.
   if (overwritten && !force) {
-    throw new CliError(`Prompt already exists at ${displayPath}\n\nUse --force to overwrite it.`);
+    if (interactive && !json) {
+      const ok = await confirm(
+        `Prompt already exists at ${displayPath}.\nOverwrite? (y/N): `,
+        prompt,
+      );
+      if (!ok) {
+        throw new CliError("Aborted: prompt not overwritten.");
+      }
+    } else {
+      throw new CliError(`Prompt already exists at ${displayPath}\n\nUse --force to overwrite it.`);
+    }
   }
 
   atomicWrite(target, promptText);
@@ -131,12 +160,6 @@ export function registerInstrument(program: Command): void {
     .option("--force", "overwrite an existing prompt file")
     .action(async (_opts, command: Command) => {
       const opts = command.optsWithGlobals();
-      // A bare `instrument` (no --print and no --output) requests no action: show
-      // help and stop, rather than silently writing a file or defaulting an agent.
-      if (opts.print !== true && opts.output === undefined) {
-        command.help({ error: true });
-        return;
-      }
       await runInstrument({
         agentId: opts.agent as string | undefined,
         cwd: process.cwd(),

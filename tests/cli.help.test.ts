@@ -68,13 +68,13 @@ describe("--agent help placeholder and defaults", () => {
   });
 });
 
-describe("traceroot instrument (bare, no action)", () => {
-  it("shows instrument help, writes nothing, and does not default an agent", () => {
+describe("traceroot instrument (bare, non-interactive)", () => {
+  it("errors for the missing agent (no prompt, no write) when not a TTY", () => {
     const { stdout, stderr, status } = runCli("instrument");
     expect(status).not.toBe(0);
-    // Help is human text → stderr; stdout stays clean (no prompt, no JSON).
+    // Non-interactive: no prompt, clean stdout, actionable agent error on stderr.
     expect(stdout).toBe("");
-    expect(stderr).toContain("Usage: traceroot instrument");
+    expect(stderr).toContain("Missing required option --agent");
     expect(stderr).not.toContain("Wrote instrument prompt");
   });
 });
