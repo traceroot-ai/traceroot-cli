@@ -14,6 +14,7 @@ import {
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
+import { formatBytes } from "../util/index.js";
 
 /** Default location for the generated prompt when neither --print nor --output is given. */
 const DEFAULT_PROMPT_PATH = join(".traceroot", "prompts", "instrument-repo.md");
@@ -114,7 +115,7 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
     `${label("Path:")}  ${displayPath}`,
   ];
   writers.out.write(`${lines.join("\n")}\n`);
-  logProgress(`Wrote ${bytes} bytes to ${displayPath}`, writers);
+  logProgress(`Wrote ${formatBytes(bytes)} to ${displayPath}`, writers);
   logInfo(`\nNext: review the prompt, then run it in ${agent.displayName}.`, writers);
 }
 

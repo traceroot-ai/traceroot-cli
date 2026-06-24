@@ -79,6 +79,12 @@ describe("runInstrument (file write)", () => {
     expect(readFileSync(target, "utf8")).toContain("Instrument this repository");
   });
 
+  it("reports the written size with grouped bytes and an MB value (stderr)", async () => {
+    const { writers, err } = makeWriters();
+    await runInstrument({ ...base, cwd, print: false, writers, detection: tsDetection });
+    expect(err.data).toMatch(/\d,\d{3} bytes \(\d+\.\d MB\)/);
+  });
+
   it("refuses to overwrite an existing prompt without --force", async () => {
     const { writers } = makeWriters();
     const args = { ...base, cwd, print: false, writers, detection: tsDetection };
@@ -106,6 +112,8 @@ describe("runInstrument (file write)", () => {
     });
     const parsed = JSON.parse(out.data) as { data: { output: string; bytes: number } };
     expect(parsed.data.output).toBe("docs/prompt.md");
+    // JSON preserves the raw numeric byte count (human formatting is stderr-only).
+    expect(typeof parsed.data.bytes).toBe("number");
     expect(parsed.data.bytes).toBeGreaterThan(0);
     expect(existsSync(join(cwd, "docs", "prompt.md"))).toBe(true);
   });
