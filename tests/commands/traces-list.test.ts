@@ -417,6 +417,21 @@ describe("resolveTimeRange", () => {
     expect(result.endBefore).toBe("2026-06-23T20:31:02.000Z");
   });
 
+  it("accepts a quoted STARTED value with a GMT±offset abbreviation (IST/JST/etc.)", () => {
+    // The STARTED column shows "GMT+5:30" in zones Intl renders as GMT offsets;
+    // the explicit offset is parsed directly (no local-zone lookup needed).
+    // 17:30:00 +05:30 = 12:00:00 UTC; 21:00:00 +09:00 = 12:00:00 UTC.
+    expect(resolveTimeRange({ from: "2026-06-23 17:30:00 GMT+5:30" }).startAfter).toBe(
+      "2026-06-23T12:00:00.000Z",
+    );
+    expect(resolveTimeRange({ to: "2026-06-23 21:00:00 GMT+9" }).endBefore).toBe(
+      "2026-06-23T12:00:00.000Z",
+    );
+    expect(resolveTimeRange({ from: "2026-06-23 09:00:00 GMT-3" }).startAfter).toBe(
+      "2026-06-23T12:00:00.000Z",
+    );
+  });
+
   it("accepts display timestamps for both --from and --to (Denver/MDT)", () => {
     const result = resolveTimeRange(
       {

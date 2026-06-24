@@ -143,7 +143,33 @@ function resolveAbbreviation(utcMs: number, timeZone: string): string {
 function normalizeTimestamp(raw: string, flag: string, timeZone: string): string {
   const trimmed = raw.trim();
 
-  // Try the quoted display format: "YYYY-MM-DD HH:mm:ss TZ_ABBR"
+  // Quoted local display with a GMT±offset (e.g. "2026-06-23 17:30:00 GMT+5:30") —
+  // the form this CLI's STARTED column shows in zones Intl renders as GMT offsets
+  // (IST, JST, CET, BRT, …). The offset is explicit and unambiguous, so convert
+  // straight to ISO; no local-zone lookup or abbreviation check is needed.
+  const gmtMatch = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(
+    trimmed,
+  );
+  if (gmtMatch !== null) {
+    const [, date, time, sign, oh, om] = gmtMatch as unknown as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string | undefined,
+    ];
+    const iso = `${date}T${time}${sign}${oh.padStart(2, "0")}:${(om ?? "00").padStart(2, "0")}`;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      throw new CliError(
+        `${flag} "${trimmed}": not a valid timestamp. Use ISO 8601, e.g. ${flag} 2026-06-23T17:30:00+05:30.`,
+      );
+    }
+    return d.toISOString();
+  }
+
+  // Try the quoted local display format: "YYYY-MM-DD HH:mm:ss TZ_ABBR" (named abbr)
   const displayMatch = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) ([A-Za-z]{2,5})$/.exec(
     trimmed,
   );

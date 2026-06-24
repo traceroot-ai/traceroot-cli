@@ -35,7 +35,7 @@ The `STARTED` column shows times in your local timezone. `--from` and `--to` acc
 | ISO 8601 with offset | `2026-06-23T14:31:02-06:00` | No spaces; no quoting needed |
 | Quoted local display | `"2026-06-23 14:31:02 MDT"` | Must be quoted; copy from this CLI's `STARTED` column |
 
-**Quoted local display values** are LOCAL-zone values copied directly from this CLI's `STARTED` column. They are interpreted in your local IANA timezone, and the timezone abbreviation is verified to match — arbitrary non-local abbreviations are not supported. Values with spaces **must** be quoted as a single shell argument. Use ISO 8601 with an explicit offset for other zones or unambiguous values.
+**Quoted local display values** are LOCAL-zone values copied directly from this CLI's `STARTED` column. When the column shows a named abbreviation (e.g. `MDT`), the value is interpreted in your local IANA timezone and the abbreviation is verified to match — arbitrary non-local abbreviations are not supported. When the column shows a `GMT±offset` (e.g. `GMT+5:30`, as it does in some zones), the explicit offset is used directly. Values with spaces **must** be quoted as a single shell argument. Use ISO 8601 with an explicit offset for other zones or unambiguous values.
 
 ```sh
 # ✓ Correct: quoted local display copied from STARTED
