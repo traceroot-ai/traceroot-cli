@@ -1,16 +1,15 @@
+import { existsSync } from "node:fs";
 import type { Command } from "commander";
 import { displaySkillPath } from "../../agents/index.js";
 import { resolveAgentOrPrompt } from "../../agents/select.js";
 import type { AgentAdapter } from "../../agents/types.js";
 import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
+import { confirm, isInteractive, readLine } from "../../prompt.js";
 import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
-import {
-  type BuiltinSkill,
-  builtinSkillNames,
-  requireBuiltinSkill,
-} from "../../skills/registry.js";
+import type { BuiltinSkill } from "../../skills/registry.js";
+import { resolveSkillOrPrompt } from "../../skills/select.js";
 
 /** Dependencies for the testable core of `skills install`. */
 export interface RunSkillsInstallDeps {
@@ -45,27 +44,42 @@ function nextStep(skill: BuiltinSkill, agent: AgentAdapter): string {
  */
 export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void> {
   const { skillName, agentId, cwd, force, dryRun, json, writers } = deps;
+  const interactive = deps.isInteractive ?? isInteractive();
+  const prompt = deps.prompt ?? readLine;
 
-  // Validate the skill before the agent, so a missing/unknown skill is reported
-  // first (not "missing --agent").
-  if (skillName === undefined) {
-    throw new CliError(
-      `Missing required argument <skill>.\nChoose one of: ${builtinSkillNames()}.\nExample:\n  traceroot skills install traceroot-instrument-repo`,
-    );
-  }
-  const skill = requireBuiltinSkill(skillName);
+  // Resolve the skill before the agent, so a missing/unknown skill is reported
+  // (or prompted) first — never "missing --agent" ahead of a missing skill.
+  const skill = await resolveSkillOrPrompt({
+    skillName,
+    json,
+    writers,
+    isInteractive: interactive,
+    prompt,
+  });
   const agent = await resolveAgentOrPrompt({
     agentId,
     json,
-    isInteractive: deps.isInteractive,
-    prompt: deps.prompt,
+    isInteractive: interactive,
+    prompt,
     example: `traceroot skills install ${skill.name} --agent claude`,
   });
   const sourceDir = bundledSkillDir(skill.name);
   const targetDir = agent.getSkillInstallPath(cwd, skill.name);
-
-  const result = installBundledSkill({ sourceDir, targetDir, force, dryRun });
   const displayPath = displaySkillPath(cwd, targetDir);
+
+  // Overwrite handling. In an interactive TTY (and not dry-run/JSON) confirm
+  // before clobbering; an empty/"n" answer aborts with no write. Otherwise the
+  // standard non-interactive "use --force" guard in installBundledSkill applies.
+  let effectiveForce = force;
+  if (!dryRun && !force && interactive && !json && existsSync(targetDir)) {
+    const ok = await confirm(`Skill already exists at ${displayPath}.\nOverwrite? (y/N): `, prompt);
+    if (!ok) {
+      throw new CliError("Aborted: skill not overwritten.");
+    }
+    effectiveForce = true;
+  }
+
+  const result = installBundledSkill({ sourceDir, targetDir, force: effectiveForce, dryRun });
 
   if (json) {
     if (dryRun) {

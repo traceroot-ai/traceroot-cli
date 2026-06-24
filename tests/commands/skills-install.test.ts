@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -283,5 +283,158 @@ describe("runSkillsInstall (codex)", () => {
         process.env.CODEX_HOME = prev;
       }
     }
+  });
+});
+
+/** A prompt fn keyed on the question text, returning scripted answers per field. */
+function scripted(answers: { skill?: string; agent?: string; overwrite?: string }) {
+  return async (q: string): Promise<string> => {
+    if (q.includes("Overwrite?")) return answers.overwrite ?? "";
+    if (q.startsWith("Agent (")) return answers.agent ?? "";
+    if (q.startsWith("Skill (")) return answers.skill ?? "";
+    throw new Error(`unexpected prompt: ${q}`);
+  };
+}
+
+describe("runSkillsInstall (interactive)", () => {
+  it("bare command prompts for skill then agent; empty input picks the defaults", async () => {
+    const { writers, err } = makeWriters();
+    await runSkillsInstall({
+      ...base,
+      skillName: undefined,
+      agentId: undefined,
+      cwd,
+      json: false,
+      isInteractive: true,
+      prompt: scripted({ skill: "", agent: "" }),
+      writers,
+    });
+    // Empty skill → instrument-repo, empty agent → claude (Claude Code path).
+    expect(
+      existsSync(join(cwd, ".claude", "skills", "traceroot-instrument-repo", "SKILL.md")),
+    ).toBe(true);
+    expect(err.data).toContain("Available skills:");
+  });
+
+  it("with a provided skill, prompts only for the agent", async () => {
+    const { writers, err } = makeWriters();
+    await runSkillsInstall({
+      ...base,
+      skillName: "traceroot-quickstart",
+      agentId: undefined,
+      cwd,
+      json: false,
+      isInteractive: true,
+      // A project-local agent keeps the test hermetic (codex would touch ~/.codex).
+      prompt: scripted({ agent: "generic" }),
+      writers,
+    });
+    // No skill list shown (skill already known); agent prompt drove the install.
+    expect(err.data).not.toContain("Available skills:");
+    expect(existsSync(join(cwd, ".agents", "skills", "traceroot-quickstart", "SKILL.md"))).toBe(
+      true,
+    );
+  });
+
+  it("with a provided agent, prompts only for the skill", async () => {
+    const { writers } = makeWriters();
+    await runSkillsInstall({
+      ...base,
+      skillName: undefined,
+      agentId: "generic",
+      cwd,
+      json: false,
+      isInteractive: true,
+      prompt: scripted({ skill: "traceroot-quickstart" }),
+      writers,
+    });
+    expect(existsSync(join(cwd, ".agents", "skills", "traceroot-quickstart", "SKILL.md"))).toBe(
+      true,
+    );
+  });
+
+  it("with explicit skill and agent, prompts for nothing", async () => {
+    const { writers } = makeWriters();
+    const prompt = async (q: string): Promise<string> => {
+      throw new Error(`should not prompt: ${q}`);
+    };
+    await runSkillsInstall({
+      ...base,
+      skillName: "traceroot-quickstart",
+      agentId: "claude",
+      cwd,
+      json: false,
+      isInteractive: true,
+      prompt,
+      writers,
+    });
+    expect(existsSync(join(cwd, ".claude", "skills", "traceroot-quickstart"))).toBe(true);
+  });
+
+  it("dry-run still prompts for missing values but writes nothing", async () => {
+    const { writers } = makeWriters();
+    await runSkillsInstall({
+      ...base,
+      skillName: undefined,
+      agentId: undefined,
+      cwd,
+      dryRun: true,
+      json: false,
+      isInteractive: true,
+      prompt: scripted({ skill: "", agent: "" }),
+      writers,
+    });
+    expect(existsSync(join(cwd, ".claude", "skills"))).toBe(false);
+  });
+});
+
+describe("runSkillsInstall (interactive overwrite)", () => {
+  const seed = {
+    ...base,
+    skillName: "traceroot-quickstart",
+    agentId: "claude",
+    json: false,
+    isInteractive: true,
+  } as const;
+
+  it("prompts to overwrite an existing skill; 'y' overwrites", async () => {
+    const first = makeWriters();
+    await runSkillsInstall({ ...seed, cwd, prompt: scripted({}), writers: first.writers });
+    const second = makeWriters();
+    await runSkillsInstall({
+      ...seed,
+      cwd,
+      prompt: scripted({ overwrite: "y" }),
+      writers: second.writers,
+    });
+    expect(existsSync(join(cwd, ".claude", "skills", "traceroot-quickstart", "SKILL.md"))).toBe(
+      true,
+    );
+  });
+
+  it("aborts (no write, non-zero) when overwrite is declined with empty input", async () => {
+    await runSkillsInstall({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
+    const sentinel = join(cwd, ".claude", "skills", "traceroot-quickstart", "sentinel.txt");
+    writeFileSync(sentinel, "keep", "utf8");
+    await expect(
+      runSkillsInstall({
+        ...seed,
+        cwd,
+        prompt: scripted({ overwrite: "" }),
+        writers: makeWriters().writers,
+      }),
+    ).rejects.toThrow(/Aborted/);
+    // Declined → existing content untouched.
+    expect(existsSync(sentinel)).toBe(true);
+  });
+
+  it("--force skips the overwrite prompt", async () => {
+    await runSkillsInstall({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
+    const prompt = async (q: string): Promise<string> => {
+      throw new Error(`should not prompt with --force: ${q}`);
+    };
+    await expect(
+      runSkillsInstall({ ...seed, cwd, force: true, prompt, writers: makeWriters().writers }),
+    ).resolves.toBeUndefined();
   });
 });

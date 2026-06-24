@@ -1,5 +1,5 @@
-import { createInterface } from "node:readline";
 import { CliError } from "../output.js";
+import { type Prompt, isInteractive, readLine } from "../prompt.js";
 import { AGENT_IDS, requireAgent } from "./index.js";
 import type { AgentAdapter, AgentId } from "./types.js";
 
@@ -17,18 +17,7 @@ export interface ResolveAgentInput {
   /** Defaults to "stdin and stdout are both TTYs". */
   isInteractive?: boolean;
   /** Reads one line from the user; defaults to a readline prompt on stdout (matches `login`). */
-  prompt?: (question: string) => Promise<string>;
-}
-
-/** Reads a visible line from stdin (same readline style as `login`'s prompts). */
-function readLine(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-  });
+  prompt?: Prompt;
 }
 
 /**
@@ -46,8 +35,7 @@ export async function resolveAgentOrPrompt(input: ResolveAgentInput): Promise<Ag
     return requireAgent(agentId);
   }
 
-  const interactive =
-    input.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true);
+  const interactive = input.isInteractive ?? isInteractive();
 
   if (json || !interactive) {
     throw new CliError(
