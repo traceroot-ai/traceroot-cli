@@ -132,6 +132,12 @@ export function registerInstrument(program: Command): void {
     .option("--json", JSON_OPTION_DESC)
     .action(async (_opts, command: Command) => {
       const opts = command.optsWithGlobals();
+      // A bare `instrument` (no --print and no --output) requests no action: show
+      // help and stop, rather than silently writing a file or defaulting an agent.
+      if (opts.print !== true && opts.output === undefined) {
+        command.help({ error: true });
+        return;
+      }
       await runInstrument({
         agentId: opts.agent as string | undefined,
         cwd: process.cwd(),

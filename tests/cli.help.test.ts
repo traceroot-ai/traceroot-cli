@@ -54,6 +54,17 @@ describe("--agent help on install/instrument", () => {
   });
 });
 
+describe("traceroot instrument (bare, no action)", () => {
+  it("shows instrument help, writes nothing, and does not default an agent", () => {
+    const { stdout, stderr, status } = runCli("instrument");
+    expect(status).not.toBe(0);
+    // Help is human text → stderr; stdout stays clean (no prompt, no JSON).
+    expect(stdout).toBe("");
+    expect(stderr).toContain("Usage: traceroot instrument");
+    expect(stderr).not.toContain("Wrote instrument prompt");
+  });
+});
+
 describe("traceroot --json (root)", () => {
   it("prints normal help rather than JSON, since root has no JSON data operation", () => {
     const { stdout, stderr } = runCli("--json");
