@@ -60,5 +60,5 @@ Run `traceroot <command> --help` for the full flag list.
 ```sh
 traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef
 traceroot traces export <trace-id> --output ./out
-traceroot traces list --limit 5 --json | jq '.data[].trace_id'
+traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --limit 5 --json | jq '.data[].trace_id'
 ```
