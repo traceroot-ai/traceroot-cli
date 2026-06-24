@@ -47,7 +47,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     status: hasKey ? "pass" : "fail",
     message: hasKey
       ? `API key resolved from ${describeSource(auth.apiKey.source, configPath)}`
-      : "No API key found. Run `traceroot login`, set TRACEROOT_API_KEY, or pass --api-key.",
+      : "API key not found. Run `traceroot login`.",
   });
 
   const host = auth.hostUrl.value;
@@ -56,9 +56,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     category: "credentials",
     status: host !== undefined ? "pass" : "fail",
     message:
-      host !== undefined
-        ? `Host resolved: ${host}`
-        : "No host found. Run `traceroot login`, set TRACEROOT_HOST_URL, or pass --host.",
+      host !== undefined ? `Host resolved: ${host}` : "Host not found. Run `traceroot login`.",
   });
 
   // Only assert validity when we actually attempted a check.
@@ -85,9 +83,7 @@ function localFileChecks(input: DoctorInput): DoctorCheck[] {
     name: "config_file_present",
     category: "traceroot_files",
     status: configExists ? "pass" : "warn",
-    message: configExists
-      ? `Config file present at ${configPath}`
-      : `No config file at ${configPath} (optional if using env vars).`,
+    message: configExists ? `Config file present at ${configPath}` : "No config file found",
   });
 
   if (configExists) {
@@ -154,7 +150,7 @@ function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
       status: hasQuickstart ? "pass" : "warn",
       message: hasQuickstart
         ? "Quickstart skill installed for Claude Code"
-        : "Quickstart skill not installed; optional",
+        : "Quickstart skill not installed",
     },
   ];
 }

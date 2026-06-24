@@ -12,6 +12,12 @@ describe("traceroot --help", () => {
     expect(stderr).toBe("");
   });
 
+  it("lists subcommands by name only — no 'instrument [options]' in the summary", () => {
+    const { stdout } = runCli("--help");
+    expect(stdout).toContain("instrument");
+    expect(stdout).not.toContain("instrument [options]");
+  });
+
   it("describes --json as applying to supported commands (not root/help itself)", () => {
     const { stdout } = runCli("--help");
     // commander wraps the long description across lines; collapse whitespace first.

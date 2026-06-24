@@ -88,10 +88,41 @@ describe("runDoctor", () => {
     const instrument = report.checks.find((c) => c.name === "skill_instrument");
     const quickstart = report.checks.find((c) => c.name === "skill_quickstart");
     expect(instrument?.message).toContain("Instrumentation skill");
-    expect(quickstart?.message).toContain("optional");
+    // Concise wording: no "; optional" clause.
+    expect(quickstart?.message).toBe("Quickstart skill not installed");
     // Both warn when absent; neither implies the other is installed.
     expect(instrument?.status).toBe("warn");
     expect(quickstart?.status).toBe("warn");
+  });
+
+  it("uses concise, login-pointing wording for missing credentials and config", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+    const key = report.checks.find((c) => c.name === "api_key_resolved");
+    const host = report.checks.find((c) => c.name === "host_resolved");
+    const config = report.checks.find((c) => c.name === "config_file_present");
+    expect(key?.message).toBe("API key not found. Run `traceroot login`.");
+    expect(host?.message).toBe("Host not found. Run `traceroot login`.");
+    expect(key?.message).not.toContain("set TRACEROOT_API_KEY");
+    expect(config?.message).toBe("No config file found");
+    expect(config?.status).toBe("warn");
+  });
+
+  it("renders required credential failures as red ✗ in human output (color enabled)", async () => {
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    await runDoctor({ ...baseDeps(cwd, { out, err }), ctx: makeCtx({}) });
+    // Red ✗ glyph present; missing API key uses it (not the gray "-").
+    expect(out.data).toContain("\x1b[91m✗\x1b[0m API key not found");
+  });
+
+  it("runtime-env warnings carry no semicolon explanatory clauses", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+    for (const c of report.checks.filter((c) => c.category === "runtime_env")) {
+      expect(c.status).toBe("warn");
+      expect(c.message).not.toContain(";");
+    }
   });
 
   it("reports runtime env as a neutral warning (not pass) when the var is unset but CLI auth is from config", async () => {

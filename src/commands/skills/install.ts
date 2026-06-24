@@ -4,7 +4,7 @@ import { displaySkillPath } from "../../agents/index.js";
 import { resolveAgentOrPrompt } from "../../agents/select.js";
 import type { AgentAdapter } from "../../agents/types.js";
 import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
-import { confirm, dim, isInteractive, readLine } from "../../prompt.js";
+import { confirm, dim, isInteractive, readLine, yellow } from "../../prompt.js";
 import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
@@ -73,7 +73,7 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
   let effectiveForce = force;
   if (!dryRun && !force && interactive && !json && existsSync(targetDir)) {
     const ok = await confirm(
-      `Skill already exists at ${dim(displayPath)}.\nOverwrite? (y/N): `,
+      `${yellow("WARNING:")} Skill already exists at ${dim(displayPath)}.\nOverwrite? (y/N): `,
       prompt,
     );
     if (!ok) {

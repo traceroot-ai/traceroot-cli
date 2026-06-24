@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { confirm, dim } from "../src/prompt.js";
+import { confirm, dim, yellow } from "../src/prompt.js";
 import { StringSink } from "./helpers/stringSink.js";
 
 describe("dim", () => {
@@ -9,6 +9,16 @@ describe("dim", () => {
 
   it("returns text unchanged when color is disabled (non-TTY)", () => {
     expect(dim("(default: claude)", new StringSink(false))).toBe("(default: claude)");
+  });
+});
+
+describe("yellow", () => {
+  it("wraps text in the yellow ANSI code when the sink supports color (TTY)", () => {
+    expect(yellow("WARNING:", new StringSink(true))).toBe("\x1b[33mWARNING:\x1b[0m");
+  });
+
+  it("returns text unchanged when color is disabled (non-TTY)", () => {
+    expect(yellow("WARNING:", new StringSink(false))).toBe("WARNING:");
   });
 });
 

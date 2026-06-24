@@ -298,6 +298,25 @@ describe("runInstrument (interactive overwrite)", () => {
     detection: tsDetection,
   } as const;
 
+  it("prefixes the overwrite prompt with a WARNING line", async () => {
+    await runInstrument({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
+    let asked = "";
+    await runInstrument({
+      ...seed,
+      cwd,
+      prompt: async (q) => {
+        if (q.includes("Overwrite?")) {
+          asked = q;
+          return "y";
+        }
+        return "";
+      },
+      writers: makeWriters().writers,
+    });
+    expect(asked).toContain("WARNING:");
+    expect(asked).toContain("Prompt already exists at");
+  });
+
   it("'y' overwrites an existing prompt", async () => {
     await runInstrument({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
     await expect(

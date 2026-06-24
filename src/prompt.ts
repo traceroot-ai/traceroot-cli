@@ -3,6 +3,7 @@ import { type Sink, colorEnabled } from "./output.js";
 
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
+const ANSI_YELLOW = "\x1b[33m";
 
 /** Asks one question and resolves with the typed line. Injectable in tests. */
 export type Prompt = (question: string) => Promise<string>;
@@ -15,6 +16,14 @@ export type Prompt = (question: string) => Promise<string>;
  */
 export function dim(text: string, sink: Sink = process.stdout): string {
   return colorEnabled(sink) ? `${ANSI_DIM}${text}${ANSI_RESET}` : text;
+}
+
+/**
+ * Colors text yellow when the destination supports color (used for the
+ * `WARNING:` tag on overwrite prompts); a no-op when piped or `NO_COLOR` is set.
+ */
+export function yellow(text: string, sink: Sink = process.stdout): string {
+  return colorEnabled(sink) ? `${ANSI_YELLOW}${text}${ANSI_RESET}` : text;
 }
 
 /**

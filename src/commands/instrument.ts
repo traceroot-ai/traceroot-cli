@@ -11,7 +11,7 @@ import {
   logProgress,
   writeJson,
 } from "../output.js";
-import { confirm, dim, isInteractive, readLine } from "../prompt.js";
+import { confirm, dim, isInteractive, readLine, yellow } from "../prompt.js";
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
@@ -119,7 +119,7 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
   if (overwritten && !force) {
     if (interactive && !json) {
       const ok = await confirm(
-        `Prompt already exists at ${dim(displayPath)}.\nOverwrite? (y/N): `,
+        `${yellow("WARNING:")} Prompt already exists at ${dim(displayPath)}.\nOverwrite? (y/N): `,
         prompt,
       );
       if (!ok) {

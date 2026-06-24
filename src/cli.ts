@@ -14,8 +14,10 @@ export function buildProgram(): Command {
     outputError: (str, write) => write(colorizeError(str)),
   });
   // Show program-wide flags (`--json`, `--api-key`, …) under a "Global Options"
-  // section in every subcommand's help, separate from that command's own options.
-  program.configureHelp({ showGlobalOptions: true });
+  // section in every subcommand's help; and list subcommands by name only in the
+  // root command summary (no trailing "[options]"), so every command reads
+  // consistently.
+  program.configureHelp({ showGlobalOptions: true, subcommandTerm: (cmd) => cmd.name() });
   // Global options (long-flag only to avoid clashing with -V/-h). Registered
   // before subcommands so they apply program-wide.
   program

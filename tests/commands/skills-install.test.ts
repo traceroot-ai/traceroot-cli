@@ -412,6 +412,25 @@ describe("runSkillsInstall (interactive overwrite)", () => {
     isInteractive: true,
   } as const;
 
+  it("prefixes the overwrite prompt with a WARNING line", async () => {
+    await runSkillsInstall({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
+    let asked = "";
+    await runSkillsInstall({
+      ...seed,
+      cwd,
+      prompt: async (q) => {
+        if (q.includes("Overwrite?")) {
+          asked = q;
+          return "y";
+        }
+        return "";
+      },
+      writers: makeWriters().writers,
+    });
+    expect(asked).toContain("WARNING:");
+    expect(asked).toContain("Skill already exists at");
+  });
+
   it("prompts to overwrite an existing skill; 'y' overwrites", async () => {
     const first = makeWriters();
     await runSkillsInstall({ ...seed, cwd, prompt: scripted({}), writers: first.writers });
