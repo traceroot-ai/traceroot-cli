@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { registerCommands } from "./commands/index.js";
-import { colorizeError, reportError } from "./output.js";
+import { CliError, colorizeError, reportError } from "./output.js";
 import { getVersion } from "./version.js";
 
 export function buildProgram(): Command {
@@ -32,6 +32,13 @@ export function buildProgram(): Command {
     if (operands.length > 0) {
       command.error(`error: unknown command '${operands[0]}'`, { exitCode: 1 });
       return;
+    }
+    // --json with no subcommand is a usage error: we have no structured output
+    // to produce, and silently showing help would be surprising.
+    if ((_opts as { json?: boolean }).json) {
+      throw new CliError(
+        "--json requires a command that supports JSON output, e.g. traceroot status --json or traceroot traces list --json",
+      );
     }
     // No subcommand given: show help and exit non-zero. Help goes to stderr
     // (per the output contract: human text never pollutes stdout). An explicit

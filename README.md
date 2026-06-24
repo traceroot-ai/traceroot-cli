@@ -20,22 +20,32 @@ traceroot traces list --since 24h     # traces from the last 24 hours
 traceroot traces list --from 2026-06-23T20:31:02Z                # filter by UTC ISO timestamp
 traceroot traces list --from 2026-06-23T14:31:02-06:00           # filter by offset timestamp
 traceroot traces list --from "2026-06-23 14:31:02 MDT"           # quote a copied STARTED value
-traceroot traces list --from "2026-06-23T14:29:54Z" --to "2026-06-23T20:00:00-06:00"  # explicit range
+traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:31:02Z  # explicit range
 traceroot traces get <trace-id>       # inspect one
 traceroot traces export <trace-id>    # export its bundle to a directory
 ```
 
-> The `STARTED` column shows times in your local timezone. To filter by time,
-> use `--from`/`--to` with either ISO 8601 or a quoted copied `STARTED` value:
->
-> - ISO 8601 (no spaces, no quoting needed): `--from 2026-06-23T20:31:02Z`
-> - ISO 8601 with explicit offset: `--from 2026-06-23T14:31:02-06:00`
-> - Quoted copied STARTED value (spaces MUST be quoted): `--from "2026-06-23 14:31:02 MDT"`
->
-> The abbreviation in a quoted STARTED value is validated against your local
-> timezone — if it doesn't match, you'll get an actionable error with an
-> ISO 8601 alternative. Use `--json` to access `trace_start_time` for
-> unambiguous UTC values.
+## Timestamp formats for `--from` / `--to`
+
+The `STARTED` column shows times in your local timezone. `--from` and `--to` accept three forms:
+
+| Form | Example | Notes |
+| :-- | :-- | :-- |
+| ISO 8601 UTC | `2026-06-23T20:31:02Z` | No spaces; no quoting needed |
+| ISO 8601 with offset | `2026-06-23T14:31:02-06:00` | No spaces; no quoting needed |
+| Quoted local display | `"2026-06-23 14:31:02 MDT"` | Must be quoted; copy from this CLI's `STARTED` column |
+
+**Quoted local display values** are LOCAL-zone values copied directly from this CLI's `STARTED` column. They are interpreted in your local IANA timezone, and the timezone abbreviation is verified to match — arbitrary non-local abbreviations are not supported. Values with spaces **must** be quoted as a single shell argument. Use ISO 8601 with an explicit offset for other zones or unambiguous values.
+
+```sh
+# ✓ Correct: quoted local display copied from STARTED
+traceroot traces list --from "2026-06-23 14:31:02 MDT"
+
+# ✗ Wrong: spaces without quotes cause shell splitting
+traceroot traces list --from 2026-06-23 14:31:02 MDT
+```
+
+Use `--json` to get `trace_start_time` as an unambiguous UTC ISO string.
 
 ## Configuration
 
@@ -67,7 +77,7 @@ traceroot traces list
 | :-- | :-- |
 | `login` | Authenticate and save credentials (validates before writing). |
 | `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
-| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (ISO 8601 e.g. `2026-06-23T14:31:02Z`, offset e.g. `2026-06-23T14:31:02-06:00`, or quoted STARTED value e.g. `"2026-06-23 14:31:02 MDT"` — values with spaces MUST be quoted) |
+| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (see [Timestamp formats](#timestamp-formats-for---from----to)) |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
 

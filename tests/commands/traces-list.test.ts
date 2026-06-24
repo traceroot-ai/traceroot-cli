@@ -730,6 +730,140 @@ describe("runList compact footer (one-line stderr)", () => {
   });
 });
 
+// ─── T3: round-trip validation ────────────────────────────────────────────
+
+describe("resolveTimeRange (round-trip validation)", () => {
+  it("rejects an invalid calendar date (Feb 31)", () => {
+    expect(() =>
+      resolveTimeRange({ from: "2026-02-31 14:31:02 MDT" }, Date.now, "America/Denver"),
+    ).toThrow(CliError);
+  });
+
+  it("rejects an out-of-range hour (hour 25)", () => {
+    expect(() =>
+      resolveTimeRange({ from: "2026-06-23 25:31:02 MDT" }, Date.now, "America/Denver"),
+    ).toThrow(CliError);
+  });
+
+  it("round-trip error message is actionable", () => {
+    let message = "";
+    try {
+      resolveTimeRange({ from: "2026-02-31 14:31:02 MDT" }, Date.now, "America/Denver");
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("not a valid local time");
+    expect(message).toContain("ISO 8601");
+    expect(message).toContain("--from");
+  });
+
+  it("still accepts valid MDT date in Denver (round-trip passes)", () => {
+    const result = resolveTimeRange(
+      { from: "2026-06-23 14:31:02 MDT" },
+      Date.now,
+      "America/Denver",
+    );
+    expect(result.startAfter).toBe("2026-06-23T20:31:02.000Z");
+  });
+
+  it("rejects a spring-forward gap time in Denver (2026-03-08 02:30:00 MDT)", () => {
+    // America/Denver springs forward on 2026-03-08 at 02:00 MST → 03:00 MDT
+    // 02:30 doesn't exist; the round-trip will produce a different time
+    expect(() =>
+      resolveTimeRange({ from: "2026-03-08 02:30:00 MDT" }, Date.now, "America/Denver"),
+    ).toThrow(CliError);
+  });
+});
+
+// ─── T5: flag ordering independence ───────────────────────────────────────
+
+describe("flag ordering independence", () => {
+  it("resolveTimeRange results are identical regardless of object key order", () => {
+    const tz = "America/Denver";
+    const r1 = resolveTimeRange(
+      { from: "2026-06-23 14:28:35 MDT", to: "2026-06-23 14:31:02 MDT" },
+      Date.now,
+      tz,
+    );
+    const r2 = resolveTimeRange(
+      { to: "2026-06-23 14:31:02 MDT", from: "2026-06-23 14:28:35 MDT" },
+      Date.now,
+      tz,
+    );
+    expect(r1).toEqual(r2);
+  });
+});
+
+// ─── T5: duplicate flag rejection ─────────────────────────────────────────
+
+describe("duplicate flag rejection", () => {
+  it("rejects duplicate --from", () => {
+    const result = runCli(
+      "traces",
+      "list",
+      "--from",
+      "2026-06-23T14:00:00Z",
+      "--from",
+      "2026-06-23T15:00:00Z",
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("--from may only be given once");
+  });
+
+  it("rejects duplicate --to", () => {
+    const result = runCli(
+      "traces",
+      "list",
+      "--to",
+      "2026-06-23T14:00:00Z",
+      "--to",
+      "2026-06-23T15:00:00Z",
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("--to may only be given once");
+  });
+
+  it("rejects duplicate --since", () => {
+    const result = runCli("traces", "list", "--since", "1h", "--since", "2h");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("--since may only be given once");
+  });
+
+  it("rejects duplicate --limit", () => {
+    const result = runCli("traces", "list", "--limit", "5", "--limit", "10");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("--limit may only be given once");
+  });
+});
+
+// ─── T6: enhanced stray-args error ────────────────────────────────────────
+
+describe("stray positional arg enhanced error (T6)", () => {
+  it("reconstructs a quoted timestamp suggestion when --from is a bare date with stray time args", () => {
+    const result = runCli("traces", "list", "--from", "2026-06-23", "14:31:02", "MDT");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Did you mean to quote the timestamp?");
+    expect(result.stderr).toContain('--from "2026-06-23 14:31:02 MDT"');
+    expect(result.stderr).toContain("Timestamps with spaces must be passed as one shell argument.");
+    expect(result.stderr).toContain("ISO 8601 also works");
+  });
+
+  it("reconstructs a quoted timestamp suggestion when --to is a bare date with stray time args", () => {
+    const result = runCli("traces", "list", "--to", "2026-06-23", "14:31:02", "MDT");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Did you mean to quote the timestamp?");
+    expect(result.stderr).toContain('--to "2026-06-23 14:31:02 MDT"');
+    expect(result.stderr).toContain("Timestamps with spaces must be passed as one shell argument.");
+  });
+
+  it("emits generic error for stray args with no bare-date flag value", () => {
+    const result = runCli("traces", "list", "extra");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unexpected argument(s)");
+    expect(result.stderr).not.toContain("Did you mean to quote the timestamp?");
+  });
+});
+
 // ─── runList tip line ──────────────────────────────────────────────────────
 
 describe("runList tip line", () => {

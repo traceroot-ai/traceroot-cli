@@ -45,6 +45,11 @@ export interface TimeRange {
  * Converts a wall-clock datetime (Y, M, D, h, m, s) interpreted in the given
  * IANA timezone to a UTC instant (ms since epoch). Uses a two-pass approach to
  * resolve DST ambiguities correctly.
+ *
+ * NOTE: This function is exclusively for values copied from THIS CLI's own local
+ * `STARTED` column. It is interpreted in the user's local IANA timezone and the
+ * abbreviation is verified — arbitrary non-local timezone abbreviations are
+ * intentionally NOT supported (use ISO 8601 with an explicit offset for other zones).
  */
 function wallClockToUtc(
   Y: number,
@@ -128,6 +133,12 @@ function resolveAbbreviation(utcMs: number, timeZone: string): string {
  * A bare date (`2026-06-01`) becomes midnight UTC; a zone-less datetime is
  * interpreted as UTC. Throws a {@link CliError} when the value is not a
  * parseable timestamp or when the abbreviation doesn't match the local zone.
+ *
+ * The quoted display format (`YYYY-MM-DD HH:mm:ss TZ_ABBR`) is ONLY for values
+ * copied from THIS CLI's own local `STARTED` column. It is interpreted in the
+ * user's local IANA timezone and the abbreviation is verified — arbitrary
+ * non-local timezone abbreviations are intentionally NOT supported (use ISO 8601
+ * with an explicit offset for other zones).
  */
 function normalizeTimestamp(raw: string, flag: string, timeZone: string): string {
   const trimmed = raw.trim();
@@ -155,6 +166,44 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
     const s = Number.parseInt(ss, 10);
 
     const utcMs = wallClockToUtc(Y, Mo, D, h, mi, s, timeZone);
+
+    // Round-trip validation: re-format utcMs back into the local zone and confirm
+    // Y/M/D/h/m/s match what was typed. This catches invalid calendar dates
+    // (e.g. Feb 31 → silently rolls to Mar 3) and nonexistent DST-gap times
+    // (e.g. spring-forward 02:30 that doesn't exist in the local clock).
+    const rtFmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const rtParts = rtFmt.formatToParts(new Date(utcMs));
+    const rtPick = (type: Intl.DateTimeFormatPartTypes): number => {
+      const val = rtParts.find((p) => p.type === type)?.value ?? "0";
+      return Number.parseInt(val, 10);
+    };
+    const rtHour = rtPick("hour") % 24; // hour12:false may return "24" for midnight → 0
+    if (
+      rtPick("year") !== Y ||
+      rtPick("month") !== Mo ||
+      rtPick("day") !== D ||
+      rtHour !== h ||
+      rtPick("minute") !== mi ||
+      rtPick("second") !== s
+    ) {
+      // The typed local time is invalid (bad calendar date/time) or nonexistent
+      // (a spring-forward DST gap). Do NOT echo the invalid value back as a
+      // suggestion (it would also be invalid ISO); point to ISO 8601 with an
+      // explicit offset using a generic, valid example instead.
+      throw new CliError(
+        `${flag} "${trimmed}": not a valid local time (invalid date/time, or a nonexistent local time such as a DST gap). Use ISO 8601 with an explicit offset, e.g. ${flag} 2026-06-23T14:31:02-06:00.`,
+      );
+    }
+
     const localAbbr = resolveAbbreviation(utcMs, timeZone);
 
     if (localAbbr !== abbr) {
@@ -406,27 +455,65 @@ export async function runList(deps: RunListDeps): Promise<void> {
   logProgress(`${res.data.length} trace(s) | ${rangeText}`, writers);
 }
 
+/**
+ * Coercion that rejects a flag given more than once. Relies on Commander passing
+ * the previously parsed value as `prev` on a repeat occurrence (and `undefined`
+ * on the first). IMPORTANT: do NOT set `.default(...)` on any option using this —
+ * Commander would pass that default as `prev` on the first use and falsely reject it.
+ */
+function onceOption(flag: string): (val: string, prev: string | undefined) => string {
+  return (val: string, prev: string | undefined): string => {
+    if (prev !== undefined) {
+      throw new CliError(`${flag} may only be given once`);
+    }
+    return val;
+  };
+}
+
 export function registerTracesList(traces: Command): void {
   traces
     .command("list")
     .description("List traces")
-    .option("--limit <n>", "maximum number of traces to return")
-    .option("--since <duration>", "only traces within a window ending now, e.g. 30m, 6h, 7d, 2w")
+    .option("--limit <n>", "maximum number of traces to return", onceOption("--limit"))
+    .option(
+      "--since <duration>",
+      "only traces within a window ending now, e.g. 30m, 6h, 7d, 2w",
+      onceOption("--since"),
+    )
     .option(
       "--from <timestamp>",
       'only traces at or after this time. Accepts ISO 8601 (e.g. 2026-06-23T14:31:02Z or 2026-06-23T14:31:02-06:00) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted. (inclusive)',
+      onceOption("--from"),
     )
     .option(
       "--to <timestamp>",
       'only traces before this time. Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted. (exclusive)',
+      onceOption("--to"),
     )
     .action(async (_opts, command: Command) => {
       // 1. Reject stray positional operands FIRST (before any API call).
       //    This catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
       if (command.args.length > 0) {
-        const joined = command.args.join(" ");
+        const strayJoined = command.args.join(" ");
+        const fromVal = (_opts as { from?: string }).from;
+        const toVal = (_opts as { to?: string }).to;
+        const bareDate = /^\d{4}-\d{2}-\d{2}$/;
+
+        if (fromVal !== undefined && bareDate.test(fromVal)) {
+          // Looks like the user forgot to quote: --from 2026-06-23 14:31:02 MDT
+          const reconstructed = `${fromVal} ${strayJoined}`;
+          throw new CliError(
+            `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --from "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --from ${fromVal}T00:00:00Z\n  traceroot traces list --from ${fromVal}T00:00:00-06:00`,
+          );
+        }
+        if (toVal !== undefined && bareDate.test(toVal)) {
+          const reconstructed = `${toVal} ${strayJoined}`;
+          throw new CliError(
+            `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --to "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --to ${toVal}T00:00:00Z\n  traceroot traces list --to ${toVal}T00:00:00-06:00`,
+          );
+        }
         throw new CliError(
-          `unexpected argument(s): ${joined}. 'traces list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
+          `unexpected argument(s): ${strayJoined}. 'traces list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
         );
       }
       const opts = command.opts();

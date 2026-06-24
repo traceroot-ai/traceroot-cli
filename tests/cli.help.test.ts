@@ -44,3 +44,18 @@ describe("traceroot (no command)", () => {
     expect(stderr).toContain("traces");
   });
 });
+
+describe("traceroot --json (no command)", () => {
+  it("exits non-zero with a clear error message", () => {
+    const result = runCli("--json");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("--json requires a command");
+    expect(result.stderr).toContain("traceroot status --json");
+    expect(result.stderr).toContain("traceroot traces list --json");
+  });
+
+  it("emits no JSON to stdout", () => {
+    const result = runCli("--json");
+    expect(result.stdout).toBe("");
+  });
+});
