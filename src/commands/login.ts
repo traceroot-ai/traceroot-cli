@@ -170,6 +170,18 @@ function promptVisible(question: string, def: string): Promise<string> {
   });
 }
 
+/** Reads a visible yes/no answer; returns `true` only for an explicit y/yes. */
+function promptConfirm(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    rl.question(question, (answer) => {
+      rl.close();
+      const normalized = answer.trim().toLowerCase();
+      resolve(normalized === "y" || normalized === "yes");
+    });
+  });
+}
+
 export function registerLogin(program: Command): void {
   program
     .command("login")
@@ -185,18 +197,7 @@ export function registerLogin(program: Command): void {
         json: ctx.json,
         isInteractive: process.stdin.isTTY === true,
         apiKeySource: ctx.auth.apiKey.source,
-        promptConfirm: (question) =>
-          new Promise((resolve) => {
-            const rl = createInterface({
-              input: process.stdin,
-              output: process.stdout,
-              terminal: true,
-            });
-            rl.question(`${question} [y/N] `, (answer) => {
-              rl.close();
-              resolve(answer.trim().toLowerCase() === "y");
-            });
-          }),
+        promptConfirm,
         promptHidden,
         promptVisible,
         createClient: createApiClient,
