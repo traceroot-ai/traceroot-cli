@@ -37,6 +37,8 @@ describe("runSkillsList (human)", () => {
     expect(out.data).toContain("traceroot-quickstart");
     expect(out.data).toContain("Best for:");
     expect(out.data).toContain("Install: traceroot skills install traceroot-instrument-repo");
+    // The install hint omits --agent (install now prompts for it).
+    expect(out.data).not.toContain("--agent");
     // Not installed → neutral marker, not the installed check.
     expect(out.data).toContain("- traceroot-instrument-repo");
   });
@@ -49,6 +51,14 @@ describe("runSkillsList (human)", () => {
     expect(out.data).toContain(
       "Installed for Claude Code: .claude/skills/traceroot-instrument-repo",
     );
+  });
+
+  it("renders the installed path dimmed when color is enabled", () => {
+    installClaudeSkill("traceroot-instrument-repo");
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    runSkillsList({ agentId: "claude", cwd, json: false, writers: { out, err } });
+    expect(out.data).toContain("\x1b[2m.claude/skills/traceroot-instrument-repo\x1b[0m");
   });
 });
 

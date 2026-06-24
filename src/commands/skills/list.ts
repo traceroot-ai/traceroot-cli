@@ -58,8 +58,8 @@ export function runSkillsList(deps: RunSkillsListDeps): void {
       `  ${skill.description}`,
       `  ${label("Best for:")} ${skill.bestFor.join(", ")}`,
       installed
-        ? `  ${label(`Installed for ${agent.displayName}:`)} ${path}`
-        : `  ${label("Install:")} traceroot skills install ${skill.name} --agent ${agent.id}`,
+        ? `  ${label(`Installed for ${agent.displayName}:`)} ${styler.dim(path)}`
+        : `  ${label("Install:")} traceroot skills install ${skill.name}`,
     ];
     return lines.join("\n");
   });
