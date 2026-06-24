@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { displaySkillPath, requireAgent } from "../../agents/index.js";
+import { displaySkillPath } from "../../agents/index.js";
+import { resolveAgentOrPrompt } from "../../agents/select.js";
 import type { AgentAdapter } from "../../agents/types.js";
 import { type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
@@ -11,12 +12,17 @@ import { JSON_OPTION_DESC } from "../shared.js";
 /** Dependencies for the testable core of `skills install`. */
 export interface RunSkillsInstallDeps {
   skillName: string;
-  agentId: string;
+  /** Missing means prompt (interactive) or fail (non-interactive/JSON). */
+  agentId?: string;
   cwd: string;
   force: boolean;
   dryRun: boolean;
   json: boolean;
   writers: Writers;
+  /** Injected for tests; default is "stdin and stdout are TTYs". */
+  isInteractive?: boolean;
+  /** Injected for tests; default is a readline prompt. */
+  prompt?: (question: string) => Promise<string>;
 }
 
 /** The recommended follow-up command after installing a skill. */
@@ -33,11 +39,19 @@ function nextStep(skill: BuiltinSkill, agent: AgentAdapter): string {
  * the filesystem, never overwrites without `--force`, and writes nothing in
  * `--dry-run` mode. Emits `{ data: {...} }` in `--json` mode.
  */
-export function runSkillsInstall(deps: RunSkillsInstallDeps): void {
+export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void> {
   const { skillName, agentId, cwd, force, dryRun, json, writers } = deps;
 
   const skill = requireBuiltinSkill(skillName);
-  const agent = requireAgent(agentId);
+  const agent = await resolveAgentOrPrompt({
+    agentId,
+    cwd,
+    json,
+    writers,
+    isInteractive: deps.isInteractive,
+    prompt: deps.prompt,
+    example: `traceroot skills install ${skill.name} --agent claude`,
+  });
   const sourceDir = bundledSkillDir(skill.name);
   const targetDir = agent.getSkillInstallPath(cwd, skill.name);
 
@@ -115,16 +129,18 @@ export function registerSkillsInstall(skills: Command): void {
   skills
     .command("install")
     .argument("<skill>", "skill name (see `traceroot skills list`)")
-    .requiredOption("--agent <id>", "target agent: claude, codex, or generic")
+    // Not `.requiredOption`: commander would reject before the action runs, which
+    // would block the interactive prompt. Validated/prompted in the action instead.
+    .option("--agent <id>", "target agent: claude, codex, or generic (required)")
     .option("--force", "overwrite an existing skill directory")
     .option("--dry-run", "show what would happen without writing files")
     .option("--json", JSON_OPTION_DESC)
     .description("Install a TraceRoot skill into an agent's skill directory")
-    .action((skillName: string, _opts, command: Command) => {
+    .action(async (skillName: string, _opts, command: Command) => {
       const opts = command.optsWithGlobals();
-      runSkillsInstall({
+      await runSkillsInstall({
         skillName,
-        agentId: opts.agent as string,
+        agentId: opts.agent as string | undefined,
         cwd: process.cwd(),
         force: opts.force === true,
         dryRun: opts.dryRun === true,

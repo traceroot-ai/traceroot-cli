@@ -34,6 +34,26 @@ describe("--json help on new commands", () => {
   }
 });
 
+describe("--agent help on install/instrument", () => {
+  it("skills install shows --agent as required", () => {
+    const { stdout } = runCli("skills", "install", "--help");
+    expect(stdout.replace(/\s+/g, " ")).toContain("--agent");
+    expect(stdout).toContain("(required)");
+  });
+
+  it("instrument shows --agent as required and does NOT imply a claude default", () => {
+    const { stdout } = runCli("instrument", "--help");
+    expect(stdout.replace(/\s+/g, " ")).toContain("--agent");
+    expect(stdout).toContain("(required)");
+    expect(stdout).not.toContain('(default: "claude")');
+  });
+
+  it("skills list keeps its read-only claude default", () => {
+    const { stdout } = runCli("skills", "list", "--help");
+    expect(stdout).toContain('(default: "claude")');
+  });
+});
+
 describe("traceroot --json (root)", () => {
   it("prints normal help rather than JSON, since root has no JSON data operation", () => {
     const { stdout, stderr } = runCli("--json");

@@ -29,9 +29,9 @@ const base = {
 };
 
 describe("runSkillsInstall (human)", () => {
-  it("installs the skill files under .claude/skills and prints a success block", () => {
+  it("installs the skill files under .claude/skills and prints a success block", async () => {
     const { writers, out } = makeWriters();
-    runSkillsInstall({
+    await runSkillsInstall({
       ...base,
       skillName: "traceroot-instrument-repo",
       cwd,
@@ -46,37 +46,23 @@ describe("runSkillsInstall (human)", () => {
     expect(out.data).toContain(".claude/skills/traceroot-instrument-repo");
   });
 
-  it("refuses to overwrite an existing skill without --force (actionable message)", () => {
+  it("refuses to overwrite an existing skill without --force (actionable message)", async () => {
     const { writers } = makeWriters();
-    const args = {
-      ...base,
-      skillName: "traceroot-quickstart",
-      cwd,
-      json: false,
-      writers,
-    } as const;
-    runSkillsInstall(args);
-
-    try {
-      runSkillsInstall(args);
-      throw new Error("expected throw");
-    } catch (err) {
-      expect(err).toBeInstanceOf(CliError);
-      expect((err as CliError).message).toContain("already exists");
-      expect((err as CliError).message).toContain("--force");
-    }
+    const args = { ...base, skillName: "traceroot-quickstart", cwd, json: false, writers } as const;
+    await runSkillsInstall(args);
+    await expect(runSkillsInstall(args)).rejects.toThrow(/already exists[\s\S]*--force/);
   });
 
-  it("overwrites with --force", () => {
+  it("overwrites with --force", async () => {
     const { writers } = makeWriters();
     const args = { ...base, skillName: "traceroot-quickstart", cwd, json: false, writers };
-    runSkillsInstall(args);
-    expect(() => runSkillsInstall({ ...args, force: true })).not.toThrow();
+    await runSkillsInstall(args);
+    await expect(runSkillsInstall({ ...args, force: true })).resolves.toBeUndefined();
   });
 
-  it("writes nothing in --dry-run mode", () => {
+  it("writes nothing in --dry-run mode", async () => {
     const { writers, out } = makeWriters();
-    runSkillsInstall({
+    await runSkillsInstall({
       ...base,
       skillName: "traceroot-quickstart",
       cwd,
@@ -88,16 +74,16 @@ describe("runSkillsInstall (human)", () => {
     expect(out.data).toContain("Dry run");
   });
 
-  it("throws an actionable CliError for an unknown skill", () => {
+  it("throws an actionable CliError for an unknown skill", async () => {
     const { writers } = makeWriters();
-    expect(() =>
+    await expect(
       runSkillsInstall({ ...base, skillName: "does-not-exist", cwd, json: false, writers }),
-    ).toThrow(/Unknown skill/);
+    ).rejects.toThrow(/Unknown skill/);
   });
 
-  it("throws for an unknown agent", () => {
+  it("throws for an unknown agent", async () => {
     const { writers } = makeWriters();
-    expect(() =>
+    await expect(
       runSkillsInstall({
         ...base,
         agentId: "cursor",
@@ -106,14 +92,95 @@ describe("runSkillsInstall (human)", () => {
         json: false,
         writers,
       }),
-    ).toThrow(/Unknown agent/);
+    ).rejects.toThrow(/Unknown agent/);
+  });
+});
+
+describe("runSkillsInstall (missing --agent)", () => {
+  it("fails with an actionable error when non-interactive and writes nothing", async () => {
+    const { writers, out } = makeWriters();
+    try {
+      await runSkillsInstall({
+        ...base,
+        agentId: undefined,
+        skillName: "traceroot-quickstart",
+        cwd,
+        json: false,
+        isInteractive: false,
+        writers,
+      });
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      const msg = (err as CliError).message;
+      expect(msg).toContain("--agent");
+      expect(msg).toContain("claude, codex, generic");
+      expect(msg).toContain("traceroot skills install traceroot-quickstart --agent claude");
+    }
+    expect(existsSync(join(cwd, ".claude"))).toBe(false);
+    expect(out.data).toBe("");
+  });
+
+  it("does not prompt or emit partial JSON in --json mode", async () => {
+    const { writers, out } = makeWriters();
+    const prompt = async (): Promise<string> => {
+      throw new Error("should not prompt in JSON mode");
+    };
+    await expect(
+      runSkillsInstall({
+        ...base,
+        agentId: undefined,
+        skillName: "traceroot-quickstart",
+        cwd,
+        json: true,
+        isInteractive: true,
+        prompt,
+        writers,
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    expect(out.data).toBe("");
+  });
+
+  it("prompts interactively and installs using the selected agent (claude)", async () => {
+    const { writers } = makeWriters();
+    await runSkillsInstall({
+      ...base,
+      agentId: undefined,
+      skillName: "traceroot-quickstart",
+      cwd,
+      json: false,
+      isInteractive: true,
+      prompt: async () => "claude",
+      writers,
+    });
+    expect(existsSync(join(cwd, ".claude", "skills", "traceroot-quickstart", "SKILL.md"))).toBe(
+      true,
+    );
+  });
+
+  it("prompts interactively and installs using the selected agent (generic)", async () => {
+    const { writers } = makeWriters();
+    await runSkillsInstall({
+      ...base,
+      agentId: undefined,
+      skillName: "traceroot-quickstart",
+      cwd,
+      json: false,
+      isInteractive: true,
+      prompt: async () => "generic",
+      writers,
+    });
+    expect(existsSync(join(cwd, ".agents", "skills", "traceroot-quickstart", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(existsSync(join(cwd, ".claude"))).toBe(false);
   });
 });
 
 describe("runSkillsInstall (--json)", () => {
-  it("emits the documented data shape on a fresh install", () => {
+  it("emits the documented data shape on a fresh install", async () => {
     const { writers, out, err } = makeWriters();
-    runSkillsInstall({
+    await runSkillsInstall({
       ...base,
       skillName: "traceroot-instrument-repo",
       cwd,
@@ -133,9 +200,9 @@ describe("runSkillsInstall (--json)", () => {
     expect(err.data).toBe("");
   });
 
-  it("marks installed:false and dryRun:true for a JSON dry-run", () => {
+  it("marks installed:false and dryRun:true for a JSON dry-run", async () => {
     const { writers, out } = makeWriters();
-    runSkillsInstall({
+    await runSkillsInstall({
       ...base,
       skillName: "traceroot-quickstart",
       cwd,
@@ -151,13 +218,13 @@ describe("runSkillsInstall (--json)", () => {
 });
 
 describe("runSkillsInstall (codex)", () => {
-  it("installs into $CODEX_HOME/skills/<name> (not a project dir)", () => {
+  it("installs into $CODEX_HOME/skills/<name> (not a project dir)", async () => {
     const prev = process.env.CODEX_HOME;
     const codexHome = join(cwd, "codex-home");
     process.env.CODEX_HOME = codexHome;
     try {
       const { writers } = makeWriters();
-      runSkillsInstall({
+      await runSkillsInstall({
         ...base,
         agentId: "codex",
         skillName: "traceroot-quickstart",

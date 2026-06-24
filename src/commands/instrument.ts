@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import type { Command } from "commander";
-import { displaySkillPath, requireAgent } from "../agents/index.js";
+import { displaySkillPath } from "../agents/index.js";
+import { resolveAgentOrPrompt } from "../agents/select.js";
 import {
   CliError,
   type Writers,
@@ -20,7 +21,8 @@ const DEFAULT_PROMPT_PATH = join(".traceroot", "prompts", "instrument-repo.md");
 
 /** Dependencies for the testable core of `instrument`. */
 export interface RunInstrumentDeps {
-  agentId: string;
+  /** Missing means prompt (interactive) or fail (non-interactive/JSON). */
+  agentId?: string;
   cwd: string;
   print: boolean;
   outputPath?: string;
@@ -29,6 +31,10 @@ export interface RunInstrumentDeps {
   writers: Writers;
   /** Injectable repo detection; defaults to scanning `cwd`. */
   detection?: RepoDetection;
+  /** Injected for tests; default is "stdin and stdout are TTYs". */
+  isInteractive?: boolean;
+  /** Injected for tests; default is a readline prompt. */
+  prompt?: (question: string) => Promise<string>;
 }
 
 /** Writes `content` to `target` via a temp file + rename so a crash can't truncate it. */
@@ -58,23 +64,31 @@ function atomicWrite(target: string, content: string): void {
  * to overwrite without `--force`. Never edits application source or embeds
  * secrets.
  */
-export function runInstrument(deps: RunInstrumentDeps): void {
+export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
   const { agentId, cwd, print, outputPath, force, json, writers } = deps;
 
-  const agent = requireAgent(agentId);
+  const agent = await resolveAgentOrPrompt({
+    agentId,
+    cwd,
+    json,
+    writers,
+    isInteractive: deps.isInteractive,
+    prompt: deps.prompt,
+    example: "traceroot instrument --agent claude --print",
+  });
   const detection = deps.detection ?? detectRepo(cwd);
   const skillPath = displaySkillPath(
     cwd,
     agent.getSkillInstallPath(cwd, "traceroot-instrument-repo"),
   );
-  const prompt = buildInstrumentPrompt(detection, { agentId: agent.id, skillPath });
-  const bytes = Buffer.byteLength(prompt, "utf8");
+  const promptText = buildInstrumentPrompt(detection, { agentId: agent.id, skillPath });
+  const bytes = Buffer.byteLength(promptText, "utf8");
 
   if (print) {
     if (json) {
-      writeJson({ data: { agent: agent.id, printed: true, bytes, prompt } }, writers);
+      writeJson({ data: { agent: agent.id, printed: true, bytes, prompt: promptText } }, writers);
     } else {
-      writers.out.write(prompt.endsWith("\n") ? prompt : `${prompt}\n`);
+      writers.out.write(promptText.endsWith("\n") ? promptText : `${promptText}\n`);
     }
     return;
   }
@@ -87,7 +101,7 @@ export function runInstrument(deps: RunInstrumentDeps): void {
     throw new CliError(`Prompt already exists at ${displayPath}\n\nUse --force to overwrite it.`);
   }
 
-  atomicWrite(target, prompt);
+  atomicWrite(target, promptText);
 
   if (json) {
     writeJson({ data: { agent: agent.id, output: displayPath, bytes, overwritten } }, writers);
@@ -111,15 +125,17 @@ export function registerInstrument(program: Command): void {
   program
     .command("instrument")
     .description("Generate an agent prompt to instrument this repo with TraceRoot")
-    .option("--agent <id>", "target agent: claude, codex, or generic", "claude")
+    // No default agent: the prompt's skill path and install command depend on it,
+    // so the target must be explicit (prompted when interactive, else an error).
+    .option("--agent <id>", "target agent: claude, codex, or generic (required)")
     .option("--print", "print the prompt to stdout instead of writing a file")
     .option("--output <path>", "write the prompt to this path")
     .option("--force", "overwrite an existing prompt file")
     .option("--json", JSON_OPTION_DESC)
-    .action((_opts, command: Command) => {
+    .action(async (_opts, command: Command) => {
       const opts = command.optsWithGlobals();
-      runInstrument({
-        agentId: opts.agent as string,
+      await runInstrument({
+        agentId: opts.agent as string | undefined,
         cwd: process.cwd(),
         print: opts.print === true,
         outputPath: opts.output as string | undefined,
