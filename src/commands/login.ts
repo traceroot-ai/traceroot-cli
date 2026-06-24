@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import type { Command } from "commander";
 import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
 import { writeConfig as realWriteConfig } from "../config/manager.js";
+import type { AuthSource } from "../config/resolve.js";
 import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../output.js";
 import { apiKeyLabel, identity } from "../render/identity.js";
 import { createStyler } from "../render/style.js";
@@ -20,6 +21,11 @@ export interface LoginDeps {
   resolvedHost?: string;
   json: boolean;
   isInteractive: boolean;
+  /** Provenance of the resolved api key; `"config"` means the user is already
+   * logged in via the persisted config file (a bare `login` re-invocation). */
+  apiKeySource: AuthSource;
+  /** Prompts for a yes/no answer; resolves `false` on empty input or EOF. */
+  promptConfirm: (question: string) => Promise<boolean>;
   /** Prompts for a secret without echoing it. */
   promptHidden: (question: string) => Promise<string>;
   /** Prompts for a visible value, offering `def` as the default on empty input. */
@@ -151,6 +157,19 @@ export function registerLogin(program: Command): void {
         resolvedHost: ctx.auth.hostUrl.value,
         json: ctx.json,
         isInteractive: process.stdin.isTTY === true,
+        apiKeySource: ctx.auth.apiKey.source,
+        promptConfirm: (question) =>
+          new Promise((resolve) => {
+            const rl = createInterface({
+              input: process.stdin,
+              output: process.stdout,
+              terminal: true,
+            });
+            rl.question(`${question} [y/N] `, (answer) => {
+              rl.close();
+              resolve(answer.trim().toLowerCase() === "y");
+            });
+          }),
         promptHidden,
         promptVisible,
         createClient: createApiClient,

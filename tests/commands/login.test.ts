@@ -58,6 +58,8 @@ function baseDeps(
   return {
     json: false,
     isInteractive: false,
+    apiKeySource: "env",
+    promptConfirm: () => Promise.reject(new Error("promptConfirm should not be called")),
     promptHidden: () => Promise.reject(new Error("promptHidden should not be called")),
     promptVisible: () => Promise.reject(new Error("promptVisible should not be called")),
     createClient: (o) => {
