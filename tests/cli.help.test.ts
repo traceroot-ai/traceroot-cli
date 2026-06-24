@@ -21,17 +21,29 @@ describe("traceroot --help", () => {
   });
 });
 
-describe("--json help on new commands", () => {
+describe("subcommand help: native Options vs Global Options", () => {
   for (const cmd of [["skills", "list"], ["skills", "install"], ["instrument"], ["doctor"]]) {
-    it(`shows --json in the Options section of \`${cmd.join(" ")}\` (no separate Global block)`, () => {
+    it(`groups --json/--api-key/--host/--env-file under Global Options for \`${cmd.join(" ")}\``, () => {
       const { stdout } = runCli(...cmd, "--help");
-      expect(stdout).toContain("--json");
-      expect(stdout.replace(/\s+/g, " ")).toContain(
-        "emit machine-readable JSON output for supported commands",
-      );
-      expect(stdout).not.toContain("Global option");
+      const [options, global] = stdout.split("Global Options:");
+      // There is a dedicated Global Options section…
+      expect(global).toBeDefined();
+      // …carrying the inherited program-wide flags.
+      expect(global).toContain("--json");
+      expect(global).toContain("--api-key");
+      expect(global).toContain("--host");
+      expect(global).toContain("--env-file");
+      // …and the native Options section does NOT list --json.
+      expect(options).toContain("Options:");
+      expect(options).not.toContain("--json");
     });
   }
+
+  it("keeps native flags (e.g. --agent) in the command's own Options section", () => {
+    const { stdout } = runCli("skills", "install", "--help");
+    const beforeGlobal = stdout.split("Global Options:")[0] ?? "";
+    expect(beforeGlobal).toContain("--agent <agent>");
+  });
 });
 
 describe("--agent help placeholder and defaults", () => {

@@ -7,7 +7,6 @@ import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
 import { type BuiltinSkill, builtinSkillNames, requireBuiltinSkill } from "../../skills/registry.js";
-import { JSON_OPTION_DESC } from "../shared.js";
 
 /** Dependencies for the testable core of `skills install`. */
 export interface RunSkillsInstallDeps {
@@ -142,7 +141,6 @@ export function registerSkillsInstall(skills: Command): void {
     .option("--agent <agent>", "target agent: claude, codex, or generic")
     .option("--force", "overwrite an existing skill directory")
     .option("--dry-run", "show what would happen without writing files")
-    .option("--json", JSON_OPTION_DESC)
     .description("Install a TraceRoot skill into an agent's skill directory")
     .action(async (skillName: string | undefined, _opts, command: Command) => {
       const opts = command.optsWithGlobals();

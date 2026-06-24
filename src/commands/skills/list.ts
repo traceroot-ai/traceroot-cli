@@ -6,7 +6,6 @@ import { type Writers, defaultWriters, writeJson } from "../../output.js";
 import { statusSymbol } from "../../render/status.js";
 import { createStyler } from "../../render/style.js";
 import { BUILTIN_SKILLS } from "../../skills/registry.js";
-import { JSON_OPTION_DESC } from "../shared.js";
 
 /** Dependencies for the testable core of `skills list`. */
 export interface RunSkillsListDeps {
@@ -78,7 +77,6 @@ export function registerSkillsList(skills: Command): void {
       "agent to check install status for: claude, codex, or generic",
       "claude",
     )
-    .option("--json", JSON_OPTION_DESC)
     .action((_opts, command: Command) => {
       const opts = command.optsWithGlobals();
       runSkillsList({

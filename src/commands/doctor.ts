@@ -8,7 +8,7 @@ import { type Writers, defaultWriters, writeJson } from "../output.js";
 import { createStyler } from "../render/style.js";
 import { statusSymbol } from "../render/status.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
-import { JSON_OPTION_DESC, contextFromCommand } from "./shared.js";
+import { contextFromCommand } from "./shared.js";
 
 /** Ordered category → human heading. */
 const CATEGORY_HEADINGS: ReadonlyArray<[DoctorCheck["category"], string]> = [
@@ -104,7 +104,6 @@ export function registerDoctor(program: Command): void {
   program
     .command("doctor")
     .description("Diagnose credentials, repo shape, and installed skills")
-    .option("--json", JSON_OPTION_DESC)
     .action(async (_opts, command: Command) => {
       const ctx = contextFromCommand(command);
       const report = await runDoctor({

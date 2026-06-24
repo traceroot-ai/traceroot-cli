@@ -14,7 +14,6 @@ import {
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
-import { JSON_OPTION_DESC } from "./shared.js";
 
 /** Default location for the generated prompt when neither --print nor --output is given. */
 const DEFAULT_PROMPT_PATH = join(".traceroot", "prompts", "instrument-repo.md");
@@ -129,7 +128,6 @@ export function registerInstrument(program: Command): void {
     .option("--print", "print the prompt to stdout instead of writing a file")
     .option("--output <path>", "write the prompt to this path")
     .option("--force", "overwrite an existing prompt file")
-    .option("--json", JSON_OPTION_DESC)
     .action(async (_opts, command: Command) => {
       const opts = command.optsWithGlobals();
       // A bare `instrument` (no --print and no --output) requests no action: show

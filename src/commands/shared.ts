@@ -3,15 +3,6 @@ import { type ApiClient, createApiClient } from "../api/client.js";
 import { type Context, buildContext } from "../context.js";
 import { CliError } from "../output.js";
 
-/**
- * Shared description for the `--json` option. The new commands declare `--json`
- * as a local option (so it appears in their own Options section alongside
- * `-h, --help`) even though it is also accepted as a program-wide flag; both
- * `traceroot --json <cmd>` and `traceroot <cmd> --json` resolve via
- * `optsWithGlobals()`. The wording notes that root/help itself emits no JSON.
- */
-export const JSON_OPTION_DESC = "emit machine-readable JSON output for supported commands";
-
 /** Build the per-invocation Context from a command's merged (global+local) options. */
 export function contextFromCommand(command: Command): Context {
   const opts = command.optsWithGlobals();
