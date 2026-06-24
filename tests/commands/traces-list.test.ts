@@ -374,13 +374,16 @@ describe("resolveTimeRange", () => {
     );
   });
 
-  it("rejects --from at or after --to", () => {
+  it("rejects an inverted --from/--to range with an ordering message", () => {
     expect(() =>
       resolveTimeRange({ from: "2024-02-01T00:00:00Z", to: "2024-01-01T00:00:00Z" }),
-    ).toThrow(CliError);
+    ).toThrow(/--from must resolve to an earlier time than --to/);
+  });
+
+  it("rejects an equal --from/--to range explaining inclusive/exclusive bounds", () => {
     expect(() =>
       resolveTimeRange({ from: "2024-01-01T00:00:00Z", to: "2024-01-01T00:00:00Z" }),
-    ).toThrow(CliError);
+    ).toThrow(/resolve to the same time.*inclusive.*exclusive/s);
   });
 
   it("rejects combining --since with --from or --to", () => {
@@ -430,6 +433,13 @@ describe("resolveTimeRange", () => {
     expect(resolveTimeRange({ from: "2026-06-23 09:00:00 GMT-3" }).startAfter).toBe(
       "2026-06-23T12:00:00.000Z",
     );
+  });
+
+  it("rejects invalid GMT±offset display values (no normalization)", () => {
+    expect(() => resolveTimeRange({ from: "2026-02-31 17:30:00 GMT+5:30" })).toThrow(CliError);
+    expect(() => resolveTimeRange({ from: "2026-06-23 25:30:00 GMT+5:30" })).toThrow(CliError);
+    expect(() => resolveTimeRange({ from: "2026-06-23 17:30:00 GMT+99" })).toThrow(CliError);
+    expect(() => resolveTimeRange({ from: "2026-06-23 17:30:00 GMT+5:99" })).toThrow(CliError);
   });
 
   it("accepts display timestamps for both --from and --to (Denver/MDT)", () => {
@@ -606,51 +616,51 @@ describe("renderRangeSummary", () => {
     );
   });
 
-  it("returns 'from <human-local>' for startAfter-only (Denver/MDT)", () => {
-    // 2026-06-23T20:29:54Z = 2:29:54 PM MDT
+  it("returns 'from <local 24h>' for startAfter-only (Denver/MDT)", () => {
+    // 2026-06-23T20:29:54Z = 14:29:54 MDT
     const result = renderRangeSummary({ startAfter: "2026-06-23T20:29:54.000Z" }, TZ);
-    expect(result).toBe("from Jun 23, 2026 2:29:54 PM MDT");
+    expect(result).toBe("from 2026-06-23 14:29:54 MDT");
   });
 
-  it("returns 'before <human-local>' for endBefore-only (Denver/MDT)", () => {
-    // 2026-06-23T20:31:02Z = 2:31:02 PM MDT
+  it("returns 'before <local 24h>' for endBefore-only (Denver/MDT)", () => {
+    // 2026-06-23T20:31:02Z = 14:31:02 MDT
     const result = renderRangeSummary({ endBefore: "2026-06-23T20:31:02.000Z" }, TZ);
-    expect(result).toBe("before Jun 23, 2026 2:31:02 PM MDT");
+    expect(result).toBe("before 2026-06-23 14:31:02 MDT");
   });
 
   it("returns 'from … to before …' for both bounds (Denver/MDT)", () => {
     const result = renderRangeSummary(
       {
-        startAfter: "2026-06-23T20:28:35.000Z", // 2:28:35 PM MDT
-        endBefore: "2026-06-23T20:31:02.000Z", // 2:31:02 PM MDT
+        startAfter: "2026-06-23T20:28:35.000Z", // 14:28:35 MDT
+        endBefore: "2026-06-23T20:31:02.000Z", // 14:31:02 MDT
       },
       TZ,
     );
-    expect(result).toBe("from Jun 23, 2026 2:28:35 PM MDT to before Jun 23, 2026 2:31:02 PM MDT");
+    expect(result).toBe("from 2026-06-23 14:28:35 MDT to before 2026-06-23 14:31:02 MDT");
   });
 });
 
 // ─── formatLocalDisplay (pure unit tests) ──────────────────────────────────
 
 describe("formatLocalDisplay", () => {
-  it("formats a UTC ISO string as local Mon DD, YYYY h:MM:SS AM/PM TZ", () => {
-    // 2026-06-23T20:29:54Z = 2:29:54 PM MDT
+  it("formats a UTC ISO string as the local 24-hour table form (YYYY-MM-DD HH:mm:ss TZ)", () => {
+    // 2026-06-23T20:29:54Z = 14:29:54 MDT
     expect(formatLocalDisplay("2026-06-23T20:29:54.000Z", "America/Denver")).toBe(
-      "Jun 23, 2026 2:29:54 PM MDT",
+      "2026-06-23 14:29:54 MDT",
     );
   });
 
-  it("formats midnight correctly (AM)", () => {
+  it("formats midnight as 00:00:00 (24-hour)", () => {
     // 2026-06-23T06:00:00Z = midnight MDT
     expect(formatLocalDisplay("2026-06-23T06:00:00.000Z", "America/Denver")).toBe(
-      "Jun 23, 2026 12:00:00 AM MDT",
+      "2026-06-23 00:00:00 MDT",
     );
   });
 
-  it("formats noon correctly (PM)", () => {
+  it("formats noon as 12:00:00 (24-hour)", () => {
     // 2026-06-23T18:00:00Z = noon MDT
     expect(formatLocalDisplay("2026-06-23T18:00:00.000Z", "America/Denver")).toBe(
-      "Jun 23, 2026 12:00:00 PM MDT",
+      "2026-06-23 12:00:00 MDT",
     );
   });
 });
@@ -658,36 +668,51 @@ describe("formatLocalDisplay", () => {
 // ─── runList compact footer (one-line stderr) ──────────────────────────────
 
 describe("runList compact footer (one-line stderr)", () => {
-  const res0: TraceList = { data: [], meta: META };
+  const res0: TraceList = { data: [], meta: { page: 0, limit: 50, total: 0 } };
   const res2: TraceList = {
     data: [listItem({ trace_id: "a-1" }), listItem({ trace_id: "a-2" })],
-    meta: META,
+    meta: { page: 0, limit: 50, total: 2 },
   };
 
-  it("emits '<n> trace(s) | all traces' when no bounds (0 traces)", async () => {
+  it("emits '<count> trace(s) | limit <N> | all traces' (0 traces)", async () => {
     const { writers: w, err } = writers();
     await runList({ client: fakeClient(res0), json: false, writers: w });
-    expect(err.data).toContain("0 trace(s) | all traces");
+    expect(err.data).toContain("0 trace(s) | limit 50 | all traces");
   });
 
-  it("emits '<n> trace(s) | all traces' when no bounds (2 traces)", async () => {
+  it("emits '<count> trace(s) | limit <N> | all traces' (2 traces)", async () => {
     const { writers: w, err } = writers();
     await runList({ client: fakeClient(res2), json: false, writers: w });
-    expect(err.data).toContain("2 trace(s) | all traces");
+    expect(err.data).toContain("2 trace(s) | limit 50 | all traces");
   });
 
-  it("does NOT emit two separate lines (old format gone)", async () => {
+  it("shows '<returned> of <total>' and uses meta.limit when total exceeds the page", async () => {
+    const res: TraceList = {
+      data: [listItem({ trace_id: "a-1" }), listItem({ trace_id: "a-2" })],
+      meta: { page: 0, limit: 50, total: 137 },
+    };
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w });
+    expect(err.data).toContain("2 of 137 trace(s) | limit 50 | all traces");
+  });
+
+  it("falls back to the explicit --limit when meta.limit is absent", async () => {
+    const res = { data: [], meta: { page: 0, total: 0 } } as unknown as TraceList;
+    const { writers: w, err } = writers();
+    await runList({ client: fakeClient(res), json: false, writers: w, limit: 7 });
+    expect(err.data).toContain("0 trace(s) | limit 7 | all traces");
+  });
+
+  it("does NOT emit a separate 'Range:' predicate line (old format gone)", async () => {
     const { writers: w, err } = writers();
     await runList({ client: fakeClient(res0), json: false, writers: w });
-    // Old format had "Range:" on a separate line — should not appear
     expect(err.data).not.toContain("Range: all traces");
-    // The count and range should be on the SAME line
+    // The count, limit and range are a single compact line (no separate tip line).
     const lines = err.data.split("\n").filter((l) => l.trim() !== "");
-    // At most 2 lines: footer + optional tip (no time flags → tip shown)
-    expect(lines.length).toBeLessThanOrEqual(2);
+    expect(lines.length).toBe(1);
   });
 
-  it("emits '<n> trace(s) | since 2m' for sinceLabel", async () => {
+  it("emits 'limit <N> | since 2m' for sinceLabel", async () => {
     const { writers: w, err } = writers();
     await runList({
       client: fakeClient(res0),
@@ -696,10 +721,10 @@ describe("runList compact footer (one-line stderr)", () => {
       startAfter: "2026-06-23T20:28:00.000Z",
       sinceLabel: "2m",
     });
-    expect(err.data).toContain("0 trace(s) | since 2m");
+    expect(err.data).toContain("0 trace(s) | limit 50 | since 2m");
   });
 
-  it("emits 'from <human-local>' footer for startAfter-only (Denver TZ)", async () => {
+  it("emits a 24-hour 'from <local>' footer for startAfter-only (Denver TZ)", async () => {
     const { writers: w, err } = writers();
     await runList({
       client: fakeClient(res0),
@@ -708,10 +733,10 @@ describe("runList compact footer (one-line stderr)", () => {
       startAfter: "2026-06-23T20:29:54.000Z",
       timeZone: "America/Denver",
     });
-    expect(err.data).toContain("0 trace(s) | from Jun 23, 2026 2:29:54 PM MDT");
+    expect(err.data).toContain("0 trace(s) | limit 50 | from 2026-06-23 14:29:54 MDT");
   });
 
-  it("emits 'before <human-local>' footer for endBefore-only (Denver TZ)", async () => {
+  it("emits a 24-hour 'before <local>' footer for endBefore-only (Denver TZ)", async () => {
     const { writers: w, err } = writers();
     await runList({
       client: fakeClient(res0),
@@ -720,10 +745,10 @@ describe("runList compact footer (one-line stderr)", () => {
       endBefore: "2026-06-23T20:31:02.000Z",
       timeZone: "America/Denver",
     });
-    expect(err.data).toContain("0 trace(s) | before Jun 23, 2026 2:31:02 PM MDT");
+    expect(err.data).toContain("0 trace(s) | limit 50 | before 2026-06-23 14:31:02 MDT");
   });
 
-  it("emits 'from … to before …' footer for both bounds (Denver TZ)", async () => {
+  it("emits a 24-hour 'from … to before …' footer for both bounds (Denver TZ)", async () => {
     const { writers: w, err } = writers();
     await runList({
       client: fakeClient(res0),
@@ -734,7 +759,7 @@ describe("runList compact footer (one-line stderr)", () => {
       timeZone: "America/Denver",
     });
     expect(err.data).toContain(
-      "0 trace(s) | from Jun 23, 2026 2:28:35 PM MDT to before Jun 23, 2026 2:31:02 PM MDT",
+      "0 trace(s) | limit 50 | from 2026-06-23 14:28:35 MDT to before 2026-06-23 14:31:02 MDT",
     );
   });
 

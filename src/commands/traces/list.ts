@@ -159,9 +159,19 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
       string,
       string | undefined,
     ];
+    const offH = Number.parseInt(oh, 10);
+    const offM = om !== undefined ? Number.parseInt(om, 10) : 0;
     const iso = `${date}T${time}${sign}${oh.padStart(2, "0")}:${(om ?? "00").padStart(2, "0")}`;
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) {
+    // Validate without normalizing. `new Date` with an explicit offset SILENTLY
+    // rolls invalid dates (Feb 31 → Mar 3, hour 25 → next day), so round-trip the
+    // resolved instant back to the same offset and require the wall-clock to match
+    // exactly — plus reject out-of-range offsets (max real offset is +14:00).
+    const pad = (n: number, w = 2): string => n.toString().padStart(w, "0");
+    const offsetMs = (sign === "+" ? 1 : -1) * (offH * 60 + offM) * 60_000;
+    const wall = new Date(d.getTime() + offsetMs); // wall-clock now lives in UTC fields
+    const roundTrip = `${pad(wall.getUTCFullYear(), 4)}-${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}T${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())}:${pad(wall.getUTCSeconds())}`;
+    if (offH > 14 || offM > 59 || Number.isNaN(d.getTime()) || roundTrip !== `${date}T${time}`) {
       throw new CliError(
         `${flag} "${trimmed}": not a valid timestamp. Use ISO 8601, e.g. ${flag} 2026-06-23T17:30:00+05:30.`,
       );
@@ -297,13 +307,16 @@ export function resolveTimeRange(
   if (to !== undefined) {
     range.endBefore = normalizeTimestamp(to, "--to", timeZone);
   }
-  if (
-    range.startAfter !== undefined &&
-    range.endBefore !== undefined &&
-    range.startAfter >= range.endBefore
-  ) {
-    // Both are normalized ISO-8601 UTC strings, so lexical >= is chronological >=.
-    throw new CliError("--from must be before --to");
+  if (range.startAfter !== undefined && range.endBefore !== undefined) {
+    // Both are normalized ISO-8601 UTC strings, so lexical comparison is chronological.
+    if (range.startAfter === range.endBefore) {
+      throw new CliError(
+        "--from and --to resolve to the same time. The lower bound is inclusive and the upper bound is exclusive, so choose a later --to.",
+      );
+    }
+    if (range.startAfter > range.endBefore) {
+      throw new CliError("--from must resolve to an earlier time than --to");
+    }
   }
   return range;
 }
@@ -328,31 +341,13 @@ export function parseLimit(raw: string | undefined): number | undefined {
 }
 
 /**
- * Formats an ISO UTC timestamp into a human-readable local form:
- * `Mon DD, YYYY h:MM:SS AM/PM TZ` (e.g. `Jun 23, 2026 2:29:54 PM MDT`).
- * `timeZone` overrides the system local zone (tests inject a fixed zone for
- * deterministic output).
+ * Formats an ISO UTC timestamp into the SAME local 24-hour form the table's
+ * `STARTED` column uses (e.g. `2026-06-23 14:29:54 MDT`), so a footer timestamp
+ * can be copied straight back into `--from`/`--to`. `timeZone` overrides the
+ * system local zone (tests inject a fixed zone for deterministic output).
  */
 export function formatLocalDisplay(iso: string, timeZone?: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return iso;
-  }
-  const parts = new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-    timeZone,
-    timeZoneName: "short",
-  }).formatToParts(date);
-  const pick = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find((p) => p.type === type)?.value ?? "";
-  // e.g. "Jun 23, 2026 2:29:54 PM MDT"
-  return `${pick("month")} ${pick("day")}, ${pick("year")} ${pick("hour")}:${pick("minute")}:${pick("second")} ${pick("dayPeriod")} ${pick("timeZoneName")}`;
+  return formatTimestamp(iso, timeZone);
 }
 
 /**
@@ -474,11 +469,20 @@ export async function runList(deps: RunListDeps): Promise<void> {
   });
   writers.out.write(`${rendered}\n`);
 
-  // Compact one-line footer: "<n> trace(s) | <range>". Copy/paste guidance lives
-  // in `--help`, the README, and the actionable errors for bad timestamps — not
-  // in normal success output, where a repeated tip is just noise.
+  // Compact one-line footer: "<count> trace(s) | limit <N> | <range>". Copy/paste
+  // guidance lives in `--help`, the README, and the bad-timestamp errors — not in
+  // normal success output, where a repeated tip is just noise. `meta.page` is
+  // intentionally NOT surfaced here: the CLI has no pagination controls today
+  // (it would gain a `--page`/`--cursor` flag as future work).
+  const returned = res.data.length;
+  const total = res.meta?.total;
+  const countText =
+    typeof total === "number" && total > returned
+      ? `${returned} of ${total} trace(s)`
+      : `${returned} trace(s)`;
+  const effectiveLimit = res.meta?.limit ?? limit ?? 50;
   const rangeText = renderRangeSummary({ startAfter, endBefore, sinceLabel }, timeZone);
-  logProgress(`${res.data.length} trace(s) | ${rangeText}`, writers);
+  logProgress(`${countText} | limit ${effectiveLimit} | ${rangeText}`, writers);
 }
 
 /**
@@ -529,13 +533,13 @@ export function registerTracesList(traces: Command): void {
           // Looks like the user forgot to quote: --from 2026-06-23 14:31:02 MDT
           const reconstructed = `${fromVal} ${strayJoined}`;
           throw new CliError(
-            `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --from "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --from ${fromVal}T00:00:00Z\n  traceroot traces list --from ${fromVal}T00:00:00-06:00`,
+            `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --from "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --from 2026-06-23T20:31:02Z\n  traceroot traces list --from 2026-06-23T14:31:02-06:00`,
           );
         }
         if (toVal !== undefined && bareDate.test(toVal)) {
           const reconstructed = `${toVal} ${strayJoined}`;
           throw new CliError(
-            `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --to "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --to ${toVal}T00:00:00Z\n  traceroot traces list --to ${toVal}T00:00:00-06:00`,
+            `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --to "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --to 2026-06-23T20:31:02Z\n  traceroot traces list --to 2026-06-23T14:31:02-06:00`,
           );
         }
         throw new CliError(
