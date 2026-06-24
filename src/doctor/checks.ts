@@ -142,7 +142,7 @@ function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
       status: hasInstrument ? "pass" : "warn",
       message: hasInstrument
         ? "Instrumentation skill installed for Claude Code"
-        : "Instrumentation skill not installed; run `traceroot skills install traceroot-instrument-repo --agent claude`",
+        : "Instrumentation skill not installed. Run `traceroot skills install traceroot-instrument-repo`",
     },
     {
       name: "skill_quickstart",

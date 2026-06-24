@@ -46,6 +46,20 @@ describe("runSkillsInstall (human)", () => {
     expect(out.data).toContain(".claude/skills/traceroot-instrument-repo");
   });
 
+  it("suggests the bare `traceroot instrument` (no flags) after installing the instrumentation skill", async () => {
+    const { writers, err } = makeWriters();
+    await runSkillsInstall({
+      ...base,
+      skillName: "traceroot-instrument-repo",
+      cwd,
+      json: false,
+      writers,
+    });
+    expect(err.data).toContain("Next: traceroot instrument");
+    expect(err.data).not.toContain("--agent");
+    expect(err.data).not.toContain("--print");
+  });
+
   it("dims the install path in the result block when color is enabled", async () => {
     const out = new StringSink(true);
     const err = new StringSink(true);

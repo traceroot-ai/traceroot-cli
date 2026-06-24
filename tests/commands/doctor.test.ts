@@ -88,6 +88,9 @@ describe("runDoctor", () => {
     const instrument = report.checks.find((c) => c.name === "skill_instrument");
     const quickstart = report.checks.find((c) => c.name === "skill_quickstart");
     expect(instrument?.message).toContain("Instrumentation skill");
+    // Hint points at the bare interactive install command — no --agent, no semicolon.
+    expect(instrument?.message).not.toContain("--agent");
+    expect(instrument?.message).not.toContain(";");
     // Concise wording: no "; optional" clause.
     expect(quickstart?.message).toBe("Quickstart skill not installed");
     // Both warn when absent; neither implies the other is installed.

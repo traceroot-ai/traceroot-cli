@@ -28,10 +28,14 @@ export interface RunSkillsInstallDeps {
   prompt?: (question: string) => Promise<string>;
 }
 
-/** The recommended follow-up command after installing a skill. */
+/**
+ * The recommended follow-up after installing a skill. For the instrumentation
+ * skill we point at the bare `traceroot instrument` command (no flags) since it
+ * prompts interactively — easier to type and read than the fully-flagged form.
+ */
 function nextStep(skill: BuiltinSkill, agent: AgentAdapter): string {
   if (skill.name === "traceroot-instrument-repo") {
-    return `traceroot instrument --agent ${agent.id} --print`;
+    return "traceroot instrument";
   }
   return agent.getUsageHint(skill.name);
 }
