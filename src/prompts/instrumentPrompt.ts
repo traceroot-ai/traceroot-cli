@@ -7,16 +7,22 @@ function presence(value: boolean): string {
 
 /** Human summary of detected languages for the facts block. */
 function languageSummary(detection: RepoDetection): string {
-  if (detection.likelyLanguages.includes("python")) {
-    if (detection.likelyLanguages.includes("typescript")) {
-      return "Python and TypeScript/JavaScript";
-    }
+  const langs = detection.likelyLanguages;
+  const hasPython = langs.includes("python");
+  // `tsconfig.json` implies TypeScript (and JS); otherwise `package.json` alone is JS.
+  const node = langs.includes("typescript")
+    ? "TypeScript/JavaScript"
+    : langs.includes("javascript")
+      ? "JavaScript"
+      : undefined;
+
+  if (hasPython && node !== undefined) {
+    return `Python and ${node}`;
+  }
+  if (hasPython) {
     return "Python";
   }
-  if (detection.likelyLanguages.length > 0) {
-    return "TypeScript/JavaScript";
-  }
-  return "unknown";
+  return node ?? "unknown";
 }
 
 /** Optional agent context so the prompt references the right skill location. */
