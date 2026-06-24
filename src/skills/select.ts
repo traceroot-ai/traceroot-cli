@@ -1,5 +1,6 @@
 import { type Writers, CliError, logInfo } from "../output.js";
-import { type Prompt, isInteractive, readLine } from "../prompt.js";
+import { type Prompt, dim, isInteractive, readLine } from "../prompt.js";
+import { createStyler } from "../render/style.js";
 import {
   type BuiltinSkill,
   BUILTIN_SKILLS,
@@ -23,10 +24,17 @@ export interface ResolveSkillInput {
   prompt?: Prompt;
 }
 
-/** Renders the built-in skills as an aligned, multi-line list (name + description). */
-function availableSkillsList(): string {
+/**
+ * Renders the built-in skills as an aligned, multi-line list (bold name +
+ * description). Padding is computed from the raw (unstyled) name so the bold
+ * ANSI codes never disturb column alignment.
+ */
+function availableSkillsList(writers: Writers): string {
+  const styler = createStyler(writers.err);
   const width = Math.max(...BUILTIN_SKILLS.map((s) => s.name.length));
-  const rows = BUILTIN_SKILLS.map((s) => `  ${s.name.padEnd(width + 2)}${s.description}`);
+  const rows = BUILTIN_SKILLS.map(
+    (s) => `  ${styler.bold(s.name)}${" ".repeat(width + 2 - s.name.length)}${s.description}`,
+  );
   return ["Available skills:", ...rows].join("\n");
 }
 
@@ -53,8 +61,8 @@ export async function resolveSkillOrPrompt(input: ResolveSkillInput): Promise<Bu
   }
 
   // List the skills first, then a compact prompt (the options aren't repeated inline).
-  logInfo(availableSkillsList(), writers);
+  logInfo(availableSkillsList(writers), writers);
   const prompt = input.prompt ?? readLine;
-  const answer = (await prompt(`Skill (default: ${DEFAULT_SKILL}): `)).trim();
+  const answer = (await prompt(`Skill ${dim(`(default: ${DEFAULT_SKILL})`)}: `)).trim();
   return requireBuiltinSkill(answer === "" ? DEFAULT_SKILL : answer);
 }

@@ -46,6 +46,19 @@ describe("runSkillsInstall (human)", () => {
     expect(out.data).toContain(".claude/skills/traceroot-instrument-repo");
   });
 
+  it("dims the install path in the result block when color is enabled", async () => {
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    await runSkillsInstall({
+      ...base,
+      skillName: "traceroot-quickstart",
+      cwd,
+      json: false,
+      writers: { out, err },
+    });
+    expect(out.data).toContain("\x1b[2m.claude/skills/traceroot-quickstart\x1b[0m");
+  });
+
   it("refuses to overwrite an existing skill without --force (actionable message)", async () => {
     const { writers } = makeWriters();
     const args = { ...base, skillName: "traceroot-quickstart", cwd, json: false, writers } as const;
@@ -289,9 +302,11 @@ describe("runSkillsInstall (codex)", () => {
 /** A prompt fn keyed on the question text, returning scripted answers per field. */
 function scripted(answers: { skill?: string; agent?: string; overwrite?: string }) {
   return async (q: string): Promise<string> => {
+    // Keyed on the question's leading word so a dimmed "(default: …)" hint
+    // (ANSI codes) does not affect matching.
     if (q.includes("Overwrite?")) return answers.overwrite ?? "";
-    if (q.startsWith("Agent (")) return answers.agent ?? "";
-    if (q.startsWith("Skill (")) return answers.skill ?? "";
+    if (q.startsWith("Agent")) return answers.agent ?? "";
+    if (q.startsWith("Skill")) return answers.skill ?? "";
     throw new Error(`unexpected prompt: ${q}`);
   };
 }

@@ -4,7 +4,7 @@ import { displaySkillPath } from "../../agents/index.js";
 import { resolveAgentOrPrompt } from "../../agents/select.js";
 import type { AgentAdapter } from "../../agents/types.js";
 import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
-import { confirm, isInteractive, readLine } from "../../prompt.js";
+import { confirm, dim, isInteractive, readLine } from "../../prompt.js";
 import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
@@ -72,7 +72,10 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
   // standard non-interactive "use --force" guard in installBundledSkill applies.
   let effectiveForce = force;
   if (!dryRun && !force && interactive && !json && existsSync(targetDir)) {
-    const ok = await confirm(`Skill already exists at ${displayPath}.\nOverwrite? (y/N): `, prompt);
+    const ok = await confirm(
+      `Skill already exists at ${dim(displayPath)}.\nOverwrite? (y/N): `,
+      prompt,
+    );
     if (!ok) {
       throw new CliError("Aborted: skill not overwritten.");
     }
@@ -125,7 +128,7 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
       "",
       `${label("Skill:")}  ${skill.name}`,
       `${label("Agent:")}  ${agent.displayName}`,
-      `${label("Path:")}   ${displayPath}${result.overwritten ? " (exists; --force required)" : ""}`,
+      `${label("Path:")}   ${styler.dim(displayPath)}${result.overwritten ? " (exists; --force required)" : ""}`,
       "",
       label("Files:"),
       ...result.files.map((f) => `  ${f}`),
@@ -139,7 +142,7 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
     "",
     `${label("Skill:")}  ${skill.name}`,
     `${label("Agent:")}  ${agent.displayName}`,
-    `${label("Path:")}   ${displayPath}`,
+    `${label("Path:")}   ${styler.dim(displayPath)}`,
   ];
   writers.out.write(`${lines.join("\n")}\n`);
   if (result.overwritten) {

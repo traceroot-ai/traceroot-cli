@@ -11,7 +11,7 @@ import {
   logProgress,
   writeJson,
 } from "../output.js";
-import { confirm, isInteractive, readLine } from "../prompt.js";
+import { confirm, dim, isInteractive, readLine } from "../prompt.js";
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
@@ -100,7 +100,9 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
   if (outputPath !== undefined) {
     resolvedOutput = outputPath;
   } else if (interactive && !json) {
-    const answer = (await prompt(`Output path (default: ${DEFAULT_PROMPT_PATH}): `)).trim();
+    const answer = (
+      await prompt(`Output path ${dim(`(default: ${DEFAULT_PROMPT_PATH})`)}: `)
+    ).trim();
     resolvedOutput = answer === "" ? DEFAULT_PROMPT_PATH : answer;
   } else {
     throw new CliError(
@@ -117,7 +119,7 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
   if (overwritten && !force) {
     if (interactive && !json) {
       const ok = await confirm(
-        `Prompt already exists at ${displayPath}.\nOverwrite? (y/N): `,
+        `Prompt already exists at ${dim(displayPath)}.\nOverwrite? (y/N): `,
         prompt,
       );
       if (!ok) {
@@ -141,10 +143,10 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
     "Wrote instrument prompt",
     "",
     `${label("Agent:")} ${agent.displayName}`,
-    `${label("Path:")}  ${displayPath}`,
+    `${label("Path:")}  ${styler.dim(displayPath)}`,
   ];
   writers.out.write(`${lines.join("\n")}\n`);
-  logProgress(`Wrote ${formatBytes(bytes)} to ${displayPath}`, writers);
+  logProgress(`Wrote ${formatBytes(bytes)}`, writers);
   logInfo(`\nNext: review the prompt, then run it in ${agent.displayName}.`, writers);
 }
 

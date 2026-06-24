@@ -80,9 +80,25 @@ describe("resolveSkillOrPrompt (interactive)", () => {
     expect(err.data).toContain("Add TraceRoot tracing"); // a description snippet
     // The list is rendered before the compact prompt.
     expect(err.data.indexOf("Available skills:")).toBeLessThan(err.data.length);
-    expect(asked).toBe("Skill (default: traceroot-instrument-repo): ");
+    // ANSI-stripped so the assertion holds whether or not the default is dimmed.
+    const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+    expect(asked.replace(ansi, "")).toBe("Skill (default: traceroot-instrument-repo): ");
     // The prompt itself does not repeat the options inline.
     expect(asked).not.toContain("traceroot-quickstart");
+  });
+
+  it("bolds the skill names in the list when color is enabled", async () => {
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    await resolveSkillOrPrompt({
+      skillName: undefined,
+      json: false,
+      isInteractive: true,
+      writers: { out, err },
+      prompt: async () => "",
+    });
+    expect(err.data).toContain("\x1b[1mtraceroot-instrument-repo\x1b[0m");
+    expect(err.data).toContain("\x1b[1mtraceroot-quickstart\x1b[0m");
   });
 
   it("selects traceroot-instrument-repo on empty input", async () => {

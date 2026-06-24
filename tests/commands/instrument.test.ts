@@ -88,6 +88,20 @@ describe("runInstrument (file write)", () => {
     expect(readFileSync(target, "utf8")).toContain("Instrument this repository");
   });
 
+  it("dims the output path in the result block when color is enabled", async () => {
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    await runInstrument({
+      ...base,
+      cwd,
+      print: false,
+      outputPath: "docs/prompt.md",
+      writers: { out, err },
+      detection: tsDetection,
+    });
+    expect(out.data).toContain("\x1b[2mdocs/prompt.md\x1b[0m");
+  });
+
   it("reports the written size with grouped bytes and an MB value (stderr)", async () => {
     const { writers, err } = makeWriters();
     await runInstrument({
@@ -98,7 +112,7 @@ describe("runInstrument (file write)", () => {
       writers,
       detection: tsDetection,
     });
-    expect(err.data).toMatch(/\d,\d{3} bytes \(\d+\.\d MB\)/);
+    expect(err.data).toMatch(/\d,\d{3} bytes \(\d+\.\d KB\)/);
   });
 
   it("refuses to overwrite an existing prompt without --force (non-interactive)", async () => {
@@ -177,8 +191,10 @@ describe("runInstrument (file write)", () => {
 /** A prompt fn keyed on the question text, returning scripted answers per field. */
 function scripted(answers: { agent?: string; output?: string; overwrite?: string }) {
   return async (q: string): Promise<string> => {
+    // Keyed on the question's leading word so a dimmed "(default: …)" hint
+    // (ANSI codes) does not affect matching.
     if (q.includes("Overwrite?")) return answers.overwrite ?? "";
-    if (q.startsWith("Agent (")) return answers.agent ?? "";
+    if (q.startsWith("Agent")) return answers.agent ?? "";
     if (q.startsWith("Output path")) return answers.output ?? "";
     throw new Error(`unexpected prompt: ${q}`);
   };

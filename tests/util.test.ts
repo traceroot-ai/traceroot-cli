@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { formatBytes, formatTimestamp } from "../src/util/index.js";
 
 describe("formatBytes", () => {
-  it("groups thousands and appends a one-decimal MB value", () => {
-    expect(formatBytes(534922)).toBe("534,922 bytes (0.5 MB)");
+  it("groups thousands and appends a one-decimal KB value", () => {
+    expect(formatBytes(534922)).toBe("534,922 bytes (534.9 KB)");
   });
 
   it("handles small and large counts", () => {
-    expect(formatBytes(2215)).toBe("2,215 bytes (0.0 MB)");
-    expect(formatBytes(0)).toBe("0 bytes (0.0 MB)");
-    expect(formatBytes(12_345_678)).toBe("12,345,678 bytes (12.3 MB)");
+    expect(formatBytes(2215)).toBe("2,215 bytes (2.2 KB)");
+    expect(formatBytes(0)).toBe("0 bytes (0.0 KB)");
+    expect(formatBytes(12_345_678)).toBe("12,345,678 bytes (12345.7 KB)");
   });
 });
 

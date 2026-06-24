@@ -1,5 +1,5 @@
 import { CliError } from "../output.js";
-import { type Prompt, isInteractive, readLine } from "../prompt.js";
+import { type Prompt, dim, isInteractive, readLine } from "../prompt.js";
 import { AGENT_IDS, requireAgent } from "./index.js";
 import type { AgentAdapter, AgentId } from "./types.js";
 
@@ -45,7 +45,7 @@ export async function resolveAgentOrPrompt(input: ResolveAgentInput): Promise<Ag
 
   const prompt = input.prompt ?? readLine;
   const answer = (
-    await prompt(`Agent (${AGENT_IDS.join(", ")}) (default: ${DEFAULT_AGENT}): `)
+    await prompt(`Agent (${AGENT_IDS.join(", ")}) ${dim(`(default: ${DEFAULT_AGENT})`)}: `)
   ).trim();
   // Enter accepts the default; otherwise validate the typed value.
   return requireAgent(answer === "" ? DEFAULT_AGENT : answer);
