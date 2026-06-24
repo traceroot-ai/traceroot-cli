@@ -311,7 +311,7 @@ export function resolveTimeRange(
     // Both are normalized ISO-8601 UTC strings, so lexical comparison is chronological.
     if (range.startAfter === range.endBefore) {
       throw new CliError(
-        "--from and --to resolve to the same time. The lower bound is inclusive and the upper bound is exclusive, so choose a later --to.",
+        "--from and --to resolve to the same time. The lower bound is inclusive and the upper bound is exclusive, so choose a later time for --to.",
       );
     }
     if (range.startAfter > range.endBefore) {
@@ -512,12 +512,12 @@ export function registerTracesList(traces: Command): void {
     )
     .option(
       "--from <timestamp>",
-      'only traces at or after this time. Accepts ISO 8601 (e.g. 2026-06-23T14:31:02Z or 2026-06-23T14:31:02-06:00) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted. (inclusive)',
+      'include traces started at or after this time. Accepts ISO 8601 (e.g. 2026-06-23T14:31:02Z or 2026-06-23T14:31:02-06:00) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
       onceOption("--from"),
     )
     .option(
       "--to <timestamp>",
-      'only traces before this time. Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted. (exclusive)',
+      'include traces started before this time (exclusive). Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
       onceOption("--to"),
     )
     .action(async (_opts, command: Command) => {
