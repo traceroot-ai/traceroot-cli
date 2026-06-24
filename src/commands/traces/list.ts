@@ -127,6 +127,23 @@ function resolveAbbreviation(utcMs: number, timeZone: string): string {
 }
 
 /**
+ * True iff the leading `YYYY-MM-DD` of an ISO string is a real calendar date.
+ * `new Date` silently rolls an out-of-range day (e.g. `2026-02-31` → Mar 3), so
+ * we round-trip the date prefix through `Date.UTC` and require it back unchanged.
+ */
+function hasValidCalendarDate(iso: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (m === null) {
+    return false;
+  }
+  const Y = Number.parseInt(m[1] as string, 10);
+  const Mo = Number.parseInt(m[2] as string, 10);
+  const D = Number.parseInt(m[3] as string, 10);
+  const probe = new Date(Date.UTC(Y, Mo - 1, D));
+  return probe.getUTCFullYear() === Y && probe.getUTCMonth() + 1 === Mo && probe.getUTCDate() === D;
+}
+
+/**
  * Treats a CLI-supplied timestamp as ISO 8601 and normalizes it to a UTC instant
  * string. Also accepts the exact display format `YYYY-MM-DD HH:mm:ss <TZ_ABBR>`
  * (a quoted single arg), validating the abbreviation against the local zone.
@@ -269,9 +286,11 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
     candidate = `${trimmed}Z`;
   }
   const date = new Date(candidate);
-  if (Number.isNaN(date.getTime())) {
+  // Reject malformed timestamps AND invalid calendar dates (e.g. 2026-02-31),
+  // which `new Date` would otherwise silently normalize to the wrong day.
+  if (Number.isNaN(date.getTime()) || !hasValidCalendarDate(trimmed)) {
     throw new CliError(
-      `${flag} must be an ISO 8601 timestamp, e.g. 2026-06-01 or 2026-06-01T13:00:00Z`,
+      `${flag} must be a valid ISO 8601 timestamp, e.g. 2026-06-01 or 2026-06-01T13:00:00Z`,
     );
   }
   return date.toISOString();

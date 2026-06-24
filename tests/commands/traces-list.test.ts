@@ -398,6 +398,18 @@ describe("resolveTimeRange", () => {
     expect(() => resolveTimeRange({ from: "not-a-date" })).toThrow(CliError);
   });
 
+  it("rejects ISO inputs with invalid calendar dates (no silent normalization)", () => {
+    expect(() => resolveTimeRange({ from: "2026-02-31" })).toThrow(CliError); // bare date
+    expect(() => resolveTimeRange({ from: "2026-02-31T10:00:00Z" })).toThrow(CliError); // Z
+    expect(() => resolveTimeRange({ to: "2026-02-31T10:00:00-06:00" })).toThrow(CliError); // offset
+    expect(() => resolveTimeRange({ from: "2026-04-31" })).toThrow(CliError); // April has 30 days
+    expect(() => resolveTimeRange({ from: "2026-02-29" })).toThrow(CliError); // 2026 not a leap year
+  });
+
+  it("accepts Feb 29 in a leap year", () => {
+    expect(resolveTimeRange({ from: "2024-02-29" }).startAfter).toBe("2024-02-29T00:00:00.000Z");
+  });
+
   it("rejects a --since window so large it overflows the date range", () => {
     expect(() => resolveTimeRange({ since: "99999999w" })).toThrow(CliError);
   });
