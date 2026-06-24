@@ -48,6 +48,19 @@ const MISSING_KEY =
 export async function runLogin(deps: LoginDeps): Promise<void> {
   const { writers } = deps;
 
+  const alreadyLoggedIn = deps.apiKeySource === "config";
+  const currentHost = deps.resolvedHost?.trim() || DEFAULT_HOST;
+
+  if (alreadyLoggedIn && (!deps.isInteractive || deps.json)) {
+    if (deps.json) {
+      writeJson({ status: "already_logged_in", host: currentHost }, writers);
+    } else {
+      logInfo(`Already logged in to ${currentHost}.`, writers);
+      logInfo("Pass --api-key or set TRACEROOT_API_KEY to switch accounts.", writers);
+    }
+    return;
+  }
+
   const resolvedKey = deps.resolvedApiKey?.trim();
   let apiKey: string;
   if (resolvedKey !== undefined && resolvedKey !== "") {

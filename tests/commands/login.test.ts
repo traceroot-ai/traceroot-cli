@@ -180,3 +180,43 @@ describe("runLogin --json", () => {
     expect(h.out.data).not.toContain(FULL_TOKEN);
   });
 });
+
+describe("runLogin already logged in (non-interactive)", () => {
+  it("warns and does not rewrite config when source is config and no TTY", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://h",
+        isInteractive: false,
+      }),
+    );
+
+    expect(h.writeConfigCalls).toHaveLength(0);
+    expect(h.createClientCalls).toHaveLength(0);
+    expect(h.err.data).toContain("Already logged in");
+    expect(h.err.data).toContain("https://h");
+    expect(h.out.data).not.toContain(FULL_TOKEN);
+    expect(h.err.data).not.toContain(FULL_TOKEN);
+  });
+
+  it("emits an already_logged_in JSON document and does not rewrite config", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://h",
+        isInteractive: false,
+        json: true,
+      }),
+    );
+
+    const parsed = JSON.parse(h.out.data) as Record<string, unknown>;
+    expect(parsed.status).toBe("already_logged_in");
+    expect(parsed.host).toBe("https://h");
+    expect(h.writeConfigCalls).toHaveLength(0);
+    expect(h.out.data).not.toContain(FULL_TOKEN);
+  });
+});
