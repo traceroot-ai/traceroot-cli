@@ -42,7 +42,13 @@ describe("resolveAgentOrPrompt (missing --agent, no prompt path)", () => {
       throw new Error("should not prompt in JSON mode");
     };
     await expect(
-      resolveAgentOrPrompt({ ...base, agentId: undefined, json: true, isInteractive: true, prompt }),
+      resolveAgentOrPrompt({
+        ...base,
+        agentId: undefined,
+        json: true,
+        isInteractive: true,
+        prompt,
+      }),
     ).rejects.toBeInstanceOf(CliError);
   });
 });

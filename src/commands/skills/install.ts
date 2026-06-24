@@ -6,7 +6,11 @@ import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../.
 import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
-import { type BuiltinSkill, builtinSkillNames, requireBuiltinSkill } from "../../skills/registry.js";
+import {
+  type BuiltinSkill,
+  builtinSkillNames,
+  requireBuiltinSkill,
+} from "../../skills/registry.js";
 
 /** Dependencies for the testable core of `skills install`. */
 export interface RunSkillsInstallDeps {
