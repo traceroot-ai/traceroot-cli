@@ -43,8 +43,12 @@ export function isBuiltinSkillName(name: string): name is BuiltinSkillName {
 export function requireBuiltinSkill(name: string): BuiltinSkill {
   const skill = BUILTIN_SKILLS.find((s) => s.name === name);
   if (skill === undefined) {
-    const known = BUILTIN_SKILLS.map((s) => s.name).join(", ");
-    throw new CliError(`Unknown skill '${name}'. Available skills: ${known}.`);
+    throw new CliError(`Unknown skill '${name}'. Choose one of: ${builtinSkillNames()}.`);
   }
   return skill;
+}
+
+/** Comma-joined list of the built-in skill names, for actionable messages. */
+export function builtinSkillNames(): string {
+  return BUILTIN_SKILLS.map((s) => s.name).join(", ");
 }

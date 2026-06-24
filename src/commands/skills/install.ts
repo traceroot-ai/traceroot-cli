@@ -2,16 +2,17 @@ import type { Command } from "commander";
 import { displaySkillPath } from "../../agents/index.js";
 import { resolveAgentOrPrompt } from "../../agents/select.js";
 import type { AgentAdapter } from "../../agents/types.js";
-import { type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
+import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
 import { installBundledSkill } from "../../skills/install.js";
-import { type BuiltinSkill, requireBuiltinSkill } from "../../skills/registry.js";
+import { type BuiltinSkill, builtinSkillNames, requireBuiltinSkill } from "../../skills/registry.js";
 import { JSON_OPTION_DESC } from "../shared.js";
 
 /** Dependencies for the testable core of `skills install`. */
 export interface RunSkillsInstallDeps {
-  skillName: string;
+  /** Missing/unknown is reported (with the valid names) before the agent is resolved. */
+  skillName?: string;
   /** Missing means prompt (interactive) or fail (non-interactive/JSON). */
   agentId?: string;
   cwd: string;
@@ -42,6 +43,13 @@ function nextStep(skill: BuiltinSkill, agent: AgentAdapter): string {
 export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void> {
   const { skillName, agentId, cwd, force, dryRun, json, writers } = deps;
 
+  // Validate the skill before the agent, so a missing/unknown skill is reported
+  // first (not "missing --agent").
+  if (skillName === undefined) {
+    throw new CliError(
+      `Missing required argument <skill>.\nChoose one of: ${builtinSkillNames()}.\nExample:\n  traceroot skills install traceroot-instrument-repo`,
+    );
+  }
   const skill = requireBuiltinSkill(skillName);
   const agent = await resolveAgentOrPrompt({
     agentId,
@@ -126,7 +134,9 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
 export function registerSkillsInstall(skills: Command): void {
   skills
     .command("install")
-    .argument("<skill>", "skill name (see `traceroot skills list`)")
+    // Optional at the parser level so a missing skill yields our actionable error
+    // (listing the valid skills) instead of commander's generic message.
+    .argument("[skill]", "skill name (see `traceroot skills list`)")
     // Not `.requiredOption`: commander would reject before the action runs, which
     // would block the interactive prompt. Validated/prompted in the action instead.
     .option("--agent <id>", "target agent: claude, codex, or generic (required)")
@@ -134,7 +144,7 @@ export function registerSkillsInstall(skills: Command): void {
     .option("--dry-run", "show what would happen without writing files")
     .option("--json", JSON_OPTION_DESC)
     .description("Install a TraceRoot skill into an agent's skill directory")
-    .action(async (skillName: string, _opts, command: Command) => {
+    .action(async (skillName: string | undefined, _opts, command: Command) => {
       const opts = command.optsWithGlobals();
       await runSkillsInstall({
         skillName,

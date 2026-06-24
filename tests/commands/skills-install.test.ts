@@ -96,6 +96,45 @@ describe("runSkillsInstall (human)", () => {
   });
 });
 
+describe("runSkillsInstall (validation order)", () => {
+  it("reports a missing skill (with valid names) before the missing agent", async () => {
+    const { writers } = makeWriters();
+    try {
+      await runSkillsInstall({
+        ...base,
+        skillName: undefined,
+        agentId: undefined,
+        cwd,
+        json: false,
+        isInteractive: false,
+        writers,
+      });
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      const msg = (err as CliError).message;
+      expect(msg).toContain("Missing required argument <skill>");
+      expect(msg).toContain("traceroot-instrument-repo, traceroot-quickstart");
+      expect(msg).not.toContain("--agent");
+    }
+  });
+
+  it("reports an unknown skill before the missing agent", async () => {
+    const { writers } = makeWriters();
+    await expect(
+      runSkillsInstall({
+        ...base,
+        skillName: "test",
+        agentId: undefined,
+        cwd,
+        json: false,
+        isInteractive: false,
+        writers,
+      }),
+    ).rejects.toThrow(/Unknown skill 'test'/);
+  });
+});
+
 describe("runSkillsInstall (missing --agent)", () => {
   it("fails with an actionable error when non-interactive and writes nothing", async () => {
     const { writers, out } = makeWriters();
