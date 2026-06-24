@@ -125,7 +125,7 @@ export function registerInstrument(program: Command): void {
     .description("Generate an agent prompt to instrument this repo with TraceRoot")
     // No default agent: the prompt's skill path and install command depend on it,
     // so the target must be explicit (prompted when interactive, else an error).
-    .option("--agent <id>", "target agent: claude, codex, or generic (required)")
+    .option("--agent <agent>", "target agent: claude, codex, or generic")
     .option("--print", "print the prompt to stdout instead of writing a file")
     .option("--output <path>", "write the prompt to this path")
     .option("--force", "overwrite an existing prompt file")

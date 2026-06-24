@@ -34,22 +34,24 @@ describe("--json help on new commands", () => {
   }
 });
 
-describe("--agent help on install/instrument", () => {
-  it("skills install shows --agent as required", () => {
+describe("--agent help placeholder and defaults", () => {
+  it("skills install uses --agent <agent> with no claude default", () => {
     const { stdout } = runCli("skills", "install", "--help");
-    expect(stdout.replace(/\s+/g, " ")).toContain("--agent");
-    expect(stdout).toContain("(required)");
-  });
-
-  it("instrument shows --agent as required and does NOT imply a claude default", () => {
-    const { stdout } = runCli("instrument", "--help");
-    expect(stdout.replace(/\s+/g, " ")).toContain("--agent");
-    expect(stdout).toContain("(required)");
+    expect(stdout).toContain("--agent <agent>");
+    expect(stdout).not.toContain("--agent <id>");
     expect(stdout).not.toContain('(default: "claude")');
   });
 
-  it("skills list keeps its read-only claude default", () => {
+  it("instrument uses --agent <agent> and does not imply a claude default", () => {
+    const { stdout } = runCli("instrument", "--help");
+    expect(stdout).toContain("--agent <agent>");
+    expect(stdout).not.toContain("--agent <id>");
+    expect(stdout).not.toContain('(default: "claude")');
+  });
+
+  it("skills list uses --agent <agent> and keeps its read-only claude default", () => {
     const { stdout } = runCli("skills", "list", "--help");
+    expect(stdout).toContain("--agent <agent>");
     expect(stdout).toContain('(default: "claude")');
   });
 });

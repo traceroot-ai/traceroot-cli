@@ -139,7 +139,7 @@ export function registerSkillsInstall(skills: Command): void {
     .argument("[skill]", "skill name (see `traceroot skills list`)")
     // Not `.requiredOption`: commander would reject before the action runs, which
     // would block the interactive prompt. Validated/prompted in the action instead.
-    .option("--agent <id>", "target agent: claude, codex, or generic (required)")
+    .option("--agent <agent>", "target agent: claude, codex, or generic")
     .option("--force", "overwrite an existing skill directory")
     .option("--dry-run", "show what would happen without writing files")
     .option("--json", JSON_OPTION_DESC)

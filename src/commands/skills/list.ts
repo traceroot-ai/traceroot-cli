@@ -74,7 +74,7 @@ export function registerSkillsList(skills: Command): void {
     .command("list")
     .description("List available TraceRoot skills and their install status")
     .option(
-      "--agent <id>",
+      "--agent <agent>",
       "agent to check install status for: claude, codex, or generic",
       "claude",
     )
