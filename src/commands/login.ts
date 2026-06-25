@@ -51,7 +51,7 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
   const alreadyLoggedIn = deps.apiKeySource === "config";
   const currentHost = deps.resolvedHost?.trim() || DEFAULT_HOST;
   const errStyler = createStyler(writers.err);
-  const alreadyLoggedInWarning = `${errStyler.warn("WARNING:")} Already logged in to ${errStyler.link(currentHost)}.`;
+  const alreadyLoggedInWarning = `${errStyler.warn("WARNING:")} Already logged in to ${errStyler.dim(currentHost)}.`;
 
   if (alreadyLoggedIn && (!deps.isInteractive || deps.json)) {
     if (deps.json) {
@@ -124,7 +124,7 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
   } else {
     const styler = createStyler(writers.out);
     const lines = [
-      `Logged in to ${styler.link(who.host)}`,
+      `Logged in to ${styler.dim(who.host)}`,
       `  ${styler.bold("Workspace:")} ${identity(who.workspace_name, who.workspace_id, styler)}`,
       `  ${styler.bold("Project:")}   ${identity(who.project_name, who.project_id, styler)}`,
       `  ${styler.bold("API key:")}   ${apiKeyLabel(who.key_name, who.key_hint, styler)}`,
