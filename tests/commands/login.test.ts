@@ -194,12 +194,38 @@ describe("runLogin already logged in (non-interactive)", () => {
       }),
     );
 
+    // The warning is enriched via whoami (one client call) but persists nothing.
     expect(h.writeConfigCalls).toHaveLength(0);
-    expect(h.createClientCalls).toHaveLength(0);
+    expect(h.createClientCalls).toHaveLength(1);
+    expect(h.createClientCalls[0]).toEqual({ host: "https://h", apiKey: FULL_TOKEN });
     expect(h.err.data).toContain("WARNING:");
     expect(h.err.data).toContain("Already logged in");
+    expect(h.err.data).toContain("My Project"); // workspace/project from whoami
     expect(h.err.data).toContain("https://h");
     expect(h.out.data).not.toContain(FULL_TOKEN);
+    expect(h.err.data).not.toContain(FULL_TOKEN);
+  });
+
+  it("falls back to a host-only warning when the saved session can't be verified", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(
+        h,
+        {
+          apiKeySource: "config",
+          resolvedApiKey: FULL_TOKEN,
+          resolvedHost: "https://h",
+          isInteractive: false,
+        },
+        () => Promise.reject(new Error("expired key")),
+      ),
+    );
+
+    expect(h.writeConfigCalls).toHaveLength(0);
+    expect(h.err.data).toContain("WARNING:");
+    expect(h.err.data).toContain("Already logged in");
+    expect(h.err.data).toContain("couldn't verify");
+    expect(h.err.data).toContain("https://h");
     expect(h.err.data).not.toContain(FULL_TOKEN);
   });
 
@@ -217,7 +243,9 @@ describe("runLogin already logged in (non-interactive)", () => {
 
     const parsed = JSON.parse(h.out.data) as Record<string, unknown>;
     expect(parsed.status).toBe("already_logged_in");
+    expect(parsed.verified).toBe(true);
     expect(parsed.host).toBe("https://h");
+    expect(parsed.project_name).toBe("My Project");
     expect(h.writeConfigCalls).toHaveLength(0);
     expect(h.out.data).not.toContain(FULL_TOKEN);
   });
@@ -264,7 +292,8 @@ describe("runLogin already logged in (interactive)", () => {
 
     expect(confirmAsked).toBe(1);
     expect(h.writeConfigCalls).toHaveLength(0);
-    expect(h.createClientCalls).toHaveLength(0);
+    // Only the whoami lookup for the warning — no second client for a re-login.
+    expect(h.createClientCalls).toHaveLength(1);
     expect(h.err.data).toContain("WARNING:");
     expect(h.err.data).toContain("Already logged in");
   });
@@ -284,10 +313,15 @@ describe("runLogin already logged in (interactive)", () => {
       }),
     );
 
-    expect(h.createClientCalls[0]).toEqual({ host: "https://new-host", apiKey: NEW_TOKEN });
+    // First client call is the whoami warning (saved creds); the second
+    // validates the freshly entered account that actually gets persisted.
+    expect(h.createClientCalls[0]).toEqual({ host: "https://old-host", apiKey: FULL_TOKEN });
+    expect(h.createClientCalls).toContainEqual({ host: "https://new-host", apiKey: NEW_TOKEN });
     expect(h.writeConfigCalls).toHaveLength(1);
     expect(h.writeConfigCalls[0]).toEqual({ api_key: NEW_TOKEN, host_url: "https://new-host" });
     expect(h.out.data).not.toContain(FULL_TOKEN);
     expect(h.out.data).not.toContain(NEW_TOKEN);
+    expect(h.err.data).not.toContain(FULL_TOKEN);
+    expect(h.err.data).not.toContain(NEW_TOKEN);
   });
 });

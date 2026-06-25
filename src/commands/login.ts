@@ -1,6 +1,11 @@
 import { createInterface } from "node:readline";
 import type { Command } from "commander";
-import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
+import {
+  type ApiClient,
+  type ApiClientOptions,
+  type Whoami,
+  createApiClient,
+} from "../api/client.js";
 import { writeConfig as realWriteConfig } from "../config/manager.js";
 import type { AuthSource } from "../config/resolve.js";
 import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../output.js";
@@ -60,28 +65,13 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
     deps.hostSource === "flag" || deps.hostSource === "env" || deps.hostSource === "env-file";
   const alreadyLoggedIn = deps.apiKeySource === "config" && !hostOverridden;
   const currentHost = deps.resolvedHost?.trim() || DEFAULT_HOST;
-  const errStyler = createStyler(writers.err);
-  const alreadyLoggedInWarning = `${errStyler.warn("WARNING:")} Already logged in to ${errStyler.dim(currentHost)}.`;
-
-  if (alreadyLoggedIn && (!deps.isInteractive || deps.json)) {
-    if (deps.json) {
-      writeJson({ status: "already_logged_in", host: currentHost }, writers);
-    } else {
-      logInfo(alreadyLoggedInWarning, writers);
-      logInfo("Pass --api-key or set TRACEROOT_API_KEY to switch accounts.", writers);
-    }
-    return;
-  }
 
   let resolvedKey = deps.resolvedApiKey?.trim();
   let resolvedHost = deps.resolvedHost?.trim();
 
   if (alreadyLoggedIn) {
-    // Interactive: warn and offer a fresh login.
-    logInfo(alreadyLoggedInWarning, writers);
-    const proceed = await deps.promptConfirm("Re-login with a different account? (y/N): ");
-    if (!proceed) {
-      logInfo("Keeping current session.", writers);
+    const outcome = await reportAlreadyLoggedIn(deps, currentHost, resolvedKey ?? "");
+    if (outcome === "exit") {
       return;
     }
     // User opted to switch: ignore persisted creds and prompt fresh below.
@@ -144,6 +134,76 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
 
   logInfo("\nNext: run `traceroot status` to confirm your identity.", writers);
   logInfo("Next: run `traceroot traces list` to see your traces.", writers);
+}
+
+/**
+ * Handles a bare `login` while already logged in: warns which workspace/project
+ * the saved session belongs to and, interactively, asks whether to re-login.
+ *
+ * To name the session it calls `whoami` with the saved key; the full token is
+ * never printed. If that lookup fails (expired key, offline) it degrades to a
+ * host-only warning that notes the session couldn't be verified — the warning
+ * never throws. Returns `"relogin"` only when an interactive user opts to switch
+ * accounts; every other path (no TTY, `--json`, or a declined prompt) returns
+ * `"exit"`, leaving the existing config untouched.
+ */
+async function reportAlreadyLoggedIn(
+  deps: LoginDeps,
+  currentHost: string,
+  savedKey: string,
+): Promise<"exit" | "relogin"> {
+  const { writers } = deps;
+  const styler = createStyler(writers.err);
+
+  let who: Whoami | null = null;
+  try {
+    who = await deps.createClient({ host: currentHost, apiKey: savedKey }).whoami();
+  } catch {
+    who = null;
+  }
+
+  if (deps.json) {
+    writeJson(
+      who !== null
+        ? {
+            status: "already_logged_in",
+            verified: true,
+            host: who.host,
+            workspace_id: who.workspace_id,
+            workspace_name: who.workspace_name,
+            project_id: who.project_id,
+            project_name: who.project_name,
+          }
+        : { status: "already_logged_in", verified: false, host: currentHost },
+      writers,
+    );
+    return "exit";
+  }
+
+  if (who !== null) {
+    const lines = [
+      `${styler.warn("WARNING:")} Already logged in:`,
+      `  ${styler.bold("Workspace:")} ${identity(who.workspace_name, who.workspace_id, styler)}`,
+      `  ${styler.bold("Project:")}   ${identity(who.project_name, who.project_id, styler)}`,
+      `  ${styler.bold("Host:")}      ${styler.dim(who.host)}`,
+    ];
+    logInfo(lines.join("\n"), writers);
+  } else {
+    logInfo(`${styler.warn("WARNING:")} Already logged in to ${styler.dim(currentHost)}`, writers);
+    logInfo("  (couldn't verify the saved session).", writers);
+  }
+
+  if (!deps.isInteractive) {
+    logInfo("Pass --api-key or set TRACEROOT_API_KEY to switch accounts.", writers);
+    return "exit";
+  }
+
+  const proceed = await deps.promptConfirm("Re-login with a different account? (y/N): ");
+  if (!proceed) {
+    logInfo("Keeping current session.", writers);
+    return "exit";
+  }
+  return "relogin";
 }
 
 /**
