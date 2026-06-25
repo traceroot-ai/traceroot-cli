@@ -67,10 +67,17 @@ describe("--agent help placeholder and defaults", () => {
     expect(stdout).not.toContain('(default: "claude")');
   });
 
-  it("skills list uses --agent <agent> and keeps its read-only claude default", () => {
+  it("skills list has no --agent option (it reports all agents)", () => {
     const { stdout } = runCli("skills", "list", "--help");
-    expect(stdout).toContain("--agent <agent>");
-    expect(stdout).toContain('(default: "claude")');
+    expect(stdout).not.toContain("--agent");
+  });
+
+  it("rejects skills list --agent as an unknown option (not silently accepted)", () => {
+    const { stdout, stderr, status } = runCli("skills", "list", "--agent", "claude");
+    expect(status).not.toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("unknown option");
+    expect(stderr).toContain("--agent");
   });
 });
 
