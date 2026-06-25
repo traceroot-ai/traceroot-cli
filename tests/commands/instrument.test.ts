@@ -329,18 +329,17 @@ describe("runInstrument (interactive overwrite)", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("declining with empty input aborts (non-zero) and keeps the file", async () => {
+  it("declining with empty input aborts gracefully (no throw, plain message) and keeps the file", async () => {
     await runInstrument({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
     const target = join(cwd, ".traceroot", "prompts", "instrument-repo.md");
     writeFileSync(target, "ORIGINAL", "utf8");
+    const { writers, err } = makeWriters();
+    // A user-initiated decline is not an error: it resolves (exit 0), no CliError.
     await expect(
-      runInstrument({
-        ...seed,
-        cwd,
-        prompt: scripted({ overwrite: "" }),
-        writers: makeWriters().writers,
-      }),
-    ).rejects.toThrow(/Aborted/);
+      runInstrument({ ...seed, cwd, prompt: scripted({ overwrite: "" }), writers }),
+    ).resolves.toBeUndefined();
+    expect(err.data).toContain("Aborted: prompt not overwritten.");
+    expect(err.data).not.toContain("error:");
     expect(readFileSync(target, "utf8")).toBe("ORIGINAL");
   });
 

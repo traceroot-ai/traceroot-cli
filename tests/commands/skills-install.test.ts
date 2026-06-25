@@ -460,18 +460,17 @@ describe("runSkillsInstall (interactive overwrite)", () => {
     );
   });
 
-  it("aborts (no write, non-zero) when overwrite is declined with empty input", async () => {
+  it("aborts gracefully (no throw, plain message, no write) when overwrite is declined", async () => {
     await runSkillsInstall({ ...seed, cwd, prompt: scripted({}), writers: makeWriters().writers });
     const sentinel = join(cwd, ".claude", "skills", "traceroot-quickstart", "sentinel.txt");
     writeFileSync(sentinel, "keep", "utf8");
+    const { writers, err } = makeWriters();
+    // A user-initiated decline is not an error: it resolves (exit 0), no CliError.
     await expect(
-      runSkillsInstall({
-        ...seed,
-        cwd,
-        prompt: scripted({ overwrite: "" }),
-        writers: makeWriters().writers,
-      }),
-    ).rejects.toThrow(/Aborted/);
+      runSkillsInstall({ ...seed, cwd, prompt: scripted({ overwrite: "" }), writers }),
+    ).resolves.toBeUndefined();
+    expect(err.data).toContain("Aborted: skill not overwritten.");
+    expect(err.data).not.toContain("error:");
     // Declined → existing content untouched.
     expect(existsSync(sentinel)).toBe(true);
   });

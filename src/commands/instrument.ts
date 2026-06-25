@@ -123,7 +123,9 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
         prompt,
       );
       if (!ok) {
-        throw new CliError("Aborted: prompt not overwritten.");
+        // User-initiated cancel — not an error. Plain message, clean (exit 0) return.
+        logInfo("Aborted: prompt not overwritten.", writers);
+        return;
       }
     } else {
       throw new CliError(`Prompt already exists at ${displayPath}\n\nUse --force to overwrite it.`);

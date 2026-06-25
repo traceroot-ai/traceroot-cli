@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { displaySkillPath } from "../../agents/index.js";
 import { resolveAgentOrPrompt } from "../../agents/select.js";
 import type { AgentAdapter } from "../../agents/types.js";
-import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
+import { type Writers, defaultWriters, logInfo, writeJson } from "../../output.js";
 import { confirm, dim, isInteractive, readLine, yellow } from "../../prompt.js";
 import { createStyler } from "../../render/style.js";
 import { bundledSkillDir } from "../../skills/bundled.js";
@@ -81,7 +81,9 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
       prompt,
     );
     if (!ok) {
-      throw new CliError("Aborted: skill not overwritten.");
+      // User-initiated cancel — not an error. Plain message, clean (exit 0) return.
+      logInfo("Aborted: skill not overwritten.", writers);
+      return;
     }
     effectiveForce = true;
   }
