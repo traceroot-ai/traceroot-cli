@@ -59,6 +59,7 @@ function baseDeps(
     json: false,
     isInteractive: false,
     apiKeySource: "env",
+    hostSource: "config",
     promptConfirm: () => Promise.reject(new Error("promptConfirm should not be called")),
     promptHidden: () => Promise.reject(new Error("promptHidden should not be called")),
     promptVisible: () => Promise.reject(new Error("promptVisible should not be called")),
@@ -219,6 +220,28 @@ describe("runLogin already logged in (non-interactive)", () => {
     expect(parsed.host).toBe("https://h");
     expect(h.writeConfigCalls).toHaveLength(0);
     expect(h.out.data).not.toContain(FULL_TOKEN);
+  });
+
+  it("treats an explicit --host override as intent and updates the host (not a no-op)", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(h, {
+        // Key still comes from the persisted config, but the host is overridden
+        // by a flag — `login --host ...`. This is deliberate intent, not a bare
+        // re-invocation, so it must validate and persist the new host.
+        apiKeySource: "config",
+        hostSource: "flag",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://new-host",
+        isInteractive: false,
+      }),
+    );
+
+    expect(h.createClientCalls).toHaveLength(1);
+    expect(h.createClientCalls[0]).toEqual({ host: "https://new-host", apiKey: FULL_TOKEN });
+    expect(h.writeConfigCalls).toHaveLength(1);
+    expect(h.writeConfigCalls[0]).toEqual({ api_key: FULL_TOKEN, host_url: "https://new-host" });
+    expect(h.err.data).not.toContain("Already logged in");
   });
 });
 

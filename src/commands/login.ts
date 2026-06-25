@@ -24,6 +24,10 @@ export interface LoginDeps {
   /** Provenance of the resolved api key; `"config"` means the user is already
    * logged in via the persisted config file (a bare `login` re-invocation). */
   apiKeySource: AuthSource;
+  /** Provenance of the resolved host. An explicit override (`flag`/`env`/
+   * `env-file`) signals intent to change the host and bypasses the
+   * already-logged-in warning even when the key still comes from config. */
+  hostSource: AuthSource;
   /** Prompts for a yes/no answer; resolves `false` on empty input or EOF. */
   promptConfirm: (question: string) => Promise<boolean>;
   /** Prompts for a secret without echoing it. */
@@ -48,7 +52,13 @@ const MISSING_KEY =
 export async function runLogin(deps: LoginDeps): Promise<void> {
   const { writers } = deps;
 
-  const alreadyLoggedIn = deps.apiKeySource === "config";
+  // An explicit override of either field (a higher-precedence flag/env/env-file)
+  // is deliberate intent, not a bare re-invocation. Since `apiKeySource ===
+  // "config"` already implies the key was not explicitly overridden, only the
+  // host needs a separate override check (e.g. `login --host ...`).
+  const hostOverridden =
+    deps.hostSource === "flag" || deps.hostSource === "env" || deps.hostSource === "env-file";
+  const alreadyLoggedIn = deps.apiKeySource === "config" && !hostOverridden;
   const currentHost = deps.resolvedHost?.trim() || DEFAULT_HOST;
   const errStyler = createStyler(writers.err);
   const alreadyLoggedInWarning = `${errStyler.warn("WARNING:")} Already logged in to ${errStyler.dim(currentHost)}.`;
@@ -199,6 +209,7 @@ export function registerLogin(program: Command): void {
         json: ctx.json,
         isInteractive: process.stdin.isTTY === true,
         apiKeySource: ctx.auth.apiKey.source,
+        hostSource: ctx.auth.hostUrl.source,
         promptConfirm,
         promptHidden,
         promptVisible,
