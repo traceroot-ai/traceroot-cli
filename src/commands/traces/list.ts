@@ -369,53 +369,38 @@ export function formatLocalDisplay(iso: string, timeZone?: string): string {
   return formatTimestamp(iso, timeZone);
 }
 
+/** Resolved range bounds shared by the footer text and the `--json` label. */
+type RangeBounds = { startAfter?: string; endBefore?: string; sinceLabel?: string };
+
 /**
- * Returns the `<range>` portion of the compact footer line (human-mode, local TZ).
- * Priority: sinceLabel → both bounds → from-only → to-only → all traces.
+ * Builds the `<range>` text from resolved bounds, applying `formatBound` to each
+ * ISO timestamp. Priority: sinceLabel → both bounds → from-only → to-only → all
+ * traces. The footer passes a local-time formatter; `--json` passes the identity
+ * (raw ISO). Keeping a single ladder here means the human and JSON outputs can't
+ * drift apart.
  */
-export function renderRangeSummary(
-  range: { startAfter?: string; endBefore?: string; sinceLabel?: string },
-  timeZone?: string,
-): string {
+function buildRangeText(range: RangeBounds, formatBound: (iso: string) => string): string {
   if (range.sinceLabel !== undefined) {
     return `since ${range.sinceLabel}`;
   }
   if (range.startAfter !== undefined && range.endBefore !== undefined) {
-    const from = formatLocalDisplay(range.startAfter, timeZone);
-    const to = formatLocalDisplay(range.endBefore, timeZone);
-    return `from ${from} to before ${to}`;
+    return `from ${formatBound(range.startAfter)} to before ${formatBound(range.endBefore)}`;
   }
   if (range.startAfter !== undefined) {
-    return `from ${formatLocalDisplay(range.startAfter, timeZone)}`;
+    return `from ${formatBound(range.startAfter)}`;
   }
   if (range.endBefore !== undefined) {
-    return `before ${formatLocalDisplay(range.endBefore, timeZone)}`;
+    return `before ${formatBound(range.endBefore)}`;
   }
   return "all traces";
 }
 
 /**
- * Returns the TZ-independent range label for use in --json output.
- * Uses ISO strings directly (no local-time formatting).
+ * The `<range>` portion of the compact footer line (human-mode, local TZ), e.g.
+ * `from 2026-06-23 14:29:54 MDT to before …`.
  */
-function renderRangeLabel(range: {
-  startAfter?: string;
-  endBefore?: string;
-  sinceLabel?: string;
-}): string {
-  if (range.sinceLabel !== undefined) {
-    return `since ${range.sinceLabel}`;
-  }
-  if (range.startAfter !== undefined && range.endBefore !== undefined) {
-    return `from ${range.startAfter} to before ${range.endBefore}`;
-  }
-  if (range.startAfter !== undefined) {
-    return `from ${range.startAfter}`;
-  }
-  if (range.endBefore !== undefined) {
-    return `before ${range.endBefore}`;
-  }
-  return "all traces";
+export function renderRangeSummary(range: RangeBounds, timeZone?: string): string {
+  return buildRangeText(range, (iso) => formatLocalDisplay(iso, timeZone));
 }
 
 type ListItem = Awaited<ReturnType<ApiClient["listTraces"]>>["data"][number];
@@ -459,7 +444,7 @@ export async function runList(deps: RunListDeps): Promise<void> {
         ...res,
         count: res.data.length,
         range: {
-          label: renderRangeLabel(rangeInfo),
+          label: buildRangeText(rangeInfo, (iso) => iso),
           startAfter: startAfter ?? null,
           endBefore: endBefore ?? null,
         },
