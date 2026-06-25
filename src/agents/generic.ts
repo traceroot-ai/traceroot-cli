@@ -8,8 +8,8 @@ const SKILLS_SUBDIR = "skills";
 
 /**
  * Generic adapter for agents that follow the tool-neutral `.agents/skills/`
- * convention. Codex/Cursor/Windsurf map here rather than getting bespoke
- * adapters.
+ * convention. Cursor, Windsurf, and other non-first-class agents can map here
+ * without bespoke adapters (Codex has its own first-class adapter).
  */
 export const genericAdapter: AgentAdapter = {
   id: "generic",

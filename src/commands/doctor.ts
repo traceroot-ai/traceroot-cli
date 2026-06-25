@@ -105,7 +105,8 @@ export function registerDoctor(program: Command): void {
           }
         },
       });
-      // Exit non-zero only on a hard failure; warnings (missing creds/skills) stay 0.
+      // Exit non-zero only on hard failures. Missing credentials are hard failures;
+      // optional/missing skills and runtime-env warnings do not fail the command.
       if (report.summary.fail > 0) {
         process.exitCode = 1;
       }

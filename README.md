@@ -53,10 +53,10 @@ traceroot traces list
 | `traces list` | List traces for your project, newest first. `--limit <n>` |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
-| `skills list` | List the first-party TraceRoot skills and whether each is installed for an agent. `--agent <claude\|codex\|generic>` (default `claude`) |
-| `skills install <skill>` | Copy a bundled skill into an agent's skill directory. `--agent <claude\|codex\|generic>`, `--force`, `--dry-run` |
-| `instrument` | Generate a Claude Code-ready prompt to add TraceRoot tracing to this repo. `--agent <id>`, `--print`, `--output <path>`, `--force` |
-| `doctor` | Diagnose credentials, repo shape, and installed skills (`pass`/`warn`/`fail`). |
+| `skills list` | List first-party TraceRoot skills and install status. `--agent <claude\|codex\|generic>` (default `claude`) |
+| `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
+| `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
+| `doctor` | Diagnose credentials, repo shape, runtime env, and installed skills (`pass`/`warn`/`fail`). |
 
 Add `--json` to any command for a single machine-readable document on stdout.
 Run `traceroot <command> --help` for the full flag list.
@@ -70,23 +70,34 @@ traceroot traces list --limit 5 --json | jq '.data[].trace_id'
 ## Skills & agents
 
 Make your coding agent TraceRoot-aware without touching your application source. The
-CLI ships two first-party skills; nothing is fetched from the network and no install
-scripts are run. Install targets depend on the agent:
+CLI ships two first-party skills. Installing a skill copies bundled files from this
+package; the install step does not fetch from the network or run install scripts.
+Install targets depend on the agent:
 
 - `--agent claude` → project-local `.claude/skills/<skill>/`
 - `--agent codex` → global `$CODEX_HOME/skills/<skill>/` (defaults to `~/.codex/skills/`)
 - `--agent generic` → project-local `.agents/skills/<skill>/`
 
+`skills install` and `instrument` are interactive: run them without the required
+flags in a terminal and they prompt (skill, then agent; or agent, then output
+path), accepting a default on Enter. Pass the flags to skip the prompts.
+
 ```sh
-traceroot skills list                                              # see what's available + install status
+traceroot skills list                                              # available skills + install status
 traceroot skills list --agent codex                                # install status for Codex
+
+traceroot skills install                                           # interactive: prompts for skill, then agent
 traceroot skills install traceroot-instrument-repo --agent claude  # add tracing to an app
 traceroot skills install traceroot-quickstart --agent codex        # install for Codex (~/.codex/skills)
-traceroot instrument --agent claude --print                        # print an instrument prompt
-traceroot instrument --agent claude                                # …or write .traceroot/prompts/instrument-repo.md
-traceroot doctor                                                   # check credentials, repo, skills
+
+traceroot instrument                                               # interactive: prompts for agent, then output path
+traceroot instrument --agent claude --print                        # print the prompt to stdout
+traceroot instrument --agent codex --output .traceroot/prompts/codex-instrument-repo.md
+
+traceroot doctor                                                   # check credentials, repo, runtime env, skills
 ```
 
-`skills install` refuses to overwrite an existing skill without `--force`, and
-`--dry-run` reports what it would write without touching disk.
+`skills install` and `instrument` refuse to overwrite an existing target without
+`--force` (in a terminal they ask first); `--dry-run` reports what `skills install`
+would write without touching disk.
 

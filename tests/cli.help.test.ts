@@ -75,7 +75,7 @@ describe("--agent help placeholder and defaults", () => {
 });
 
 describe("traceroot instrument (bare, non-interactive)", () => {
-  it("errors for the missing agent (no prompt, no write) when not a TTY", () => {
+  it("bare instrument fails cleanly in non-interactive mode instead of prompting", () => {
     const { stdout, stderr, status } = runCli("instrument");
     expect(status).not.toBe(0);
     // Non-interactive: no prompt, clean stdout, actionable agent error on stderr.
