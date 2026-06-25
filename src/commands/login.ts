@@ -50,12 +50,14 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
 
   const alreadyLoggedIn = deps.apiKeySource === "config";
   const currentHost = deps.resolvedHost?.trim() || DEFAULT_HOST;
+  const errStyler = createStyler(writers.err);
+  const alreadyLoggedInWarning = `${errStyler.warn("WARNING:")} Already logged in to ${errStyler.link(currentHost)}.`;
 
   if (alreadyLoggedIn && (!deps.isInteractive || deps.json)) {
     if (deps.json) {
       writeJson({ status: "already_logged_in", host: currentHost }, writers);
     } else {
-      logInfo(`Already logged in to ${currentHost}.`, writers);
+      logInfo(alreadyLoggedInWarning, writers);
       logInfo("Pass --api-key or set TRACEROOT_API_KEY to switch accounts.", writers);
     }
     return;
@@ -66,8 +68,8 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
 
   if (alreadyLoggedIn) {
     // Interactive: warn and offer a fresh login.
-    logInfo(`Already logged in to ${currentHost}.`, writers);
-    const proceed = await deps.promptConfirm("Re-login with a different account? [y/N]: ");
+    logInfo(alreadyLoggedInWarning, writers);
+    const proceed = await deps.promptConfirm("Re-login with a different account? (y/N): ");
     if (!proceed) {
       logInfo("Keeping current session.", writers);
       return;
@@ -122,7 +124,7 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
   } else {
     const styler = createStyler(writers.out);
     const lines = [
-      `Logged in to ${who.host}`,
+      `Logged in to ${styler.link(who.host)}`,
       `  ${styler.bold("Workspace:")} ${identity(who.workspace_name, who.workspace_id, styler)}`,
       `  ${styler.bold("Project:")}   ${identity(who.project_name, who.project_id, styler)}`,
       `  ${styler.bold("API key:")}   ${apiKeyLabel(who.key_name, who.key_hint, styler)}`,

@@ -195,6 +195,7 @@ describe("runLogin already logged in (non-interactive)", () => {
 
     expect(h.writeConfigCalls).toHaveLength(0);
     expect(h.createClientCalls).toHaveLength(0);
+    expect(h.err.data).toContain("WARNING:");
     expect(h.err.data).toContain("Already logged in");
     expect(h.err.data).toContain("https://h");
     expect(h.out.data).not.toContain(FULL_TOKEN);
@@ -241,6 +242,7 @@ describe("runLogin already logged in (interactive)", () => {
     expect(confirmAsked).toBe(1);
     expect(h.writeConfigCalls).toHaveLength(0);
     expect(h.createClientCalls).toHaveLength(0);
+    expect(h.err.data).toContain("WARNING:");
     expect(h.err.data).toContain("Already logged in");
   });
 
