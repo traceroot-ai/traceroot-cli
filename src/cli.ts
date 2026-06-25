@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { registerCommands } from "./commands/index.js";
-import { colorizeError, reportError } from "./output.js";
+import { colorizeError, handlePipeError, reportError } from "./output.js";
 import { getVersion } from "./version.js";
 
 export function buildProgram(): Command {
@@ -13,13 +13,18 @@ export function buildProgram(): Command {
   program.configureOutput({
     outputError: (str, write) => write(colorizeError(str)),
   });
+  // Show program-wide flags (`--json`, `--api-key`, …) under a "Global Options"
+  // section in every subcommand's help; and list subcommands by name only in the
+  // root command summary (no trailing "[options]"), so every command reads
+  // consistently.
+  program.configureHelp({ showGlobalOptions: true, subcommandTerm: (cmd) => cmd.name() });
   // Global options (long-flag only to avoid clashing with -V/-h). Registered
   // before subcommands so they apply program-wide.
   program
     .option("--api-key <key>", "API key for authentication")
     .option("--host <url>", "API host URL")
     .option("--env-file <path>", "path to a .env file to load")
-    .option("--json", "emit machine-readable JSON output");
+    .option("--json", "emit machine-readable JSON output for supported commands");
   registerCommands(program);
   // Root action: lets global flags parse without a subcommand, while still
   // rejecting an unrecognized operand so unknown-command handling is preserved.
@@ -38,6 +43,10 @@ export function buildProgram(): Command {
 }
 
 export async function run(argv: string[]): Promise<void> {
+  // Exit cleanly when a downstream reader (e.g. `head`, `jq`) closes the pipe:
+  // turn the resulting EPIPE into a quiet exit instead of a Node stack trace.
+  process.stdout.on("error", (err: NodeJS.ErrnoException) => handlePipeError(err));
+  process.stderr.on("error", (err: NodeJS.ErrnoException) => handlePipeError(err));
   try {
     await buildProgram().parseAsync(argv);
   } catch (err) {

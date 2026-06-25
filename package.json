@@ -29,7 +29,7 @@
     "traceroot": "bin/traceroot.mjs"
   },
   "main": "dist/cli.js",
-  "files": ["bin", "dist", "README.md"],
+  "files": ["bin", "dist", "assets", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "codegen": "openapi-typescript openapi.json -o src/api/generated/schema.ts",
