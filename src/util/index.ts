@@ -45,6 +45,20 @@ export function formatDuration(durationMs: number | null): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+/**
+ * Formats a byte count for humans: thousands-separated, with a one-decimal KB
+ * value in parentheses, e.g. `534922` → `"534,922 bytes (534.9 KB)"`. The raw
+ * numeric value is preserved in JSON output; this is for human-readable lines
+ * only.
+ */
+export function formatBytes(bytes: number): string {
+  const grouped = Math.trunc(bytes)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const kb = (bytes / 1000).toFixed(1);
+  return `${grouped} bytes (${kb} KB)`;
+}
+
 /** Treats a zone-less backend timestamp as UTC and returns a Date (or null). */
 function parseBackendTime(raw: string): Date | null {
   // Backend timestamps are naive UTC, e.g. "2026-06-04T23:43:13.590000" (no

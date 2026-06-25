@@ -20,6 +20,14 @@ describe("buildProgram", () => {
     expect(names).toContain("traces");
   });
 
+  it("registers the new skills, instrument, and doctor commands", () => {
+    const program = buildProgram();
+    const names = childNames(program);
+    expect(names).toContain("skills");
+    expect(names).toContain("instrument");
+    expect(names).toContain("doctor");
+  });
+
   it("registers list, get, and export under traces", () => {
     const program = buildProgram();
     const traces = program.commands.find((c) => c.name() === "traces");
@@ -28,5 +36,14 @@ describe("buildProgram", () => {
     expect(subNames).toContain("list");
     expect(subNames).toContain("get");
     expect(subNames).toContain("export");
+  });
+
+  it("registers list and install under skills", () => {
+    const program = buildProgram();
+    const skills = program.commands.find((c) => c.name() === "skills");
+    expect(skills).toBeDefined();
+    const subNames = childNames(skills as Command);
+    expect(subNames).toContain("list");
+    expect(subNames).toContain("install");
   });
 });

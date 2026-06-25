@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CliError } from "../src/output.js";
-import { formatTimestamp, parseDuration } from "../src/util/index.js";
+import { formatBytes, formatTimestamp, parseDuration } from "../src/util/index.js";
 
 describe("parseDuration", () => {
   it("parses each supported unit into milliseconds", () => {
@@ -24,6 +24,18 @@ describe("parseDuration", () => {
 
   it("throws CliError on a non-positive amount", () => {
     expect(() => parseDuration("0h")).toThrow(CliError);
+  });
+});
+
+describe("formatBytes", () => {
+  it("groups thousands and appends a one-decimal KB value", () => {
+    expect(formatBytes(534922)).toBe("534,922 bytes (534.9 KB)");
+  });
+
+  it("handles small and large counts", () => {
+    expect(formatBytes(2215)).toBe("2,215 bytes (2.2 KB)");
+    expect(formatBytes(0)).toBe("0 bytes (0.0 KB)");
+    expect(formatBytes(12_345_678)).toBe("12,345,678 bytes (12345.7 KB)");
   });
 });
 

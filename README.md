@@ -53,6 +53,10 @@ traceroot traces list
 | `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
+| `skills list` | List first-party TraceRoot skills and install status across supported agents. |
+| `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
+| `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
+| `doctor` | Diagnose credentials, repo shape, runtime env, and installed skills (`pass`/`warn`/`fail`). |
 
 Add `--json` to any command for a single machine-readable document on stdout.
 Run `traceroot <command> --help` for the full flag list.
@@ -62,3 +66,36 @@ traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef
 traceroot traces export <trace-id> --output ./out
 traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --limit 5 --json | jq '.data[].trace_id'
 ```
+
+## Skills & agents
+
+Make your coding agent TraceRoot-aware without touching your application source. The
+CLI ships two first-party skills. Installing a skill copies bundled files from this
+package; the install step does not fetch from the network or run install scripts.
+Install targets depend on the agent:
+
+- `--agent claude` → project-local `.claude/skills/<skill>/`
+- `--agent codex` → global `$CODEX_HOME/skills/<skill>/` (defaults to `~/.codex/skills/`)
+- `--agent generic` → project-local `.agents/skills/<skill>/`
+
+`skills install` and `instrument` are interactive: run them without the required
+flags in a terminal and they prompt (skill, then agent; or agent, then output
+path), accepting a default on Enter. Pass the flags to skip the prompts.
+
+```sh
+traceroot skills list                                              # available skills + per-agent install status
+
+traceroot skills install                                           # interactive: prompts for skill, then agent
+traceroot skills install traceroot-instrument-repo --agent claude  # add tracing to an app
+traceroot skills install traceroot-quickstart --agent codex        # install for Codex (~/.codex/skills)
+
+traceroot instrument                                               # interactive: prompts for agent, then output path
+traceroot instrument --agent claude --print                        # print the prompt to stdout
+traceroot instrument --agent codex --output .traceroot/prompts/codex-instrument-repo.md
+
+traceroot doctor                                                   # check credentials, repo, runtime env, skills
+```
+
+`skills install` and `instrument` refuse to overwrite an existing target without
+`--force` (in a terminal they ask first); `--dry-run` reports what `skills install`
+would write without touching disk.

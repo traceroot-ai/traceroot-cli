@@ -87,6 +87,23 @@ export function isCliError(e: unknown): e is CliError {
 }
 
 /**
+ * Handles a stream `error` event: exits cleanly (code 0) on `EPIPE` — a
+ * downstream reader such as `head` or `jq` closed the pipe early, which is not a
+ * failure — and rethrows anything else. Wired to stdout/stderr in {@link run} so
+ * a broken pipe never prints a Node stack trace. `exit` is injectable for tests.
+ */
+export function handlePipeError(
+  err: NodeJS.ErrnoException,
+  exit: (code: number) => void = process.exit,
+): void {
+  if (err.code === "EPIPE") {
+    exit(0);
+    return;
+  }
+  throw err;
+}
+
+/**
  * Reports an error to stderr (red when color is enabled) without a stack trace
  * and returns the exit code (a {@link CliError}'s `exitCode`, else 1). Never
  * writes to stdout.
