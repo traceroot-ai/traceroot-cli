@@ -114,3 +114,37 @@ describe("never leaks the api key", () => {
     expect(String(e)).not.toContain(API_KEY);
   });
 });
+
+describe("request timeout", () => {
+  it("attaches a per-request AbortSignal when timeoutMs is set", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ ok: true }));
+    const client = createApiClient({
+      host: "https://h",
+      apiKey: API_KEY,
+      fetchImpl: fake.fetchImpl,
+      timeoutMs: 5000,
+    });
+    await client.whoami();
+    expect(fake.calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("attaches no AbortSignal when timeoutMs is unset", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ ok: true }));
+    const client = createApiClient({
+      host: "https://h",
+      apiKey: API_KEY,
+      fetchImpl: fake.fetchImpl,
+    });
+    await client.whoami();
+    expect(fake.calls[0]?.init.signal).toBeUndefined();
+  });
+
+  it("surfaces an aborted request as a CliError (so callers can fall back)", async () => {
+    const { client } = clientWith(() => {
+      // Simulate what an AbortSignal.timeout firing does to fetch.
+      throw new DOMException("The operation was aborted.", "TimeoutError");
+    });
+    const err = await client.whoami().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+  });
+});

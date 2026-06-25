@@ -332,4 +332,24 @@ describe("runLogin already logged in (interactive)", () => {
     expect(h.err.data).not.toContain(FULL_TOKEN);
     expect(h.err.data).not.toContain(NEW_TOKEN);
   });
+
+  it("does not prompt on an interactive --host override; updates the host directly", async () => {
+    const h = makeHarness();
+    // promptConfirm/promptHidden/promptVisible all reject-on-call in baseDeps,
+    // so reaching any prompt would fail this test. A flag host override is intent,
+    // so even interactively it must skip the warning and persist the new host.
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        hostSource: "flag",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://new-host",
+        isInteractive: true,
+      }),
+    );
+
+    expect(h.createClientCalls).toEqual([{ host: "https://new-host", apiKey: FULL_TOKEN }]);
+    expect(h.writeConfigCalls).toEqual([{ api_key: FULL_TOKEN, host_url: "https://new-host" }]);
+    expect(h.err.data).not.toContain("Already logged in");
+  });
 });
