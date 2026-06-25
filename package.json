@@ -1,6 +1,6 @@
 {
   "name": "traceroot-cli",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "description": "Read your TraceRoot traces from the terminal — list, inspect, and export traces from the TraceRoot public API.",
   "license": "Apache-2.0",
@@ -29,7 +29,12 @@
     "traceroot": "bin/traceroot.mjs"
   },
   "main": "dist/cli.js",
-  "files": ["bin", "dist", "assets", "README.md"],
+  "files": [
+    "bin",
+    "dist",
+    "assets",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "codegen": "openapi-typescript openapi.json -o src/api/generated/schema.ts",
