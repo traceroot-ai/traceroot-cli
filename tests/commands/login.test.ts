@@ -160,6 +160,35 @@ describe("runLogin interactive", () => {
   });
 });
 
+describe("runLogin interactive key normalization", () => {
+  it("strips the TRACEROOT_API_KEY= prefix and quotes from a pasted key", async () => {
+    const h = makeHarness();
+    const deps = baseDeps(h, {
+      isInteractive: true,
+      resolvedHost: "https://h",
+      promptHidden: () => Promise.resolve(`TRACEROOT_API_KEY="${FULL_TOKEN}"`),
+    });
+
+    await runLogin(deps);
+
+    expect(h.createClientCalls[0]).toEqual({ host: "https://h", apiKey: FULL_TOKEN });
+    expect(h.writeConfigCalls[0]).toEqual({ api_key: FULL_TOKEN, host_url: "https://h" });
+  });
+
+  it("strips surrounding quotes from a pasted key", async () => {
+    const h = makeHarness();
+    const deps = baseDeps(h, {
+      isInteractive: true,
+      resolvedHost: "https://h",
+      promptHidden: () => Promise.resolve(`"${FULL_TOKEN}"`),
+    });
+
+    await runLogin(deps);
+
+    expect(h.writeConfigCalls[0]).toEqual({ api_key: FULL_TOKEN, host_url: "https://h" });
+  });
+});
+
 describe("runLogin --json", () => {
   it("emits one JSON document on stdout with no full token", async () => {
     const h = makeHarness();
