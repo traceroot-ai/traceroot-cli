@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,14 +10,32 @@ import type { RepoDetection } from "../../src/repo/detect.js";
 import { StringSink } from "../helpers/stringSink.js";
 
 let cwd: string;
+let codexHome: string;
+let prevCodexHome: string | undefined;
 
 beforeEach(() => {
   cwd = mkdtempSync(join(tmpdir(), "tr-doctor-"));
+  // Pin CODEX_HOME so codex skill checks are hermetic (never read the real ~/.codex).
+  codexHome = join(cwd, "codex-home");
+  prevCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
 });
 
 afterEach(() => {
+  if (prevCodexHome === undefined) {
+    // biome-ignore lint/performance/noDelete: restoring an env var; assigning undefined would stringify it
+    delete process.env.CODEX_HOME;
+  } else {
+    process.env.CODEX_HOME = prevCodexHome;
+  }
   rmSync(cwd, { recursive: true, force: true });
 });
+
+/** Marks a skill installed for an agent by writing its SKILL.md. */
+function writeSkill(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), "# skill", "utf8");
+}
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -96,6 +114,16 @@ describe("runDoctor", () => {
     // Both warn when absent; neither implies the other is installed.
     expect(instrument?.status).toBe("warn");
     expect(quickstart?.status).toBe("warn");
+  });
+
+  it("lists every agent that has the instrumentation skill (claude, codex order)", async () => {
+    writeSkill(join(cwd, ".claude", "skills", "traceroot-instrument-repo"));
+    writeSkill(join(codexHome, "skills", "traceroot-instrument-repo"));
+    const { writers } = makeWriters();
+    const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+    const instrument = report.checks.find((c) => c.name === "skill_instrument");
+    expect(instrument?.status).toBe("pass");
+    expect(instrument?.message).toBe("Instrumentation skill installed for Claude Code, Codex");
   });
 
   it("uses concise, login-pointing wording for missing credentials and config", async () => {

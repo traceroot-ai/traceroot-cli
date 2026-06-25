@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { claudeAdapter } from "../agents/claude.js";
+import { ALL_AGENTS } from "../agents/index.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
 import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
@@ -140,34 +140,44 @@ function localFileChecks(input: DoctorInput): DoctorCheck[] {
 }
 
 /**
+ * Display names of the supported agents that have `skillName` installed, in the
+ * stable `claude, codex, generic` order. Mirrors `skills list` so doctor reflects
+ * multi-agent installs (not just Claude Code).
+ */
+function installedFor(cwd: string, skillName: string): string[] {
+  return ALL_AGENTS.filter((agent) =>
+    existsSync(join(agent.getSkillInstallPath(cwd, skillName), "SKILL.md")),
+  ).map((agent) => agent.displayName);
+}
+
+/**
  * Readiness-oriented skill checks (not a full inventory — that's
- * `traceroot skills list --agent <agent>`). The instrumentation skill is the one
- * that matters for getting started, so its absence is an actionable warning; the
- * quickstart skill is explicitly optional.
+ * `traceroot skills list`). The instrumentation skill is the one that matters for
+ * getting started, so its absence is an actionable warning; the quickstart skill
+ * is explicitly optional. A skill counts as present if installed for any agent.
  */
 function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
-  const skillsDir = claudeAdapter.detect(input.cwd).skillsDir;
-  const installed = (name: string): boolean => existsSync(join(skillsDir, name, "SKILL.md"));
-
-  const hasInstrument = installed("traceroot-instrument-repo");
-  const hasQuickstart = installed("traceroot-quickstart");
+  const instrumentAgents = installedFor(input.cwd, "traceroot-instrument-repo");
+  const quickstartAgents = installedFor(input.cwd, "traceroot-quickstart");
 
   return [
     {
       name: "skill_instrument",
       category: "agent_skills",
-      status: hasInstrument ? "pass" : "warn",
-      message: hasInstrument
-        ? "Instrumentation skill installed for Claude Code"
-        : "Instrumentation skill not installed. Run `traceroot skills install traceroot-instrument-repo`",
+      status: instrumentAgents.length > 0 ? "pass" : "warn",
+      message:
+        instrumentAgents.length > 0
+          ? `Instrumentation skill installed for ${instrumentAgents.join(", ")}`
+          : "Instrumentation skill not installed. Run `traceroot skills install traceroot-instrument-repo`",
     },
     {
       name: "skill_quickstart",
       category: "agent_skills",
-      status: hasQuickstart ? "pass" : "warn",
-      message: hasQuickstart
-        ? "Quickstart skill installed for Claude Code"
-        : "Quickstart skill not installed",
+      status: quickstartAgents.length > 0 ? "pass" : "warn",
+      message:
+        quickstartAgents.length > 0
+          ? `Quickstart skill installed for ${quickstartAgents.join(", ")}`
+          : "Quickstart skill not installed",
     },
   ];
 }
