@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import type { Command } from "commander";
 import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
+import { normalizeApiKey } from "../config/apiKey.js";
 import { writeConfig as realWriteConfig } from "../config/manager.js";
 import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../output.js";
 import { apiKeyLabel, identity } from "../render/identity.js";
@@ -47,7 +48,7 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
   if (resolvedKey !== undefined && resolvedKey !== "") {
     apiKey = resolvedKey;
   } else if (deps.isInteractive) {
-    apiKey = (await deps.promptHidden("API key: ")).trim();
+    apiKey = normalizeApiKey(await deps.promptHidden("API key: "));
   } else {
     throw new CliError(MISSING_KEY);
   }
