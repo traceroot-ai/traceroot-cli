@@ -20,9 +20,17 @@ export interface ApiClientOptions {
   fetchImpl?: typeof globalThis.fetch;
 }
 
+export interface ListTracesParams {
+  limit?: number;
+  /** ISO 8601 lower bound (inclusive), sent as `start_after`. */
+  startAfter?: string;
+  /** ISO 8601 upper bound (exclusive), sent as `end_before`. */
+  endBefore?: string;
+}
+
 export interface ApiClient {
   whoami(): Promise<Whoami>;
-  listTraces(params?: { limit?: number }): Promise<TraceList>;
+  listTraces(params?: ListTracesParams): Promise<TraceList>;
   getTrace(traceId: string): Promise<TraceDetail>;
   exportTrace(traceId: string): Promise<TraceExport>;
 }
@@ -91,8 +99,18 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       return request<Whoami>("/api/v1/public/whoami");
     },
     listTraces(params) {
-      const query = params?.limit !== undefined ? `?limit=${String(params.limit)}` : "";
-      return request<TraceList>(`/api/v1/public/traces${query}`);
+      const search = new URLSearchParams();
+      if (params?.limit !== undefined) {
+        search.set("limit", String(params.limit));
+      }
+      if (params?.startAfter !== undefined) {
+        search.set("start_after", params.startAfter);
+      }
+      if (params?.endBefore !== undefined) {
+        search.set("end_before", params.endBefore);
+      }
+      const query = search.toString();
+      return request<TraceList>(`/api/v1/public/traces${query ? `?${query}` : ""}`);
     },
     getTrace(traceId) {
       return request<TraceDetail>(`/api/v1/public/traces/${encodeURIComponent(traceId)}`);

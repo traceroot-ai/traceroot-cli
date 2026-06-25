@@ -39,8 +39,9 @@ describe("subcommand help: native Options vs Global Options", () => {
       expect(global).toContain("--api-key");
       expect(global).toContain("--host");
       expect(global).toContain("--env-file");
-      // …and the native Options section does NOT list --json.
-      expect(options).toContain("Options:");
+      // …and the command's own (pre-"Global Options") section never lists --json.
+      // Flagless commands like `doctor`/`skills list` may have no "Options:"
+      // section at all now that `-h, --help` lives under Global Options.
       expect(options).not.toContain("--json");
     });
   }
@@ -114,6 +115,51 @@ describe("traceroot --json (root)", () => {
     // Acceptable: root --json yields help (on stderr per the output contract).
     expect(stdout).toBe("");
     expect(stderr).toContain("Usage: traceroot");
+  });
+});
+
+describe("global --json discoverability in help", () => {
+  it("traces list --help shows the global --json flag", () => {
+    const { stdout, status } = runCli("traces", "list", "--help");
+    expect(status).toBe(0);
+    expect(stdout).toContain("--json");
+    expect(stdout).toContain("Global Options");
+  });
+
+  it("traces --help shows the global --json flag", () => {
+    const { stdout, status } = runCli("traces", "--help");
+    expect(status).toBe(0);
+    expect(stdout).toContain("--json");
+  });
+
+  it("top-level --help shows --json", () => {
+    const { stdout } = runCli("--help");
+    expect(stdout).toContain("--json");
+  });
+});
+
+describe("--help placement (Global Options for subcommands)", () => {
+  it("lists -h, --help under Global Options, not the command's own Options (traces list)", () => {
+    const { stdout } = runCli("traces", "list", "--help");
+    const idx = stdout.indexOf("Global Options");
+    expect(idx).toBeGreaterThan(-1);
+    // The command's own Options (before "Global Options") must NOT list --help.
+    expect(stdout.slice(0, idx)).not.toContain("--help");
+    // It appears in the Global Options section instead.
+    expect(stdout.slice(idx)).toContain("--help");
+  });
+
+  it("lists -h, --help under Global Options for an intermediate command (traces)", () => {
+    const { stdout } = runCli("traces", "--help");
+    const idx = stdout.indexOf("Global Options");
+    expect(idx).toBeGreaterThan(-1);
+    expect(stdout.slice(idx)).toContain("--help");
+  });
+
+  it("keeps -h, --help on the root help and gives it no Global Options section", () => {
+    const { stdout } = runCli("--help");
+    expect(stdout).toContain("--help");
+    expect(stdout).not.toContain("Global Options");
   });
 });
 

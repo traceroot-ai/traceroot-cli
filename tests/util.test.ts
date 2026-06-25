@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatTimestamp } from "../src/util/index.js";
+import { CliError } from "../src/output.js";
+import { formatBytes, formatTimestamp, parseDuration } from "../src/util/index.js";
+
+describe("parseDuration", () => {
+  it("parses each supported unit into milliseconds", () => {
+    expect(parseDuration("45s")).toBe(45_000);
+    expect(parseDuration("30m")).toBe(30 * 60_000);
+    expect(parseDuration("6h")).toBe(6 * 3_600_000);
+    expect(parseDuration("7d")).toBe(7 * 86_400_000);
+    expect(parseDuration("2w")).toBe(2 * 604_800_000);
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(parseDuration("  12h  ")).toBe(12 * 3_600_000);
+  });
+
+  it("throws CliError on a missing or unknown unit", () => {
+    expect(() => parseDuration("10")).toThrow(CliError);
+    expect(() => parseDuration("10y")).toThrow(CliError);
+    expect(() => parseDuration("abc")).toThrow(CliError);
+    expect(() => parseDuration("")).toThrow(CliError);
+  });
+
+  it("throws CliError on a non-positive amount", () => {
+    expect(() => parseDuration("0h")).toThrow(CliError);
+  });
+});
 
 describe("formatBytes", () => {
   it("groups thousands and appends a one-decimal KB value", () => {
@@ -31,5 +57,13 @@ describe("formatTimestamp", () => {
 
   it("falls back to the raw string when unparseable", () => {
     expect(formatTimestamp("not-a-date", "UTC")).toBe("not-a-date");
+  });
+
+  it("renders local midnight as 00:00:00, not 24:00:00 (ICU-independent)", () => {
+    // 06:00 UTC = midnight MDT. Some ICU builds emit "24" with hour12:false.
+    expect(formatTimestamp("2026-06-23T06:00:00.000Z", "America/Denver")).toBe(
+      "2026-06-23 00:00:00 MDT",
+    );
+    expect(formatTimestamp("2026-06-23T00:00:00Z", "UTC")).toBe("2026-06-23 00:00:00 UTC");
   });
 });

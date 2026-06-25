@@ -50,7 +50,7 @@ traceroot traces list
 | :-- | :-- |
 | `login` | Authenticate and save credentials (validates before writing). |
 | `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
-| `traces list` | List traces for your project, newest first. `--limit <n>` |
+| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
@@ -64,7 +64,7 @@ Run `traceroot <command> --help` for the full flag list.
 ```sh
 traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef
 traceroot traces export <trace-id> --output ./out
-traceroot traces list --limit 5 --json | jq '.data[].trace_id'
+traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --limit 5 --json | jq '.data[].trace_id'
 ```
 
 ## Skills & agents
@@ -99,4 +99,3 @@ traceroot doctor                                                   # check crede
 `skills install` and `instrument` refuse to overwrite an existing target without
 `--force` (in a terminal they ask first); `--dry-run` reports what `skills install`
 would write without touching disk.
-

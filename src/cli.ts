@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { registerCommands } from "./commands/index.js";
 import { colorizeError, handlePipeError, reportError } from "./output.js";
 import { getVersion } from "./version.js";
@@ -13,11 +13,37 @@ export function buildProgram(): Command {
   program.configureOutput({
     outputError: (str, write) => write(colorizeError(str)),
   });
-  // Show program-wide flags (`--json`, `--api-key`, …) under a "Global Options"
-  // section in every subcommand's help; and list subcommands by name only in the
-  // root command summary (no trailing "[options]"), so every command reads
-  // consistently.
-  program.configureHelp({ showGlobalOptions: true, subcommandTerm: (cmd) => cmd.name() });
+  // Surface program-wide global flags (e.g. `--json`) in every subcommand's
+  // `--help` under a "Global Options" section, so they're discoverable where
+  // users look (e.g. `traceroot traces list --help`). `-h, --help` is available
+  // on every command, so it belongs there too — not repeated in each command's
+  // own "Options". The root command keeps `--help` in its "Options" (it has no
+  // "Global Options" section). Subcommands are listed by name only in the root
+  // summary (no trailing "[options]"), so every command reads consistently.
+  const notHidden = (o: Option): boolean => !(o as Option & { hidden?: boolean }).hidden;
+  const helpOption = (): Option => new Option("-h, --help", "display help for command");
+  program.configureHelp({
+    showGlobalOptions: true,
+    subcommandTerm: (cmd) => cmd.name(),
+    visibleOptions(cmd) {
+      const own = cmd.options.filter(notHidden);
+      if (cmd.parent === null) {
+        own.push(helpOption()); // root: keep `--help` in its own Options
+      }
+      return own;
+    },
+    visibleGlobalOptions(cmd) {
+      if (cmd.parent === null) {
+        return []; // root has no "Global Options" section
+      }
+      const globals: Option[] = [];
+      for (let ancestor: Command | null = cmd.parent; ancestor; ancestor = ancestor.parent) {
+        globals.push(...ancestor.options.filter(notHidden));
+      }
+      globals.push(helpOption()); // subcommands: `--help` is a global flag
+      return globals;
+    },
+  });
   // Global options (long-flag only to avoid clashing with -V/-h). Registered
   // before subcommands so they apply program-wide.
   program
