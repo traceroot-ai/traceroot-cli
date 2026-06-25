@@ -3,13 +3,16 @@ import { type Sink, colorEnabled } from "../output.js";
 const ANSI_RESET = "\x1b[0m";
 const ANSI_BOLD = "\x1b[1m";
 const ANSI_DIM = "\x1b[2m";
+const ANSI_YELLOW = "\x1b[33m";
 
 /** Applies emphasis to text, no-op when color is disabled. */
 export interface Styler {
   /** Bold/bright emphasis (used for labels and table headers). */
   bold(text: string): string;
-  /** Dim de-emphasis (used for secondary detail such as IDs). */
+  /** Dim de-emphasis (used for secondary detail such as IDs and links/URLs). */
   dim(text: string): string;
+  /** Yellow emphasis for warnings. */
+  warn(text: string): string;
 }
 
 /**
@@ -25,5 +28,9 @@ export function createStyler(sink: Sink, env: NodeJS.ProcessEnv = process.env): 
     (code: string) =>
     (text: string): string =>
       on ? `${code}${text}${ANSI_RESET}` : text;
-  return { bold: wrap(ANSI_BOLD), dim: wrap(ANSI_DIM) };
+  return {
+    bold: wrap(ANSI_BOLD),
+    dim: wrap(ANSI_DIM),
+    warn: wrap(ANSI_YELLOW),
+  };
 }

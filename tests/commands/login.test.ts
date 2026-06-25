@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ApiClient, Whoami } from "../../src/api/client.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
-import { type LoginDeps, runLogin } from "../../src/commands/login.js";
+import { type LoginDeps, WHOAMI_WARNING_TIMEOUT_MS, runLogin } from "../../src/commands/login.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
 
@@ -35,7 +35,7 @@ interface Harness {
   out: StringSink;
   err: StringSink;
   writeConfigCalls: Array<{ api_key: string; host_url: string }>;
-  createClientCalls: Array<{ host: string; apiKey: string }>;
+  createClientCalls: Array<{ host: string; apiKey: string; timeoutMs?: number }>;
 }
 
 function makeHarness(): Harness {
@@ -58,6 +58,9 @@ function baseDeps(
   return {
     json: false,
     isInteractive: false,
+    apiKeySource: "env",
+    hostSource: "config",
+    promptConfirm: () => Promise.reject(new Error("promptConfirm should not be called")),
     promptHidden: () => Promise.reject(new Error("promptHidden should not be called")),
     promptVisible: () => Promise.reject(new Error("promptVisible should not be called")),
     createClient: (o) => {
@@ -176,5 +179,177 @@ describe("runLogin --json", () => {
     expect(parsed.key_hint).toBe("tr_***1234");
     expect(h.out.data.trimEnd().split("\n")).toHaveLength(1);
     expect(h.out.data).not.toContain(FULL_TOKEN);
+  });
+});
+
+describe("runLogin already logged in (non-interactive)", () => {
+  it("warns and does not rewrite config when source is config and no TTY", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://h",
+        isInteractive: false,
+      }),
+    );
+
+    // The warning is enriched via whoami (one client call) but persists nothing.
+    expect(h.writeConfigCalls).toHaveLength(0);
+    expect(h.createClientCalls).toHaveLength(1);
+    expect(h.createClientCalls[0]).toEqual({
+      host: "https://h",
+      apiKey: FULL_TOKEN,
+      timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
+    });
+    expect(h.err.data).toContain("WARNING:");
+    expect(h.err.data).toContain("Already logged in");
+    expect(h.err.data).toContain("My Project"); // workspace/project from whoami
+    expect(h.err.data).toContain("https://h");
+    expect(h.out.data).not.toContain(FULL_TOKEN);
+    expect(h.err.data).not.toContain(FULL_TOKEN);
+  });
+
+  it("falls back to a host-only warning when the saved session can't be verified", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(
+        h,
+        {
+          apiKeySource: "config",
+          resolvedApiKey: FULL_TOKEN,
+          resolvedHost: "https://h",
+          isInteractive: false,
+        },
+        () => Promise.reject(new Error("expired key")),
+      ),
+    );
+
+    expect(h.writeConfigCalls).toHaveLength(0);
+    expect(h.err.data).toContain("WARNING:");
+    expect(h.err.data).toContain("Already logged in");
+    expect(h.err.data).toContain("couldn't verify");
+    expect(h.err.data).toContain("https://h");
+    expect(h.err.data).not.toContain(FULL_TOKEN);
+  });
+
+  it("emits an already_logged_in JSON document and does not rewrite config", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://h",
+        isInteractive: false,
+        json: true,
+      }),
+    );
+
+    const parsed = JSON.parse(h.out.data) as Record<string, unknown>;
+    expect(parsed.status).toBe("already_logged_in");
+    expect(parsed.verified).toBe(true);
+    expect(parsed.host).toBe("https://h");
+    expect(parsed.project_name).toBe("My Project");
+    expect(h.writeConfigCalls).toHaveLength(0);
+    expect(h.out.data).not.toContain(FULL_TOKEN);
+  });
+
+  it("treats an explicit --host override as intent and updates the host (not a no-op)", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(h, {
+        // Key still comes from the persisted config, but the host is overridden
+        // by a flag — `login --host ...`. This is deliberate intent, not a bare
+        // re-invocation, so it must validate and persist the new host.
+        apiKeySource: "config",
+        hostSource: "flag",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://new-host",
+        isInteractive: false,
+      }),
+    );
+
+    expect(h.createClientCalls).toHaveLength(1);
+    expect(h.createClientCalls[0]).toEqual({ host: "https://new-host", apiKey: FULL_TOKEN });
+    expect(h.writeConfigCalls).toHaveLength(1);
+    expect(h.writeConfigCalls[0]).toEqual({ api_key: FULL_TOKEN, host_url: "https://new-host" });
+    expect(h.err.data).not.toContain("Already logged in");
+  });
+});
+
+describe("runLogin already logged in (interactive)", () => {
+  it("aborts and keeps the session when the user declines re-login", async () => {
+    const h = makeHarness();
+    let confirmAsked = 0;
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://h",
+        isInteractive: true,
+        promptConfirm: () => {
+          confirmAsked += 1;
+          return Promise.resolve(false);
+        },
+      }),
+    );
+
+    expect(confirmAsked).toBe(1);
+    expect(h.writeConfigCalls).toHaveLength(0);
+    // Only the whoami lookup for the warning — no second client for a re-login.
+    expect(h.createClientCalls).toHaveLength(1);
+    expect(h.err.data).toContain("WARNING:");
+    expect(h.err.data).toContain("Already logged in");
+  });
+
+  it("re-prompts for fresh credentials and writes the new account on accept", async () => {
+    const h = makeHarness();
+    const NEW_TOKEN = "tr_new_TOKEN";
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        resolvedApiKey: FULL_TOKEN, // persisted creds — must be ignored on accept
+        resolvedHost: "https://old-host",
+        isInteractive: true,
+        promptConfirm: () => Promise.resolve(true),
+        promptHidden: () => Promise.resolve(NEW_TOKEN),
+        promptVisible: () => Promise.resolve("https://new-host"),
+      }),
+    );
+
+    // First client call is the whoami warning (saved creds); the second
+    // validates the freshly entered account that actually gets persisted.
+    expect(h.createClientCalls[0]).toEqual({
+      host: "https://old-host",
+      apiKey: FULL_TOKEN,
+      timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
+    });
+    expect(h.createClientCalls).toContainEqual({ host: "https://new-host", apiKey: NEW_TOKEN });
+    expect(h.writeConfigCalls).toHaveLength(1);
+    expect(h.writeConfigCalls[0]).toEqual({ api_key: NEW_TOKEN, host_url: "https://new-host" });
+    expect(h.out.data).not.toContain(FULL_TOKEN);
+    expect(h.out.data).not.toContain(NEW_TOKEN);
+    expect(h.err.data).not.toContain(FULL_TOKEN);
+    expect(h.err.data).not.toContain(NEW_TOKEN);
+  });
+
+  it("does not prompt on an interactive --host override; updates the host directly", async () => {
+    const h = makeHarness();
+    // promptConfirm/promptHidden/promptVisible all reject-on-call in baseDeps,
+    // so reaching any prompt would fail this test. A flag host override is intent,
+    // so even interactively it must skip the warning and persist the new host.
+    await runLogin(
+      baseDeps(h, {
+        apiKeySource: "config",
+        hostSource: "flag",
+        resolvedApiKey: FULL_TOKEN,
+        resolvedHost: "https://new-host",
+        isInteractive: true,
+      }),
+    );
+
+    expect(h.createClientCalls).toEqual([{ host: "https://new-host", apiKey: FULL_TOKEN }]);
+    expect(h.writeConfigCalls).toEqual([{ api_key: FULL_TOKEN, host_url: "https://new-host" }]);
+    expect(h.err.data).not.toContain("Already logged in");
   });
 });
