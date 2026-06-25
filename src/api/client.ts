@@ -18,6 +18,11 @@ export interface ApiClientOptions {
   apiKey: string;
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchImpl?: typeof globalThis.fetch;
+  /**
+   * Optional per-request timeout in milliseconds. When set, each request aborts
+   * after this long instead of blocking indefinitely on a stalled socket.
+   */
+  timeoutMs?: number;
 }
 
 export interface ApiClient {
@@ -59,9 +64,15 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
 
   async function request<T>(path: string): Promise<T> {
     const url = `${base}${path}`;
+    const init: RequestInit = { method: "GET", headers };
+    if (opts.timeoutMs !== undefined) {
+      // A fresh signal per request; aborts the fetch on timeout so a stalled
+      // socket can't hang the process indefinitely.
+      init.signal = AbortSignal.timeout(opts.timeoutMs);
+    }
     let res: Response;
     try {
-      res = await fetchImpl(url, { method: "GET", headers });
+      res = await fetchImpl(url, init);
     } catch (err) {
       // Deliberately do NOT interpolate the underlying error message: it could
       // echo back request contents and leak the api key. Mention only the host.

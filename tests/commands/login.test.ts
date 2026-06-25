@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ApiClient, Whoami } from "../../src/api/client.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
-import { type LoginDeps, runLogin } from "../../src/commands/login.js";
+import { type LoginDeps, WHOAMI_WARNING_TIMEOUT_MS, runLogin } from "../../src/commands/login.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
 
@@ -35,7 +35,7 @@ interface Harness {
   out: StringSink;
   err: StringSink;
   writeConfigCalls: Array<{ api_key: string; host_url: string }>;
-  createClientCalls: Array<{ host: string; apiKey: string }>;
+  createClientCalls: Array<{ host: string; apiKey: string; timeoutMs?: number }>;
 }
 
 function makeHarness(): Harness {
@@ -197,7 +197,11 @@ describe("runLogin already logged in (non-interactive)", () => {
     // The warning is enriched via whoami (one client call) but persists nothing.
     expect(h.writeConfigCalls).toHaveLength(0);
     expect(h.createClientCalls).toHaveLength(1);
-    expect(h.createClientCalls[0]).toEqual({ host: "https://h", apiKey: FULL_TOKEN });
+    expect(h.createClientCalls[0]).toEqual({
+      host: "https://h",
+      apiKey: FULL_TOKEN,
+      timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
+    });
     expect(h.err.data).toContain("WARNING:");
     expect(h.err.data).toContain("Already logged in");
     expect(h.err.data).toContain("My Project"); // workspace/project from whoami
@@ -315,7 +319,11 @@ describe("runLogin already logged in (interactive)", () => {
 
     // First client call is the whoami warning (saved creds); the second
     // validates the freshly entered account that actually gets persisted.
-    expect(h.createClientCalls[0]).toEqual({ host: "https://old-host", apiKey: FULL_TOKEN });
+    expect(h.createClientCalls[0]).toEqual({
+      host: "https://old-host",
+      apiKey: FULL_TOKEN,
+      timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
+    });
     expect(h.createClientCalls).toContainEqual({ host: "https://new-host", apiKey: NEW_TOKEN });
     expect(h.writeConfigCalls).toHaveLength(1);
     expect(h.writeConfigCalls[0]).toEqual({ api_key: NEW_TOKEN, host_url: "https://new-host" });

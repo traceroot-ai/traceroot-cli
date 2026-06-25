@@ -48,6 +48,13 @@ const MISSING_KEY =
   "an API key is required: pass --api-key, set TRACEROOT_API_KEY (or a .env file), or run interactively";
 
 /**
+ * Timeout for the courtesy `whoami` that enriches the already-logged-in
+ * warning. It is only informational, so a slow/unreachable host degrades to the
+ * host-only fallback quickly rather than hanging the command.
+ */
+export const WHOAMI_WARNING_TIMEOUT_MS = 5000;
+
+/**
  * Establishes credentials: takes the api key and host already resolved from the
  * precedence chain (flags > `--env-file` > env > config > auto `.env`) or, when
  * none resolved and interactive, prompts; validates them via `whoami`, and only
@@ -157,7 +164,12 @@ async function reportAlreadyLoggedIn(
 
   let who: Whoami | null = null;
   try {
-    who = await deps.createClient({ host: currentHost, apiKey: savedKey }).whoami();
+    const client = deps.createClient({
+      host: currentHost,
+      apiKey: savedKey,
+      timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
+    });
+    who = await client.whoami();
   } catch {
     who = null;
   }
