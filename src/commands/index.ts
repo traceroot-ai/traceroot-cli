@@ -3,6 +3,7 @@ import { registerDoctor } from "./doctor.js";
 import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
 import { registerSkills } from "./skills.js";
+import { registerSql } from "./sql.js";
 import { registerStatus } from "./status.js";
 import { registerTraces } from "./traces.js";
 
@@ -14,6 +15,7 @@ export function registerCommands(program: Command): void {
   registerLogin(program);
   registerStatus(program);
   registerTraces(program);
+  registerSql(program);
   registerSkills(program);
   registerInstrument(program);
   registerDoctor(program);

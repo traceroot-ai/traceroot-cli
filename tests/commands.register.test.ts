@@ -46,4 +46,10 @@ describe("buildProgram", () => {
     expect(subNames).toContain("list");
     expect(subNames).toContain("install");
   });
+
+  it("registers a sql group", () => {
+    const program = buildProgram();
+    const names = childNames(program);
+    expect(names).toContain("sql");
+  });
 });
