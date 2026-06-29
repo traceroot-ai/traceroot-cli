@@ -67,6 +67,38 @@ traceroot traces export <trace-id> --output ./out
 traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --limit 5 --json | jq '.data[].trace_id'
 ```
 
+## SQL — analytical export
+
+`traceroot sql` runs read-only ClickHouse SQL against the TraceRoot analytical
+export. **input, output, and metadata blobs are excluded from the export** (raw
+blob access may be offered as an opt-in in the future).
+
+```sh
+# count spans in the last 24h
+traceroot sql "SELECT count() AS spans_24h FROM spans WHERE span_start_time >= now() - INTERVAL 24 HOUR"
+
+# p95 latency by model
+traceroot sql "SELECT model_name, quantile(0.95)(duration_ms) AS p95_ms FROM spans WHERE model_name IS NOT NULL GROUP BY model_name ORDER BY p95_ms DESC"
+
+# cost by model
+traceroot sql "SELECT model_name, sum(cost) AS total_cost FROM spans GROUP BY model_name ORDER BY total_cost DESC"
+
+# export spans to CSV
+traceroot sql "SELECT * FROM spans WHERE span_start_time >= now() - INTERVAL 7 DAY" --csv --output spans.csv
+
+# find error spans
+traceroot sql "SELECT span_id, name, status_message FROM spans WHERE status = 'ERROR' ORDER BY span_start_time DESC LIMIT 100"
+
+# show the analytical export schema
+traceroot sql schema
+```
+
+Output modes: default table | `--json` (one JSON line) | `--csv` (RFC-4180).
+`--output <file>` writes any mode to a file instead of stdout.
+
+`traceroot sql schema` prints the curated list of available tables, columns, and
+types without running a query.
+
 ## Skills & agents
 
 Make your coding agent TraceRoot-aware without touching your application source. The
