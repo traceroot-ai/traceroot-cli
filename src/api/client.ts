@@ -13,6 +13,32 @@ export type TraceList = Ok200<paths["/api/v1/public/traces"]["get"]>;
 export type TraceDetail = Ok200<paths["/api/v1/public/traces/{trace_id}"]["get"]>;
 export type TraceExport = Ok200<paths["/api/v1/public/traces/{trace_id}/export"]["get"]>;
 
+// Hand-written types for SQL Gateway endpoints (not in openapi.json).
+export interface SqlColumn {
+  name: string;
+  type: string;
+}
+export interface SqlQueryRequest {
+  query: string;
+  parameters?: Record<string, unknown>;
+  max_rows?: number;
+}
+export interface SqlQueryResponse {
+  columns: SqlColumn[];
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+  elapsed_ms: number;
+  statistics: Record<string, unknown>;
+}
+export interface SqlSchemaTable {
+  name: string;
+  columns: SqlColumn[];
+}
+export interface SqlSchemaResponse {
+  tables: SqlSchemaTable[];
+}
+
 export interface ApiClientOptions {
   host: string;
   apiKey: string;
@@ -38,6 +64,8 @@ export interface ApiClient {
   listTraces(params?: ListTracesParams): Promise<TraceList>;
   getTrace(traceId: string): Promise<TraceDetail>;
   exportTrace(traceId: string): Promise<TraceExport>;
+  sqlQuery(body: SqlQueryRequest): Promise<SqlQueryResponse>;
+  sqlSchema(): Promise<SqlSchemaResponse>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -70,17 +98,32 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     accept: "application/json",
   };
 
-  async function request<T>(path: string): Promise<T> {
+  async function request<T>(
+    path: string,
+    reqInit?: { method?: string; body?: unknown },
+  ): Promise<T> {
     const url = `${base}${path}`;
-    const init: RequestInit = { method: "GET", headers };
+    const method = reqInit?.method ?? "GET";
+
+    // Merge in content-type only for requests that carry a body.
+    const requestHeaders =
+      reqInit?.body !== undefined ? { ...headers, "content-type": "application/json" } : headers;
+
+    const fetchInit: RequestInit = { method, headers: requestHeaders };
+
+    if (reqInit?.body !== undefined) {
+      fetchInit.body = JSON.stringify(reqInit.body);
+    }
+
     if (opts.timeoutMs !== undefined) {
       // A fresh signal per request; aborts the fetch on timeout so a stalled
       // socket can't hang the process indefinitely.
-      init.signal = AbortSignal.timeout(opts.timeoutMs);
+      fetchInit.signal = AbortSignal.timeout(opts.timeoutMs);
     }
+
     let res: Response;
     try {
-      res = await fetchImpl(url, init);
+      res = await fetchImpl(url, fetchInit);
     } catch (err) {
       // Deliberately do NOT interpolate the underlying error message: it could
       // echo back request contents and leak the api key. Mention only the host.
@@ -128,6 +171,12 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     },
     exportTrace(traceId) {
       return request<TraceExport>(`/api/v1/public/traces/${encodeURIComponent(traceId)}/export`);
+    },
+    sqlQuery(body) {
+      return request<SqlQueryResponse>("/api/v1/public/sql", { method: "POST", body });
+    },
+    sqlSchema() {
+      return request<SqlSchemaResponse>("/api/v1/public/sql/schema");
     },
   };
 }
