@@ -52,4 +52,12 @@ describe("buildProgram", () => {
     const names = childNames(program);
     expect(names).toContain("sql");
   });
+
+  it("registers schema under sql", () => {
+    const program = buildProgram();
+    const sql = program.commands.find((c) => c.name() === "sql");
+    expect(sql).toBeDefined();
+    const subNames = childNames(sql as Command);
+    expect(subNames).toContain("schema");
+  });
 });
