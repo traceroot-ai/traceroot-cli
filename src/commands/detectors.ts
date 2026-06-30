@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { registerFindings } from "./detectors/findings.js";
+import { registerShow } from "./detectors/show.js";
 
 export function registerDetectors(program: Command): void {
   // `helpCommand(false)` drops the implicit `detectors help [command]` subcommand;
@@ -9,4 +10,5 @@ export function registerDetectors(program: Command): void {
     .description("Work with detector findings")
     .helpCommand(false);
   registerFindings(detectors);
+  registerShow(detectors);
 }
