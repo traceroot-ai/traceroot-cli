@@ -18,6 +18,8 @@ traceroot status                      # confirm who you are
 traceroot traces list --limit 10      # list recent traces
 traceroot traces get <trace-id>       # inspect one
 traceroot traces export <trace-id>    # export its bundle to a directory
+traceroot detectors findings --since 24h   # list recent detector findings
+traceroot detectors show <finding-id>      # inspect one finding + its RCA
 ```
 
 ## Configuration
@@ -53,6 +55,8 @@ traceroot traces list
 | `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
+| `detectors findings` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id\|name\|template>`, `--trace <id>` |
+| `detectors show [id]` | Show one finding: per-detector results and its free-text RCA. Look it up by finding id or with `--trace <id>` (exactly one). |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
@@ -65,6 +69,8 @@ Run `traceroot <command> --help` for the full flag list.
 traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef
 traceroot traces export <trace-id> --output ./out
 traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --limit 5 --json | jq '.data[].trace_id'
+traceroot detectors findings --detector hallucination --since 7d --json | jq '.data[].finding_id'
+traceroot detectors show --trace 99224be337d725fd5e8f2e7b45dc22ef
 ```
 
 ## Skills & agents
