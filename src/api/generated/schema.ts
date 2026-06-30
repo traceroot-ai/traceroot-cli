@@ -4,6 +4,66 @@
  */
 
 export interface paths {
+    "/api/v1/public/detectors/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Findings
+         * @description List recent detector findings for the API key's project (newest first).
+         */
+        get: operations["list_findings_api_v1_public_detectors_findings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/detectors/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Finding
+         * @description Get a single finding by id for the key's project.
+         */
+        get: operations["get_finding_api_v1_public_detectors_findings__finding_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/detectors/traces/{trace_id}/finding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Finding By Trace
+         * @description Get the finding for a single trace (findings are 1-per-trace).
+         */
+        get: operations["get_finding_by_trace_api_v1_public_detectors_traces__trace_id__finding_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/traces": {
         parameters: {
             query?: never;
@@ -149,6 +209,31 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * DetectorResultItem
+         * @description One detector's result within a finding, normalized from the stored payload.
+         *
+         *     The stored finding ``payload`` uses camelCase keys (``detectorId`` /
+         *     ``detectorName``); the public API exposes snake_case. Only triggered detectors
+         *     are persisted, so ``identified`` is always ``True`` for a present item. ``data``
+         *     is the detector's opaque output, passed through verbatim. ``template`` is looked
+         *     up from the Postgres ``detectors`` row and is ``None`` when that row is absent
+         *     (e.g. a deleted detector).
+         */
+        DetectorResultItem: {
+            /** Data */
+            data: unknown | null;
+            /** Detector Id */
+            detector_id: string;
+            /** Detector Name */
+            detector_name: string;
+            /** Identified */
+            identified: boolean;
+            /** Summary */
+            summary: string;
+            /** Template */
+            template: string | null;
+        };
+        /**
          * ExportManifest
          * @description manifest.json: index of the bundle's parts.
          */
@@ -159,6 +244,51 @@ export interface components {
             files: string[];
             /** Project Id */
             project_id: string;
+            /** Trace Id */
+            trace_id: string;
+        };
+        /**
+         * FindingDetail
+         * @description A finding plus its per-detector results and optional free-text RCA.
+         */
+        FindingDetail: {
+            /** Detectors */
+            detectors: string[];
+            /** Finding Id */
+            finding_id: string;
+            /** Project Id */
+            project_id: string;
+            rca: components["schemas"]["RCAResult"] | null;
+            /** Results */
+            results: components["schemas"]["DetectorResultItem"][];
+            /** Summary */
+            summary: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Trace Id */
+            trace_id: string;
+        };
+        /**
+         * FindingSummary
+         * @description A detector finding row for the list view; ``detectors`` are display labels.
+         */
+        FindingSummary: {
+            /** Detectors */
+            detectors: string[];
+            /** Finding Id */
+            finding_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Summary */
+            summary: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
             /** Trace Id */
             trace_id: string;
         };
@@ -214,6 +344,15 @@ export interface components {
             page: number;
             /** Total */
             total: number;
+        };
+        /**
+         * PublicFindingListResponse
+         * @description Paginated list of detector findings for the public API.
+         */
+        PublicFindingListResponse: {
+            /** Data */
+            data: components["schemas"]["FindingSummary"][];
+            meta: components["schemas"]["PaginationMeta"];
         };
         /**
          * PublicTraceDetailResponse
@@ -317,6 +456,16 @@ export interface components {
             /** Data */
             data: components["schemas"]["PublicTraceListItem"][];
             meta: components["schemas"]["PaginationMeta"];
+        };
+        /**
+         * RCAResult
+         * @description Free-text root-cause analysis for a finding (Postgres ``detector_rcas``).
+         */
+        RCAResult: {
+            /** Result */
+            result: string | null;
+            /** Status */
+            status: string;
         };
         /**
          * SpanResponse
@@ -438,15 +587,179 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_findings_api_v1_public_detectors_findings_get: {
+        parameters: {
+            query?: {
+                /** @description Items per page */
+                limit?: number;
+                /** @description Only findings at or after this time (inclusive, ISO 8601) */
+                start_after?: string | null;
+                /** @description Only findings before this time (exclusive, ISO 8601) */
+                end_before?: string | null;
+                /** @description Filter by detector id, name, or template */
+                detector?: string | null;
+                /** @description Filter to a single trace */
+                trace_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicFindingListResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    get_finding_api_v1_public_detectors_findings__finding_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingDetail"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    get_finding_by_trace_api_v1_public_detectors_traces__trace_id__finding_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FindingDetail"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
     list_traces_api_v1_public_traces_get: {
         parameters: {
             query?: {
                 /** @description Items per page */
                 limit?: number;
-                /** @description Only traces that started at or after this time (inclusive, ISO 8601) */
-                start_after?: string | null;
-                /** @description Only traces that started before this time (exclusive, ISO 8601) */
-                end_before?: string | null;
             };
             header?: never;
             path?: never;
