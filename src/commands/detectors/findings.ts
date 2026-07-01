@@ -127,12 +127,12 @@ export function registerFindings(detectors: Command): void {
     )
     .option(
       "--from <timestamp>",
-      "include findings at or after this time (ISO 8601)",
+      'include findings at or after this time. Accepts ISO 8601 (e.g. 2026-06-23T14:31:02Z or 2026-06-23T14:31:02-06:00) or a quoted copied TIME value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
       onceOption("--from"),
     )
     .option(
       "--to <timestamp>",
-      "include findings before this time (exclusive, ISO 8601)",
+      'include findings before this time (exclusive). Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied TIME value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
       onceOption("--to"),
     )
     .option(
@@ -143,8 +143,25 @@ export function registerFindings(detectors: Command): void {
     .option("--trace <traceId>", "filter to a single trace", onceOption("--trace"))
     .action(async (_opts, command: Command) => {
       if (command.args.length > 0) {
+        // A common footgun: pasting a copied `TIME` value after --from/--to without
+        // quoting, so the time-of-day + zone land here as stray operands. Mirror the
+        // `traces list` hint since findings accepts the same quoted-display format.
+        const strayJoined = command.args.join(" ");
+        const fromVal = (_opts as { from?: string }).from;
+        const toVal = (_opts as { to?: string }).to;
+        const bareDate = /^\d{4}-\d{2}-\d{2}$/;
+        for (const [flag, value] of [
+          ["--from", fromVal],
+          ["--to", toVal],
+        ] as const) {
+          if (value !== undefined && bareDate.test(value)) {
+            throw new CliError(
+              `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot detectors findings ${flag} "${value} ${strayJoined}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot detectors findings ${flag} 2026-06-23T20:31:02Z\n  traceroot detectors findings ${flag} 2026-06-23T14:31:02-06:00`,
+            );
+          }
+        }
         throw new CliError(
-          `unexpected argument(s): ${command.args.join(" ")}. 'detectors findings' takes no positional arguments.`,
+          `unexpected argument(s): ${strayJoined}. 'detectors findings' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
         );
       }
       const opts = command.opts();
