@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ApiClient, FindingDetail } from "../../src/api/client.js";
 import { runShow } from "../../src/commands/detectors/show.js";
 import { CliError, type Writers } from "../../src/output.js";
+import { runCli } from "../helpers/runCli.js";
 import { StringSink } from "../helpers/stringSink.js";
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
@@ -160,5 +161,21 @@ describe("runShow", () => {
     await expect(
       runShow({ client: fakeClient({}), json: false, writers: w, traceId: "  " }),
     ).rejects.toBeInstanceOf(CliError);
+  });
+});
+
+// Action-level guards (parsed by commander) — exercised end-to-end via the built
+// CLI, since they live in the command action, not runShow.
+describe("detectors show argument guards (CLI)", () => {
+  it("rejects extra positional arguments", () => {
+    const r = runCli("detectors", "show", "abc", "def");
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("unexpected argument(s)");
+  });
+
+  it("rejects a repeated --trace flag", () => {
+    const r = runCli("detectors", "show", "--trace", "t1", "--trace", "t2");
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("--trace may only be given once");
   });
 });
