@@ -1,6 +1,9 @@
 import { CliError } from "../output.js";
 import type { paths } from "./generated/schema.js";
 
+/** Default per-request timeout when a caller doesn't specify one. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
 /** Name-agnostic extractor for an operation's JSON 200 body. */
 type Ok200<Op> = Op extends {
   responses: { 200: { content: { "application/json": infer B } } };
@@ -82,6 +85,13 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     try {
       res = await fetchImpl(url, init);
     } catch (err) {
+      // A fired `AbortSignal.timeout` throws a DOMException named "TimeoutError";
+      // a plain abort is "AbortError". Report these with a friendly, api-key-free
+      // message naming the host and the elapsed budget instead of the raw text.
+      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        const seconds = (opts.timeoutMs ?? 0) / 1000;
+        throw new CliError(`request to ${base} timed out after ${seconds}s`);
+      }
       // Deliberately do NOT interpolate the underlying error message: it could
       // echo back request contents and leak the api key. Mention only the host.
       const message = err instanceof Error ? err.message : String(err);

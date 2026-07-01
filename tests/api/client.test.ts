@@ -170,4 +170,27 @@ describe("request timeout", () => {
     const err = await client.whoami().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CliError);
   });
+
+  it("names the timeout and host without leaking the api key on a real abort", async () => {
+    // A fetch that never resolves on its own; it only settles when the
+    // per-request AbortSignal fires, rejecting with the signal's reason. This
+    // exercises AbortSignal.timeout end to end without hanging the test.
+    const fetchImpl = ((_url: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener("abort", () => reject(signal.reason));
+      })) as typeof fetch;
+    const client = createApiClient({
+      host: "https://h",
+      apiKey: API_KEY,
+      fetchImpl,
+      timeoutMs: 10,
+    });
+    const err = await client.whoami().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    const e = err as CliError;
+    expect(e.message).toMatch(/timed out/);
+    expect(e.message).toContain("https://h");
+    expect(e.message).not.toContain(API_KEY);
+  });
 });
