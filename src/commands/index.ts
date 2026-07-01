@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { registerDetectors } from "./detectors.js";
 import { registerDoctor } from "./doctor.js";
 import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
@@ -14,6 +15,7 @@ export function registerCommands(program: Command): void {
   registerLogin(program);
   registerStatus(program);
   registerTraces(program);
+  registerDetectors(program);
   registerSkills(program);
   registerInstrument(program);
   registerDoctor(program);

@@ -12,6 +12,8 @@ export type Whoami = Ok200<paths["/api/v1/public/whoami"]["get"]>;
 export type TraceList = Ok200<paths["/api/v1/public/traces"]["get"]>;
 export type TraceDetail = Ok200<paths["/api/v1/public/traces/{trace_id}"]["get"]>;
 export type TraceExport = Ok200<paths["/api/v1/public/traces/{trace_id}/export"]["get"]>;
+export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"]>;
+export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 
 export interface ApiClientOptions {
   host: string;
@@ -33,11 +35,26 @@ export interface ListTracesParams {
   endBefore?: string;
 }
 
+export interface ListFindingsParams {
+  limit?: number;
+  /** ISO 8601 lower bound (inclusive), sent as `start_after`. */
+  startAfter?: string;
+  /** ISO 8601 upper bound (exclusive), sent as `end_before`. */
+  endBefore?: string;
+  /** Detector selector (id, name, or template); resolved server-side. */
+  detector?: string;
+  /** Restrict to a single trace, sent as `trace_id`. */
+  traceId?: string;
+}
+
 export interface ApiClient {
   whoami(): Promise<Whoami>;
   listTraces(params?: ListTracesParams): Promise<TraceList>;
   getTrace(traceId: string): Promise<TraceDetail>;
   exportTrace(traceId: string): Promise<TraceExport>;
+  listFindings(params?: ListFindingsParams): Promise<FindingList>;
+  getFinding(findingId: string): Promise<FindingDetail>;
+  getFindingByTrace(traceId: string): Promise<FindingDetail>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -128,6 +145,36 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     },
     exportTrace(traceId) {
       return request<TraceExport>(`/api/v1/public/traces/${encodeURIComponent(traceId)}/export`);
+    },
+    listFindings(params) {
+      const search = new URLSearchParams();
+      if (params?.limit !== undefined) {
+        search.set("limit", String(params.limit));
+      }
+      if (params?.startAfter !== undefined) {
+        search.set("start_after", params.startAfter);
+      }
+      if (params?.endBefore !== undefined) {
+        search.set("end_before", params.endBefore);
+      }
+      if (params?.detector !== undefined) {
+        search.set("detector", params.detector);
+      }
+      if (params?.traceId !== undefined) {
+        search.set("trace_id", params.traceId);
+      }
+      const query = search.toString();
+      return request<FindingList>(`/api/v1/public/detectors/findings${query ? `?${query}` : ""}`);
+    },
+    getFinding(findingId) {
+      return request<FindingDetail>(
+        `/api/v1/public/detectors/findings/${encodeURIComponent(findingId)}`,
+      );
+    },
+    getFindingByTrace(traceId) {
+      return request<FindingDetail>(
+        `/api/v1/public/detectors/traces/${encodeURIComponent(traceId)}/finding`,
+      );
     },
   };
 }
