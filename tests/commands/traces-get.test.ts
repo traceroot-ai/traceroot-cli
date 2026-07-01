@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ApiClient, TraceDetail } from "../../src/api/client.js";
 import { runGet } from "../../src/commands/traces/get.js";
 import { CliError, type Writers } from "../../src/output.js";
@@ -121,6 +121,43 @@ describe("runGet (human)", () => {
     expect(out.data).toContain("LIVE");
     expect(out.data).toContain("*** (live");
   });
+});
+
+describe("runGet live Duration under a non-UTC timezone", () => {
+  // trace_start_time is zone-less UTC; a bare `new Date(...)` reads it as LOCAL,
+  // which blanks the elapsed Duration west of UTC and inflates it east. These
+  // tests run under real non-UTC zones to prove the elapsed math is UTC-based.
+  const originalTz = process.env.TZ;
+  afterEach(() => {
+    process.env.TZ = originalTz;
+  });
+
+  /** Extracts the "Duration: <N>s (so far)" value (seconds) from the output. */
+  function liveDurationSeconds(out: StringSink): number {
+    const line = out.data.split("\n").find((l) => l.includes("Duration:")) as string;
+    expect(line).toBeDefined();
+    const match = /Duration:\s+([\d.]+)s/.exec(line);
+    expect(match).not.toBeNull();
+    return Number.parseFloat((match as RegExpExecArray)[1] as string);
+  }
+
+  for (const tz of ["America/Los_Angeles", "Asia/Tokyo"]) {
+    it(`shows elapsed ~10m for a live trace (TZ=${tz})`, async () => {
+      process.env.TZ = tz;
+      // A zone-less UTC start ~10 minutes ago (drop the trailing Z the backend omits).
+      const startedZoneless = new Date(Date.now() - 10 * 60_000).toISOString().slice(0, -1);
+      const trace = detail({
+        trace_start_time: startedZoneless,
+        spans: [span({ span_id: "root", span_end_time: null })],
+      });
+      const { writers: w, out } = writers();
+      await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+      expect(out.data).toContain("Duration:");
+      // 10 minutes = 600s; allow a small tolerance for elapsed test time.
+      expect(liveDurationSeconds(out)).toBeGreaterThanOrEqual(600);
+      expect(liveDurationSeconds(out)).toBeLessThan(605);
+    });
+  }
 });
 
 describe("runGet (--json)", () => {

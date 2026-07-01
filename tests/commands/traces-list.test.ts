@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ApiClient, TraceList } from "../../src/api/client.js";
 import { buildProgram } from "../../src/cli.js";
 import {
@@ -171,6 +171,48 @@ describe("runList (human)", () => {
     await runList({ client: fakeClient(res), json: false, writers: w });
     expect(out.data).not.toContain("STARTED ISO");
   });
+});
+
+describe("runList live DURATION under a non-UTC timezone", () => {
+  // Backend timestamps are zone-less UTC. A bare `new Date(...)` reads them as
+  // LOCAL, which blanks the elapsed DURATION west of UTC and inflates it east.
+  // These tests run under real non-UTC zones to prove the elapsed math is
+  // computed in UTC regardless of the host timezone.
+  const originalTz = process.env.TZ;
+  afterEach(() => {
+    process.env.TZ = originalTz;
+  });
+
+  /** Extracts the DURATION cell (seconds) for the sole live row. */
+  function liveDurationSeconds(out: StringSink): number {
+    const lines = out.data.split("\n");
+    const headerLine = lines.find((l) => l.includes("STARTED")) as string;
+    const dataLine = lines.find((l) => l.includes("live-1")) as string;
+    const cell = cellAt(dataLine, headerLine, "DURATION", "NAME");
+    expect(cell).not.toBe("");
+    const match = /^([\d.]+)s$/.exec(cell);
+    expect(match).not.toBeNull();
+    return Number.parseFloat((match as RegExpExecArray)[1] as string);
+  }
+
+  for (const tz of ["America/Los_Angeles", "Asia/Tokyo"]) {
+    it(`renders elapsed ~10m for a live trace (TZ=${tz})`, async () => {
+      process.env.TZ = tz;
+      // A zone-less UTC start ~10 minutes ago (drop the trailing Z the backend omits).
+      const startedZoneless = new Date(Date.now() - 10 * 60_000).toISOString().slice(0, -1);
+      const res: TraceList = {
+        data: [
+          listItem({ trace_id: "live-1", duration_ms: null, trace_start_time: startedZoneless }),
+        ],
+        meta: META,
+      };
+      const { writers: w, out } = writers();
+      await runList({ client: fakeClient(res), json: false, writers: w });
+      // 10 minutes = 600s; allow a small tolerance for elapsed test time.
+      expect(liveDurationSeconds(out)).toBeGreaterThanOrEqual(600);
+      expect(liveDurationSeconds(out)).toBeLessThan(605);
+    });
+  }
 });
 
 describe("runList (--json)", () => {
