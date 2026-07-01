@@ -147,4 +147,18 @@ describe("runShow", () => {
       runShow({ client: fakeClient({}), json: false, writers: w, findingId: "f", traceId: "t" }),
     ).rejects.toBeInstanceOf(CliError);
   });
+
+  it("treats a blank finding id as missing (clear error, no malformed request)", async () => {
+    const { writers: w } = writers();
+    await expect(
+      runShow({ client: fakeClient({}), json: false, writers: w, findingId: "" }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
+  it("treats a blank --trace value as missing", async () => {
+    const { writers: w } = writers();
+    await expect(
+      runShow({ client: fakeClient({}), json: false, writers: w, traceId: "  " }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
 });
