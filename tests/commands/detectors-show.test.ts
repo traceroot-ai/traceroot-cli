@@ -71,7 +71,7 @@ function fakeClient(
 }
 
 describe("runShow", () => {
-  it("renders Finding / Detector Results / RCA blocks for a finding id", async () => {
+  it("renders Finding / Detectors / RCA blocks for a finding id", async () => {
     const state: FakeState = {};
     const { writers: w, out } = writers();
     await runShow({
@@ -82,17 +82,19 @@ describe("runShow", () => {
       timeZone: "UTC",
     });
     expect(state.lastGet).toBe("fnd-1");
-    expect(out.data).toContain("Finding");
+    expect(out.data).toContain("Finding:");
     expect(out.data).toContain("fnd-1");
+    expect(out.data).toContain("Trace:");
     expect(out.data).toContain("tr-1");
-    expect(out.data).toContain("Detector Results");
+    expect(out.data).toContain("Detectors:");
     expect(out.data).toContain("hallucination");
-    expect(out.data).toContain("Identified: true");
     expect(out.data).toContain("unsupported claims");
     expect(out.data).toContain('"k": "v"');
-    expect(out.data).toContain("RCA");
+    expect(out.data).toContain("RCA:");
     expect(out.data).toContain("Status: done");
     expect(out.data).toContain("the root cause");
+    // the invariant "Identified" field was dropped in the cleanup
+    expect(out.data).not.toContain("Identified");
   });
 
   it("dispatches to getFindingByTrace for --trace", async () => {
