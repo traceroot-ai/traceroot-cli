@@ -19,10 +19,13 @@ const ALL_FINDINGS = "all findings";
 /** Max width for the single-line SUMMARY column before truncation. */
 const SUMMARY_MAX = 80;
 
-/** Collapse whitespace/newlines to a single line and truncate for the table. */
+/** Collapse whitespace/newlines to a single line and truncate for the table.
+ * Truncates by Unicode code point (via `Array.from`) so a multi-byte character
+ * (e.g. an emoji) straddling the limit is never split into a lone surrogate. */
 function summarize(text: string): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > SUMMARY_MAX ? `${oneLine.slice(0, SUMMARY_MAX - 1)}…` : oneLine;
+  const chars = Array.from(oneLine);
+  return chars.length > SUMMARY_MAX ? `${chars.slice(0, SUMMARY_MAX - 1).join("")}…` : oneLine;
 }
 
 /** Dependencies for the testable core of `detectors findings`. */
