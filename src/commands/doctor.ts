@@ -5,8 +5,8 @@ import type { Context } from "../context.js";
 import { buildDoctorReport } from "../doctor/checks.js";
 import type { DoctorCheck, DoctorReport } from "../doctor/types.js";
 import { type Writers, defaultWriters, writeJson } from "../output.js";
-import { createStyler } from "../render/style.js";
 import { statusSymbol } from "../render/status.js";
+import { createStyler } from "../render/style.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { contextFromCommand } from "./shared.js";
 
@@ -98,7 +98,7 @@ export function registerDoctor(program: Command): void {
         writers: defaultWriters,
         verifyCredentials: async (host, apiKey) => {
           try {
-            await createApiClient({ host, apiKey }).whoami();
+            await createApiClient({ host, apiKey, timeoutMs: ctx.timeoutMs }).whoami();
             return true;
           } catch {
             return false;
