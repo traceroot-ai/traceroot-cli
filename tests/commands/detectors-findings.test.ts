@@ -117,4 +117,19 @@ describe("runFindings", () => {
     expect(out.data).not.toContain("fnd-1");
     expect(err.data).toContain("0 finding(s)");
   });
+
+  it("truncates a long summary without splitting a multi-byte character", async () => {
+    const { writers: w, out } = writers();
+    // Emoji straddles the truncation boundary; slicing by UTF-16 unit would split it.
+    const summary = `${"x".repeat(78)}😀${"y".repeat(20)}`;
+    await runFindings({
+      client: fakeClient(listResult({ data: [findingItem({ summary })] })),
+      json: false,
+      writers: w,
+      timeZone: "UTC",
+    });
+    expect(out.data).toContain("…");
+    // No unpaired high surrogate — i.e. no emoji was cut in half.
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out.data)).toBe(false);
+  });
 });

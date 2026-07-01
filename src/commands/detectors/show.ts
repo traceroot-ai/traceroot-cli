@@ -4,6 +4,7 @@ import { type Writers, CliError, defaultWriters, writeJson } from "../../output.
 import { createStyler } from "../../render/style.js";
 import { formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
+import { onceOption } from "../traces/list.js";
 
 /** Dependencies for the testable core of `detectors show`. */
 export interface RunShowDeps {
@@ -22,17 +23,21 @@ export interface RunShowDeps {
 export async function runShow(deps: RunShowDeps): Promise<void> {
   const { client, json, writers, findingId, traceId, timeZone } = deps;
 
-  if (findingId !== undefined && traceId !== undefined) {
+  // Treat a blank value as "not provided" so `show ""` / `--trace ""` give a clear
+  // error instead of hitting a malformed URL (e.g. `/traces//finding`).
+  const hasFinding = findingId !== undefined && findingId.trim() !== "";
+  const hasTrace = traceId !== undefined && traceId.trim() !== "";
+
+  if (hasFinding && hasTrace) {
     throw new CliError("provide either a finding id or --trace, not both");
   }
-  if (findingId === undefined && traceId === undefined) {
+  if (!hasFinding && !hasTrace) {
     throw new CliError("provide a finding id, or --trace <trace-id>");
   }
 
-  const finding =
-    findingId !== undefined
-      ? await client.getFinding(findingId)
-      : await client.getFindingByTrace(traceId as string);
+  const finding = hasFinding
+    ? await client.getFinding(findingId as string)
+    : await client.getFindingByTrace(traceId as string);
 
   if (json) {
     // Bare object, byte-for-byte the backend response (mirrors `traces get`).
@@ -85,9 +90,18 @@ export function registerShow(detectors: Command): void {
   detectors
     .command("show")
     .argument("[findingId]", "finding identifier")
-    .option("--trace <traceId>", "look up the finding for a trace instead of by finding id")
+    .option(
+      "--trace <traceId>",
+      "look up the finding for a trace instead of by finding id",
+      onceOption("--trace"),
+    )
     .description("Show a single detector finding")
     .action(async (findingId: string | undefined, _opts, command: Command) => {
+      if (command.args.length > 1) {
+        throw new CliError(
+          `unexpected argument(s): ${command.args.slice(1).join(" ")}. 'detectors show' takes a single finding id (or use --trace).`,
+        );
+      }
       const opts = command.opts();
       const ctx = contextFromCommand(command);
       const client = requireApiClient(ctx);
