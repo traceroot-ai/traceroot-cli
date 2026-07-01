@@ -61,6 +61,16 @@ describe("runFindings", () => {
     expect(out.data).toContain("failure,logic");
     expect(err.data).toContain("1 finding(s)");
     expect(err.data).toContain("limit 50");
+    // no-filter footer uses the findings-specific label, not traces' "all traces"
+    expect(err.data).toContain("all findings");
+    expect(err.data).not.toContain("all traces");
+  });
+
+  it("labels the range 'all findings' with no filters under --json", async () => {
+    const { writers: w, out } = writers();
+    await runFindings({ client: fakeClient(listResult()), json: true, writers: w });
+    const parsed = JSON.parse(out.data) as { range: { label: string } };
+    expect(parsed.range.label).toBe("all findings");
   });
 
   it("emits a JSON envelope with count and range under --json", async () => {
