@@ -53,32 +53,39 @@ function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: stri
   const label = (text: string): string => styler.bold(text);
   const lines: string[] = [];
 
-  lines.push(label("Finding"));
-  lines.push(`  ID: ${finding.finding_id}`);
-  lines.push(`  Trace: ${finding.trace_id}`);
-  lines.push(`  Time: ${formatTimestamp(finding.timestamp, timeZone)}`);
-  lines.push(`  Summary: ${finding.summary}`);
+  // Flat, aligned header fields, mirroring `traces get`.
+  lines.push(`${label("Finding:")} ${finding.finding_id}`);
+  lines.push(`${label("Trace:")}   ${finding.trace_id}`);
+  lines.push(`${label("Time:")}    ${formatTimestamp(finding.timestamp, timeZone)}`);
+  lines.push(`${label("Summary:")} ${finding.summary}`);
 
-  lines.push(label("Detector Results"));
+  lines.push("");
+  lines.push(label("Detectors:"));
   for (const result of finding.results) {
-    lines.push(`  ${label(result.detector_name)}`);
-    lines.push(`    Identified: ${result.identified}`);
-    lines.push(`    Summary: ${result.summary}`);
-    lines.push("    Data:");
-    for (const dataLine of JSON.stringify(result.data ?? null, null, 2).split("\n")) {
-      lines.push(`      ${dataLine}`);
+    const heading =
+      result.template && result.template !== result.detector_name
+        ? `${result.detector_name} (${result.template})`
+        : result.detector_name;
+    lines.push(`  ${heading}`);
+    if (result.summary) {
+      lines.push(`    ${result.summary}`);
+    }
+    if (result.data !== null && result.data !== undefined) {
+      for (const dataLine of JSON.stringify(result.data, null, 2).split("\n")) {
+        lines.push(`    ${dataLine}`);
+      }
     }
   }
 
-  lines.push(label("RCA"));
+  lines.push("");
+  lines.push(label("RCA:"));
   if (finding.rca === null || finding.rca === undefined) {
-    lines.push("  Status: none");
+    lines.push(`  ${label("Status:")} none`);
   } else {
-    lines.push(`  Status: ${finding.rca.status}`);
+    lines.push(`  ${label("Status:")} ${finding.rca.status}`);
     if (finding.rca.result !== null && finding.rca.result !== undefined) {
-      lines.push("  Result:");
       for (const resultLine of finding.rca.result.split("\n")) {
-        lines.push(`    ${resultLine}`);
+        lines.push(`  ${resultLine}`);
       }
     }
   }

@@ -16,18 +16,6 @@ import {
 /** The no-filter range label for findings (vs. traces' "all traces"). */
 const ALL_FINDINGS = "all findings";
 
-/** Max width for the single-line SUMMARY column before truncation. */
-const SUMMARY_MAX = 80;
-
-/** Collapse whitespace/newlines to a single line and truncate for the table.
- * Truncates by Unicode code point (via `Array.from`) so a multi-byte character
- * (e.g. an emoji) straddling the limit is never split into a lone surrogate. */
-function summarize(text: string): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  const chars = Array.from(oneLine);
-  return chars.length > SUMMARY_MAX ? `${chars.slice(0, SUMMARY_MAX - 1).join("")}…` : oneLine;
-}
-
 /** Dependencies for the testable core of `detectors findings`. */
 export interface RunFindingsDeps {
   client: ApiClient;
@@ -86,13 +74,12 @@ export async function runFindings(deps: RunFindingsDeps): Promise<void> {
     return;
   }
 
-  const headers = ["TIME", "FINDING ID", "TRACE ID", "DETECTORS", "SUMMARY"];
+  const headers = ["TIME", "FINDING ID", "TRACE ID", "DETECTOR TYPE"];
   const rows = res.data.map((item) => [
     formatTimestamp(item.timestamp, deps.timeZone),
     item.finding_id,
     item.trace_id,
     item.detectors.join(","),
-    summarize(item.summary),
   ]);
 
   const styler = createStyler(writers.out);
