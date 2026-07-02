@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApiClient, FindingList, ListFindingsParams } from "../../src/api/client.js";
-import { runFindings } from "../../src/commands/detectors/findings.js";
+import { runFindings } from "../../src/commands/findings/list.js";
 import type { Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
 
@@ -20,6 +20,7 @@ function fakeClient(res: FindingList, state: FakeState = {}): ApiClient {
     listTraces: () => Promise.reject(new Error("unused")),
     getTrace: () => Promise.reject(new Error("unused")),
     exportTrace: () => Promise.reject(new Error("unused")),
+    listDetectors: () => Promise.reject(new Error("unused")),
     listFindings: (params?: ListFindingsParams) => {
       state.lastParams = params;
       return Promise.resolve(res);

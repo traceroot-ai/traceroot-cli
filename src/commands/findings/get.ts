@@ -6,7 +6,7 @@ import { formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 import { onceOption } from "../traces/list.js";
 
-/** Dependencies for the testable core of `detectors show`. */
+/** Dependencies for the testable core of `findings get`. */
 export interface RunShowDeps {
   client: ApiClient;
   json: boolean;
@@ -19,7 +19,7 @@ export interface RunShowDeps {
   timeZone?: string;
 }
 
-/** Core, network-free logic for `detectors show`. Tests inject a fake client. */
+/** Core, network-free logic for `findings get`. Tests inject a fake client. */
 export async function runShow(deps: RunShowDeps): Promise<void> {
   const { client, json, writers, findingId, traceId, timeZone } = deps;
 
@@ -93,9 +93,9 @@ function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: stri
   return lines.join("\n");
 }
 
-export function registerShow(detectors: Command): void {
-  detectors
-    .command("show")
+export function registerFindingsGet(findings: Command): void {
+  findings
+    .command("get")
     .argument("[findingId]", "finding identifier")
     .option(
       "--trace <traceId>",
@@ -106,7 +106,7 @@ export function registerShow(detectors: Command): void {
     .action(async (findingId: string | undefined, _opts, command: Command) => {
       if (command.args.length > 1) {
         throw new CliError(
-          `unexpected argument(s): ${command.args.slice(1).join(" ")}. 'detectors show' takes a single finding id (or use --trace).`,
+          `unexpected argument(s): ${command.args.slice(1).join(" ")}. 'findings get' takes a single finding id (or use --trace).`,
         );
       }
       const opts = command.opts();

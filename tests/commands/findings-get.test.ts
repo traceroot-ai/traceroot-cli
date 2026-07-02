@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApiClient, FindingDetail } from "../../src/api/client.js";
-import { runShow } from "../../src/commands/detectors/show.js";
+import { runShow } from "../../src/commands/findings/get.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { runCli } from "../helpers/runCli.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -54,6 +54,7 @@ function fakeClient(
     listTraces: reject,
     getTrace: reject,
     exportTrace: reject,
+    listDetectors: reject,
     listFindings: reject,
     getFinding: (id: string) => {
       state.lastGet = id;
@@ -168,15 +169,15 @@ describe("runShow", () => {
 
 // Action-level guards (parsed by commander) — exercised end-to-end via the built
 // CLI, since they live in the command action, not runShow.
-describe("detectors show argument guards (CLI)", () => {
+describe("findings get argument guards (CLI)", () => {
   it("rejects extra positional arguments", () => {
-    const r = runCli("detectors", "show", "abc", "def");
+    const r = runCli("findings", "get", "abc", "def");
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("unexpected argument(s)");
   });
 
   it("rejects a repeated --trace flag", () => {
-    const r = runCli("detectors", "show", "--trace", "t1", "--trace", "t2");
+    const r = runCli("findings", "get", "--trace", "t1", "--trace", "t2");
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("--trace may only be given once");
   });
