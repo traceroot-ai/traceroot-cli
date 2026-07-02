@@ -60,7 +60,7 @@ export function formatBytes(bytes: number): string {
 }
 
 /** Treats a zone-less backend timestamp as UTC and returns a Date (or null). */
-function parseBackendTime(raw: string): Date | null {
+export function parseBackendTime(raw: string): Date | null {
   // Backend timestamps are naive UTC, e.g. "2026-06-04T23:43:13.590000" (no
   // suffix). JS would parse a zone-less datetime as LOCAL, so append `Z`.
   const hasZone = /([zZ])$|([+-]\d{2}:?\d{2})$/.test(raw);
