@@ -102,6 +102,15 @@ describe("runLogin non-interactive", () => {
     expect(h.writeConfigCalls).toHaveLength(1);
   });
 
+  it("bounds credential validation with the request timeout", async () => {
+    const h = makeHarness();
+    await runLogin(
+      baseDeps(h, { resolvedApiKey: FULL_TOKEN, resolvedHost: "https://h", timeoutMs: 1234 }),
+    );
+
+    expect(h.createClientCalls[0]?.timeoutMs).toBe(1234);
+  });
+
   it("throws a CliError when no api key resolves and not interactive", async () => {
     const h = makeHarness();
     await expect(runLogin(baseDeps(h, { resolvedHost: "https://h" }))).rejects.toBeInstanceOf(
