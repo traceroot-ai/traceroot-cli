@@ -154,6 +154,28 @@ describe("detector findings", () => {
   });
 });
 
+describe("detectors", () => {
+  it("sends list filters as query params", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ data: [], meta: {} }));
+    await client.listDetectors({
+      limit: 10,
+      startAfter: "2024-01-01T00:00:00.000Z",
+      endBefore: "2024-02-01T00:00:00.000Z",
+    });
+    const url = new URL(calls[0]?.url as string);
+    expect(url.pathname).toBe("/api/v1/public/detectors");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("start_after")).toBe("2024-01-01T00:00:00.000Z");
+    expect(url.searchParams.get("end_before")).toBe("2024-02-01T00:00:00.000Z");
+  });
+
+  it("omits unset list params", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ data: [], meta: {} }));
+    await client.listDetectors();
+    expect(calls[0]?.url).toBe("https://h/api/v1/public/detectors");
+  });
+});
+
 describe("never leaks the api key", () => {
   it("keeps the key out of a network-failure CliError", async () => {
     const { client } = clientWith(() => {
