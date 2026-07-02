@@ -7,7 +7,7 @@ import { contextFromCommand, requireApiClient } from "../shared.js";
 import { onceOption } from "../traces/list.js";
 
 /** Dependencies for the testable core of `findings get`. */
-export interface RunShowDeps {
+export interface RunGetDeps {
   client: ApiClient;
   json: boolean;
   writers: Writers;
@@ -20,10 +20,10 @@ export interface RunShowDeps {
 }
 
 /** Core, network-free logic for `findings get`. Tests inject a fake client. */
-export async function runShow(deps: RunShowDeps): Promise<void> {
+export async function runGet(deps: RunGetDeps): Promise<void> {
   const { client, json, writers, findingId, traceId, timeZone } = deps;
 
-  // Treat a blank value as "not provided" so `show ""` / `--trace ""` give a clear
+  // Treat a blank value as "not provided" so `get ""` / `--trace ""` give a clear
   // error instead of hitting a malformed URL (e.g. `/traces//finding`).
   const hasFinding = findingId !== undefined && findingId.trim() !== "";
   const hasTrace = traceId !== undefined && traceId.trim() !== "";
@@ -102,7 +102,7 @@ export function registerFindingsGet(findings: Command): void {
       "look up the finding for a trace instead of by finding id",
       onceOption("--trace"),
     )
-    .description("Show a single detector finding")
+    .description("Get a single detector finding")
     .action(async (findingId: string | undefined, _opts, command: Command) => {
       if (command.args.length > 1) {
         throw new CliError(
@@ -112,7 +112,7 @@ export function registerFindingsGet(findings: Command): void {
       const opts = command.opts();
       const ctx = contextFromCommand(command);
       const client = requireApiClient(ctx);
-      await runShow({
+      await runGet({
         client,
         json: ctx.json,
         writers: defaultWriters,

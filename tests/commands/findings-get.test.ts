@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApiClient, FindingDetail } from "../../src/api/client.js";
-import { runShow } from "../../src/commands/findings/get.js";
+import { runGet } from "../../src/commands/findings/get.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { runCli } from "../helpers/runCli.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -71,11 +71,11 @@ function fakeClient(
   };
 }
 
-describe("runShow", () => {
+describe("runGet", () => {
   it("renders Finding / Detectors / RCA blocks for a finding id", async () => {
     const state: FakeState = {};
     const { writers: w, out } = writers();
-    await runShow({
+    await runGet({
       client: fakeClient({ finding: detail() }, state),
       json: false,
       writers: w,
@@ -101,7 +101,7 @@ describe("runShow", () => {
   it("dispatches to getFindingByTrace for --trace", async () => {
     const state: FakeState = {};
     const { writers: w, out } = writers();
-    await runShow({
+    await runGet({
       client: fakeClient({ byTrace: detail({ trace_id: "tr-9" }) }, state),
       json: false,
       writers: w,
@@ -114,7 +114,7 @@ describe("runShow", () => {
 
   it("shows 'Status: none' and no Result line when rca is null", async () => {
     const { writers: w, out } = writers();
-    await runShow({
+    await runGet({
       client: fakeClient({ finding: detail({ rca: null }) }),
       json: false,
       writers: w,
@@ -126,7 +126,7 @@ describe("runShow", () => {
 
   it("emits a bare FindingDetail object under --json", async () => {
     const { writers: w, out } = writers();
-    await runShow({
+    await runGet({
       client: fakeClient({ finding: detail() }),
       json: true,
       writers: w,
@@ -141,34 +141,34 @@ describe("runShow", () => {
   it("errors when neither a finding id nor --trace is given", async () => {
     const { writers: w } = writers();
     await expect(
-      runShow({ client: fakeClient({}), json: false, writers: w }),
+      runGet({ client: fakeClient({}), json: false, writers: w }),
     ).rejects.toBeInstanceOf(CliError);
   });
 
   it("errors when both a finding id and --trace are given", async () => {
     const { writers: w } = writers();
     await expect(
-      runShow({ client: fakeClient({}), json: false, writers: w, findingId: "f", traceId: "t" }),
+      runGet({ client: fakeClient({}), json: false, writers: w, findingId: "f", traceId: "t" }),
     ).rejects.toBeInstanceOf(CliError);
   });
 
   it("treats a blank finding id as missing (clear error, no malformed request)", async () => {
     const { writers: w } = writers();
     await expect(
-      runShow({ client: fakeClient({}), json: false, writers: w, findingId: "" }),
+      runGet({ client: fakeClient({}), json: false, writers: w, findingId: "" }),
     ).rejects.toBeInstanceOf(CliError);
   });
 
   it("treats a blank --trace value as missing", async () => {
     const { writers: w } = writers();
     await expect(
-      runShow({ client: fakeClient({}), json: false, writers: w, traceId: "  " }),
+      runGet({ client: fakeClient({}), json: false, writers: w, traceId: "  " }),
     ).rejects.toBeInstanceOf(CliError);
   });
 });
 
 // Action-level guards (parsed by commander) — exercised end-to-end via the built
-// CLI, since they live in the command action, not runShow.
+// CLI, since they live in the command action, not runGet.
 describe("findings get argument guards (CLI)", () => {
   it("rejects extra positional arguments", () => {
     const r = runCli("findings", "get", "abc", "def");
