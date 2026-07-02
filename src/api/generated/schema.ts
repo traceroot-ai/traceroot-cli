@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/v1/public/detectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Detectors
+         * @description List the detectors in the API key's project (newest first).
+         */
+        get: operations["list_detectors_api_v1_public_detectors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/detectors/findings": {
         parameters: {
             query?: never;
@@ -209,6 +229,28 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * DetectorItem
+         * @description A detector from the project's catalog (Postgres ``detectors``).
+         *
+         *     ``detector_id`` is the value to pass to ``findings list --detector`` to filter
+         *     findings to this detector.
+         */
+        DetectorItem: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detector Id */
+            detector_id: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            /** Template */
+            template: string;
+        };
+        /**
          * DetectorResultItem
          * @description One detector's result within a finding, normalized from the stored payload.
          *
@@ -344,6 +386,15 @@ export interface components {
             page: number;
             /** Total */
             total: number;
+        };
+        /**
+         * PublicDetectorListResponse
+         * @description Paginated list of the project's detectors for the public API.
+         */
+        PublicDetectorListResponse: {
+            /** Data */
+            data: components["schemas"]["DetectorItem"][];
+            meta: components["schemas"]["PaginationMeta"];
         };
         /**
          * PublicFindingListResponse
@@ -587,6 +638,71 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_detectors_api_v1_public_detectors_get: {
+        parameters: {
+            query?: {
+                /** @description Items per page */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDetectorListResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Failed to list detectors */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
     list_findings_api_v1_public_detectors_findings_get: {
         parameters: {
             query?: {
