@@ -16,7 +16,7 @@ import {
 /** The no-filter range label for findings (vs. traces' "all traces"). */
 const ALL_FINDINGS = "all findings";
 
-/** Dependencies for the testable core of `detectors findings`. */
+/** Dependencies for the testable core of `findings list`. */
 export interface RunFindingsDeps {
   client: ApiClient;
   json: boolean;
@@ -36,7 +36,7 @@ export interface RunFindingsDeps {
   timeZone?: string;
 }
 
-/** Core, network-free logic for `detectors findings`. Tests inject a fake client. */
+/** Core, network-free logic for `findings list`. Tests inject a fake client. */
 export async function runFindings(deps: RunFindingsDeps): Promise<void> {
   const { client, json, writers, limit, startAfter, endBefore, detector, traceId, sinceLabel } =
     deps;
@@ -102,9 +102,9 @@ export async function runFindings(deps: RunFindingsDeps): Promise<void> {
   logProgress(`${countText} | limit ${effectiveLimit} | ${rangeText}`, writers);
 }
 
-export function registerFindings(detectors: Command): void {
-  detectors
-    .command("findings")
+export function registerFindingsList(findings: Command): void {
+  findings
+    .command("list")
     .description("List detector findings")
     .option("--limit <n>", "maximum number of findings to return", onceOption("--limit"))
     .option(
@@ -123,8 +123,8 @@ export function registerFindings(detectors: Command): void {
       onceOption("--to"),
     )
     .option(
-      "--detector <selector>",
-      "filter by detector id, name, or template (resolved server-side)",
+      "--detector <id>",
+      "filter to a detector id (from 'detectors list'); also accepts a name or template",
       onceOption("--detector"),
     )
     .option("--trace <traceId>", "filter to a single trace", onceOption("--trace"))
@@ -143,12 +143,12 @@ export function registerFindings(detectors: Command): void {
         ] as const) {
           if (value !== undefined && bareDate.test(value)) {
             throw new CliError(
-              `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot detectors findings ${flag} "${value} ${strayJoined}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot detectors findings ${flag} 2026-06-23T20:31:02Z\n  traceroot detectors findings ${flag} 2026-06-23T14:31:02-06:00`,
+              `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot findings list ${flag} "${value} ${strayJoined}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot findings list ${flag} 2026-06-23T20:31:02Z\n  traceroot findings list ${flag} 2026-06-23T14:31:02-06:00`,
             );
           }
         }
         throw new CliError(
-          `unexpected argument(s): ${strayJoined}. 'detectors findings' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
+          `unexpected argument(s): ${strayJoined}. 'findings list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
         );
       }
       const opts = command.opts();

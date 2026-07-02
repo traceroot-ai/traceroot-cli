@@ -14,6 +14,7 @@ export type TraceDetail = Ok200<paths["/api/v1/public/traces/{trace_id}"]["get"]
 export type TraceExport = Ok200<paths["/api/v1/public/traces/{trace_id}/export"]["get"]>;
 export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"]>;
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
+export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
 
 export interface ApiClientOptions {
   host: string;
@@ -35,6 +36,14 @@ export interface ListTracesParams {
   endBefore?: string;
 }
 
+export interface ListDetectorsParams {
+  limit?: number;
+  /** ISO 8601 lower bound (inclusive) on creation time, sent as `start_after`. */
+  startAfter?: string;
+  /** ISO 8601 upper bound (exclusive) on creation time, sent as `end_before`. */
+  endBefore?: string;
+}
+
 export interface ListFindingsParams {
   limit?: number;
   /** ISO 8601 lower bound (inclusive), sent as `start_after`. */
@@ -52,6 +61,7 @@ export interface ApiClient {
   listTraces(params?: ListTracesParams): Promise<TraceList>;
   getTrace(traceId: string): Promise<TraceDetail>;
   exportTrace(traceId: string): Promise<TraceExport>;
+  listDetectors(params?: ListDetectorsParams): Promise<DetectorList>;
   listFindings(params?: ListFindingsParams): Promise<FindingList>;
   getFinding(findingId: string): Promise<FindingDetail>;
   getFindingByTrace(traceId: string): Promise<FindingDetail>;
@@ -145,6 +155,20 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     },
     exportTrace(traceId) {
       return request<TraceExport>(`/api/v1/public/traces/${encodeURIComponent(traceId)}/export`);
+    },
+    listDetectors(params) {
+      const search = new URLSearchParams();
+      if (params?.limit !== undefined) {
+        search.set("limit", String(params.limit));
+      }
+      if (params?.startAfter !== undefined) {
+        search.set("start_after", params.startAfter);
+      }
+      if (params?.endBefore !== undefined) {
+        search.set("end_before", params.endBefore);
+      }
+      const query = search.toString();
+      return request<DetectorList>(`/api/v1/public/detectors${query ? `?${query}` : ""}`);
     },
     listFindings(params) {
       const search = new URLSearchParams();
