@@ -5,9 +5,9 @@ OpenAPI schema. `openapi.json` is the ONLY cross-repo artifact; nothing in the
 build graph imports the backend.
 
 - Backend source: `backend/rest/openapi/public.json`
-- Backend commit: `85116bec`
-- sha256(openapi.json): `f76ad6a1f96372d47de6b9ddc0a86349a3e55fdcae87de73151c959e05a9793a`
-- Vendored on: 2026-06-30
+- Backend commit: `55edca4a`
+- sha256(openapi.json): `9c3205019281c131a2d0d38372883cc16abaf618d9286a76681cece62d058792`
+- Vendored on: 2026-07-02
 
 ## Refresh
 
