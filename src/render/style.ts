@@ -7,6 +7,11 @@ const ANSI_YELLOW = "\x1b[33m";
 // OSC 8 hyperlink: OSC 8 ; ; <url> ST <text> OSC 8 ; ; ST (ST = ESC \).
 const OSC8_OPEN = "\x1b]8;;";
 const OSC8_ST = "\x1b\\";
+// C0 controls, DEL, and C1 controls — includes ESC (\x1b), BEL (\x07), and the
+// C1 string terminator (\x9c), any of which could close the OSC 8 sequence early
+// or inject further terminal escapes. Stripped from untrusted text before use.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent — this regex exists to strip them.
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
 /** Applies emphasis to text, no-op when color is disabled. */
 export interface Styler {
@@ -43,8 +48,13 @@ export function createStyler(sink: Sink, env: NodeJS.ProcessEnv = process.env): 
     dim: wrap(ANSI_DIM),
     warn: wrap(ANSI_YELLOW),
     link: (url: string, text?: string): string => {
-      const label = text ?? url;
-      return on ? `${OSC8_OPEN}${url}${OSC8_ST}${label}${OSC8_OPEN}${OSC8_ST}` : label;
+      // Strip control characters so untrusted URL/label text cannot terminate
+      // the OSC 8 sequence early or inject additional terminal escapes — both on
+      // the escaped path and the bare fallback (which may still reach a TTY under
+      // NO_COLOR).
+      const safeUrl = url.replace(CONTROL_CHARS, "");
+      const safeLabel = (text ?? url).replace(CONTROL_CHARS, "");
+      return on ? `${OSC8_OPEN}${safeUrl}${OSC8_ST}${safeLabel}${OSC8_OPEN}${OSC8_ST}` : safeLabel;
     },
   };
 }

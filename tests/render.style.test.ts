@@ -43,4 +43,17 @@ describe("createStyler", () => {
     const url = "https://app.example.com/trace/t-1";
     expect(styler.link(url)).toBe(url);
   });
+
+  it("strips control characters so a URL cannot break out of or inject escapes", () => {
+    const styler = createStyler(new StringSink(true), {});
+    // ESC + OSC injection, BEL, and the C1 string terminator embedded in the URL.
+    const evil = "https://x.example/\x1b]0;pwned\x07/\x9ct-1";
+    const clean = "https://x.example/]0;pwned/t-1";
+    expect(styler.link(evil)).toBe(`\x1b]8;;${clean}\x1b\\${clean}\x1b]8;;\x1b\\`);
+  });
+
+  it("strips control characters even when emphasis is disabled (bare output)", () => {
+    const styler = createStyler(new StringSink(false), {});
+    expect(styler.link("https://x.example/\x1b]0;pwned\x07")).toBe("https://x.example/]0;pwned");
+  });
 });
