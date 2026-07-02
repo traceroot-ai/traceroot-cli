@@ -4,6 +4,9 @@ const ANSI_RESET = "\x1b[0m";
 const ANSI_BOLD = "\x1b[1m";
 const ANSI_DIM = "\x1b[2m";
 const ANSI_YELLOW = "\x1b[33m";
+// OSC 8 hyperlink: OSC 8 ; ; <url> ST <text> OSC 8 ; ; ST (ST = ESC \).
+const OSC8_OPEN = "\x1b]8;;";
+const OSC8_ST = "\x1b\\";
 
 /** Applies emphasis to text, no-op when color is disabled. */
 export interface Styler {
@@ -13,6 +16,13 @@ export interface Styler {
   dim(text: string): string;
   /** Yellow emphasis for warnings. */
   warn(text: string): string;
+  /**
+   * Renders `url` as an OSC 8 terminal hyperlink whose visible text is `text`
+   * (defaulting to the URL itself), clickable in terminals that support OSC 8.
+   * When emphasis is disabled, returns the visible text with no escapes so
+   * piped/`NO_COLOR` output stays a plain, copyable URL.
+   */
+  link(url: string, text?: string): string;
 }
 
 /**
@@ -32,5 +42,9 @@ export function createStyler(sink: Sink, env: NodeJS.ProcessEnv = process.env): 
     bold: wrap(ANSI_BOLD),
     dim: wrap(ANSI_DIM),
     warn: wrap(ANSI_YELLOW),
+    link: (url: string, text?: string): string => {
+      const label = text ?? url;
+      return on ? `${OSC8_OPEN}${url}${OSC8_ST}${label}${OSC8_OPEN}${OSC8_ST}` : label;
+    },
   };
 }
