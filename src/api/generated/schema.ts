@@ -643,6 +643,10 @@ export interface operations {
             query?: {
                 /** @description Items per page */
                 limit?: number;
+                /** @description Only detectors created at or after this time (inclusive, ISO 8601) */
+                start_after?: string | null;
+                /** @description Only detectors created before this time (exclusive, ISO 8601) */
+                end_before?: string | null;
             };
             header?: never;
             path?: never;
