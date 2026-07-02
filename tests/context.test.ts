@@ -68,6 +68,13 @@ describe("buildContext", () => {
     expect(() => buildContext({ timeout: "-5" }, hermetic)).toThrow(CliError);
   });
 
+  it("rejects non-integer timeout forms a bare Number() would accept", () => {
+    // hex, scientific, and decimal strings must not slip through as valid ms.
+    expect(() => buildContext({ timeout: "0x10" }, hermetic)).toThrow(CliError);
+    expect(() => buildContext({ timeout: "1e2" }, hermetic)).toThrow(CliError);
+    expect(() => buildContext({ timeout: "5.5" }, hermetic)).toThrow(CliError);
+  });
+
   it("lets the config file win over the auto-discovered .env", () => {
     const ctx = buildContext(
       {},

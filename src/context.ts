@@ -42,11 +42,14 @@ function resolveTimeoutMs(flag: string | undefined, env: NodeJS.ProcessEnv): num
   if (raw === undefined) {
     return DEFAULT_TIMEOUT_MS;
   }
-  const ms = Number(raw);
-  if (!Number.isInteger(ms) || ms <= 0) {
+  // Require a plain positive integer of milliseconds. A bare `Number()` would
+  // silently accept hex (`0x10`), scientific (`1e2`), and padded/decimal forms,
+  // so match the same digits-only rule `--limit` uses.
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed) || Number.parseInt(trimmed, 10) <= 0) {
     throw new CliError(`invalid timeout: ${raw} (expected a positive integer of milliseconds)`);
   }
-  return ms;
+  return Number.parseInt(trimmed, 10);
 }
 
 /**
