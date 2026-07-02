@@ -50,7 +50,8 @@ export function buildProgram(): Command {
     .option("--api-key <key>", "API key for authentication")
     .option("--host <url>", "API host URL")
     .option("--env-file <path>", "path to a .env file to load")
-    .option("--json", "emit machine-readable JSON output for supported commands");
+    .option("--json", "emit machine-readable JSON output for supported commands")
+    .option("--timeout <ms>", "per-request network timeout in milliseconds (default: 30000)");
   registerCommands(program);
   // Root action: lets global flags parse without a subcommand, while still
   // rejecting an unrecognized operand so unknown-command handling is preserved.

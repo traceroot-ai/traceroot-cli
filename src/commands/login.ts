@@ -41,6 +41,8 @@ export interface LoginDeps {
   promptVisible: (question: string, def: string) => Promise<string>;
   createClient: (opts: ApiClientOptions) => ApiClient;
   writeConfig: (config: { api_key: string; host_url: string }) => void;
+  /** Per-request network timeout (ms) so credential validation can't hang. */
+  timeoutMs?: number;
   writers: Writers;
 }
 
@@ -108,7 +110,7 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
     host = DEFAULT_HOST;
   }
 
-  const client = deps.createClient({ host, apiKey });
+  const client = deps.createClient({ host, apiKey, timeoutMs: deps.timeoutMs });
   // Validate before persisting; a failure throws and leaves config untouched.
   const who = await client.whoami();
 
@@ -287,6 +289,7 @@ export function registerLogin(program: Command): void {
         promptVisible,
         createClient: createApiClient,
         writeConfig: realWriteConfig,
+        timeoutMs: ctx.timeoutMs,
         writers: defaultWriters,
       });
     });
