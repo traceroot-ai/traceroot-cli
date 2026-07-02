@@ -193,4 +193,28 @@ describe("request timeout", () => {
     expect(e.message).toContain("https://h");
     expect(e.message).not.toContain(API_KEY);
   });
+
+  it("names the timeout when the abort fires while reading the response body", async () => {
+    // Headers arrive, then the body stalls until the deadline: the abort fires
+    // inside `res.json()`, not the fetch call. It must still be reported as a
+    // timeout rather than escaping as a raw DOMException.
+    const fetchImpl = (() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.reject(
+            new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+          ),
+      } as unknown as Response)) as typeof fetch;
+    const client = createApiClient({
+      host: "https://h",
+      apiKey: API_KEY,
+      fetchImpl,
+      timeoutMs: 10,
+    });
+    const err = await client.whoami().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toMatch(/timed out/);
+  });
 });

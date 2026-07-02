@@ -81,15 +81,32 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       // socket can't hang the process indefinitely.
       init.signal = AbortSignal.timeout(opts.timeoutMs);
     }
-    let res: Response;
     try {
-      res = await fetchImpl(url, init);
+      const res = await fetchImpl(url, init);
+      if (!res.ok) {
+        let detail: string | undefined;
+        try {
+          const body: unknown = await res.json();
+          if (isErrorBody(body) && typeof body.detail === "string") {
+            detail = body.detail;
+          }
+        } catch {
+          // Ignore unreadable / non-JSON error bodies.
+        }
+        throw new CliError(detail ?? `request failed with status ${res.status}`);
+      }
+      return (await res.json()) as T;
     } catch (err) {
-      // A fired `AbortSignal.timeout` throws a DOMException named "TimeoutError";
-      // a plain abort is "AbortError". Report these with a friendly, api-key-free
-      // message naming the host and the elapsed budget instead of the raw text.
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        const seconds = (opts.timeoutMs ?? 0) / 1000;
+      // A non-2xx status is already a friendly CliError; re-throw it unchanged.
+      if (err instanceof CliError) {
+        throw err;
+      }
+      // `AbortSignal.timeout` rejects with a DOMException named "TimeoutError".
+      // The deadline covers the whole request, so this can fire while connecting,
+      // reading headers, or streaming the body — report all of them with one
+      // friendly, api-key-free message naming the host and the timeout budget.
+      if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
+        const seconds = opts.timeoutMs / 1000;
         throw new CliError(`request to ${base} timed out after ${seconds}s`);
       }
       // Deliberately do NOT interpolate the underlying error message: it could
@@ -98,21 +115,6 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       const safe = message.split(opts.apiKey).join("<redacted>");
       throw new CliError(`request to ${base} failed: ${safe}`);
     }
-
-    if (!res.ok) {
-      let detail: string | undefined;
-      try {
-        const body: unknown = await res.json();
-        if (isErrorBody(body) && typeof body.detail === "string") {
-          detail = body.detail;
-        }
-      } catch {
-        // Ignore unreadable / non-JSON error bodies.
-      }
-      throw new CliError(detail ?? `request failed with status ${res.status}`);
-    }
-
-    return (await res.json()) as T;
   }
 
   return {
