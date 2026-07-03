@@ -94,7 +94,7 @@ describe("runGet", () => {
     expect(out.data).toContain("Category:");
     expect(out.data).toContain("Hallucination"); // human category label
     expect(out.data).toContain("RCA: done");
-    expect(out.data).toContain("- the root cause"); // rca result rendered as a list
+    expect(out.data).toContain("the root cause"); // rca result printed verbatim
     // no per-section RCA header now that there's no structured packet
     expect(out.data).not.toContain("Root cause:");
     // per-detector summary + data and the "Identified" field are JSON-only now
@@ -127,6 +127,20 @@ describe("runGet", () => {
     });
     expect(out.data).toContain("RCA: none");
     expect(out.data).not.toContain("Root cause");
+  });
+
+  it("prints an RCA result that is already a list without doubling the bullets", async () => {
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({
+        finding: detail({ rca: { status: "done", result: "- root cause one\n- root cause two" } }),
+      }),
+      json: false,
+      writers: w,
+      findingId: "fnd-1",
+    });
+    expect(out.data).toContain("- root cause one");
+    expect(out.data).not.toContain("- - root cause one"); // no doubled list markers
   });
 
   it("emits a bare FindingDetail object under --json", async () => {
