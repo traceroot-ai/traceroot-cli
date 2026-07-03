@@ -48,45 +48,61 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   writers.out.write(`${renderFinding(finding, writers, timeZone)}\n`);
 }
 
+/**
+ * Human-readable category label per detector template, mirroring the frontend's
+ * `frontend/ui/src/features/detectors/templates.ts`. Unknown templates fall back
+ * to a title-cased form; a null template (e.g. a deleted detector) → "Unknown".
+ */
+const CATEGORY_LABELS: Record<string, string> = {
+  failure: "Failure",
+  hallucination: "Hallucination",
+  logic: "Logic Error",
+  task: "Task Completion",
+  safety: "Safety",
+  blank: "Blank",
+};
+
+function categoryLabel(template: string | null | undefined): string {
+  if (!template) {
+    return "Unknown";
+  }
+  return CATEGORY_LABELS[template] ?? template.charAt(0).toUpperCase() + template.slice(1);
+}
+
 function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: string): string {
   const styler = createStyler(writers.out);
   const label = (text: string): string => styler.bold(text);
   const lines: string[] = [];
 
-  // Flat, aligned header fields, mirroring `traces get`.
-  lines.push(`${label("Finding:")} ${finding.finding_id}`);
-  lines.push(`${label("Trace:")}   ${finding.trace_id}`);
-  lines.push(`${label("Time:")}    ${formatTimestamp(finding.timestamp, timeZone)}`);
-  lines.push(`${label("Summary:")} ${finding.summary}`);
+  // Aligned header fields (values line up under column 13).
+  lines.push(`${label("Finding ID:")} ${finding.finding_id}`);
+  lines.push(`${label("Trace ID:")}   ${finding.trace_id}`);
+  lines.push(`${label("Time:")}       ${formatTimestamp(finding.timestamp, timeZone)}`);
+  lines.push(`${label("Summary:")}    ${finding.summary}`);
 
+  // Per-detector, flush-left (like RCA): name (precedence — meaningful for custom
+  // detectors), then the unique id (disambiguates same-named detectors) and the
+  // category. Multiple detectors are separated by a blank line. The per-detector
+  // summary/data stay in `--json` only.
   lines.push("");
   lines.push(label("Detectors:"));
-  for (const result of finding.results) {
-    const heading =
-      result.template && result.template !== result.detector_name
-        ? `${result.detector_name} (${result.template})`
-        : result.detector_name;
-    lines.push(`  ${heading}`);
-    if (result.summary) {
-      lines.push(`    ${result.summary}`);
+  finding.results.forEach((result, i) => {
+    if (i > 0) {
+      lines.push("");
     }
-    if (result.data !== null && result.data !== undefined) {
-      for (const dataLine of JSON.stringify(result.data, null, 2).split("\n")) {
-        lines.push(`    ${dataLine}`);
-      }
-    }
-  }
+    lines.push(result.detector_name);
+    lines.push(`${label("ID:")}       ${result.detector_id}`);
+    lines.push(`${label("Category:")} ${categoryLabel(result.template)}`);
+  });
 
+  // RCA, flush-left: `RCA: <status|none>` then the free-text root cause.
   lines.push("");
-  lines.push(label("RCA:"));
-  if (finding.rca === null || finding.rca === undefined) {
-    lines.push(`  ${label("Status:")} none`);
-  } else {
-    lines.push(`  ${label("Status:")} ${finding.rca.status}`);
-    if (finding.rca.result !== null && finding.rca.result !== undefined) {
-      for (const resultLine of finding.rca.result.split("\n")) {
-        lines.push(`  ${resultLine}`);
-      }
+  lines.push(`${label("RCA:")} ${finding.rca?.status ?? "none"}`);
+  if (finding.rca?.result) {
+    const [first, ...rest] = finding.rca.result.split("\n");
+    lines.push(`${label("Root cause:")} ${first ?? ""}`);
+    for (const resultLine of rest) {
+      lines.push(resultLine);
     }
   }
 

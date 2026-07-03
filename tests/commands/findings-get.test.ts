@@ -83,18 +83,22 @@ describe("runGet", () => {
       timeZone: "UTC",
     });
     expect(state.lastGet).toBe("fnd-1");
-    expect(out.data).toContain("Finding:");
+    expect(out.data).toContain("Finding ID:");
     expect(out.data).toContain("fnd-1");
-    expect(out.data).toContain("Trace:");
+    expect(out.data).toContain("Trace ID:");
     expect(out.data).toContain("tr-1");
     expect(out.data).toContain("Detectors:");
-    expect(out.data).toContain("hallucination");
-    expect(out.data).toContain("unsupported claims");
-    expect(out.data).toContain('"k": "v"');
-    expect(out.data).toContain("RCA:");
-    expect(out.data).toContain("Status: done");
+    expect(out.data).toContain("hallucination"); // detector name (precedence)
+    expect(out.data).toContain("ID:");
+    expect(out.data).toContain("d1"); // detector id
+    expect(out.data).toContain("Category:");
+    expect(out.data).toContain("Hallucination"); // human category label
+    expect(out.data).toContain("RCA: done");
+    expect(out.data).toContain("Root cause:");
     expect(out.data).toContain("the root cause");
-    // the invariant "Identified" field was dropped in the cleanup
+    // per-detector summary + data and the "Identified" field are JSON-only now
+    expect(out.data).not.toContain("unsupported claims");
+    expect(out.data).not.toContain('"k": "v"');
     expect(out.data).not.toContain("Identified");
   });
 
@@ -112,7 +116,7 @@ describe("runGet", () => {
     expect(out.data).toContain("tr-9");
   });
 
-  it("shows 'Status: none' and no Result line when rca is null", async () => {
+  it("shows 'RCA: none' and no Root cause line when rca is null", async () => {
     const { writers: w, out } = writers();
     await runGet({
       client: fakeClient({ finding: detail({ rca: null }) }),
@@ -120,8 +124,8 @@ describe("runGet", () => {
       writers: w,
       findingId: "fnd-1",
     });
-    expect(out.data).toContain("Status: none");
-    expect(out.data).not.toContain("Result:");
+    expect(out.data).toContain("RCA: none");
+    expect(out.data).not.toContain("Root cause");
   });
 
   it("emits a bare FindingDetail object under --json", async () => {
@@ -136,6 +140,10 @@ describe("runGet", () => {
     expect(parsed.finding_id).toBe("fnd-1");
     expect(parsed.data).toBeUndefined(); // bare object, not a {data,meta} envelope
     expect((parsed.rca as { status: string }).status).toBe("done");
+    // per-detector summary + data are dropped from the human view but kept here
+    const result = (parsed.results as Array<Record<string, unknown>>)[0];
+    expect(result?.summary).toBe("unsupported claims");
+    expect(result?.data).toEqual({ k: "v" });
   });
 
   it("errors when neither a finding id nor --trace is given", async () => {
