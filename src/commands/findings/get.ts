@@ -80,29 +80,30 @@ function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: stri
   lines.push(`${label("Time:")}       ${formatTimestamp(finding.timestamp, timeZone)}`);
   lines.push(`${label("Summary:")}    ${finding.summary}`);
 
-  // Per-detector, flush-left (like RCA): name (precedence — meaningful for custom
-  // detectors), then the unique id (disambiguates same-named detectors) and the
-  // category. Multiple detectors are separated by a blank line. The per-detector
-  // summary/data stay in `--json` only.
+  // Per-detector, flush-left: `Detector: <name> (<template>)`, then the unique id
+  // (disambiguates same-named detectors) and the human-readable category.
+  // Multiple detectors are separated by a blank line; per-detector summary/data
+  // stay in `--json` only.
   lines.push("");
-  lines.push(label("Detectors:"));
   finding.results.forEach((result, i) => {
     if (i > 0) {
       lines.push("");
     }
-    lines.push(result.detector_name);
+    const template = result.template ? ` (${result.template})` : "";
+    lines.push(`${label("Detector:")} ${result.detector_name}${template}`);
     lines.push(`${label("ID:")}       ${result.detector_id}`);
     lines.push(`${label("Category:")} ${categoryLabel(result.template)}`);
   });
 
-  // RCA, flush-left: `RCA: <status|none>` then the free-text root cause.
+  // RCA, flush-left: `RCA: <status|none>`, then the free-text result as a bulleted
+  // list (there's no structured RCA packet — just the status + text).
   lines.push("");
   lines.push(`${label("RCA:")} ${finding.rca?.status ?? "none"}`);
   if (finding.rca?.result) {
-    const [first, ...rest] = finding.rca.result.split("\n");
-    lines.push(`${label("Root cause:")} ${first ?? ""}`);
-    for (const resultLine of rest) {
-      lines.push(resultLine);
+    for (const resultLine of finding.rca.result.split("\n")) {
+      if (resultLine.trim() !== "") {
+        lines.push(`- ${resultLine}`);
+      }
     }
   }
 
