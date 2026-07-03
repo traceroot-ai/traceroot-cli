@@ -74,7 +74,7 @@ export async function runFindings(deps: RunFindingsDeps): Promise<void> {
     return;
   }
 
-  const headers = ["TIME", "FINDING ID", "TRACE ID", "DETECTOR TYPE"];
+  const headers = ["TIME", "FINDING ID", "TRACE ID", "DETECTOR"];
   const rows = res.data.map((item) => [
     formatTimestamp(item.timestamp, deps.timeZone),
     item.finding_id,
