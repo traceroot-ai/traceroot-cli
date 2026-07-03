@@ -95,15 +95,20 @@ function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: stri
     lines.push(`${label("Category:")} ${categoryLabel(result.template)}`);
   });
 
-  // RCA, flush-left: `RCA: <status|none>`, then the free-text result as-is. The
-  // result already carries its own formatting (often a markdown list), so we
-  // print it verbatim rather than adding bullets — otherwise the markers double up.
+  // RCA, flush-left. With a result: a bare `RCA:` header, then the result verbatim
+  // (it already carries its own formatting — usually a markdown list — so no added
+  // bullets, or the markers double up). No RCA → `RCA: none`; an in-progress RCA
+  // with no result yet keeps its status (e.g. `RCA: processing`).
   lines.push("");
-  lines.push(`${label("RCA:")} ${finding.rca?.status ?? "none"}`);
-  if (finding.rca?.result) {
+  if (!finding.rca) {
+    lines.push(`${label("RCA:")} none`);
+  } else if (finding.rca.result) {
+    lines.push(label("RCA:"));
     for (const resultLine of finding.rca.result.trim().split("\n")) {
       lines.push(resultLine);
     }
+  } else {
+    lines.push(`${label("RCA:")} ${finding.rca.status}`);
   }
 
   return lines.join("\n");

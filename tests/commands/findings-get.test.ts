@@ -93,7 +93,8 @@ describe("runGet", () => {
     expect(out.data).toContain("d1"); // detector id
     expect(out.data).toContain("Category:");
     expect(out.data).toContain("Hallucination"); // human category label
-    expect(out.data).toContain("RCA: done");
+    expect(out.data).toContain("RCA:");
+    expect(out.data).not.toContain("RCA: done"); // status dropped when a result is present
     expect(out.data).toContain("the root cause"); // rca result printed verbatim
     // no per-section RCA header now that there's no structured packet
     expect(out.data).not.toContain("Root cause:");
@@ -127,6 +128,17 @@ describe("runGet", () => {
     });
     expect(out.data).toContain("RCA: none");
     expect(out.data).not.toContain("Root cause");
+  });
+
+  it("keeps the RCA status when it is still in progress (no result yet)", async () => {
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ finding: detail({ rca: { status: "processing", result: null } }) }),
+      json: false,
+      writers: w,
+      findingId: "fnd-1",
+    });
+    expect(out.data).toContain("RCA: processing");
   });
 
   it("prints an RCA result that is already a list without doubling the bullets", async () => {
