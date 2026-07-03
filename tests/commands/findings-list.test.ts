@@ -55,7 +55,7 @@ describe("runFindings", () => {
       writers: w,
       timeZone: "UTC",
     });
-    for (const header of ["TIME", "FINDING ID", "TRACE ID", "DETECTOR"]) {
+    for (const header of ["TIME", "FINDING ID", "TRACE ID", "DETECTOR NAME"]) {
       expect(out.data).toContain(header);
     }
     // summary is intentionally not a column (kept out of the list table)
