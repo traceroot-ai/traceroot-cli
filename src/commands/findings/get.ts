@@ -95,15 +95,14 @@ function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: stri
     lines.push(`${label("Category:")} ${categoryLabel(result.template)}`);
   });
 
-  // RCA, flush-left: `RCA: <status|none>`, then the free-text result as a bulleted
-  // list (there's no structured RCA packet — just the status + text).
+  // RCA, flush-left: `RCA: <status|none>`, then the free-text result as-is. The
+  // result already carries its own formatting (often a markdown list), so we
+  // print it verbatim rather than adding bullets — otherwise the markers double up.
   lines.push("");
   lines.push(`${label("RCA:")} ${finding.rca?.status ?? "none"}`);
   if (finding.rca?.result) {
-    for (const resultLine of finding.rca.result.split("\n")) {
-      if (resultLine.trim() !== "") {
-        lines.push(`- ${resultLine}`);
-      }
+    for (const resultLine of finding.rca.result.trim().split("\n")) {
+      lines.push(resultLine);
     }
   }
 
