@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { registerFindingsGet } from "./findings/get.js";
 import { registerFindingsList } from "./findings/list.js";
 
 export function registerFindings(program: Command): void {
@@ -9,4 +10,5 @@ export function registerFindings(program: Command): void {
     .description("Work with detector findings")
     .helpCommand(false);
   registerFindingsList(findings);
+  registerFindingsGet(findings);
 }

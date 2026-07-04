@@ -36,12 +36,14 @@ describe("buildProgram", () => {
     expect(childNames(detectors as Command)).toContain("list");
   });
 
-  it("registers the findings command with a list subcommand", () => {
+  it("registers the findings command with list and get subcommands", () => {
     const program = buildProgram();
     expect(childNames(program)).toContain("findings");
     const findings = program.commands.find((c) => c.name() === "findings");
     expect(findings).toBeDefined();
-    expect(childNames(findings as Command)).toContain("list");
+    const subNames = childNames(findings as Command);
+    expect(subNames).toContain("list");
+    expect(subNames).toContain("get");
   });
 
   it("registers list, get, and export under traces", () => {
