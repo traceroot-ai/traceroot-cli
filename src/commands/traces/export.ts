@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
-import type { ApiClient, TraceExport } from "../../api/client.js";
+import type { ApiClient, FindingDetail, TraceExport } from "../../api/client.js";
 import { CliError, type Writers, defaultWriters, logProgress } from "../../output.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
@@ -55,6 +55,16 @@ export async function runExport(deps: ExportDeps): Promise<void> {
   // Fetch first: a failure here must not create a half-written bundle dir.
   const response: TraceExport = await client.exportTrace(traceId);
 
+  // Best-effort: include the detector finding (1-per-trace) in the bundle. A 404
+  // means "not flagged" (null); any other failure degrades to no finding so a
+  // findings-API hiccup never blocks the export.
+  let finding: FindingDetail | null = null;
+  try {
+    finding = await client.findFindingByTrace(traceId);
+  } catch {
+    finding = null;
+  }
+
   const timestamp = deps.now ? deps.now() : defaultTimestamp();
   const outputDir =
     deps.outputDir ?? join(process.cwd(), `trace_${sanitizeId(traceId)}_${timestamp}`);
@@ -79,8 +89,19 @@ export async function runExport(deps: ExportDeps): Promise<void> {
     writeFileSync(join(outputDir, file), toJsonFile(contents[file]), "utf8");
   }
 
+  // A flagged trace adds a 5th file, `finding.json` (the full FindingDetail —
+  // finding id + per-detector results + RCA). The four core files stay unchanged.
+  const files: string[] = [...BUNDLE_FILES];
+  if (finding !== null) {
+    writeFileSync(join(outputDir, "finding.json"), toJsonFile(finding), "utf8");
+    files.push("finding.json");
+    logProgress(`Flagged: finding ${finding.finding_id} → finding.json`, writers);
+  }
+
   if (json) {
-    writers.out.write(`${JSON.stringify({ output_dir: outputDir, files: [...BUNDLE_FILES] })}\n`);
+    writers.out.write(
+      `${JSON.stringify({ output_dir: outputDir, files, finding_id: finding?.finding_id ?? null })}\n`,
+    );
   } else {
     writers.out.write(`${outputDir}\n`);
   }
