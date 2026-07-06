@@ -1,10 +1,22 @@
 import type { Command } from "commander";
-import type { ApiClient, TraceDetail } from "../../api/client.js";
+import type { ApiClient, FindingDetail, TraceDetail } from "../../api/client.js";
 import { type Writers, colorEnabled, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTree } from "../../render/tree.js";
 import { formatDuration, formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
+
+/** Max width for the single-line RCA preview shown inline in `traces get`. */
+const RCA_PREVIEW_MAX = 80;
+
+/** Collapse an RCA to one truncated line (code-point safe) for the inline preview. */
+function rcaPreview(result: string): string {
+  const oneLine = result.replace(/\s+/g, " ").trim();
+  const chars = Array.from(oneLine);
+  return chars.length > RCA_PREVIEW_MAX
+    ? `${chars.slice(0, RCA_PREVIEW_MAX - 1).join("")}…`
+    : oneLine;
+}
 
 /** Dependencies for the testable core of `traces get`. */
 export interface RunGetDeps {
@@ -46,9 +58,19 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   const { client, json, writers, traceId } = deps;
   const trace = await client.getTrace(traceId);
 
+  // Best-effort: surface the detector finding for this trace (findings are
+  // 1-per-trace). A 404 means "not flagged" (null); any other failure must not
+  // break `traces get`, so it also degrades to no finding.
+  let finding: FindingDetail | null = null;
+  try {
+    finding = await client.findFindingByTrace(traceId);
+  } catch {
+    finding = null;
+  }
+
   if (json) {
-    // FULL untruncated payload, byte-for-byte the backend response.
-    writeJson(trace, writers);
+    // FULL untruncated trace, plus the finding (or null) so scripts get it in one call.
+    writeJson({ ...trace, finding }, writers);
     return;
   }
 
@@ -74,6 +96,20 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   }
   if (duration !== null) {
     lines.push(`${label("Duration:")} ${formatDuration(duration)}${live ? " (so far)" : ""}`);
+  }
+  // Detector finding indicator (only when the trace was flagged). Kept compact:
+  // finding id + which detectors fired, RCA status + a one-line preview, and a
+  // pointer to `findings get` for the full RCA / per-detector data.
+  if (finding !== null) {
+    lines.push("");
+    const detectors =
+      finding.detectors.length > 0 ? `  (flagged by ${finding.detectors.join(", ")})` : "";
+    lines.push(`${label("Finding:")}  ${finding.finding_id}${detectors}`);
+    if (finding.rca !== null) {
+      const preview = rcaPreview(finding.rca.result ?? "");
+      lines.push(`${label("RCA:")}      ${finding.rca.status}${preview ? ` — ${preview}` : ""}`);
+    }
+    lines.push(`          run 'traceroot findings get ${finding.finding_id}' for the full finding`);
   }
   lines.push("");
   lines.push(label("Spans:"));
