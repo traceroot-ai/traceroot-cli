@@ -1,6 +1,6 @@
 {
   "name": "traceroot-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Read your TraceRoot traces from the terminal — list, inspect, and export traces from the TraceRoot public API.",
   "license": "Apache-2.0",
