@@ -65,6 +65,8 @@ export interface ApiClient {
   listFindings(params?: ListFindingsParams): Promise<FindingList>;
   getFinding(findingId: string): Promise<FindingDetail>;
   getFindingByTrace(traceId: string): Promise<FindingDetail>;
+  /** The finding for a trace, or `null` when the trace has none (404). */
+  findFindingByTrace(traceId: string): Promise<FindingDetail | null>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -97,7 +99,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     accept: "application/json",
   };
 
-  async function request<T>(path: string): Promise<T> {
+  async function rawGet(path: string): Promise<Response> {
     const url = `${base}${path}`;
     const init: RequestInit = { method: "GET", headers };
     if (opts.timeoutMs !== undefined) {
@@ -105,9 +107,8 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       // socket can't hang the process indefinitely.
       init.signal = AbortSignal.timeout(opts.timeoutMs);
     }
-    let res: Response;
     try {
-      res = await fetchImpl(url, init);
+      return await fetchImpl(url, init);
     } catch (err) {
       // Deliberately do NOT interpolate the underlying error message: it could
       // echo back request contents and leak the api key. Mention only the host.
@@ -115,20 +116,38 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       const safe = message.split(opts.apiKey).join("<redacted>");
       throw new CliError(`request to ${base} failed: ${safe}`);
     }
+  }
 
-    if (!res.ok) {
-      let detail: string | undefined;
-      try {
-        const body: unknown = await res.json();
-        if (isErrorBody(body) && typeof body.detail === "string") {
-          detail = body.detail;
-        }
-      } catch {
-        // Ignore unreadable / non-JSON error bodies.
+  async function failFor(res: Response): Promise<never> {
+    let detail: string | undefined;
+    try {
+      const body: unknown = await res.json();
+      if (isErrorBody(body) && typeof body.detail === "string") {
+        detail = body.detail;
       }
-      throw new CliError(detail ?? `request failed with status ${res.status}`);
+    } catch {
+      // Ignore unreadable / non-JSON error bodies.
     }
+    throw new CliError(detail ?? `request failed with status ${res.status}`);
+  }
 
+  async function request<T>(path: string): Promise<T> {
+    const res = await rawGet(path);
+    if (!res.ok) {
+      await failFor(res);
+    }
+    return (await res.json()) as T;
+  }
+
+  /** Like {@link request}, but resolves `null` on a 404 instead of throwing. */
+  async function requestOptional<T>(path: string): Promise<T | null> {
+    const res = await rawGet(path);
+    if (res.status === 404) {
+      return null;
+    }
+    if (!res.ok) {
+      await failFor(res);
+    }
     return (await res.json()) as T;
   }
 
@@ -197,6 +216,11 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     },
     getFindingByTrace(traceId) {
       return request<FindingDetail>(
+        `/api/v1/public/detectors/traces/${encodeURIComponent(traceId)}/finding`,
+      );
+    },
+    findFindingByTrace(traceId) {
+      return requestOptional<FindingDetail>(
         `/api/v1/public/detectors/traces/${encodeURIComponent(traceId)}/finding`,
       );
     },
