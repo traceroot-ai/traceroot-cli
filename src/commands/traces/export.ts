@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import type { ApiClient, FindingDetail, TraceExport } from "../../api/client.js";
 import { CliError, type Writers, defaultWriters, logProgress } from "../../output.js";
+import { createStyler } from "../../render/style.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** The four bundle files, in the fixed order they are reported. */
@@ -96,13 +97,23 @@ export async function runExport(deps: ExportDeps): Promise<void> {
   if (finding !== null) {
     writeFileSync(findingPath, toJsonFile(finding), "utf8");
     files.push("finding.json");
-    logProgress(`Flagged: finding ${finding.finding_id} → finding.json`, writers);
   } else {
     // A --force overwrite of a directory from an earlier *flagged* export could
     // leave behind a finding.json for a different trace; remove it so the bundle
     // never carries a finding that doesn't match trace.json. `force` = no error
     // when the file is absent (the common, unflagged case).
     rmSync(findingPath, { force: true });
+  }
+
+  // Confirm what landed on disk, then (when flagged) a yellow one-liner naming
+  // the detector(s) and pointing at finding.json — consistent with `traces get`.
+  logProgress(`Wrote ${files.length} files: ${files.join(", ")}`, writers);
+  if (finding !== null) {
+    const by = finding.detectors.length > 0 ? ` by ${finding.detectors.join(", ")}` : "";
+    const styler = createStyler(writers.err);
+    writers.err.write(
+      `${styler.warn(`Flagged${by} — finding ${finding.finding_id} in finding.json`)}\n`,
+    );
   }
 
   if (json) {

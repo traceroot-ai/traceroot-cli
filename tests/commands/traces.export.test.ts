@@ -417,6 +417,46 @@ describe("runExport", () => {
     expect(err.data).toContain("fnd-1"); // flag echoed to stderr
   });
 
+  it("reports a file summary and a flagged line naming the detector", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers, err } = makeWriters();
+
+    await runExport({
+      client: fakeClient(response, makeFinding()),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+    });
+
+    expect(err.data).toContain(
+      "Wrote 5 files: trace.json, spans.json, git_context.json, manifest.json, finding.json",
+    );
+    expect(err.data).toContain("Flagged by hallucination — finding fnd-1 in finding.json");
+  });
+
+  it("reports a 4-file summary and no flagged line for an unflagged trace", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers, err } = makeWriters();
+
+    await runExport({
+      client: fakeClient(response, null),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+    });
+
+    expect(err.data).toContain(
+      "Wrote 4 files: trace.json, spans.json, git_context.json, manifest.json",
+    );
+    expect(err.data).not.toContain("Flagged");
+  });
+
   it("writes no finding.json when the finding lookup fails (best-effort)", async () => {
     const response = makeResponse();
     const outputDir = join(tmpRoot, "bundle");
