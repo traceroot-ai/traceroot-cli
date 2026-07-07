@@ -433,6 +433,31 @@ describe("runExport", () => {
     expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
   });
 
+  it("removes a stale finding.json when re-exporting an unflagged trace with --force", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(outputDir, { recursive: true });
+    // A previous flagged export into this dir left a finding.json for a *different* trace.
+    writeFileSync(join(outputDir, "finding.json"), '{"finding_id":"stale"}\n', "utf8");
+
+    // The current trace is unflagged (finding lookup → null).
+    await runExport({
+      client: fakeClient(response, null),
+      traceId: "abc123",
+      outputDir,
+      force: true,
+      json: false,
+      writers,
+    });
+
+    // The stale finding.json must not survive — the bundle would otherwise carry a
+    // detector finding that doesn't match trace.json.
+    expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
+    expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
+  });
+
   it("propagates a fetch failure and creates no bundle dir or files", async () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();

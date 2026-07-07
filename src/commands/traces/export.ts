@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
 import type { ApiClient, FindingDetail, TraceExport } from "../../api/client.js";
@@ -92,10 +92,17 @@ export async function runExport(deps: ExportDeps): Promise<void> {
   // A flagged trace adds a 5th file, `finding.json` (the full FindingDetail —
   // finding id + per-detector results + RCA). The four core files stay unchanged.
   const files: string[] = [...BUNDLE_FILES];
+  const findingPath = join(outputDir, "finding.json");
   if (finding !== null) {
-    writeFileSync(join(outputDir, "finding.json"), toJsonFile(finding), "utf8");
+    writeFileSync(findingPath, toJsonFile(finding), "utf8");
     files.push("finding.json");
     logProgress(`Flagged: finding ${finding.finding_id} → finding.json`, writers);
+  } else {
+    // A --force overwrite of a directory from an earlier *flagged* export could
+    // leave behind a finding.json for a different trace; remove it so the bundle
+    // never carries a finding that doesn't match trace.json. `force` = no error
+    // when the file is absent (the common, unflagged case).
+    rmSync(findingPath, { force: true });
   }
 
   if (json) {
