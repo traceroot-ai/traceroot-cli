@@ -9,9 +9,16 @@ import { contextFromCommand, requireApiClient } from "../shared.js";
 /** Max width for the single-line RCA preview shown inline in `traces get`. */
 const RCA_PREVIEW_MAX = 80;
 
-/** Collapse an RCA to one truncated line (code-point safe) for the inline preview. */
+/**
+ * Collapse an RCA to one truncated line (code-point safe) for the inline
+ * preview. A leading list bullet (`- `/`* `) is stripped so the preview reads as
+ * a sentence rather than a fragment of a list.
+ */
 function rcaPreview(result: string): string {
-  const oneLine = result.replace(/\s+/g, " ").trim();
+  const oneLine = result
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[-*]\s+/, "");
   const chars = Array.from(oneLine);
   return chars.length > RCA_PREVIEW_MAX
     ? `${chars.slice(0, RCA_PREVIEW_MAX - 1).join("")}…`
@@ -98,18 +105,25 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
     lines.push(`${label("Duration:")} ${formatDuration(duration)}${live ? " (so far)" : ""}`);
   }
   // Detector finding indicator (only when the trace was flagged). Kept compact:
-  // finding id + which detectors fired, RCA status + a one-line preview, and a
-  // pointer to `findings get` for the full RCA / per-detector data.
+  // finding id + which detectors fired, the RCA text (or its status while still
+  // generating), and a yellow pointer to `findings get` for the full RCA /
+  // per-detector data. Labels align on the value column, like `findings get`.
   if (finding !== null) {
     lines.push("");
     const detectors =
       finding.detectors.length > 0 ? `  (flagged by ${finding.detectors.join(", ")})` : "";
-    lines.push(`${label("Finding:")}  ${finding.finding_id}${detectors}`);
+    lines.push(`${label("Finding ID:")} ${finding.finding_id}${detectors}`);
     if (finding.rca !== null) {
+      // Show the RCA text directly; only fall back to the status (e.g. while it
+      // is still being generated) when there is no result yet.
       const preview = rcaPreview(finding.rca.result ?? "");
-      lines.push(`${label("RCA:")}      ${finding.rca.status}${preview ? ` — ${preview}` : ""}`);
+      lines.push(`${label("RCA:")}        ${preview || finding.rca.status}`);
     }
-    lines.push(`          run 'traceroot findings get ${finding.finding_id}' for the full finding`);
+    lines.push(
+      styler.warn(
+        `            run 'traceroot findings get ${finding.finding_id}' for the full finding`,
+      ),
+    );
   }
   lines.push("");
   lines.push(label("Spans:"));

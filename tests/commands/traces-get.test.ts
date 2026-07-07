@@ -185,11 +185,12 @@ describe("runGet (finding indicator)", () => {
       writers: w,
       traceId: "t-1",
     });
-    expect(out.data).toContain("Finding:");
+    expect(out.data).toContain("Finding ID:");
     expect(out.data).toContain("fnd-1");
     expect(out.data).toContain("hallucination");
     expect(out.data).toContain("RCA:");
-    expect(out.data).toContain("done");
+    // The "<status> — " prefix is dropped; the RCA text is shown directly.
+    expect(out.data).not.toContain("done —");
     expect(out.data).toContain("Root cause"); // preview of rca.result
     expect(out.data).toContain("findings get fnd-1"); // pointer to full detail
   });
@@ -203,7 +204,7 @@ describe("runGet (finding indicator)", () => {
       writers: w,
       traceId: "t-1",
     });
-    expect(out.data).not.toContain("Finding:");
+    expect(out.data).not.toContain("Finding ID:");
     expect(out.data).not.toContain("RCA:");
   });
 
@@ -216,7 +217,7 @@ describe("runGet (finding indicator)", () => {
       writers: w,
       traceId: "t-1",
     });
-    expect(out.data).toContain("Finding:");
+    expect(out.data).toContain("Finding ID:");
     expect(out.data).not.toContain("RCA:");
   });
 
@@ -244,7 +245,7 @@ describe("runGet (finding indicator)", () => {
       writers: w,
       traceId: "t-1",
     });
-    expect(out.data).toContain("Finding:");
+    expect(out.data).toContain("Finding ID:");
     expect(out.data).toContain("fnd-1");
     expect(out.data).not.toContain("flagged by");
   });
@@ -268,6 +269,24 @@ describe("runGet (finding indicator)", () => {
     expect(out.data).not.toContain("TAIL_MARKER");
   });
 
+  it("strips a leading bullet and the status prefix from the RCA preview", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({
+        trace,
+        finding: finding({ rca: { status: "done", result: "- Root cause: boom" } }),
+      }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("Root cause: boom");
+    // No leading "- " bullet and no "done — " status prefix.
+    expect(out.data).not.toContain("- Root cause");
+    expect(out.data).not.toContain("done");
+  });
+
   it("still renders the trace when the finding lookup fails (best-effort)", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
@@ -278,7 +297,7 @@ describe("runGet (finding indicator)", () => {
       traceId: "t-1",
     });
     expect(out.data).toContain("root-span"); // trace still rendered
-    expect(out.data).not.toContain("Finding:"); // finding silently omitted
+    expect(out.data).not.toContain("Finding ID:"); // finding silently omitted
   });
 });
 
