@@ -104,6 +104,20 @@ describe("runGet (human)", () => {
     expect(out.data).not.toContain("Output:");
   });
 
+  it("renders the trace_url as an OSC 8 hyperlink on a TTY", async () => {
+    const trace = detail({});
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: { out, err },
+      traceId: "t-1",
+    });
+    const url = "https://app.example.com/trace/t-1";
+    expect(out.data).toContain(`\x1b]8;;${url}\x1b\\${url}\x1b]8;;\x1b\\`);
+  });
+
   it("does not construct a frontend URL (only the backend trace_url appears)", async () => {
     const trace = detail({ trace_url: "https://backend-built.example/abc" });
     const { writers: w, out } = writers();
