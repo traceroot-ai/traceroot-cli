@@ -1,6 +1,9 @@
 import { CliError } from "../output.js";
 import type { paths } from "./generated/schema.js";
 
+/** Default per-request timeout when a caller doesn't specify one. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
 /** Name-agnostic extractor for an operation's JSON 200 body. */
 type Ok200<Op> = Op extends {
   responses: { 200: { content: { "application/json": infer B } } };
@@ -110,11 +113,22 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     try {
       return await fetchImpl(url, init);
     } catch (err) {
+      throwIfTimeout(err);
       // Deliberately do NOT interpolate the underlying error message: it could
       // echo back request contents and leak the api key. Mention only the host.
       const message = err instanceof Error ? err.message : String(err);
       const safe = message.split(opts.apiKey).join("<redacted>");
       throw new CliError(`request to ${base} failed: ${safe}`);
+    }
+  }
+
+  // `AbortSignal.timeout` rejects with a DOMException named "TimeoutError". The
+  // deadline covers the whole request, so it can fire while connecting, reading
+  // headers, or streaming the body; report all of them with one friendly,
+  // api-key-free message naming the host and the timeout budget.
+  function throwIfTimeout(err: unknown): void {
+    if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
+      throw new CliError(`request to ${base} timed out after ${opts.timeoutMs / 1000}s`);
     }
   }
 
@@ -131,12 +145,22 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     throw new CliError(detail ?? `request failed with status ${res.status}`);
   }
 
+  /** Reads a JSON body, translating a body-phase timeout into the same message. */
+  async function readJson<T>(res: Response): Promise<T> {
+    try {
+      return (await res.json()) as T;
+    } catch (err) {
+      throwIfTimeout(err);
+      throw err;
+    }
+  }
+
   async function request<T>(path: string): Promise<T> {
     const res = await rawGet(path);
     if (!res.ok) {
       await failFor(res);
     }
-    return (await res.json()) as T;
+    return readJson<T>(res);
   }
 
   /** Like {@link request}, but resolves `null` on a 404 instead of throwing. */
@@ -148,7 +172,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     if (!res.ok) {
       await failFor(res);
     }
-    return (await res.json()) as T;
+    return readJson<T>(res);
   }
 
   return {

@@ -4,13 +4,18 @@ import { contextFromCommand, requireApiClient } from "../../src/commands/shared.
 import type { Context } from "../../src/context.js";
 import { CliError } from "../../src/output.js";
 
-function makeContext(apiKey: string | undefined, host: string | undefined): Context {
+function makeContext(
+  apiKey: string | undefined,
+  host: string | undefined,
+  timeoutMs = 30_000,
+): Context {
   return {
     auth: {
       apiKey: { value: apiKey, source: apiKey === undefined ? "none" : "flag" },
       hostUrl: { value: host, source: host === undefined ? "none" : "flag" },
     },
     json: false,
+    timeoutMs,
   };
 }
 
@@ -37,6 +42,22 @@ describe("requireApiClient", () => {
   it("does not perform network activity on construction", () => {
     const ctx = makeContext("tr_present", "https://api.example.com");
     expect(() => requireApiClient(ctx)).not.toThrow();
+  });
+
+  it("builds a client that applies the context timeout to each request", async () => {
+    const ctx = makeContext("tr_present", "https://h", 5000);
+    let captured: RequestInit | undefined;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      captured = init;
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      await requireApiClient(ctx).whoami();
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect(captured?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("never includes the api key in the thrown error message", () => {

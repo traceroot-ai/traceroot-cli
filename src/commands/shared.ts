@@ -11,6 +11,7 @@ export function contextFromCommand(command: Command): Context {
     host: opts.host as string | undefined,
     envFile: opts.envFile as string | undefined,
     json: opts.json as boolean | undefined,
+    timeout: opts.timeout as string | undefined,
   });
 }
 
@@ -32,5 +33,5 @@ export function requireApiClient(ctx: Context): ApiClient {
       "No host found. Run `traceroot login`, or set TRACEROOT_HOST_URL, or pass --host.",
     );
   }
-  return createApiClient({ host, apiKey });
+  return createApiClient({ host, apiKey, timeoutMs: ctx.timeoutMs });
 }
