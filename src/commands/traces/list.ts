@@ -10,7 +10,12 @@ import {
 } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { formatDuration, formatTimestamp, parseDuration } from "../../util/index.js";
+import {
+  formatDuration,
+  formatTimestamp,
+  parseBackendTime,
+  parseDuration,
+} from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** Dependencies for the testable core of `traces list`. */
@@ -424,7 +429,10 @@ function isLiveItem(item: ListItem): boolean {
 
 function durationOf(item: ListItem): string {
   if (isLiveItem(item)) {
-    const ms = Date.now() - new Date(item.trace_start_time).getTime();
+    // trace_start_time is zone-less UTC, so parse it as UTC (not host-local) or
+    // the elapsed math goes negative west of UTC and inflates east of it.
+    const start = parseBackendTime(item.trace_start_time);
+    const ms = start ? Date.now() - start.getTime() : Number.NaN;
     return Number.isFinite(ms) && ms >= 0 ? formatDuration(ms) : "";
   }
   return formatDuration(item.duration_ms);

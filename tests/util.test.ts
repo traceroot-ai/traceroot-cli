@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CliError } from "../src/output.js";
-import { formatBytes, formatTimestamp, parseDuration } from "../src/util/index.js";
+import {
+  formatBytes,
+  formatTimestamp,
+  parseBackendTime,
+  parseDuration,
+} from "../src/util/index.js";
 
 describe("parseDuration", () => {
   it("parses each supported unit into milliseconds", () => {
@@ -36,6 +41,28 @@ describe("formatBytes", () => {
     expect(formatBytes(2215)).toBe("2,215 bytes (2.2 KB)");
     expect(formatBytes(0)).toBe("0 bytes (0.0 KB)");
     expect(formatBytes(12_345_678)).toBe("12,345,678 bytes (12345.7 KB)");
+  });
+});
+
+describe("parseBackendTime", () => {
+  it("treats a zone-less backend timestamp as UTC (appends Z)", () => {
+    // "2026-06-04T23:43:13.590000" with no zone must be read as UTC, not local.
+    expect(parseBackendTime("2026-06-04T23:43:13.590000")?.getTime()).toBe(
+      Date.parse("2026-06-04T23:43:13.590Z"),
+    );
+  });
+
+  it("respects an already-zoned string without double-shifting", () => {
+    expect(parseBackendTime("2026-06-04T23:43:13Z")?.getTime()).toBe(
+      Date.parse("2026-06-04T23:43:13Z"),
+    );
+    expect(parseBackendTime("2026-06-04T23:43:13-06:00")?.getTime()).toBe(
+      Date.parse("2026-06-04T23:43:13-06:00"),
+    );
+  });
+
+  it("returns null for an unparseable string", () => {
+    expect(parseBackendTime("not-a-date")).toBeNull();
   });
 });
 

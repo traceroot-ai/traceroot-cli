@@ -3,7 +3,7 @@ import type { ApiClient, FindingDetail, TraceDetail } from "../../api/client.js"
 import { type Writers, colorEnabled, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTree } from "../../render/tree.js";
-import { formatDuration, formatTimestamp } from "../../util/index.js";
+import { formatDuration, formatTimestamp, parseBackendTime } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** Max width for the single-line RCA preview shown inline in `traces get`. */
@@ -56,7 +56,15 @@ function elapsedMs(start: string, end: string | null): number | null {
   if (end === null) {
     return null;
   }
-  const ms = new Date(end).getTime() - new Date(start).getTime();
+  // Parse both as zone-less UTC so the live path (end is a real-UTC ISO) and the
+  // completed path stay consistent; a bare `new Date(...)` would misread the
+  // zone-less backend start time as host-local and skew the elapsed math.
+  const startDate = parseBackendTime(start);
+  const endDate = parseBackendTime(end);
+  if (startDate === null || endDate === null) {
+    return null;
+  }
+  const ms = endDate.getTime() - startDate.getTime();
   return Number.isFinite(ms) && ms >= 0 ? ms : null;
 }
 
