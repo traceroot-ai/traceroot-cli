@@ -152,6 +152,22 @@ describe("detector findings", () => {
     await client.getFindingByTrace("a/b c");
     expect(calls[0]?.url).toBe("https://h/api/v1/public/detectors/traces/a%2Fb%20c/finding");
   });
+
+  it("findFindingByTrace returns the finding on 200", async () => {
+    const { client } = clientWith(() => jsonResponse({ finding_id: "fnd-1" }));
+    const finding = await client.findFindingByTrace("tr-1");
+    expect(finding?.finding_id).toBe("fnd-1");
+  });
+
+  it("findFindingByTrace returns null on a 404 (trace not flagged)", async () => {
+    const { client } = clientWith(() => errorResponse(404, "Finding not found"));
+    expect(await client.findFindingByTrace("tr-1")).toBeNull();
+  });
+
+  it("findFindingByTrace still throws on a non-404 error", async () => {
+    const { client } = clientWith(() => errorResponse(500, "Failed to read finding"));
+    await expect(client.findFindingByTrace("tr-1")).rejects.toBeInstanceOf(CliError);
+  });
 });
 
 describe("detectors", () => {

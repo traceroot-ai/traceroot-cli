@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ApiClient, TraceDetail } from "../../src/api/client.js";
+import type { ApiClient, FindingDetail, TraceDetail } from "../../src/api/client.js";
 import { runGet } from "../../src/commands/traces/get.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -57,13 +57,34 @@ function detail(over: Partial<TraceDetail>): TraceDetail {
   };
 }
 
-function fakeClient(over: { trace?: TraceDetail; error?: Error }): ApiClient {
+function finding(over: Partial<FindingDetail> = {}): FindingDetail {
+  return {
+    finding_id: "fnd-1",
+    project_id: "p-1",
+    trace_id: "t-1",
+    summary: "a finding summary",
+    timestamp: "2024-01-01T00:00:00Z",
+    detectors: ["hallucination", "failure"],
+    results: [],
+    rca: { status: "done", result: "Root cause: the model cited a source absent from the tools." },
+    ...over,
+  };
+}
+
+function fakeClient(over: {
+  trace?: TraceDetail;
+  error?: Error;
+  finding?: FindingDetail | null;
+  findingError?: Error;
+}): ApiClient {
   return {
     whoami: () => Promise.reject(new Error("unused")),
     listTraces: () => Promise.reject(new Error("unused")),
     getTrace: () =>
       over.error ? Promise.reject(over.error) : Promise.resolve(over.trace as TraceDetail),
     exportTrace: () => Promise.reject(new Error("unused")),
+    findFindingByTrace: () =>
+      over.findingError ? Promise.reject(over.findingError) : Promise.resolve(over.finding ?? null),
   };
 }
 
@@ -124,7 +145,7 @@ describe("runGet (human)", () => {
 });
 
 describe("runGet (--json)", () => {
-  it("writes exactly one doc equal to the full untruncated trace", async () => {
+  it("writes exactly one doc: the full untruncated trace plus finding:null when unflagged", async () => {
     const trace = detail({});
     const { writers: w, out, err } = writers();
     await runGet({ client: fakeClient({ trace }), json: true, writers: w, traceId: "t-1" });
@@ -132,11 +153,151 @@ describe("runGet (--json)", () => {
     const docs = out.data.trim().split("\n");
     expect(docs).toHaveLength(1);
     const parsed = JSON.parse(docs[0] as string);
-    expect(parsed).toEqual(trace);
+    expect(parsed).toEqual({ ...trace, finding: null });
     // full input present, untruncated
     expect(parsed.input).toBe(LONG_INPUT);
     expect(out.data).not.toContain("truncated");
     expect(err.data).not.toContain("{");
+  });
+
+  it("includes the full finding object when the trace is flagged", async () => {
+    const trace = detail({});
+    const f = finding();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace, finding: f }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+    });
+    const parsed = JSON.parse(out.data.trim());
+    expect(parsed.finding).toEqual(f);
+  });
+});
+
+describe("runGet (finding indicator)", () => {
+  it("shows a Finding line and RCA preview when the trace is flagged", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace, finding: finding() }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("Finding ID:");
+    expect(out.data).toContain("fnd-1");
+    expect(out.data).toContain("hallucination");
+    expect(out.data).toContain("RCA:");
+    // The "<status> — " prefix is dropped; the RCA text is shown directly.
+    expect(out.data).not.toContain("done —");
+    expect(out.data).toContain("Root cause"); // preview of rca.result
+    expect(out.data).toContain("findings get fnd-1"); // pointer to full detail
+  });
+
+  it("omits the Finding block for an unflagged trace", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace, finding: null }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).not.toContain("Finding ID:");
+    expect(out.data).not.toContain("RCA:");
+  });
+
+  it("shows the Finding but no RCA line when rca is null", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace, finding: finding({ rca: null }) }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("Finding ID:");
+    expect(out.data).not.toContain("RCA:");
+  });
+
+  it("shows the RCA status with no preview when the rca is still loading (result null)", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace, finding: finding({ rca: { status: "running", result: null } }) }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("RCA:");
+    expect(out.data).toContain("running");
+    // No preview text yet, so no " — <preview>" separator is appended.
+    expect(out.data).not.toContain(" — ");
+  });
+
+  it("shows the Finding id without a '(flagged by …)' suffix when detectors is empty", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace, finding: finding({ detectors: [] }) }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("Finding ID:");
+    expect(out.data).toContain("fnd-1");
+    expect(out.data).not.toContain("flagged by");
+  });
+
+  it("truncates a long RCA preview to a single line ending in an ellipsis", async () => {
+    const trace = detail({});
+    const longResult = `Root cause: ${"x".repeat(200)} TAIL_MARKER`;
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({
+        trace,
+        finding: finding({ rca: { status: "done", result: longResult } }),
+      }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("RCA:");
+    expect(out.data).toContain("…");
+    // The tail past the 80-char cap is dropped.
+    expect(out.data).not.toContain("TAIL_MARKER");
+  });
+
+  it("strips a leading bullet and the status prefix from the RCA preview", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({
+        trace,
+        finding: finding({ rca: { status: "done", result: "- Root cause: boom" } }),
+      }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("Root cause: boom");
+    // No leading "- " bullet and no "done — " status prefix.
+    expect(out.data).not.toContain("- Root cause");
+    expect(out.data).not.toContain("done");
+  });
+
+  it("still renders the trace when the finding lookup fails (best-effort)", async () => {
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace, findingError: new CliError("Failed to read finding") }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+    });
+    expect(out.data).toContain("root-span"); // trace still rendered
+    expect(out.data).not.toContain("Finding ID:"); // finding silently omitted
   });
 });
 

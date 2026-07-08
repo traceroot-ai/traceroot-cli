@@ -2,10 +2,24 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ApiClient, TraceExport } from "../../src/api/client.js";
+import type { ApiClient, FindingDetail, TraceExport } from "../../src/api/client.js";
 import { runExport } from "../../src/commands/traces/export.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
+
+function makeFinding(over: Partial<FindingDetail> = {}): FindingDetail {
+  return {
+    finding_id: "fnd-1",
+    project_id: "proj-1",
+    trace_id: "abc123",
+    summary: "a finding summary",
+    timestamp: "2026-06-05T12:00:00Z",
+    detectors: ["hallucination"],
+    results: [],
+    rca: { status: "done", result: "root cause text" },
+    ...over,
+  };
+}
 
 function makeResponse(): TraceExport {
   return {
@@ -59,12 +73,13 @@ function makeResponse(): TraceExport {
   };
 }
 
-function fakeClient(response: TraceExport): ApiClient {
+function fakeClient(response: TraceExport, finding: FindingDetail | null = null): ApiClient {
   return {
     whoami: () => Promise.reject(new Error("not used")),
     listTraces: () => Promise.reject(new Error("not used")),
     getTrace: () => Promise.reject(new Error("not used")),
     exportTrace: () => Promise.resolve(response),
+    findFindingByTrace: () => Promise.resolve(finding),
   };
 }
 
@@ -74,6 +89,7 @@ function throwingClient(error: unknown): ApiClient {
     listTraces: () => Promise.reject(new Error("not used")),
     getTrace: () => Promise.reject(new Error("not used")),
     exportTrace: () => Promise.reject(error),
+    findFindingByTrace: () => Promise.resolve(null),
   };
 }
 
@@ -371,8 +387,115 @@ describe("runExport", () => {
     expect(parsed).toEqual({
       output_dir: outputDir,
       files: ["trace.json", "spans.json", "git_context.json", "manifest.json"],
+      finding_id: null,
     });
     expect(err.data.length).toBeGreaterThan(0);
+  });
+
+  it("writes finding.json and reports the finding when the trace is flagged", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers, out, err } = makeWriters();
+
+    await runExport({
+      client: fakeClient(response, makeFinding()),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: true,
+      writers,
+    });
+
+    // finding.json is written with the full FindingDetail (finding id + rca).
+    const finding = JSON.parse(readFileSync(join(outputDir, "finding.json"), "utf8"));
+    expect(finding).toEqual(makeFinding());
+    // reported in the bundle listing and the --json summary.
+    expect(readdirSync(outputDir)).toContain("finding.json");
+    const parsed = JSON.parse(out.data);
+    expect(parsed.files).toContain("finding.json");
+    expect(parsed.finding_id).toBe("fnd-1");
+    expect(err.data).toContain("fnd-1"); // flag echoed to stderr
+  });
+
+  it("reports a file summary and a flagged line naming the detector", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers, err } = makeWriters();
+
+    await runExport({
+      client: fakeClient(response, makeFinding()),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+    });
+
+    expect(err.data).toContain(
+      "Wrote 5 files: trace.json, spans.json, git_context.json, manifest.json, finding.json",
+    );
+    expect(err.data).toContain("Flagged by hallucination — finding fnd-1 in finding.json");
+  });
+
+  it("reports a 4-file summary and no flagged line for an unflagged trace", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers, err } = makeWriters();
+
+    await runExport({
+      client: fakeClient(response, null),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+    });
+
+    expect(err.data).toContain(
+      "Wrote 4 files: trace.json, spans.json, git_context.json, manifest.json",
+    );
+    expect(err.data).not.toContain("Flagged");
+  });
+
+  it("writes no finding.json when the finding lookup fails (best-effort)", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+    const client: ApiClient = {
+      ...fakeClient(response),
+      findFindingByTrace: () => Promise.reject(new CliError("Failed to read finding")),
+    };
+
+    await runExport({ client, traceId: "abc123", outputDir, force: false, json: false, writers });
+
+    // Bundle still written; the finding is simply omitted.
+    expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
+    expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
+  });
+
+  it("removes a stale finding.json when re-exporting an unflagged trace with --force", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(outputDir, { recursive: true });
+    // A previous flagged export into this dir left a finding.json for a *different* trace.
+    writeFileSync(join(outputDir, "finding.json"), '{"finding_id":"stale"}\n', "utf8");
+
+    // The current trace is unflagged (finding lookup → null).
+    await runExport({
+      client: fakeClient(response, null),
+      traceId: "abc123",
+      outputDir,
+      force: true,
+      json: false,
+      writers,
+    });
+
+    // The stale finding.json must not survive — the bundle would otherwise carry a
+    // detector finding that doesn't match trace.json.
+    expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
+    expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
   });
 
   it("propagates a fetch failure and creates no bundle dir or files", async () => {
