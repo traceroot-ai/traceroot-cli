@@ -379,7 +379,11 @@ type RangeBounds = { startAfter?: string; endBefore?: string; sinceLabel?: strin
  * (raw ISO). Keeping a single ladder here means the human and JSON outputs can't
  * drift apart.
  */
-function buildRangeText(range: RangeBounds, formatBound: (iso: string) => string): string {
+export function buildRangeText(
+  range: RangeBounds,
+  formatBound: (iso: string) => string,
+  allLabel = "all traces",
+): string {
   if (range.sinceLabel !== undefined) {
     return `since ${range.sinceLabel}`;
   }
@@ -392,15 +396,19 @@ function buildRangeText(range: RangeBounds, formatBound: (iso: string) => string
   if (range.endBefore !== undefined) {
     return `before ${formatBound(range.endBefore)}`;
   }
-  return "all traces";
+  return allLabel;
 }
 
 /**
  * The `<range>` portion of the compact footer line (human-mode, local TZ), e.g.
  * `from 2026-06-23 14:29:54 MDT to before …`.
  */
-export function renderRangeSummary(range: RangeBounds, timeZone?: string): string {
-  return buildRangeText(range, (iso) => formatLocalDisplay(iso, timeZone));
+export function renderRangeSummary(
+  range: RangeBounds,
+  timeZone?: string,
+  allLabel = "all traces",
+): string {
+  return buildRangeText(range, (iso) => formatLocalDisplay(iso, timeZone), allLabel);
 }
 
 type ListItem = Awaited<ReturnType<ApiClient["listTraces"]>>["data"][number];
@@ -495,7 +503,7 @@ export async function runList(deps: RunListDeps): Promise<void> {
  * on the first). IMPORTANT: do NOT set `.default(...)` on any option using this —
  * Commander would pass that default as `prev` on the first use and falsely reject it.
  */
-function onceOption(flag: string): (val: string, prev: string | undefined) => string {
+export function onceOption(flag: string): (val: string, prev: string | undefined) => string {
   return (val: string, prev: string | undefined): string => {
     if (prev !== undefined) {
       throw new CliError(`${flag} may only be given once`);
