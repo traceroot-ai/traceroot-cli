@@ -116,6 +116,82 @@ describe("createApiClient", () => {
   });
 });
 
+describe("detector findings", () => {
+  it("sends list filters as query params", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ data: [], meta: {} }));
+    await client.listFindings({
+      limit: 10,
+      startAfter: "2024-01-01T00:00:00.000Z",
+      endBefore: "2024-02-01T00:00:00.000Z",
+      detector: "hallucination",
+      traceId: "tr-1",
+    });
+    const url = new URL(calls[0]?.url as string);
+    expect(url.pathname).toBe("/api/v1/public/detectors/findings");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("start_after")).toBe("2024-01-01T00:00:00.000Z");
+    expect(url.searchParams.get("end_before")).toBe("2024-02-01T00:00:00.000Z");
+    expect(url.searchParams.get("detector")).toBe("hallucination");
+    expect(url.searchParams.get("trace_id")).toBe("tr-1");
+  });
+
+  it("omits unset list params", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ data: [], meta: {} }));
+    await client.listFindings();
+    expect(calls[0]?.url).toBe("https://h/api/v1/public/detectors/findings");
+  });
+
+  it("url-encodes the finding id for getFinding", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({}));
+    await client.getFinding("a/b c");
+    expect(calls[0]?.url).toBe("https://h/api/v1/public/detectors/findings/a%2Fb%20c");
+  });
+
+  it("url-encodes the trace id for getFindingByTrace", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({}));
+    await client.getFindingByTrace("a/b c");
+    expect(calls[0]?.url).toBe("https://h/api/v1/public/detectors/traces/a%2Fb%20c/finding");
+  });
+
+  it("findFindingByTrace returns the finding on 200", async () => {
+    const { client } = clientWith(() => jsonResponse({ finding_id: "fnd-1" }));
+    const finding = await client.findFindingByTrace("tr-1");
+    expect(finding?.finding_id).toBe("fnd-1");
+  });
+
+  it("findFindingByTrace returns null on a 404 (trace not flagged)", async () => {
+    const { client } = clientWith(() => errorResponse(404, "Finding not found"));
+    expect(await client.findFindingByTrace("tr-1")).toBeNull();
+  });
+
+  it("findFindingByTrace still throws on a non-404 error", async () => {
+    const { client } = clientWith(() => errorResponse(500, "Failed to read finding"));
+    await expect(client.findFindingByTrace("tr-1")).rejects.toBeInstanceOf(CliError);
+  });
+});
+
+describe("detectors", () => {
+  it("sends list filters as query params", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ data: [], meta: {} }));
+    await client.listDetectors({
+      limit: 10,
+      startAfter: "2024-01-01T00:00:00.000Z",
+      endBefore: "2024-02-01T00:00:00.000Z",
+    });
+    const url = new URL(calls[0]?.url as string);
+    expect(url.pathname).toBe("/api/v1/public/detectors");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("start_after")).toBe("2024-01-01T00:00:00.000Z");
+    expect(url.searchParams.get("end_before")).toBe("2024-02-01T00:00:00.000Z");
+  });
+
+  it("omits unset list params", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ data: [], meta: {} }));
+    await client.listDetectors();
+    expect(calls[0]?.url).toBe("https://h/api/v1/public/detectors");
+  });
+});
+
 describe("never leaks the api key", () => {
   it("keeps the key out of a network-failure CliError", async () => {
     const { client } = clientWith(() => {

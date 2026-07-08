@@ -1,8 +1,9 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
-import type { ApiClient, TraceExport } from "../../api/client.js";
+import type { ApiClient, FindingDetail, TraceExport } from "../../api/client.js";
 import { CliError, type Writers, defaultWriters, logProgress } from "../../output.js";
+import { createStyler } from "../../render/style.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** The four bundle files, in the fixed order they are reported. */
@@ -55,6 +56,16 @@ export async function runExport(deps: ExportDeps): Promise<void> {
   // Fetch first: a failure here must not create a half-written bundle dir.
   const response: TraceExport = await client.exportTrace(traceId);
 
+  // Best-effort: include the detector finding (1-per-trace) in the bundle. A 404
+  // means "not flagged" (null); any other failure degrades to no finding so a
+  // findings-API hiccup never blocks the export.
+  let finding: FindingDetail | null = null;
+  try {
+    finding = await client.findFindingByTrace(traceId);
+  } catch {
+    finding = null;
+  }
+
   const timestamp = deps.now ? deps.now() : defaultTimestamp();
   const outputDir =
     deps.outputDir ?? join(process.cwd(), `trace_${sanitizeId(traceId)}_${timestamp}`);
@@ -79,8 +90,36 @@ export async function runExport(deps: ExportDeps): Promise<void> {
     writeFileSync(join(outputDir, file), toJsonFile(contents[file]), "utf8");
   }
 
+  // A flagged trace adds a 5th file, `finding.json` (the full FindingDetail —
+  // finding id + per-detector results + RCA). The four core files stay unchanged.
+  const files: string[] = [...BUNDLE_FILES];
+  const findingPath = join(outputDir, "finding.json");
+  if (finding !== null) {
+    writeFileSync(findingPath, toJsonFile(finding), "utf8");
+    files.push("finding.json");
+  } else {
+    // A --force overwrite of a directory from an earlier *flagged* export could
+    // leave behind a finding.json for a different trace; remove it so the bundle
+    // never carries a finding that doesn't match trace.json. `force` = no error
+    // when the file is absent (the common, unflagged case).
+    rmSync(findingPath, { force: true });
+  }
+
+  // Confirm what landed on disk, then (when flagged) a yellow one-liner naming
+  // the detector(s) and pointing at finding.json — consistent with `traces get`.
+  logProgress(`Wrote ${files.length} files: ${files.join(", ")}`, writers);
+  if (finding !== null) {
+    const by = finding.detectors.length > 0 ? ` by ${finding.detectors.join(", ")}` : "";
+    const styler = createStyler(writers.err);
+    writers.err.write(
+      `${styler.warn(`Flagged${by} — finding ${finding.finding_id} in finding.json`)}\n`,
+    );
+  }
+
   if (json) {
-    writers.out.write(`${JSON.stringify({ output_dir: outputDir, files: [...BUNDLE_FILES] })}\n`);
+    writers.out.write(
+      `${JSON.stringify({ output_dir: outputDir, files, finding_id: finding?.finding_id ?? null })}\n`,
+    );
   } else {
     writers.out.write(`${outputDir}\n`);
   }
