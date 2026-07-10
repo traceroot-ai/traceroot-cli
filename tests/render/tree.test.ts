@@ -6,6 +6,7 @@ function span(partial: Partial<SpanLike> & { span_id: string }): SpanLike {
     parent_span_id: null,
     name: partial.span_id,
     span_start_time: "2024-01-01T00:00:00Z",
+    span_end_time: "2024-01-01T00:00:01Z",
     ...partial,
   };
 }
@@ -103,6 +104,91 @@ describe("renderTree", () => {
     expect(out).toContain("root");
     expect(out).toContain("C");
     expect(out).toContain("D");
+  });
+});
+
+describe("renderTree durations", () => {
+  it("shows the formatted duration for a span with an end time", () => {
+    const out = renderTree([
+      span({
+        span_id: "r",
+        name: "r",
+        span_start_time: "2024-01-01T00:00:00Z",
+        span_end_time: "2024-01-01T00:00:01.5Z",
+      }),
+    ]);
+    expect(out).toContain("1.5s");
+  });
+
+  it("right-aligns the duration to the given width", () => {
+    const out = renderTree(
+      [
+        span({
+          span_id: "r",
+          name: "r",
+          span_start_time: "2024-01-01T00:00:00Z",
+          span_end_time: "2024-01-01T00:00:01Z",
+        }),
+      ],
+      { width: 40 },
+    );
+    const line = out.split("\n")[0] as string;
+    expect(line.length).toBe(40);
+    expect(line.endsWith("1.0s")).toBe(true);
+  });
+
+  it("defaults the width to 80 when not given", () => {
+    const out = renderTree([
+      span({
+        span_id: "r",
+        name: "r",
+        span_start_time: "2024-01-01T00:00:00Z",
+        span_end_time: "2024-01-01T00:00:01Z",
+      }),
+    ]);
+    expect((out.split("\n")[0] as string).length).toBe(80);
+  });
+
+  it("shows elapsed-so-far against options.now for a span with no span_end_time", () => {
+    const out = renderTree([
+      span({
+        span_id: "r",
+        name: "r",
+        span_start_time: "2024-01-01T00:00:00Z",
+        span_end_time: null,
+      }),
+    ]);
+    expect(out).not.toMatch(/\d+(\.\d+)?(ms|s)/);
+
+    const withNow = renderTree(
+      [
+        span({
+          span_id: "r",
+          name: "r",
+          span_start_time: "2024-01-01T00:00:00Z",
+          span_end_time: null,
+        }),
+      ],
+      { now: "2024-01-01T00:00:03Z" },
+    );
+    expect(withNow).toContain("3.0s");
+  });
+
+  it("never pads to less than one space between the name/marker and the duration", () => {
+    const out = renderTree(
+      [
+        span({
+          span_id: "r",
+          name: "a-very-long-span-name-that-blows-past-the-target-width-entirely",
+          span_start_time: "2024-01-01T00:00:00Z",
+          span_end_time: "2024-01-01T00:00:01Z",
+        }),
+      ],
+      { width: 20 },
+    );
+    const line = out.split("\n")[0] as string;
+    expect(line).toContain(" 1.0s");
+    expect(line).not.toContain("  1.0s");
   });
 });
 

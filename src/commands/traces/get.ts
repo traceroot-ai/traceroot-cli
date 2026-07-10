@@ -75,12 +75,17 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   const styler = createStyler(writers.out);
   const label = (text: string): string => styler.bold(text);
   const live = isLive(trace.spans);
+  // Single "now" instant, reused for both the header's live elapsed duration
+  // and the per-span tree (via renderTree's `now` option), so a still-running
+  // span's elapsed-so-far agrees with the header rather than drifting apart
+  // from a second, later `Date.now()` read.
+  const nowIso = new Date().toISOString();
 
   // Live traces have no real end yet: show elapsed-so-far and a LIVE marker
   // instead of an end time. Completed traces derive end/duration from the spans.
   const end = live ? null : latestSpanEnd(trace.spans);
   const duration = live
-    ? elapsedMs(trace.trace_start_time, new Date().toISOString())
+    ? elapsedMs(trace.trace_start_time, nowIso)
     : elapsedMs(trace.trace_start_time, end);
 
   const lines: string[] = [];
@@ -118,7 +123,13 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   }
   lines.push("");
   lines.push(label("Spans:"));
-  lines.push(renderTree(trace.spans, { color: colorEnabled(writers.out) }));
+  lines.push(
+    renderTree(trace.spans, {
+      color: colorEnabled(writers.out),
+      width: process.stdout.columns ?? 80,
+      now: nowIso,
+    }),
+  );
   if (live) {
     // Indicate the tree is incomplete — more spans are still arriving.
     lines.push("  *** (live — more spans incoming)");

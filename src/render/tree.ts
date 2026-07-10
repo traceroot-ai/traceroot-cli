@@ -1,3 +1,5 @@
+import { elapsedMs, formatDuration } from "../util/index.js";
+
 /**
  * Minimal structural shape a span needs to be rendered as a tree. A superset of
  * the fields of `SpanResponse` used here, kept local so the renderer stays a
@@ -9,6 +11,8 @@ export interface SpanLike {
   name: string;
   status?: string;
   span_start_time?: string;
+  /** End timestamp, or `null`/absent while the span is still running. */
+  span_end_time?: string | null;
 }
 
 const ERROR_STATUSES = new Set(["ERROR", "error", "STATUS_CODE_ERROR"]);
@@ -17,6 +21,9 @@ const ERROR_STATUSES = new Set(["ERROR", "error", "STATUS_CODE_ERROR"]);
 // terminals; applied to the whole line, gated behind the `color` option.
 const ANSI_RESET = "\x1b[0m";
 const ANSI_RED = "\x1b[91m";
+
+/** Default terminal width assumed when {@link RenderTreeOptions.width} is omitted. */
+const DEFAULT_WIDTH = 80;
 
 function isError(status: string | undefined): boolean {
   return status !== undefined && ERROR_STATUSES.has(status);
@@ -34,6 +41,19 @@ function sortKey(span: SpanLike, index: number): [string, number] {
 export interface RenderTreeOptions {
   /** When true, error span lines are colored red. Off for non-TTY / `NO_COLOR`. */
   color?: boolean;
+  /**
+   * Terminal width: durations are right-aligned to this column. Defaults to
+   * 80.
+   */
+  width?: number;
+  /**
+   * ISO timestamp used as "now" for the elapsed-so-far duration of a span with
+   * no `span_end_time` (still running). Passed in — rather than read via
+   * `Date.now()` inside the renderer — so this stays a pure, testable
+   * transform and agrees with whatever "now" the caller used for its own live
+   * elapsed display (e.g. the `traces get` header).
+   */
+  now?: string;
 }
 
 /**
@@ -46,6 +66,8 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     return "";
   }
   const color = options.color === true;
+  const width = options.width ?? DEFAULT_WIDTH;
+  const now = options.now;
 
   const indexOf = new Map<string, number>();
   for (const [i, span] of spans.entries()) {
@@ -85,8 +107,22 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     visited.add(span.span_id);
     const connector = isRoot ? "" : isLast ? "└─ " : "├─ ";
     const text = `${prefix}${connector}${span.name} ${marker(span.status)}`;
-    lines.push(color && isError(span.status) ? `${ANSI_RED}${text}${ANSI_RESET}` : text);
     const childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+
+    // Duration, right-aligned to `width`: end time if the span has finished,
+    // otherwise elapsed-so-far against `now` (only when the caller supplied
+    // one — a still-running span with no `now` simply shows no duration
+    // rather than silently computing one from a fresh `Date.now()`).
+    const end = span.span_end_time ?? now ?? null;
+    const durationMs =
+      span.span_start_time !== undefined ? elapsedMs(span.span_start_time, end) : null;
+    const durationText = durationMs !== null ? formatDuration(durationMs) : null;
+    const lineCore =
+      durationText === null
+        ? text
+        : `${text}${" ".repeat(Math.max(1, width - text.length - durationText.length))}${durationText}`;
+    lines.push(color && isError(span.status) ? `${ANSI_RED}${lineCore}${ANSI_RESET}` : lineCore);
+
     const children = [...(childrenOf.get(span.span_id) ?? [])].sort(byStart);
     for (const [i, child] of children.entries()) {
       walk(child, childPrefix, i === children.length - 1, false);
