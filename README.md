@@ -92,6 +92,9 @@ tree and the JSON/JSONL bodies):
 
 The flags compose — `--errors-only` is applied first, then `--depth`, then
 `--max-spans` — and the truncation total always reflects the post-filter set.
+Truncation selects spans in tree traversal order (the order the human tree
+prints), so both views keep the same spans; JSON emits the kept spans in the
+backend's original array order.
 
 ```sh
 # Just the failures and how they were reached, as JSON.
