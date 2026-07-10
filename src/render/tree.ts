@@ -15,6 +15,12 @@ export interface SpanLike {
   span_end_time?: string | null;
   /** Error detail, shown as its own line beneath an errored span. */
   status_message?: string | null;
+  /** LLM model name; presence triggers the compact model/token/cost detail. */
+  model_name?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  cost?: number | null;
 }
 
 const ERROR_STATUSES = new Set(["ERROR", "error", "STATUS_CODE_ERROR"]);
@@ -23,6 +29,9 @@ const ERROR_STATUSES = new Set(["ERROR", "error", "STATUS_CODE_ERROR"]);
 // terminals; applied to the whole line, gated behind the `color` option.
 const ANSI_RESET = "\x1b[0m";
 const ANSI_RED = "\x1b[91m";
+// Dim, for the secondary LLM model/token/cost detail line, so it reads as
+// supplementary rather than competing with the span line itself.
+const ANSI_DIM = "\x1b[2m";
 
 /** Default terminal width assumed when {@link RenderTreeOptions.width} is omitted. */
 const DEFAULT_WIDTH = 80;
@@ -37,6 +46,54 @@ function marker(status: string | undefined): string {
 
 function sortKey(span: SpanLike, index: number): [string, number] {
   return [span.span_start_time ?? "", index];
+}
+
+/**
+ * Compact token count for the LLM detail line, e.g. `850` → `"850 tok"`,
+ * `1200` → `"1.2k tok"`. Values at or above 1000 collapse to one decimal of
+ * thousands (trailing `.0` dropped) so the detail stays a single glanceable
+ * token.
+ */
+function formatTokens(count: number): string {
+  if (count < 1000) {
+    return `${count} tok`;
+  }
+  const thousands = (count / 1000).toFixed(1).replace(/\.0$/, "");
+  return `${thousands}k tok`;
+}
+
+/** `total_tokens` if present, else `input_tokens + output_tokens`; null if neither is known. */
+function tokenCount(span: SpanLike): number | null {
+  if (span.total_tokens !== undefined && span.total_tokens !== null) {
+    return span.total_tokens;
+  }
+  if (
+    (span.input_tokens !== undefined && span.input_tokens !== null) ||
+    (span.output_tokens !== undefined && span.output_tokens !== null)
+  ) {
+    return (span.input_tokens ?? 0) + (span.output_tokens ?? 0);
+  }
+  return null;
+}
+
+/**
+ * Compact `model · N tok · $cost` detail for an LLM span, or null when the
+ * span has no `model_name`. Tokens and cost are each omitted individually when
+ * unknown, so a span with only a model name still renders that much.
+ */
+function llmDetail(span: SpanLike): string | null {
+  if (span.model_name === undefined || span.model_name === null || span.model_name === "") {
+    return null;
+  }
+  const parts = [span.model_name];
+  const tokens = tokenCount(span);
+  if (tokens !== null) {
+    parts.push(formatTokens(tokens));
+  }
+  if (span.cost !== undefined && span.cost !== null) {
+    parts.push(`$${span.cost.toFixed(4)}`);
+  }
+  return parts.join(" · ");
 }
 
 /** Optional behavior for {@link renderTree}. */
@@ -133,6 +190,13 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
         const msgText = `${childPrefix}${truncate(trimmed, Math.max(10, width - childPrefix.length))}`;
         lines.push(color ? `${ANSI_RED}${msgText}${ANSI_RESET}` : msgText);
       }
+    }
+
+    // Compact LLM detail (model · tokens · cost), dim, on its own line.
+    const detail = llmDetail(span);
+    if (detail !== null) {
+      const detailText = `${childPrefix}${detail}`;
+      lines.push(color ? `${ANSI_DIM}${detailText}${ANSI_RESET}` : detailText);
     }
 
     const children = [...(childrenOf.get(span.span_id) ?? [])].sort(byStart);

@@ -255,6 +255,67 @@ describe("renderTree error status_message", () => {
   });
 });
 
+describe("renderTree LLM detail", () => {
+  it("shows model, compact token count, and cost on their own dim line", () => {
+    const out = renderTree(
+      [
+        span({
+          span_id: "llm",
+          model_name: "claude-sonnet-4-5",
+          total_tokens: 1234,
+          cost: 0.004,
+        }),
+      ],
+      { color: true },
+    );
+    const lines = out.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("claude-sonnet-4-5");
+    expect(lines[1]).toContain("1.2k tok");
+    expect(lines[1]).toContain("$0.0040");
+    expect(lines[1]).toContain("\x1b[2m");
+  });
+
+  it("sums input_tokens and output_tokens when total_tokens is absent", () => {
+    const out = renderTree([
+      span({ span_id: "llm", model_name: "gpt-4o", input_tokens: 100, output_tokens: 50 }),
+    ]);
+    expect(out).toContain("150 tok");
+  });
+
+  it("prefers total_tokens over input+output when both are present", () => {
+    const out = renderTree([
+      span({
+        span_id: "llm",
+        model_name: "gpt-4o",
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 999,
+      }),
+    ]);
+    expect(out).toContain("999 tok");
+    expect(out).not.toContain("150 tok");
+  });
+
+  it("omits tokens and cost individually when missing, still showing the model", () => {
+    const out = renderTree([span({ span_id: "llm", model_name: "gpt-4o" })]);
+    const lines = out.split("\n");
+    expect(lines[1]).toBe("gpt-4o");
+  });
+
+  it("omits the detail line entirely when model_name is absent", () => {
+    const out = renderTree([span({ span_id: "s", total_tokens: 100, cost: 0.01 })]);
+    expect(out.split("\n")).toHaveLength(1);
+  });
+
+  it("has no ANSI codes for the detail line when color is off", () => {
+    const out = renderTree([
+      span({ span_id: "llm", model_name: "claude-sonnet-4-5", total_tokens: 1200, cost: 0.004 }),
+    ]);
+    expect(out).not.toContain("\x1b[");
+  });
+});
+
 describe("truncate", () => {
   it("returns text unchanged when at or below the max", () => {
     expect(truncate("hello", 200)).toBe("hello");
