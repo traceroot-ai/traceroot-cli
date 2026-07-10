@@ -76,6 +76,26 @@ traceroot findings list --detector <detector-id> --since 7d --json | jq '.data[]
 traceroot findings get --trace 99224be337d725fd5e8f2e7b45dc22ef
 ```
 
+### Exit codes
+
+Every command exits with a class-specific code so scripts can branch on the kind
+of failure — retry a network blip, re-authenticate, or give up on a missing
+resource — without parsing prose.
+
+| Code | Class | JSON `code` | Meaning |
+| ---- | ----- | ----------- | ------- |
+| `0` | success | — | The command completed. |
+| `1` | internal | `internal` | Unexpected/internal error (the default when nothing else fits). |
+| `2` | usage | `usage` | Invalid arguments or options (bad flag value, unknown agent/skill, missing required input). |
+| `3` | auth | `auth` | Authentication required or invalid: HTTP 401/403, or no local credentials. |
+| `4` | not_found | `not_found` | The requested resource does not exist (HTTP 404). |
+| `5` | network | `network` | Network failure or timeout — transient, so a retry may succeed. |
+
+On failure the human-readable message goes to stderr as `error: <message>`. Under
+`--json` the failure is written to stderr instead as exactly one line —
+`{"error":{"code":"<class>","message":"<text>"}}` — while stdout stays empty, so a
+`jq` pipeline over stdout is never corrupted by an error.
+
 ## Skills & agents
 
 Make your coding agent TraceRoot-aware without touching your application source. The
