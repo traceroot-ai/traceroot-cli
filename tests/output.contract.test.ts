@@ -87,3 +87,58 @@ describe("exit-code classes (spawned)", () => {
     expect(parsed.error.code).toBe("usage");
   });
 });
+
+describe("commander-native failures follow the exit-code contract (spawned)", () => {
+  it("exits 2 with one `error: ` line on an unknown option", () => {
+    const { stdout, stderr, status } = runIsolated("traces", "list", "--bogusflag");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/^error: unknown option '--bogusflag'/);
+    // Reported exactly once (no commander double-print).
+    expect(stderr.match(/unknown option/g)).toHaveLength(1);
+  });
+
+  it("exits 2 on an unknown command", () => {
+    const { stdout, stderr, status } = runIsolated("boguscmd");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/^error: unknown command 'boguscmd'/);
+  });
+
+  it("exits 2 when an option's argument is missing", () => {
+    const { stdout, stderr, status } = runIsolated("traces", "list", "--limit");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/^error: .*--limit.*argument missing/);
+  });
+
+  it("under --json an unknown option yields a single `usage` envelope on stderr", () => {
+    const { stdout, stderr, status } = runIsolated("--json", "traces", "list", "--bogusflag");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr.trimEnd().includes("\n")).toBe(false);
+    const parsed = JSON.parse(stderr) as { error: { code: string; message: string } };
+    expect(parsed.error.code).toBe("usage");
+    expect(parsed.error.message).toContain("--bogusflag");
+  });
+
+  it("keeps --help exiting 0 with help on stdout", () => {
+    const { stdout, stderr, status } = runIsolated("--help");
+    expect(status).toBe(0);
+    expect(stdout).toContain("Usage: traceroot");
+    expect(stderr).toBe("");
+  });
+
+  it("keeps subcommand --help exiting 0 with help on stdout", () => {
+    const { stdout, status } = runIsolated("traces", "list", "--help");
+    expect(status).toBe(0);
+    expect(stdout).toContain("Usage: traceroot traces list");
+  });
+
+  it("keeps --version exiting 0 with the version on stdout", () => {
+    const { stdout, stderr, status } = runIsolated("--version");
+    expect(status).toBe(0);
+    expect(stdout.trim()).not.toBe("");
+    expect(stderr).toBe("");
+  });
+});

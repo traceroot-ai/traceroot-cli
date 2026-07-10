@@ -1,6 +1,6 @@
-import { Command, Option } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import { registerCommands } from "./commands/index.js";
-import { colorizeError, handlePipeError, reportError } from "./output.js";
+import { CliError, ExitCode, handlePipeError, reportError } from "./output.js";
 import { getVersion } from "./version.js";
 
 export function buildProgram(): Command {
@@ -8,10 +8,17 @@ export function buildProgram(): Command {
   program.name("traceroot").description("TraceRoot command line interface").version(getVersion());
   // Drop the implicit `help [command]` subcommand; `-h, --help` already covers it.
   program.helpCommand(false);
-  // Color commander's own errors (unknown command/option) the same red as the
-  // central error handler, so every error message is consistent.
+  // Make commander throw a CommanderError instead of calling process.exit, so
+  // its native failures (unknown option/command, missing option argument) reach
+  // the central handler in run() and follow the standard exit-code and `--json`
+  // envelope contract. Set before registerCommands so subcommands inherit it.
+  program.exitOverride();
+  // Suppress commander's own error printing: with exitOverride the same message
+  // travels on the thrown CommanderError and run() reports it exactly once via
+  // reportError (consistent prose/JSON shape and color). Help output is
+  // unaffected — it goes through writeOut/writeErr, not outputError.
   program.configureOutput({
-    outputError: (str, write) => write(colorizeError(str)),
+    outputError: () => {},
   });
   // Surface program-wide global flags (e.g. `--json`) in every subcommand's
   // `--help` under a "Global Options" section, so they're discoverable where
@@ -75,8 +82,7 @@ export function buildProgram(): Command {
   program.action((_opts, command: Command) => {
     const operands = command.args;
     if (operands.length > 0) {
-      command.error(`error: unknown command '${operands[0]}'`, { exitCode: 1 });
-      return;
+      throw new CliError(`unknown command '${operands[0]}'`, ExitCode.usage);
     }
     // No subcommand given: show help and exit non-zero. Help goes to stderr
     // (per the output contract: human text never pollutes stdout). An explicit
@@ -110,6 +116,26 @@ export async function run(argv: string[]): Promise<void> {
     // The central catch has no resolved Context, so detect `--json` straight from
     // argv (the accepted approach) to pick the machine-readable error envelope.
     const json = argv.includes("--json");
+    if (err instanceof CommanderError) {
+      if (err.exitCode === 0) {
+        // `--help` / `--version`: normal output was already written; exit 0
+        // naturally so stdout flushes on its own.
+        return;
+      }
+      if (err.code === "commander.help") {
+        // Help was already rendered (e.g. bare `traceroot`); the CommanderError
+        // message is only a placeholder, so add no error line.
+        exitAfterStderrDrain(err.exitCode);
+        return;
+      }
+      // A commander-native usage failure (unknown option, missing option
+      // argument, …). Its own printing is suppressed in buildProgram, so report
+      // it here exactly once, stripping commander's "error: " prefix (the
+      // reporter adds its own).
+      const message = err.message.replace(/^error: /, "");
+      exitAfterStderrDrain(reportError(new CliError(message, ExitCode.usage), { json }));
+      return;
+    }
     exitAfterStderrDrain(reportError(err, { json }));
   }
 }
