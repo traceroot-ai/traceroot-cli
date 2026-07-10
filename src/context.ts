@@ -4,7 +4,7 @@ import { loadEnvFileFromDisk, loadOptionalEnvFileFromDisk } from "./config/envFi
 import { readConfig } from "./config/manager.js";
 import { type ResolvedAuth, resolveAuth } from "./config/resolve.js";
 import type { Config } from "./config/schema.js";
-import { CliError } from "./output.js";
+import { CliError, ExitCode } from "./output.js";
 
 /** Global flags parsed by the root program. */
 export interface GlobalOptions {
@@ -47,7 +47,10 @@ function resolveTimeoutMs(flag: string | undefined, env: NodeJS.ProcessEnv): num
   // so match the same digits-only rule `--limit` uses.
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed) || Number.parseInt(trimmed, 10) <= 0) {
-    throw new CliError(`invalid timeout: ${raw} (expected a positive integer of milliseconds)`);
+    throw new CliError(
+      `invalid timeout: ${raw} (expected a positive integer of milliseconds)`,
+      ExitCode.usage,
+    );
   }
   return Number.parseInt(trimmed, 10);
 }

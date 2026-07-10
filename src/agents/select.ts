@@ -1,4 +1,4 @@
-import { CliError } from "../output.js";
+import { CliError, ExitCode } from "../output.js";
 import { type Prompt, dim, isInteractive, readLine } from "../prompt.js";
 import { AGENT_IDS, requireAgent } from "./index.js";
 import type { AgentAdapter, AgentId } from "./types.js";
@@ -40,6 +40,7 @@ export async function resolveAgentOrPrompt(input: ResolveAgentInput): Promise<Ag
   if (json || !interactive) {
     throw new CliError(
       `Missing required option --agent.\nChoose one of: ${AGENT_IDS.join(", ")}.\nExample:\n  ${example}`,
+      ExitCode.usage,
     );
   }
 

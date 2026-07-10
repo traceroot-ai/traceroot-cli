@@ -53,6 +53,23 @@ export function buildProgram(): Command {
     .option("--json", "emit machine-readable JSON output for supported commands")
     .option("--timeout <ms>", "per-request network timeout in milliseconds (default: 30000)");
   registerCommands(program);
+  // Make the exit-code contract discoverable from `traceroot --help` so scripts
+  // know how to branch on failures (mirrors the README table).
+  program.addHelpText(
+    "after",
+    [
+      "",
+      "Exit codes:",
+      "  0  success",
+      "  1  internal   unexpected/internal error",
+      "  2  usage      invalid arguments or options",
+      "  3  auth       authentication required or invalid",
+      "  4  not_found  the requested resource does not exist",
+      "  5  network    network failure or timeout (retryable)",
+      "",
+      'Under --json, failures also print {"error":{"code","message"}} to stderr.',
+    ].join("\n"),
+  );
   // Root action: lets global flags parse without a subcommand, while still
   // rejecting an unrecognized operand so unknown-command handling is preserved.
   program.action((_opts, command: Command) => {
@@ -77,10 +94,11 @@ export async function run(argv: string[]): Promise<void> {
   try {
     await buildProgram().parseAsync(argv);
   } catch (err) {
-    const code = reportError(err);
-    process.exitCode = code;
-    if (code !== 0) {
-      process.exit(code);
-    }
+    // The central catch has no resolved Context, so detect `--json` straight from
+    // argv (the accepted approach) to pick the machine-readable error envelope.
+    const json = argv.includes("--json");
+    // Set `process.exitCode` rather than calling `process.exit`, so a piped
+    // stderr can fully drain before the process ends instead of being truncated.
+    process.exitCode = reportError(err, { json });
   }
 }

@@ -45,3 +45,45 @@ describe("output contract (spawned failing command)", () => {
     expect(stderr).not.toContain("\x1b[");
   });
 });
+
+describe("exit-code classes (spawned)", () => {
+  it("exits 2 (usage) on a validation error", () => {
+    // Bad --limit is a pure usage error, so it never needs credentials.
+    const { stdout, stderr, status } = runIsolated("traces", "list", "--limit", "banana");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/^error: /);
+  });
+
+  it("exits 3 (auth) when credentials are missing", () => {
+    const { stdout, stderr, status } = runIsolated("status");
+    expect(status).toBe(3);
+    expect(stdout).toBe("");
+    expect(stderr).not.toBe("");
+  });
+
+  it("human-mode stderr starts with `error: `", () => {
+    const { stderr } = runIsolated("status");
+    expect(stderr.startsWith("error: ")).toBe(true);
+  });
+
+  it("under --json emits a single parseable error envelope to stderr, stdout empty", () => {
+    const { stdout, stderr, status } = runIsolated("--json", "status");
+    expect(status).toBe(3);
+    expect(stdout).toBe("");
+    // Exactly one line.
+    expect(stderr.trimEnd().includes("\n")).toBe(false);
+    const parsed = JSON.parse(stderr) as { error: { code: string; message: string } };
+    expect(parsed.error.code).toBe("auth");
+    expect(typeof parsed.error.message).toBe("string");
+    expect(parsed.error.message).not.toBe("");
+  });
+
+  it("under --json a usage error carries the `usage` code", () => {
+    const { stdout, stderr, status } = runIsolated("--json", "traces", "list", "--limit", "banana");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    const parsed = JSON.parse(stderr) as { error: { code: string } };
+    expect(parsed.error.code).toBe("usage");
+  });
+});

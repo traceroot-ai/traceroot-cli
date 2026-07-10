@@ -1,4 +1,4 @@
-import { CliError } from "../output.js";
+import { CliError, ExitCode } from "../output.js";
 
 /** The first-party skills the CLI knows how to install. This is the allowlist. */
 export type BuiltinSkillName = "traceroot-instrument-repo" | "traceroot-quickstart";
@@ -43,7 +43,10 @@ export function isBuiltinSkillName(name: string): name is BuiltinSkillName {
 export function requireBuiltinSkill(name: string): BuiltinSkill {
   const skill = BUILTIN_SKILLS.find((s) => s.name === name);
   if (skill === undefined) {
-    throw new CliError(`Unknown skill '${name}'. Choose one of: ${builtinSkillNames()}.`);
+    throw new CliError(
+      `Unknown skill '${name}'. Choose one of: ${builtinSkillNames()}.`,
+      ExitCode.usage,
+    );
   }
   return skill;
 }
