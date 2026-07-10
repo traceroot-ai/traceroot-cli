@@ -12,6 +12,8 @@ export interface DoctorInput {
   /** Network validation result; `null` when it was skipped (no credentials). */
   credentialsValid: boolean | null;
   configPath: string;
+  /** Path to the global (per-user) config fallback; see `globalConfigPath()`. */
+  globalConfigPath: string;
   detection: RepoDetection;
   env: NodeJS.ProcessEnv;
 }
@@ -32,10 +34,12 @@ function safeHostOrigin(raw: string): string {
 }
 
 /** Friendly description of where a credential resolved from (no secret values). */
-function describeSource(source: AuthSource, configPath: string): string {
+function describeSource(source: AuthSource, configPath: string, globalConfigPath: string): string {
   switch (source) {
     case "config":
       return configPath;
+    case "global-config":
+      return globalConfigPath;
     case "auto-env-file":
       return ".env (auto-loaded)";
     case "env-file":
@@ -50,7 +54,7 @@ function describeSource(source: AuthSource, configPath: string): string {
 }
 
 function credentialChecks(input: DoctorInput): DoctorCheck[] {
-  const { auth, configPath, credentialsValid } = input;
+  const { auth, configPath, globalConfigPath, credentialsValid } = input;
   const checks: DoctorCheck[] = [];
 
   // API key and host are required for CLI readiness, so their absence is a hard
@@ -61,7 +65,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     category: "credentials",
     status: hasKey ? "pass" : "fail",
     message: hasKey
-      ? `API key resolved from ${describeSource(auth.apiKey.source, configPath)}`
+      ? `API key resolved from ${describeSource(auth.apiKey.source, configPath, globalConfigPath)}`
       : "API key not found. Run `traceroot login`.",
   });
 
@@ -92,7 +96,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
 }
 
 function localFileChecks(input: DoctorInput): DoctorCheck[] {
-  const { configPath } = input;
+  const { configPath, globalConfigPath } = input;
   const checks: DoctorCheck[] = [];
   const configExists = existsSync(configPath);
 
@@ -102,6 +106,18 @@ function localFileChecks(input: DoctorInput): DoctorCheck[] {
     status: configExists ? "pass" : "warn",
     message: configExists ? `Config file present at ${configPath}` : "No config file found",
   });
+
+  // Purely informational: the global fallback is optional, so its absence is
+  // never a warning — only note it when present.
+  const globalConfigExists = existsSync(globalConfigPath);
+  if (globalConfigExists) {
+    checks.push({
+      name: "global_config_file_present",
+      category: "traceroot_files",
+      status: "pass",
+      message: `Global config file present at ${globalConfigPath}`,
+    });
+  }
 
   if (configExists) {
     const dir = dirname(configPath);

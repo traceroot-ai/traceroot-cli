@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { createApiClient } from "../api/client.js";
-import { configPath } from "../config/manager.js";
+import { configPath, globalConfigPath } from "../config/manager.js";
 import type { Context } from "../context.js";
 import { buildDoctorReport } from "../doctor/checks.js";
 import type { DoctorCheck, DoctorReport } from "../doctor/types.js";
@@ -25,6 +25,8 @@ export interface RunDoctorDeps {
   cwd: string;
   env: NodeJS.ProcessEnv;
   configPath: string;
+  /** Path to the global (per-user) config fallback; see `globalConfigPath()`. */
+  globalConfigPath: string;
   writers: Writers;
   /** Network credential validation; omitted in tests to stay offline. */
   verifyCredentials?: (host: string, apiKey: string) => Promise<boolean>;
@@ -54,6 +56,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
     auth: ctx.auth,
     credentialsValid,
     configPath: deps.configPath,
+    globalConfigPath: deps.globalConfigPath,
     detection,
     env,
   });
@@ -95,6 +98,7 @@ export function registerDoctor(program: Command): void {
         cwd: process.cwd(),
         env: process.env,
         configPath: configPath(),
+        globalConfigPath: globalConfigPath(),
         writers: defaultWriters,
         verifyCredentials: async (host, apiKey) => {
           try {

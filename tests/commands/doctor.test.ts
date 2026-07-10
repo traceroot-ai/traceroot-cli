@@ -43,14 +43,16 @@ function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
   return { writers: { out, err }, out, err };
 }
 
-function makeCtx(opts: { apiKey?: string; host?: string; json?: boolean }): Context {
+function makeCtx(opts: {
+  apiKey?: string;
+  host?: string;
+  json?: boolean;
+  source?: "config" | "global-config";
+}): Context {
+  const source = opts.source ?? "config";
   const auth: ResolvedAuth = {
-    apiKey: opts.apiKey
-      ? { value: opts.apiKey, source: "config" }
-      : { value: undefined, source: "none" },
-    hostUrl: opts.host
-      ? { value: opts.host, source: "config" }
-      : { value: undefined, source: "none" },
+    apiKey: opts.apiKey ? { value: opts.apiKey, source } : { value: undefined, source: "none" },
+    hostUrl: opts.host ? { value: opts.host, source } : { value: undefined, source: "none" },
   };
   return { auth, json: opts.json ?? false };
 }
@@ -69,6 +71,9 @@ const baseDeps = (cwdArg: string, writers: Writers) => ({
   cwd: cwdArg,
   env: {} as NodeJS.ProcessEnv,
   configPath: join(cwdArg, ".traceroot", "config.json"),
+  // A path under the isolated temp cwd, never the real ~/.config, so the
+  // global-config-presence check never touches the real filesystem.
+  globalConfigPath: join(cwdArg, "global-config", "config.json"),
   writers,
   detection,
 });
@@ -250,6 +255,37 @@ describe("runDoctor", () => {
     const { writers, out } = makeWriters();
     await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
     expect(out.data).not.toContain("Recommended next step");
+  });
+
+  it("reports the global config path as the source when credentials resolved from it", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({
+      ...baseDeps(cwd, writers),
+      ctx: makeCtx({
+        apiKey: "tr_x",
+        host: "https://api.example.com",
+        source: "global-config",
+      }),
+    });
+    const key = report.checks.find((c) => c.name === "api_key_resolved");
+    expect(key?.message).toBe(`API key resolved from ${join(cwd, "global-config", "config.json")}`);
+  });
+
+  it("reports the global config file as absent when not present", async () => {
+    const { writers } = makeWriters();
+    const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+    expect(report.checks.find((c) => c.name === "global_config_file_present")).toBeUndefined();
+  });
+
+  it("reports the global config file as present when it exists", async () => {
+    const globalConfigPath = join(cwd, "global-config", "config.json");
+    mkdirSync(join(cwd, "global-config"), { recursive: true });
+    writeFileSync(globalConfigPath, JSON.stringify({ api_key: "k", host_url: "https://h" }));
+    const { writers } = makeWriters();
+    const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+    const check = report.checks.find((c) => c.name === "global_config_file_present");
+    expect(check?.status).toBe("pass");
+    expect(check?.message).toContain(globalConfigPath);
   });
 
   it("emits valid JSON with data.checks and data.summary", async () => {
