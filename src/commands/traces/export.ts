@@ -5,6 +5,7 @@ import type { ApiClient, FindingDetail, TraceExport } from "../../api/client.js"
 import { CliError, type Writers, defaultWriters, logProgress } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
+import { onceOption } from "./list.js";
 
 /** The four bundle files, in the fixed order they are reported. */
 const BUNDLE_FILES = ["trace.json", "spans.json", "git_context.json", "manifest.json"] as const;
@@ -19,6 +20,12 @@ export interface ExportDeps {
   writers: Writers;
   /** Injectable clock for a deterministic default directory name. */
   now?: () => string;
+  /**
+   * Field projection to request, sent verbatim as `fields` (e.g. `full` or
+   * `io,metadata`). Omitted means the server's default `full` projection,
+   * which already includes per-span input/output/metadata.
+   */
+  fields?: string;
 }
 
 /** Replaces filesystem-unsafe characters in a trace id with underscores. */
@@ -51,10 +58,10 @@ function toJsonFile(value: unknown): string {
  * fetch leaves nothing on disk.
  */
 export async function runExport(deps: ExportDeps): Promise<void> {
-  const { client, traceId, force, json, writers } = deps;
+  const { client, traceId, force, json, writers, fields } = deps;
 
   // Fetch first: a failure here must not create a half-written bundle dir.
-  const response: TraceExport = await client.exportTrace(traceId);
+  const response: TraceExport = await client.exportTrace(traceId, { fields });
 
   // Best-effort: include the detector finding (1-per-trace) in the bundle. A 404
   // means "not flagged" (null); any other failure degrades to no finding so a
@@ -131,6 +138,12 @@ export function registerTracesExport(traces: Command): void {
     .argument("<traceId>", "trace identifier")
     .option("--output <dir>", "destination directory")
     .option("--force", "overwrite a non-empty output directory")
+    .option(
+      "--fields <groups>",
+      "field projection to request, e.g. full or io,metadata. Export defaults to the full " +
+        "projection (span input/output/metadata included); pass --fields to narrow it.",
+      onceOption("--fields"),
+    )
     .description("Export a trace bundle")
     .action(async (traceId: string, _opts, command: Command) => {
       const ctx = contextFromCommand(command);
@@ -143,6 +156,7 @@ export function registerTracesExport(traces: Command): void {
         force: opts.force === true,
         json: ctx.json,
         writers: defaultWriters,
+        fields: opts.fields as string | undefined,
       });
     });
 }
