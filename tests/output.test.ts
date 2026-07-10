@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   CliError,
+  ExitCode,
   type Writers,
   colorEnabled,
+  exitCodeToString,
   handlePipeError,
   isCliError,
   logInfo,
@@ -83,7 +85,7 @@ describe("log helpers", () => {
 describe("reportError", () => {
   it("returns the CliError exit code and writes the message to err with no stack", () => {
     const { w, out, err } = writers();
-    const code = reportError(new CliError("boom", 2), w);
+    const code = reportError(new CliError("boom", 2), {}, w);
     expect(code).toBe(2);
     expect(err.data).toContain("boom");
     expect(err.data).not.toContain("at ");
@@ -92,7 +94,67 @@ describe("reportError", () => {
 
   it("returns 1 for a plain Error", () => {
     const { w } = writers();
-    expect(reportError(new Error("plain"), w)).toBe(1);
+    expect(reportError(new Error("plain"), {}, w)).toBe(1);
+  });
+
+  it("writes human prose (not JSON) by default", () => {
+    const { w, err } = writers();
+    reportError(new CliError("nope", 2), {}, w);
+    expect(err.data).toBe("error: nope\n");
+  });
+
+  describe("json envelope", () => {
+    it("writes exactly one parseable line to err with the class code and message", () => {
+      const { w, out, err } = writers();
+      const code = reportError(new CliError("no key", ExitCode.auth), { json: true }, w);
+      expect(code).toBe(ExitCode.auth);
+      // Single line, trailing newline only.
+      expect(err.data.endsWith("\n")).toBe(true);
+      expect(err.data.trimEnd().includes("\n")).toBe(false);
+      const parsed = JSON.parse(err.data) as { error: { code: string; message: string } };
+      expect(parsed).toEqual({ error: { code: "auth", message: "no key" } });
+      // stdout stays empty.
+      expect(out.data).toBe("");
+    });
+
+    it("maps each exit-code class to its stable string code", () => {
+      const cases: Array<[number, string]> = [
+        [ExitCode.usage, "usage"],
+        [ExitCode.auth, "auth"],
+        [ExitCode.notFound, "not_found"],
+        [ExitCode.network, "network"],
+        [ExitCode.internal, "internal"],
+      ];
+      for (const [exitCode, expected] of cases) {
+        const { w, err } = writers();
+        reportError(new CliError("x", exitCode), { json: true }, w);
+        expect((JSON.parse(err.data) as { error: { code: string } }).error.code).toBe(expected);
+      }
+    });
+
+    it("classifies a plain Error as internal", () => {
+      const { w, err } = writers();
+      const code = reportError(new Error("boom"), { json: true }, w);
+      expect(code).toBe(ExitCode.internal);
+      expect((JSON.parse(err.data) as { error: { code: string } }).error.code).toBe("internal");
+    });
+
+    it("emits no ANSI escape in the JSON envelope", () => {
+      const { w, err } = writers(false, true);
+      reportError(new CliError("boom", ExitCode.usage), { json: true }, w);
+      expect(err.data).not.toContain("\x1b[");
+    });
+  });
+});
+
+describe("exitCodeToString", () => {
+  it("maps known codes and defaults unknown ones to internal", () => {
+    expect(exitCodeToString(ExitCode.usage)).toBe("usage");
+    expect(exitCodeToString(ExitCode.auth)).toBe("auth");
+    expect(exitCodeToString(ExitCode.notFound)).toBe("not_found");
+    expect(exitCodeToString(ExitCode.network)).toBe("network");
+    expect(exitCodeToString(ExitCode.internal)).toBe("internal");
+    expect(exitCodeToString(99)).toBe("internal");
   });
 });
 
@@ -126,7 +188,7 @@ describe("color application", () => {
     const { w, err } = writers(false, false);
     logProgress("dim text", w);
     logWarn("warn text", w);
-    reportError(new Error("err text"), w);
+    reportError(new Error("err text"), {}, w);
     expect(err.data).not.toContain("\x1b[");
   });
 });
