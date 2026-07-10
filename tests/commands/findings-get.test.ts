@@ -42,17 +42,30 @@ function detail(over: Partial<FindingDetail> = {}): FindingDetail {
 interface FakeState {
   lastGet?: string;
   lastByTrace?: string;
+  lastGetTrace?: string;
 }
 
 function fakeClient(
-  over: { finding?: FindingDetail; byTrace?: FindingDetail; error?: Error },
+  over: {
+    finding?: FindingDetail;
+    byTrace?: FindingDetail;
+    error?: Error;
+    traceUrl?: string;
+    getTraceError?: Error;
+  },
   state: FakeState = {},
 ): ApiClient {
   const reject = () => Promise.reject(new Error("unused"));
   return {
     whoami: reject,
     listTraces: reject,
-    getTrace: reject,
+    getTrace: (id: string) => {
+      state.lastGetTrace = id;
+      if (over.getTraceError) {
+        return Promise.reject(over.getTraceError);
+      }
+      return Promise.resolve({ trace_url: over.traceUrl ?? "https://app.example/t/1" } as never);
+    },
     exportTrace: reject,
     listDetectors: reject,
     listFindings: reject,
@@ -103,6 +116,10 @@ describe("runGet", () => {
     // per-detector summary + raw data payload stay JSON-only
     expect(out.data).not.toContain("unsupported claims");
     expect(out.data).not.toContain('"k": "v"');
+    // footer: trace link (from the best-effort getTrace) + next-step hints
+    expect(out.data).toContain("https://app.example/t/1");
+    expect(out.data).toContain("traceroot traces get tr-1");
+    expect(out.data).toContain("traceroot traces export tr-1");
   });
 
   it("dispatches to getFindingByTrace for --trace", async () => {
@@ -202,6 +219,19 @@ describe("runGet", () => {
     expect(out.data).toContain("tool call");
   });
 
+  it("omits the trace link (but keeps the next-step hints) when getTrace fails", async () => {
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ finding: detail(), getTraceError: new Error("boom") }),
+      json: false,
+      writers: w,
+      findingId: "fnd-1",
+    });
+    expect(out.data).not.toContain("View in TraceRoot:");
+    expect(out.data).toContain("traceroot traces get tr-1");
+    expect(out.data).toContain("traceroot traces export tr-1");
+  });
+
   it("shows 'RCA: none' and no Root cause line when rca is null", async () => {
     const { writers: w, out } = writers();
     await runGet({
@@ -239,14 +269,16 @@ describe("runGet", () => {
     expect(out.data).not.toContain("- - root cause one"); // no doubled list markers
   });
 
-  it("emits a bare FindingDetail object under --json", async () => {
+  it("emits a bare FindingDetail object under --json, with no trace fetch", async () => {
+    const state: FakeState = {};
     const { writers: w, out } = writers();
     await runGet({
-      client: fakeClient({ finding: detail() }),
+      client: fakeClient({ finding: detail() }, state),
       json: true,
       writers: w,
       findingId: "fnd-1",
     });
+    expect(state.lastGetTrace).toBeUndefined(); // json mode never fetches the trace
     const parsed = JSON.parse(out.data) as Record<string, unknown>;
     expect(parsed.finding_id).toBe("fnd-1");
     expect(parsed.data).toBeUndefined(); // bare object, not a {data,meta} envelope

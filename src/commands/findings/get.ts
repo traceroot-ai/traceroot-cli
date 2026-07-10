@@ -49,7 +49,18 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
     return;
   }
 
-  writers.out.write(`${renderFinding(finding, writers, timeZone)}\n`);
+  // Best-effort: fetch the trace purely to get its backend-provided `trace_url`
+  // for the footer link. Never let this fail the command — any error (network,
+  // 404, etc.) degrades to no link, with the next-step hints still shown.
+  let traceUrl: string | null = null;
+  try {
+    const trace = await client.getTrace(finding.trace_id);
+    traceUrl = trace.trace_url;
+  } catch {
+    traceUrl = null;
+  }
+
+  writers.out.write(`${renderFinding(finding, writers, traceUrl, timeZone)}\n`);
 }
 
 /**
@@ -101,7 +112,12 @@ function detectorCategory(result: FindingDetail["results"][number]): string {
   return result.template ? `${category} (template: ${result.template})` : category;
 }
 
-function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: string): string {
+function renderFinding(
+  finding: FindingDetail,
+  writers: Writers,
+  traceUrl: string | null,
+  timeZone?: string,
+): string {
   const styler = createStyler(writers.out);
   const label = (text: string): string => styler.bold(text);
   const lines: string[] = [];
@@ -145,6 +161,18 @@ function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: stri
   } else {
     lines.push(`${label("RCA:")} ${finding.rca.status}`);
   }
+
+  // Footer: never dead-end. A backend-provided trace link when available (best
+  // effort — never hand-construct a frontend URL), and always the next-step
+  // hints, matching the `styler.warn` idiom `traces get` uses.
+  lines.push("");
+  if (traceUrl !== null) {
+    lines.push(`${label("View in TraceRoot:")} ${styler.link(traceUrl)}`);
+  }
+  lines.push(styler.warn(`run 'traceroot traces get ${finding.trace_id}' for spans and context`));
+  lines.push(
+    styler.warn(`run 'traceroot traces export ${finding.trace_id}' to save a full bundle`),
+  );
 
   return lines.join("\n");
 }
