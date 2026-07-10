@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type SpanLike, renderTree, truncate } from "../../src/render/tree.js";
+import {
+  type SpanLike,
+  filterErrorsWithAncestors,
+  isErrorStatus,
+  renderTree,
+  spansWithinDepth,
+  truncate,
+} from "../../src/render/tree.js";
 
 function span(partial: Partial<SpanLike> & { span_id: string }): SpanLike {
   return {
@@ -103,6 +110,125 @@ describe("renderTree", () => {
     expect(out).toContain("root");
     expect(out).toContain("C");
     expect(out).toContain("D");
+  });
+});
+
+describe("renderTree --depth cap", () => {
+  const nested = [
+    span({ span_id: "root", name: "root" }),
+    span({ span_id: "mid", parent_span_id: "root", name: "mid" }),
+    span({ span_id: "leaf", parent_span_id: "mid", name: "leaf" }),
+    span({ span_id: "leaf2", parent_span_id: "mid", name: "leaf2" }),
+  ];
+
+  it("hides spans below the depth limit and marks the count", () => {
+    // depth 2: root (1) and mid (2) show; leaf/leaf2 (3) are hidden behind one marker.
+    const out = renderTree(nested, { maxDepth: 2 });
+    expect(out).toContain("root");
+    expect(out).toContain("mid");
+    expect(out).not.toContain("leaf");
+    expect(out).toContain("… 2 deeper spans hidden");
+  });
+
+  it("singularizes the marker for a single hidden span", () => {
+    const out = renderTree(
+      [
+        span({ span_id: "root", name: "root" }),
+        span({ span_id: "only", parent_span_id: "root", name: "only" }),
+      ],
+      { maxDepth: 1 },
+    );
+    expect(out).toContain("… 1 deeper span hidden");
+    expect(out).not.toContain("deeper spans");
+  });
+
+  it("emits no depth marker when nothing is hidden", () => {
+    const out = renderTree(nested, { maxDepth: 5 });
+    expect(out).not.toContain("hidden");
+    expect(out).toContain("leaf2");
+  });
+});
+
+describe("renderTree --max-spans cap", () => {
+  const spans = [
+    span({ span_id: "a", name: "a" }),
+    span({ span_id: "b", name: "b" }),
+    span({ span_id: "c", name: "c" }),
+    span({ span_id: "d", name: "d" }),
+  ];
+
+  it("stops after N spans and appends the true remainder", () => {
+    const out = renderTree(spans, { maxSpans: 2 });
+    const lines = out.split("\n");
+    // 2 span lines + 1 elision line.
+    expect(lines).toHaveLength(3);
+    expect(out).toContain("… 2 more spans");
+  });
+
+  it("singularizes the elision line for one remaining span", () => {
+    const out = renderTree(spans, { maxSpans: 3 });
+    expect(out).toContain("… 1 more span");
+    expect(out).not.toContain("more spans");
+  });
+
+  it("emits no elision line when the cap is not reached", () => {
+    const out = renderTree(spans, { maxSpans: 10 });
+    expect(out).not.toContain("more span");
+  });
+});
+
+describe("spansWithinDepth", () => {
+  const spans = [
+    span({ span_id: "root", name: "root" }),
+    span({ span_id: "mid", parent_span_id: "root", name: "mid" }),
+    span({ span_id: "leaf", parent_span_id: "mid", name: "leaf" }),
+  ];
+
+  it("keeps only spans at or above the depth limit (roots = 1)", () => {
+    expect(spansWithinDepth(spans, 1).map((s) => s.span_id)).toEqual(["root"]);
+    expect(spansWithinDepth(spans, 2).map((s) => s.span_id)).toEqual(["root", "mid"]);
+    expect(spansWithinDepth(spans, 3).map((s) => s.span_id)).toEqual(["root", "mid", "leaf"]);
+  });
+
+  it("treats a parent cycle as a root without hanging", () => {
+    const cyclic = [
+      span({ span_id: "x", parent_span_id: "y", name: "x" }),
+      span({ span_id: "y", parent_span_id: "x", name: "y" }),
+    ];
+    expect(
+      spansWithinDepth(cyclic, 1)
+        .map((s) => s.span_id)
+        .sort(),
+    ).toEqual(["x", "y"]);
+  });
+});
+
+describe("filterErrorsWithAncestors", () => {
+  it("keeps error spans plus their ancestor chain and drops unrelated branches", () => {
+    const spans = [
+      span({ span_id: "root", name: "root", status: "OK" }),
+      span({ span_id: "a", parent_span_id: "root", name: "a", status: "OK" }),
+      span({ span_id: "err", parent_span_id: "a", name: "err", status: "ERROR" }),
+      span({ span_id: "unrelated", parent_span_id: "root", name: "unrelated", status: "OK" }),
+    ];
+    const kept = filterErrorsWithAncestors(spans).map((s) => s.span_id);
+    expect(kept).toEqual(["root", "a", "err"]);
+    expect(kept).not.toContain("unrelated");
+  });
+
+  it("returns an empty list when there are no error spans", () => {
+    const spans = [span({ span_id: "root", name: "root", status: "OK" })];
+    expect(filterErrorsWithAncestors(spans)).toEqual([]);
+  });
+});
+
+describe("isErrorStatus", () => {
+  it("recognizes the known error statuses and nothing else", () => {
+    for (const s of ["ERROR", "error", "STATUS_CODE_ERROR"]) {
+      expect(isErrorStatus(s)).toBe(true);
+    }
+    expect(isErrorStatus("OK")).toBe(false);
+    expect(isErrorStatus(undefined)).toBe(false);
   });
 });
 
