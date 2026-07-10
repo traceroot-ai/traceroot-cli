@@ -5,6 +5,7 @@ import {
   isErrorStatus,
   renderTree,
   spansWithinDepth,
+  treeOrder,
   truncate,
 } from "../../src/render/tree.js";
 
@@ -247,6 +248,35 @@ describe("renderTree and spansWithinDepth agree on malformed data", () => {
     // Only y is hidden; x itself is on screen and must not be counted.
     expect(out).toContain("… 1 deeper span hidden");
     expect(out).not.toContain("2 deeper");
+  });
+});
+
+describe("treeOrder", () => {
+  it("matches the renderer's span line order exactly, including recovered cycles", () => {
+    // Array order deliberately differs from tree order: sibling B is listed
+    // before A but A starts earlier, and a detached x ↔ y cycle trails behind.
+    const spans = [
+      span({
+        span_id: "B",
+        parent_span_id: "root",
+        name: "B",
+        span_start_time: "2024-01-01T00:00:02Z",
+      }),
+      span({ span_id: "root", name: "root", span_start_time: "2024-01-01T00:00:00Z" }),
+      span({
+        span_id: "A",
+        parent_span_id: "root",
+        name: "A",
+        span_start_time: "2024-01-01T00:00:01Z",
+      }),
+      span({ span_id: "x", parent_span_id: "y", name: "x" }),
+      span({ span_id: "y", parent_span_id: "x", name: "y" }),
+    ];
+    const renderedOrder = renderTree(spans)
+      .split("\n")
+      .map((l) => (/([\w-]+) \[/.exec(l) as RegExpExecArray)[1] as string);
+    expect(treeOrder(spans).map((s) => s.span_id)).toEqual(renderedOrder);
+    expect(renderedOrder).toEqual(["root", "A", "B", "x", "y"]);
   });
 });
 

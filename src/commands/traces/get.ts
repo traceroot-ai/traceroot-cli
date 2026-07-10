@@ -2,7 +2,12 @@ import type { Command } from "commander";
 import type { ApiClient, FindingDetail, TraceDetail } from "../../api/client.js";
 import { CliError, type Writers, colorEnabled, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
-import { filterErrorsWithAncestors, renderTree, spansWithinDepth } from "../../render/tree.js";
+import {
+  filterErrorsWithAncestors,
+  renderTree,
+  spansWithinDepth,
+  treeOrder,
+} from "../../render/tree.js";
 import { formatDuration, formatTimestamp, parseBackendTime } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 import { onceOption } from "./list.js";
@@ -67,7 +72,19 @@ function boundSpans(
 } {
   const working = opts.errorsOnly === true ? filterErrorsWithAncestors(spans) : spans;
   const depthFiltered = opts.depth !== undefined ? spansWithinDepth(working, opts.depth) : working;
-  const shown = opts.maxSpans !== undefined ? depthFiltered.slice(0, opts.maxSpans) : depthFiltered;
+  // `--max-spans` SELECTS the first n spans in tree traversal order — the same
+  // order the human tree prints, via the shared `treeOrder` — so both modes keep
+  // the SAME spans. The kept spans are then EMITTED in their original backend
+  // array order, keeping the JSON/JSONL body array-stable.
+  let shown = depthFiltered;
+  if (opts.maxSpans !== undefined && opts.maxSpans < depthFiltered.length) {
+    const keep = new Set(
+      treeOrder(depthFiltered)
+        .slice(0, opts.maxSpans)
+        .map((s) => s.span_id),
+    );
+    shown = depthFiltered.filter((s) => keep.has(s.span_id));
+  }
   return {
     working,
     shown,

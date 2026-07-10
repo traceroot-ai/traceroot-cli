@@ -565,6 +565,101 @@ describe("runGet --output jsonl", () => {
   });
 });
 
+describe("runGet --max-spans selection consistency", () => {
+  // Reviewer repro: sibling B appears BEFORE A in the backend array but A
+  // starts earlier, so tree order (root, A, B) differs from array order
+  // (root, B, A). Both modes must keep the SAME spans.
+  function siblingTrace(): TraceDetail {
+    return detail({
+      spans: [
+        span({
+          span_id: "root",
+          name: "root",
+          parent_span_id: null,
+          span_start_time: "2024-01-01T00:00:00Z",
+        }),
+        span({
+          span_id: "B",
+          name: "B",
+          parent_span_id: "root",
+          span_start_time: "2024-01-01T00:00:02Z",
+        }),
+        span({
+          span_id: "A",
+          name: "A",
+          parent_span_id: "root",
+          span_start_time: "2024-01-01T00:00:01Z",
+        }),
+      ],
+    });
+  }
+
+  it("keeps the same spans in human and JSON (tree-order selection)", async () => {
+    const human = writers();
+    await runGet({
+      client: fakeClient({ trace: siblingTrace() }),
+      json: false,
+      writers: human.writers,
+      traceId: "t-1",
+      maxSpans: 2,
+    });
+    const machine = writers();
+    await runGet({
+      client: fakeClient({ trace: siblingTrace() }),
+      json: true,
+      writers: machine.writers,
+      traceId: "t-1",
+      maxSpans: 2,
+    });
+    const parsed = JSON.parse(machine.out.data.trim());
+    // Tree order is root → A (earlier start) → B, so the cap keeps root and A
+    // in BOTH modes; B is the elided span everywhere.
+    expect(parsed.spans.map((s: { span_id: string }) => s.span_id).sort()).toEqual(["A", "root"]);
+    expect(human.out.data).toContain("A [ok]");
+    expect(human.out.data).not.toContain("B [ok]");
+    expect(parsed.spans_truncated).toEqual({ shown: 2, total: 3 });
+  });
+
+  it("emits the kept spans in the original backend array order", async () => {
+    // Child c1 precedes its parent in the array; both survive the cap, so the
+    // JSON must keep the array order [c1, root], not tree order [root, c1].
+    const trace = detail({
+      spans: [
+        span({
+          span_id: "c1",
+          name: "c1",
+          parent_span_id: "root",
+          span_start_time: "2024-01-01T00:00:01Z",
+        }),
+        span({
+          span_id: "root",
+          name: "root",
+          parent_span_id: null,
+          span_start_time: "2024-01-01T00:00:00Z",
+        }),
+        span({
+          span_id: "c2",
+          name: "c2",
+          parent_span_id: "root",
+          span_start_time: "2024-01-01T00:00:02Z",
+        }),
+      ],
+    });
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+      maxSpans: 2,
+    });
+    const parsed = JSON.parse(out.data.trim());
+    // Keep-set from tree order = {root, c1}; emitted array-stable as [c1, root].
+    expect(parsed.spans.map((s: { span_id: string }) => s.span_id)).toEqual(["c1", "root"]);
+    expect(parsed.spans_truncated).toEqual({ shown: 2, total: 3 });
+  });
+});
+
 describe("runGet (flags compose)", () => {
   it("applies --errors-only before --max-spans; total reflects the post-filter set", async () => {
     // root → a → err(ERROR); a second error branch root → b → err2(ERROR).

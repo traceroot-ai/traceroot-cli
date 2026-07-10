@@ -259,6 +259,39 @@ function computeDepths<T extends TreeSpan>(spans: T[]): Map<string, number> {
 }
 
 /**
+ * The spans in the renderer's traversal order: sorted roots depth-first (with
+ * the same sibling ordering, cycle guard, and orphan-recovery pass), exactly
+ * the sequence {@link renderTree} prints span lines in. The shared source of
+ * truth for "which spans come first", so a span-count cap selects the SAME
+ * spans in the human tree and in the JSON/JSONL emitters.
+ */
+export function treeOrder<T extends TreeSpan>(spans: T[]): T[] {
+  const { roots, childrenOf, byStart } = buildTree(spans);
+  const out: T[] = [];
+  const visited = new Set<string>();
+  const visit = (span: T): void => {
+    if (visited.has(span.span_id)) {
+      return;
+    }
+    visited.add(span.span_id);
+    out.push(span);
+    const children = [...(childrenOf.get(span.span_id) ?? [])].sort(byStart);
+    for (const child of children) {
+      visit(child);
+    }
+  };
+  for (const root of [...roots].sort(byStart)) {
+    visit(root);
+  }
+  for (const span of spans) {
+    if (!visited.has(span.span_id)) {
+      visit(span);
+    }
+  }
+  return out;
+}
+
+/**
  * Returns the spans whose depth (roots = 1) is at most `maxDepth`, preserving
  * input order. The flat-array counterpart of {@link renderTree}'s depth cap.
  */
