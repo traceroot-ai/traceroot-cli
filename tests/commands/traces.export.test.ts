@@ -457,6 +457,56 @@ describe("runExport", () => {
     expect(err.data).not.toContain("Flagged");
   });
 
+  it("patches manifest.json's files to include finding.json for a flagged trace, matching the --json summary", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers, out } = makeWriters();
+
+    await runExport({
+      client: fakeClient(response, makeFinding()),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: true,
+      writers,
+    });
+
+    const manifest = JSON.parse(readFileSync(join(outputDir, "manifest.json"), "utf8"));
+    const expectedFiles = [
+      "trace.json",
+      "spans.json",
+      "git_context.json",
+      "manifest.json",
+      "finding.json",
+    ];
+    expect(manifest.files).toEqual(expectedFiles);
+    const parsed = JSON.parse(out.data);
+    expect(manifest.files).toEqual(parsed.files);
+    // Everything else passes through untouched.
+    expect(manifest.bundle_version).toBe(response.manifest.bundle_version);
+    expect(manifest.project_id).toBe(response.manifest.project_id);
+    expect(manifest.trace_id).toBe(response.manifest.trace_id);
+  });
+
+  it("writes manifest.json byte-identical to the server's manifest for an unflagged trace", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+
+    await runExport({
+      client: fakeClient(response, null),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+    });
+
+    const raw = readFileSync(join(outputDir, "manifest.json"), "utf8");
+    expect(raw).toBe(`${JSON.stringify(response.manifest, null, 2)}\n`);
+    expect(JSON.parse(raw)).toEqual(response.manifest);
+  });
+
   it("writes no finding.json when the finding lookup fails (best-effort)", async () => {
     const response = makeResponse();
     const outputDir = join(tmpRoot, "bundle");
@@ -496,6 +546,46 @@ describe("runExport", () => {
     // detector finding that doesn't match trace.json.
     expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
     expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
+  });
+
+  it("--force re-export from flagged to unflagged drops finding.json and shrinks manifest.files back to 4", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+
+    // Seed the directory as a prior *flagged* export would have left it: a
+    // finding.json plus a 5-entry manifest.
+    await runExport({
+      client: fakeClient(response, makeFinding()),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+    });
+    expect(existsSync(join(outputDir, "finding.json"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(outputDir, "manifest.json"), "utf8")).files).toContain(
+      "finding.json",
+    );
+
+    // Re-export the same trace, now unflagged, with --force.
+    await runExport({
+      client: fakeClient(response, null),
+      traceId: "abc123",
+      outputDir,
+      force: true,
+      json: false,
+      writers,
+    });
+
+    expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
+    const manifest = JSON.parse(readFileSync(join(outputDir, "manifest.json"), "utf8"));
+    expect(manifest.files).toEqual([
+      "trace.json",
+      "spans.json",
+      "git_context.json",
+      "manifest.json",
+    ]);
   });
 
   it("propagates a fetch failure and creates no bundle dir or files", async () => {

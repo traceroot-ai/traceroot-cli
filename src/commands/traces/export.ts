@@ -77,11 +77,20 @@ export async function runExport(deps: ExportDeps): Promise<void> {
   logProgress(`Writing bundle to ${outputDir} …`, writers);
   mkdirSync(outputDir, { recursive: true });
 
+  // A flagged trace adds a 5th file, `finding.json` (the full FindingDetail —
+  // finding id + per-detector results + RCA). Computed up front so the manifest
+  // written to disk, the stderr summary, and the --json summary all report the
+  // exact same file list — the server's manifest doesn't know about the finding,
+  // which the CLI fetches separately, so it must be patched here.
+  const files: string[] = finding !== null ? [...BUNDLE_FILES, "finding.json"] : [...BUNDLE_FILES];
+
   const contents: Record<(typeof BUNDLE_FILES)[number], unknown> = {
     "trace.json": response.trace,
     "spans.json": response.spans,
     "git_context.json": response.git_context,
-    "manifest.json": response.manifest,
+    // Spread-then-override preserves key order and leaves bundle_version,
+    // project_id, trace_id untouched; only `files` reflects the finding.
+    "manifest.json": { ...response.manifest, files },
   };
   // The trace is fetched before the directory is created, so a fetch failure
   // leaves nothing on disk. A mid-write I/O error here can still leave a partial
@@ -90,13 +99,9 @@ export async function runExport(deps: ExportDeps): Promise<void> {
     writeFileSync(join(outputDir, file), toJsonFile(contents[file]), "utf8");
   }
 
-  // A flagged trace adds a 5th file, `finding.json` (the full FindingDetail —
-  // finding id + per-detector results + RCA). The four core files stay unchanged.
-  const files: string[] = [...BUNDLE_FILES];
   const findingPath = join(outputDir, "finding.json");
   if (finding !== null) {
     writeFileSync(findingPath, toJsonFile(finding), "utf8");
-    files.push("finding.json");
   } else {
     // A --force overwrite of a directory from an earlier *flagged* export could
     // leave behind a finding.json for a different trace; remove it so the bundle
