@@ -1,10 +1,14 @@
 import type { Command } from "commander";
 import type { ApiClient, FindingDetail } from "../../api/client.js";
-import { type Writers, CliError, defaultWriters, writeJson } from "../../output.js";
+import { CliError, type Writers, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
+import { wrapMarkdown } from "../../render/wrap.js";
 import { formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 import { onceOption } from "../traces/list.js";
+
+/** Fallback RCA wrap width when the terminal doesn't report a column count. */
+const DEFAULT_WRAP_WIDTH = 80;
 
 /** Dependencies for the testable core of `findings get`. */
 export interface RunGetDeps {
@@ -69,6 +73,34 @@ function categoryLabel(template: string | null | undefined): string {
   return CATEGORY_LABELS[template] ?? template.charAt(0).toUpperCase() + template.slice(1);
 }
 
+/**
+ * The detector's own classification, from `result.data.category` (a loose,
+ * detector-defined payload — only a non-empty string `category` key is
+ * trusted). `null` when `data` doesn't carry one, so the caller falls back to
+ * the template-derived label.
+ */
+function dataCategory(data: unknown): string | null {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return null;
+  }
+  const value = (data as Record<string, unknown>).category;
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/**
+ * The Category line's value: the detector's own conclusion (`data.category`)
+ * when present, annotated with the raw template id for precision, e.g.
+ * `Tool call error (template: failure)`. Falls back to the template-derived
+ * label alone when `data` has no usable category.
+ */
+function detectorCategory(result: FindingDetail["results"][number]): string {
+  const category = dataCategory(result.data);
+  if (category === null) {
+    return categoryLabel(result.template);
+  }
+  return result.template ? `${category} (template: ${result.template})` : category;
+}
+
 function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: string): string {
   const styler = createStyler(writers.out);
   const label = (text: string): string => styler.bold(text);
@@ -81,32 +113,35 @@ function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: stri
   lines.push(`${label("Summary:")}    ${finding.summary}`);
 
   // Per-detector, flush-left: `Detector: <name> (<template>)`, then the unique id
-  // (disambiguates same-named detectors) and the human-readable category.
-  // Multiple detectors are separated by a blank line; per-detector summary/data
-  // stay in `--json` only.
+  // (disambiguates same-named detectors), whether the detector actually fired
+  // (`Identified:`), and the Category line — the detector's own conclusion
+  // (`result.data.category`) when present, else the template-derived label.
+  // Multiple detectors are separated by a blank line; the raw `summary` /
+  // `data` payload stays in `--json` only.
   lines.push("");
   finding.results.forEach((result, i) => {
     if (i > 0) {
       lines.push("");
     }
     const template = result.template ? ` (${result.template})` : "";
-    lines.push(`${label("Detector:")} ${result.detector_name}${template}`);
-    lines.push(`${label("ID:")}       ${result.detector_id}`);
-    lines.push(`${label("Category:")} ${categoryLabel(result.template)}`);
+    lines.push(`${label("Detector:")}   ${result.detector_name}${template}`);
+    lines.push(`${label("ID:")}         ${result.detector_id}`);
+    lines.push(`${label("Identified:")} ${result.identified ? "yes" : "no"}`);
+    lines.push(`${label("Category:")}   ${detectorCategory(result)}`);
   });
 
-  // RCA, flush-left. With a result: a bare `RCA:` header, then the result verbatim
-  // (it already carries its own formatting — usually a markdown list — so no added
-  // bullets, or the markers double up). No RCA → `RCA: none`; an in-progress RCA
-  // with no result yet keeps its status (e.g. `RCA: processing`).
+  // RCA, flush-left. With a result: a bare `RCA:` header, then the result
+  // wrapped to the terminal width with minimal markdown treatment (headings /
+  // `**bold**` / `` `code` `` styled-or-stripped rather than printed literally;
+  // see `render/wrap.ts`). No RCA → `RCA: none`; an in-progress RCA with no
+  // result yet keeps its status (e.g. `RCA: processing`).
   lines.push("");
   if (!finding.rca) {
     lines.push(`${label("RCA:")} none`);
   } else if (finding.rca.result) {
     lines.push(label("RCA:"));
-    for (const resultLine of finding.rca.result.trim().split("\n")) {
-      lines.push(resultLine);
-    }
+    const width = process.stdout.columns ?? DEFAULT_WRAP_WIDTH;
+    lines.push(wrapMarkdown(finding.rca.result.trim(), width, styler.bold));
   } else {
     lines.push(`${label("RCA:")} ${finding.rca.status}`);
   }

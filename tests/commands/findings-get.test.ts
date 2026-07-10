@@ -92,16 +92,17 @@ describe("runGet", () => {
     expect(out.data).toContain("ID:");
     expect(out.data).toContain("d1"); // detector id
     expect(out.data).toContain("Category:");
-    expect(out.data).toContain("Hallucination"); // human category label
+    expect(out.data).toContain("Hallucination"); // human category label (no data.category to prefer)
+    expect(out.data).toContain("Identified:");
+    expect(out.data).toContain("yes"); // result.identified surfaced
     expect(out.data).toContain("RCA:");
     expect(out.data).not.toContain("RCA: done"); // status dropped when a result is present
     expect(out.data).toContain("the root cause"); // rca result printed verbatim
     // no per-section RCA header now that there's no structured packet
     expect(out.data).not.toContain("Root cause:");
-    // per-detector summary + data and the "Identified" field are JSON-only now
+    // per-detector summary + raw data payload stay JSON-only
     expect(out.data).not.toContain("unsupported claims");
     expect(out.data).not.toContain('"k": "v"');
-    expect(out.data).not.toContain("Identified");
   });
 
   it("dispatches to getFindingByTrace for --trace", async () => {
@@ -116,6 +117,89 @@ describe("runGet", () => {
     });
     expect(state.lastByTrace).toBe("tr-9");
     expect(out.data).toContain("tr-9");
+  });
+
+  it("prefers the detector's own data.category, noting the raw template in parens", async () => {
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({
+        finding: detail({
+          results: [resultItem({ template: "failure", data: { category: "Tool call error" } })],
+        }),
+      }),
+      json: false,
+      writers: w,
+      findingId: "fnd-1",
+    });
+    expect(out.data).toContain("Category:");
+    expect(out.data).toContain("Tool call error (template: failure)");
+  });
+
+  it("falls back to the template label when data has no usable category", async () => {
+    const { writers: w, out } = writers();
+    for (const data of [{ k: "v" }, { category: 42 }, { category: "" }, null, "oops", [1, 2]]) {
+      const localOut = out.data;
+      await runGet({
+        client: fakeClient({
+          finding: detail({ results: [resultItem({ template: "logic", data })] }),
+        }),
+        json: false,
+        writers: w,
+        findingId: "fnd-1",
+      });
+      const added = out.data.slice(localOut.length);
+      expect(added).toContain("Category:");
+      expect(added).toContain("Logic Error");
+      expect(added).not.toContain("(template:"); // fallback form has no parenthetical
+    }
+  });
+
+  it("shows an Identified: no line when a result has identified: false", async () => {
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({
+        finding: detail({ results: [resultItem({ identified: false })] }),
+      }),
+      json: false,
+      writers: w,
+      findingId: "fnd-1",
+    });
+    expect(out.data).toContain("Identified:");
+    expect(out.data).toContain("no");
+  });
+
+  it("wraps a long RCA paragraph instead of printing raw hundreds-wide lines", async () => {
+    const longWord = () => "word";
+    const longParagraph = Array.from({ length: 40 }, longWord).join(" ");
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ finding: detail({ rca: { status: "done", result: longParagraph } }) }),
+      json: false,
+      writers: w,
+      findingId: "fnd-1",
+    });
+    const rcaLines = out.data.split("\n").filter((line) => line.length > 0 && !line.includes(":"));
+    for (const line of rcaLines) {
+      expect(line.length).toBeLessThanOrEqual(80); // default fallback width
+    }
+  });
+
+  it("styles-or-strips markdown headings and bold instead of printing them literally", async () => {
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({
+        finding: detail({
+          rca: { status: "done", result: "## Root Cause\n\nThe **tool call** failed." },
+        }),
+      }),
+      json: false,
+      writers: w,
+      findingId: "fnd-1",
+    });
+    expect(out.data).not.toContain("##");
+    expect(out.data).not.toContain("**");
+    expect(out.data).toContain("Root Cause");
+    expect(out.data).toContain("tool call");
   });
 
   it("shows 'RCA: none' and no Root cause line when rca is null", async () => {
