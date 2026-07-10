@@ -352,6 +352,247 @@ describe("runGet (finding indicator)", () => {
   });
 });
 
+/** A trace with a 4-span linear chain: root → a → b → c, all OK. */
+function chainTrace(): TraceDetail {
+  return detail({
+    spans: [
+      span({ span_id: "root", name: "root", parent_span_id: null }),
+      span({ span_id: "a", name: "a", parent_span_id: "root" }),
+      span({ span_id: "b", name: "b", parent_span_id: "a" }),
+      span({ span_id: "c", name: "c", parent_span_id: "b" }),
+    ],
+  });
+}
+
+describe("runGet --max-spans", () => {
+  it("caps the JSON spans array and records the true total", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+      maxSpans: 2,
+    });
+    const parsed = JSON.parse(out.data.trim());
+    expect(parsed.spans).toHaveLength(2);
+    expect(parsed.spans_truncated).toEqual({ shown: 2, total: 4 });
+  });
+
+  it("caps the human tree and appends an elision line with the true remainder", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      maxSpans: 2,
+    });
+    expect(out.data).toContain("… 2 more spans");
+  });
+
+  it("adds no marker when the cap is not exceeded", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+      maxSpans: 10,
+    });
+    const parsed = JSON.parse(out.data.trim());
+    expect(parsed.spans).toHaveLength(4);
+    expect(parsed.spans_truncated).toBeUndefined();
+  });
+});
+
+describe("runGet --depth", () => {
+  it("filters deep spans out of the JSON array", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+      depth: 2,
+    });
+    const parsed = JSON.parse(out.data.trim());
+    expect(parsed.spans.map((s: { span_id: string }) => s.span_id)).toEqual(["root", "a"]);
+  });
+
+  it("emits a depth elision marker in the human tree", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      depth: 2,
+    });
+    expect(out.data).toContain("deeper span");
+    expect(out.data).not.toContain("c [ok]");
+  });
+});
+
+describe("runGet --errors-only", () => {
+  /** root → a → err(ERROR), plus an unrelated OK branch root → other. */
+  function errorTrace(): TraceDetail {
+    return detail({
+      spans: [
+        span({ span_id: "root", name: "root", parent_span_id: null, status: "OK" }),
+        span({ span_id: "a", name: "a", parent_span_id: "root", status: "OK" }),
+        span({ span_id: "err", name: "err", parent_span_id: "a", status: "ERROR" }),
+        span({ span_id: "other", name: "other", parent_span_id: "root", status: "OK" }),
+      ],
+    });
+  }
+
+  it("keeps error spans and their ancestors, dropping unrelated branches (JSON)", async () => {
+    const trace = errorTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+      errorsOnly: true,
+    });
+    const parsed = JSON.parse(out.data.trim());
+    expect(parsed.spans.map((s: { span_id: string }) => s.span_id)).toEqual(["root", "a", "err"]);
+  });
+
+  it("drops the unrelated branch from the human tree", async () => {
+    const trace = errorTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      errorsOnly: true,
+    });
+    expect(out.data).toContain("err");
+    expect(out.data).not.toContain("other");
+  });
+
+  it("indicates explicitly when no error spans match (JSON)", async () => {
+    const trace = chainTrace(); // all OK
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+      errorsOnly: true,
+    });
+    const parsed = JSON.parse(out.data.trim());
+    expect(parsed.spans).toEqual([]);
+    expect(parsed.errors_only_no_matches).toBe(true);
+  });
+
+  it("indicates explicitly when no error spans match (human)", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      errorsOnly: true,
+    });
+    expect(out.data).toContain("no error spans");
+  });
+});
+
+describe("runGet --output jsonl", () => {
+  it("emits a header line then one JSON-parseable line per span; header excludes spans", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      output: "jsonl",
+    });
+    const lines = out.data.trim().split("\n");
+    expect(lines).toHaveLength(5); // 1 header + 4 spans
+    const header = JSON.parse(lines[0] as string);
+    expect(header.spans).toBeUndefined();
+    expect(header.trace_id).toBe("t-1");
+    expect(header.finding).toBeNull();
+    for (const line of lines.slice(1)) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+    expect(JSON.parse(lines[1] as string).span_id).toBe("root");
+  });
+
+  it("works without the global --json flag (jsonl implies machine output)", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      output: "jsonl",
+    });
+    // Machine output only: no human tree connectors / labels.
+    expect(out.data).not.toContain("Trace:");
+    expect(out.data).not.toContain("[ok]");
+  });
+
+  it("carries the truncation marker on the header when capped", async () => {
+    const trace = chainTrace();
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      output: "jsonl",
+      maxSpans: 2,
+    });
+    const lines = out.data.trim().split("\n");
+    expect(lines).toHaveLength(3); // header + 2 spans
+    const header = JSON.parse(lines[0] as string);
+    expect(header.spans_truncated).toEqual({ shown: 2, total: 4 });
+  });
+});
+
+describe("runGet (flags compose)", () => {
+  it("applies --errors-only before --max-spans; total reflects the post-filter set", async () => {
+    // root → a → err(ERROR); a second error branch root → b → err2(ERROR).
+    const trace = detail({
+      spans: [
+        span({ span_id: "root", name: "root", parent_span_id: null, status: "OK" }),
+        span({ span_id: "a", name: "a", parent_span_id: "root", status: "OK" }),
+        span({ span_id: "err", name: "err", parent_span_id: "a", status: "ERROR" }),
+        span({ span_id: "b", name: "b", parent_span_id: "root", status: "OK" }),
+        span({ span_id: "err2", name: "err2", parent_span_id: "b", status: "ERROR" }),
+      ],
+    });
+    const { writers: w, out } = writers();
+    await runGet({
+      client: fakeClient({ trace }),
+      json: true,
+      writers: w,
+      traceId: "t-1",
+      errorsOnly: true,
+      maxSpans: 2,
+    });
+    const parsed = JSON.parse(out.data.trim());
+    // All 5 spans are on an error path, so the post-filter total is 5, capped to 2.
+    expect(parsed.spans).toHaveLength(2);
+    expect(parsed.spans_truncated).toEqual({ shown: 2, total: 5 });
+  });
+});
+
 describe("runGet (errors)", () => {
   it("rejects and writes nothing to stdout on an unknown id", async () => {
     const { writers: w, out } = writers();
