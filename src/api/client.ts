@@ -1,4 +1,4 @@
-import { CliError } from "../output.js";
+import { CliError, ExitCode } from "../output.js";
 import type { paths } from "./generated/schema.js";
 
 /** Default per-request timeout when a caller doesn't specify one. */
@@ -82,6 +82,21 @@ function isErrorBody(value: unknown): value is ErrorBody {
 }
 
 /**
+ * Classifies a non-2xx HTTP status into a CLI exit-code class so scripts can tell
+ * re-auth (401/403) from give-up (404) from an unexpected server error. Anything
+ * else (5xx, other 4xx) is treated as internal (1).
+ */
+function exitCodeForStatus(status: number): number {
+  if (status === 401 || status === 403) {
+    return ExitCode.auth;
+  }
+  if (status === 404) {
+    return ExitCode.notFound;
+  }
+  return ExitCode.internal;
+}
+
+/**
  * Creates a thin typed client over the public REST API. No network activity
  * occurs on construction — only the request methods call `fetch`.
  */
@@ -92,10 +107,13 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   try {
     parsedHost = new URL(base);
   } catch {
-    throw new CliError(`invalid host URL: ${base}`);
+    throw new CliError(`invalid host URL: ${base}`, ExitCode.usage);
   }
   if (parsedHost.protocol !== "http:" && parsedHost.protocol !== "https:") {
-    throw new CliError(`unsupported host scheme: ${parsedHost.protocol} (expected http or https)`);
+    throw new CliError(
+      `unsupported host scheme: ${parsedHost.protocol} (expected http or https)`,
+      ExitCode.usage,
+    );
   }
   const headers = {
     authorization: `Bearer ${opts.apiKey}`,
@@ -118,7 +136,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       // echo back request contents and leak the api key. Mention only the host.
       const message = err instanceof Error ? err.message : String(err);
       const safe = message.split(opts.apiKey).join("<redacted>");
-      throw new CliError(`request to ${base} failed: ${safe}`);
+      throw new CliError(`request to ${base} failed: ${safe}`, ExitCode.network);
     }
   }
 
@@ -128,7 +146,10 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   // api-key-free message naming the host and the timeout budget.
   function throwIfTimeout(err: unknown): void {
     if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
-      throw new CliError(`request to ${base} timed out after ${opts.timeoutMs / 1000}s`);
+      throw new CliError(
+        `request to ${base} timed out after ${opts.timeoutMs / 1000}s`,
+        ExitCode.network,
+      );
     }
   }
 
@@ -142,7 +163,10 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     } catch {
       // Ignore unreadable / non-JSON error bodies.
     }
-    throw new CliError(detail ?? `request failed with status ${res.status}`);
+    throw new CliError(
+      detail ?? `request failed with status ${res.status}`,
+      exitCodeForStatus(res.status),
+    );
   }
 
   /** Reads a JSON body, translating a body-phase timeout into the same message. */
