@@ -3,7 +3,7 @@ import type { ApiClient, FindingDetail, TraceDetail } from "../../api/client.js"
 import { type Writers, colorEnabled, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTree } from "../../render/tree.js";
-import { formatDuration, formatTimestamp, parseBackendTime } from "../../util/index.js";
+import { elapsedMs, formatDuration, formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** Max width for the single-line RCA preview shown inline in `traces get`. */
@@ -49,23 +49,6 @@ function latestSpanEnd(spans: Span[]): string | null {
 /** A trace is live (still running) when at least one span has no end time yet. */
 function isLive(spans: Span[]): boolean {
   return spans.some((span) => span.span_end_time === null);
-}
-
-/** Milliseconds between two ISO timestamps, or null when not derivable. */
-function elapsedMs(start: string, end: string | null): number | null {
-  if (end === null) {
-    return null;
-  }
-  // Parse both as zone-less UTC so the live path (end is a real-UTC ISO) and the
-  // completed path stay consistent; a bare `new Date(...)` would misread the
-  // zone-less backend start time as host-local and skew the elapsed math.
-  const startDate = parseBackendTime(start);
-  const endDate = parseBackendTime(end);
-  if (startDate === null || endDate === null) {
-    return null;
-  }
-  const ms = endDate.getTime() - startDate.getTime();
-  return Number.isFinite(ms) && ms >= 0 ? ms : null;
 }
 
 /** Core, network-free logic for `traces get`. Tests inject a fake client. */

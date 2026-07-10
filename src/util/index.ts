@@ -69,6 +69,27 @@ export function parseBackendTime(raw: string): Date | null {
 }
 
 /**
+ * Milliseconds between two backend timestamps, or null when not derivable
+ * (`end` is null, either side fails to parse, or the result would be
+ * negative). Both sides are parsed via {@link parseBackendTime} so zone-less
+ * backend times are read as UTC rather than host-local. Shared by the trace
+ * header (`traces get`) and the per-span tree renderer so their "live" /
+ * elapsed durations stay consistent with each other.
+ */
+export function elapsedMs(start: string, end: string | null): number | null {
+  if (end === null) {
+    return null;
+  }
+  const startDate = parseBackendTime(start);
+  const endDate = parseBackendTime(end);
+  if (startDate === null || endDate === null) {
+    return null;
+  }
+  const ms = endDate.getTime() - startDate.getTime();
+  return Number.isFinite(ms) && ms >= 0 ? ms : null;
+}
+
+/**
  * Renders a backend timestamp in a readable, unambiguous form: local time with
  * an explicit timezone label (e.g. `2026-06-04 16:43:13 PDT`), since the backend
  * sends zone-less UTC. `timeZone` overrides the local zone (used by tests for
