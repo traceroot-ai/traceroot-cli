@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,10 +17,16 @@ const isolatedEnv: NodeJS.ProcessEnv = {
   TRACEROOT_HOST_URL: "",
 };
 
+// A fresh empty working directory so the CLI's auto-discovered `.env` (a
+// lowest-precedence credential source) can never pick up a developer's stray
+// repo `.env` and flip a missing-credentials failure into a network one.
+const isolatedCwd = mkdtempSync(join(tmpdir(), "traceroot-cli-contract-"));
+
 function runIsolated(...args: string[]): { stdout: string; stderr: string; status: number | null } {
   const result = spawnSync(process.execPath, [binPath, ...args], {
     encoding: "utf8",
     env: isolatedEnv,
+    cwd: isolatedCwd,
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
