@@ -31,8 +31,52 @@ function marker(status: string | undefined): string {
   return isErrorStatus(status) ? "[error]" : "[ok]";
 }
 
-function sortKey(span: SpanLike, index: number): [string, number] {
+function sortKey(span: { span_start_time?: string }, index: number): [string, number] {
   return [span.span_start_time ?? "", index];
+}
+
+/** Minimal structural fields the tree-building helpers need. */
+type TreeSpan = { span_id: string; parent_span_id: string | null; span_start_time?: string };
+
+/** The parent/child structure every tree consumer must agree on. */
+interface TreeIndex<T> {
+  /** Spans whose parent is null or absent from the set (orphans). */
+  roots: T[];
+  childrenOf: Map<string, T[]>;
+  /** Sibling comparator: start time, falling back to input order for stability. */
+  byStart: (a: T, b: T) => number;
+}
+
+/**
+ * Builds the parent/child index used by {@link renderTree}, {@link treeOrder}
+ * and the depth computation. One shared construction (roots, children, sibling
+ * order) so the human tree and the flat-array filters cannot drift apart.
+ */
+function buildTree<T extends TreeSpan>(spans: T[]): TreeIndex<T> {
+  const indexOf = new Map<string, number>();
+  for (const [i, span] of spans.entries()) {
+    indexOf.set(span.span_id, i);
+  }
+  const childrenOf = new Map<string, T[]>();
+  const roots: T[] = [];
+  for (const span of spans) {
+    const parent = span.parent_span_id;
+    if (parent !== null && indexOf.has(parent)) {
+      const siblings = childrenOf.get(parent) ?? [];
+      siblings.push(span);
+      childrenOf.set(parent, siblings);
+    } else {
+      roots.push(span);
+    }
+  }
+  const byStart = (a: T, b: T): number => {
+    const [ak, ai] = sortKey(a, indexOf.get(a.span_id) ?? 0);
+    const [bk, bi] = sortKey(b, indexOf.get(b.span_id) ?? 0);
+    if (ak < bk) return -1;
+    if (ak > bk) return 1;
+    return ai - bi;
+  };
+  return { roots, childrenOf, byStart };
 }
 
 /** Optional behavior for {@link renderTree}. */
@@ -66,52 +110,29 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
   const maxDepth = options.maxDepth;
   const maxSpans = options.maxSpans;
 
-  const indexOf = new Map<string, number>();
-  for (const [i, span] of spans.entries()) {
-    indexOf.set(span.span_id, i);
-  }
+  const { roots, childrenOf, byStart } = buildTree(spans);
 
-  const childrenOf = new Map<string, SpanLike[]>();
-  const roots: SpanLike[] = [];
-  for (const span of spans) {
-    const parent = span.parent_span_id;
-    if (parent !== null && indexOf.has(parent)) {
-      const siblings = childrenOf.get(parent) ?? [];
-      siblings.push(span);
-      childrenOf.set(parent, siblings);
-    } else {
-      roots.push(span);
-    }
-  }
-
-  const byStart = (a: SpanLike, b: SpanLike): number => {
-    const [ak, ai] = sortKey(a, indexOf.get(a.span_id) ?? 0);
-    const [bk, bi] = sortKey(b, indexOf.get(b.span_id) ?? 0);
-    if (ak < bk) return -1;
-    if (ak > bk) return 1;
-    return ai - bi;
-  };
-
-  // Count the unique spans in the subtrees rooted at `children`, so a depth
-  // elision marker can report exactly how many spans it stands in for. Each
-  // hidden span is also added to `visited` (passed in) so the orphan-recovery
-  // pass below does not re-render it as a stray root. A local `seen` set guards
-  // against cycles in malformed data.
-  const subtreeSpanCount = (children: SpanLike[], markHidden: Set<string>): number => {
-    const seen = new Set<string>();
+  // Count the spans hidden behind a depth-elision marker: the subtree(s) under
+  // `children`, EXCLUDING anything already rendered (`visitedSet`) — an
+  // already-displayed span (e.g. the shown side of a parent cycle) is not
+  // hidden, so it must not be counted. Each genuinely hidden span is added to
+  // `visitedSet` so the orphan-recovery pass below does not re-render it as a
+  // stray root; the same set breaks parent cycles.
+  const subtreeSpanCount = (children: SpanLike[], visitedSet: Set<string>): number => {
+    let count = 0;
     const stack = [...children];
     while (stack.length > 0) {
       const s = stack.pop() as SpanLike;
-      if (seen.has(s.span_id)) {
+      if (visitedSet.has(s.span_id)) {
         continue;
       }
-      seen.add(s.span_id);
-      markHidden.add(s.span_id);
+      visitedSet.add(s.span_id);
+      count += 1;
       for (const c of childrenOf.get(s.span_id) ?? []) {
         stack.push(c);
       }
     }
-    return seen.size;
+    return count;
   };
 
   // Each entry is one output line, tagged so the `--max-spans` cap can count
@@ -148,13 +169,17 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
       return;
     }
     // Depth cap: at the limit, hide this span's whole subtree behind one marker
-    // rendered as a final pseudo-child, rather than recursing further.
+    // rendered as a final pseudo-child, rather than recursing further. When the
+    // "subtree" holds nothing new (every member already rendered, e.g. a cycle
+    // back to a shown span), there is nothing hidden and no marker to print.
     if (maxDepth !== undefined && depth >= maxDepth) {
       const hidden = subtreeSpanCount(children, visited);
-      entries.push({
-        text: `${childPrefix}└─ … ${hidden} deeper span${hidden === 1 ? "" : "s"} hidden`,
-        isSpan: false,
-      });
+      if (hidden > 0) {
+        entries.push({
+          text: `${childPrefix}└─ … ${hidden} deeper span${hidden === 1 ? "" : "s"} hidden`,
+          isSpan: false,
+        });
+      }
       return;
     }
     for (const [i, child] of children.entries()) {
@@ -198,44 +223,36 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
 
 /**
  * Depth of each span keyed by `span_id`, where a root/orphan is depth 1 and a
- * child is one deeper than its parent. Computed by a BFS from the roots — the
- * same root/orphan and cycle-recovery rules {@link renderTree} uses — so the
+ * child is one deeper than its parent. Computed by traversal from the roots
+ * over the SAME {@link buildTree} structure {@link renderTree} walks, so the
  * flat-array depth filter and the tree renderer agree on what "depth" means.
- * Spans never reached (e.g. members of a parent cycle) are treated as roots.
+ * Spans unreachable from any real root (parent cycles in malformed data) are
+ * recovered as depth-1 roots in input order — and traversal CONTINUES into
+ * their still-unassigned descendants — exactly mirroring the renderer's
+ * recovery walk (e.g. in an x ↔ y cycle, x is depth 1 and y is depth 2).
  */
-function computeDepths<T extends { span_id: string; parent_span_id: string | null }>(
-  spans: T[],
-): Map<string, number> {
-  const present = new Set(spans.map((s) => s.span_id));
-  const childrenOf = new Map<string, T[]>();
-  const roots: T[] = [];
-  for (const span of spans) {
-    const parent = span.parent_span_id;
-    if (parent !== null && present.has(parent)) {
-      const siblings = childrenOf.get(parent) ?? [];
-      siblings.push(span);
-      childrenOf.set(parent, siblings);
-    } else {
-      roots.push(span);
-    }
-  }
+function computeDepths<T extends TreeSpan>(spans: T[]): Map<string, number> {
+  const { roots, childrenOf } = buildTree(spans);
   const depthOf = new Map<string, number>();
-  const queue: Array<[T, number]> = roots.map((r) => [r, 1]);
-  for (let i = 0; i < queue.length; i++) {
-    const [span, depth] = queue[i] as [T, number];
-    if (depthOf.has(span.span_id)) {
-      continue;
+  const assignFrom = (start: T): void => {
+    const queue: Array<[T, number]> = [[start, 1]];
+    for (let i = 0; i < queue.length; i++) {
+      const [span, depth] = queue[i] as [T, number];
+      if (depthOf.has(span.span_id)) {
+        continue;
+      }
+      depthOf.set(span.span_id, depth);
+      for (const child of childrenOf.get(span.span_id) ?? []) {
+        queue.push([child, depth + 1]);
+      }
     }
-    depthOf.set(span.span_id, depth);
-    for (const child of childrenOf.get(span.span_id) ?? []) {
-      queue.push([child, depth + 1]);
-    }
+  };
+  for (const root of roots) {
+    assignFrom(root);
   }
-  // Spans unreachable from any root (parent cycles in malformed data) are
-  // recovered as depth-1 roots, matching renderTree's recovery pass.
   for (const span of spans) {
     if (!depthOf.has(span.span_id)) {
-      depthOf.set(span.span_id, 1);
+      assignFrom(span);
     }
   }
   return depthOf;
@@ -245,10 +262,7 @@ function computeDepths<T extends { span_id: string; parent_span_id: string | nul
  * Returns the spans whose depth (roots = 1) is at most `maxDepth`, preserving
  * input order. The flat-array counterpart of {@link renderTree}'s depth cap.
  */
-export function spansWithinDepth<T extends { span_id: string; parent_span_id: string | null }>(
-  spans: T[],
-  maxDepth: number,
-): T[] {
+export function spansWithinDepth<T extends TreeSpan>(spans: T[], maxDepth: number): T[] {
   const depthOf = computeDepths(spans);
   return spans.filter((s) => (depthOf.get(s.span_id) ?? 1) <= maxDepth);
 }

@@ -190,16 +190,63 @@ describe("spansWithinDepth", () => {
     expect(spansWithinDepth(spans, 3).map((s) => s.span_id)).toEqual(["root", "mid", "leaf"]);
   });
 
-  it("treats a parent cycle as a root without hanging", () => {
+  it("recovers a parent cycle exactly like the renderer: first member root, rest deeper", () => {
     const cyclic = [
       span({ span_id: "x", parent_span_id: "y", name: "x" }),
       span({ span_id: "y", parent_span_id: "x", name: "y" }),
     ];
-    expect(
-      spansWithinDepth(cyclic, 1)
+    // Mirrors renderTree's recovery walk: x (first in input order) becomes the
+    // recovered root at depth 1 and y hangs under it at depth 2.
+    expect(spansWithinDepth(cyclic, 1).map((s) => s.span_id)).toEqual(["x"]);
+    expect(spansWithinDepth(cyclic, 2).map((s) => s.span_id)).toEqual(["x", "y"]);
+  });
+});
+
+describe("renderTree and spansWithinDepth agree on malformed data", () => {
+  // Adversarial graph: a real chain root → a plus a detached 2-cycle x ↔ y.
+  const adversarial = [
+    span({ span_id: "root", name: "root" }),
+    span({ span_id: "a", parent_span_id: "root", name: "a" }),
+    span({ span_id: "x", parent_span_id: "y", name: "x" }),
+    span({ span_id: "y", parent_span_id: "x", name: "y" }),
+  ];
+
+  /** Span names visible in a rendered tree (excludes elision markers). */
+  function renderedNames(out: string): string[] {
+    return out
+      .split("\n")
+      .filter((l) => / \[(ok|error)\]$/.test(l))
+      .map((l) => (/([\w-]+) \[/.exec(l) as RegExpExecArray)[1] as string);
+  }
+
+  for (const depth of [1, 2, 3]) {
+    it(`keeps the SAME span set in the tree and the flat filter at depth ${depth}`, () => {
+      const human = renderedNames(renderTree(adversarial, { maxDepth: depth })).sort();
+      const flat = spansWithinDepth(adversarial, depth)
         .map((s) => s.span_id)
-        .sort(),
-    ).toEqual(["x", "y"]);
+        .sort();
+      expect(flat).toEqual(human);
+    });
+  }
+
+  it("hides the far side of a recovered cycle at depth 1 in both views", () => {
+    expect(spansWithinDepth(adversarial, 1).map((s) => s.span_id)).toEqual(["root", "x"]);
+    const out = renderTree(adversarial, { maxDepth: 1 });
+    expect(out).toContain("x [ok]");
+    expect(out).not.toContain("y [ok]");
+  });
+
+  it("does not count the displayed recovered root in its own elision marker", () => {
+    const out = renderTree(
+      [
+        span({ span_id: "x", parent_span_id: "y", name: "x" }),
+        span({ span_id: "y", parent_span_id: "x", name: "y" }),
+      ],
+      { maxDepth: 1 },
+    );
+    // Only y is hidden; x itself is on screen and must not be counted.
+    expect(out).toContain("… 1 deeper span hidden");
+    expect(out).not.toContain("2 deeper");
   });
 });
 
