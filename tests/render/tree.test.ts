@@ -192,6 +192,69 @@ describe("renderTree durations", () => {
   });
 });
 
+describe("renderTree error status_message", () => {
+  it("prints the status_message on its own line beneath an errored span, in red when color is on", () => {
+    const out = renderTree(
+      [span({ span_id: "bad", status: "ERROR", status_message: "connection refused" })],
+      { color: true },
+    );
+    const lines = out.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("connection refused");
+    expect(lines[1]).toContain("\x1b[91m");
+  });
+
+  it("indents the message to align under the span name", () => {
+    const out = renderTree([
+      span({ span_id: "root", name: "root" }),
+      span({
+        span_id: "bad",
+        parent_span_id: "root",
+        name: "bad",
+        status: "ERROR",
+        status_message: "boom",
+      }),
+    ]);
+    const lines = out.split("\n");
+    const msgLine = lines.find((l) => l.includes("boom")) as string;
+    expect(msgLine).toBeDefined();
+    expect(msgLine.indexOf("boom")).toBeGreaterThan(0);
+  });
+
+  it("has no ANSI codes for the message when color is off", () => {
+    const out = renderTree([
+      span({ span_id: "bad", status: "ERROR", status_message: "connection refused" }),
+    ]);
+    expect(out).not.toContain("\x1b[");
+  });
+
+  it("omits the message line entirely when status_message is null", () => {
+    const out = renderTree([span({ span_id: "bad", status: "ERROR", status_message: null })]);
+    expect(out.split("\n")).toHaveLength(1);
+  });
+
+  it("omits the message line when status_message is absent", () => {
+    const out = renderTree([span({ span_id: "bad", status: "ERROR" })]);
+    expect(out.split("\n")).toHaveLength(1);
+  });
+
+  it("does not print a status_message for a non-error span", () => {
+    const out = renderTree([span({ span_id: "ok", status: "OK", status_message: "some message" })]);
+    expect(out.split("\n")).toHaveLength(1);
+    expect(out).not.toContain("some message");
+  });
+
+  it("truncates a long status_message to the given width", () => {
+    const long = "x".repeat(200);
+    const out = renderTree([span({ span_id: "bad", status: "ERROR", status_message: long })], {
+      width: 40,
+    });
+    const lines = out.split("\n");
+    expect(lines[1]?.length).toBeLessThanOrEqual(40 + "… (truncated)".length);
+    expect(lines[1]).toContain("truncated");
+  });
+});
+
 describe("truncate", () => {
   it("returns text unchanged when at or below the max", () => {
     expect(truncate("hello", 200)).toBe("hello");

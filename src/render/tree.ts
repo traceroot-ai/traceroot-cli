@@ -13,6 +13,8 @@ export interface SpanLike {
   span_start_time?: string;
   /** End timestamp, or `null`/absent while the span is still running. */
   span_end_time?: string | null;
+  /** Error detail, shown as its own line beneath an errored span. */
+  status_message?: string | null;
 }
 
 const ERROR_STATUSES = new Set(["ERROR", "error", "STATUS_CODE_ERROR"]);
@@ -42,8 +44,8 @@ export interface RenderTreeOptions {
   /** When true, error span lines are colored red. Off for non-TTY / `NO_COLOR`. */
   color?: boolean;
   /**
-   * Terminal width: durations are right-aligned to this column. Defaults to
-   * 80.
+   * Terminal width: durations are right-aligned to this column and error
+   * messages are truncated to it. Defaults to 80.
    */
   width?: number;
   /**
@@ -122,6 +124,16 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
         ? text
         : `${text}${" ".repeat(Math.max(1, width - text.length - durationText.length))}${durationText}`;
     lines.push(color && isError(span.status) ? `${ANSI_RED}${lineCore}${ANSI_RESET}` : lineCore);
+
+    // Error detail, directly beneath the span line, indented to align under
+    // the name (the same indent children continue at) and truncated to width.
+    if (isError(span.status) && span.status_message !== undefined && span.status_message !== null) {
+      const trimmed = span.status_message.trim();
+      if (trimmed.length > 0) {
+        const msgText = `${childPrefix}${truncate(trimmed, Math.max(10, width - childPrefix.length))}`;
+        lines.push(color ? `${ANSI_RED}${msgText}${ANSI_RESET}` : msgText);
+      }
+    }
 
     const children = [...(childrenOf.get(span.span_id) ?? [])].sort(byStart);
     for (const [i, child] of children.entries()) {
