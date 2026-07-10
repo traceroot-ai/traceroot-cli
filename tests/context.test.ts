@@ -6,6 +6,7 @@ import { CliError } from "../src/output.js";
 const hermetic = {
   env: {},
   readConfig: () => null,
+  readGlobalConfig: () => null,
   loadEnvFile: () => ({}),
   loadAutoEnvFile: () => ({}),
 };
@@ -33,6 +34,7 @@ describe("buildContext", () => {
       {
         env: {},
         readConfig: () => null,
+        readGlobalConfig: () => null,
         loadEnvFile: () => ({}),
         loadAutoEnvFile: () => ({
           TRACEROOT_API_KEY: "auto-key",
@@ -81,10 +83,49 @@ describe("buildContext", () => {
       {
         env: {},
         readConfig: () => ({ api_key: "cfg-key", host_url: "https://cfg" }),
+        readGlobalConfig: () => null,
         loadEnvFile: () => ({}),
         loadAutoEnvFile: () => ({ TRACEROOT_API_KEY: "auto-key" }),
       },
     );
     expect(ctx.auth.apiKey).toEqual({ value: "cfg-key", source: "config" });
+  });
+
+  it("wires the injected readGlobalConfig into auth resolution", () => {
+    const ctx = buildContext(
+      {},
+      {
+        ...hermetic,
+        readConfig: () => null,
+        readGlobalConfig: () => ({ api_key: "global-key", host_url: "https://global" }),
+      },
+    );
+    expect(ctx.auth.apiKey).toEqual({ value: "global-key", source: "global-config" });
+    expect(ctx.auth.hostUrl).toEqual({ value: "https://global", source: "global-config" });
+  });
+
+  it("lets the project config win over the injected global config", () => {
+    const ctx = buildContext(
+      {},
+      {
+        ...hermetic,
+        readConfig: () => ({ api_key: "cfg-key", host_url: "https://cfg" }),
+        readGlobalConfig: () => ({ api_key: "global-key", host_url: "https://global" }),
+      },
+    );
+    expect(ctx.auth.apiKey).toEqual({ value: "cfg-key", source: "config" });
+  });
+
+  it("lets the injected global config win over the auto-discovered .env", () => {
+    const ctx = buildContext(
+      {},
+      {
+        ...hermetic,
+        readConfig: () => null,
+        readGlobalConfig: () => ({ api_key: "global-key", host_url: "https://global" }),
+        loadAutoEnvFile: () => ({ TRACEROOT_API_KEY: "auto-key" }),
+      },
+    );
+    expect(ctx.auth.apiKey).toEqual({ value: "global-key", source: "global-config" });
   });
 });

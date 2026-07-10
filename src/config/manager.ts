@@ -7,6 +7,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { type Config, ConfigError, type ConfigReadResult } from "./schema.js";
 
@@ -15,7 +16,8 @@ import { type Config, ConfigError, type ConfigReadResult } from "./schema.js";
  * non-empty `TRACEROOT_CONFIG_PATH`, then a project-local
  * `./.traceroot/config.json` in the current working directory. The config lives
  * in the project directory (mirroring the `.env` the CLI already auto-discovers
- * there), not the user's home folder.
+ * there), not the user's home folder. See {@link globalConfigPath} for the
+ * global fallback location `login` never writes to.
  */
 export function configPath(path?: string): string {
   if (path !== undefined && path !== "") {
@@ -33,6 +35,24 @@ export function configDir(path?: string): string {
   return dirname(configPath(path));
 }
 
+/**
+ * Resolves the global (per-user) config fallback path. Precedence: explicit
+ * `path` argument, then `$XDG_CONFIG_HOME/traceroot/config.json` when
+ * `XDG_CONFIG_HOME` is set, else `~/.config/traceroot/config.json`. This is a
+ * read-only fallback consulted when no project-local config is found; `login`
+ * never writes here (see {@link configPath}).
+ */
+export function globalConfigPath(path?: string): string {
+  if (path !== undefined && path !== "") {
+    return path;
+  }
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+  if (xdgConfigHome !== undefined && xdgConfigHome !== "") {
+    return join(xdgConfigHome, "traceroot", "config.json");
+  }
+  return join(homedir(), ".config", "traceroot", "config.json");
+}
+
 function isValidShape(value: unknown): value is Config {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -42,12 +62,13 @@ function isValidShape(value: unknown): value is Config {
 }
 
 /**
- * Reads and validates the config file. Never throws for the four documented
- * cases (valid, missing, invalid JSON, invalid shape); any other fs error
- * (EACCES, EISDIR, …) is rethrown as a genuine fault.
+ * Reads and validates the config file at `target`. Never throws for the four
+ * documented cases (valid, missing, invalid JSON, invalid shape); any other fs
+ * error (EACCES, EISDIR, …) is rethrown as a genuine fault. Shared by
+ * {@link readConfig} (project-local) and {@link readGlobalConfig} (the global
+ * fallback) so both paths parse identically.
  */
-export function readConfig(path?: string): ConfigReadResult {
-  const target = configPath(path);
+function parseConfigFile(target: string): ConfigReadResult {
   let raw: string;
   try {
     raw = readFileSync(target, "utf8");
@@ -84,6 +105,20 @@ export function readConfig(path?: string): ConfigReadResult {
   }
 
   return { ok: true, config: { api_key: parsed.api_key, host_url: parsed.host_url } };
+}
+
+/** Reads and validates the project-local config file (see {@link configPath}). */
+export function readConfig(path?: string): ConfigReadResult {
+  return parseConfigFile(configPath(path));
+}
+
+/**
+ * Reads and validates the global (per-user) fallback config file (see
+ * {@link globalConfigPath}). Consulted only when no project-local config is
+ * found.
+ */
+export function readGlobalConfig(path?: string): ConfigReadResult {
+  return parseConfigFile(globalConfigPath(path));
 }
 
 const SWALLOWED_CHMOD_CODES = new Set(["EPERM", "ENOSYS", "ENOTSUP"]);

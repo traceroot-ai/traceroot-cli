@@ -6,12 +6,14 @@ import { describe, expect, it } from "vitest";
 
 const binPath = fileURLToPath(new URL("../bin/traceroot.mjs", import.meta.url));
 
-// Isolate from any real ~/.traceroot/config.json and ambient credentials so
-// `status` deterministically resolves no credentials and exercises the failure
-// contract (non-zero exit, empty stdout, error on stderr) on every machine.
+// Isolate from any real ./.traceroot/config.json, ~/.config/traceroot/config.json
+// (the global fallback), and ambient credentials so `status` deterministically
+// resolves no credentials and exercises the failure contract (non-zero exit,
+// empty stdout, error on stderr) on every machine.
 const isolatedEnv: NodeJS.ProcessEnv = {
   ...process.env,
   TRACEROOT_CONFIG_PATH: join(tmpdir(), "traceroot-cli-no-such-config", "config.json"),
+  XDG_CONFIG_HOME: join(tmpdir(), "traceroot-cli-no-such-config-home"),
   TRACEROOT_API_KEY: "",
   TRACEROOT_HOST_URL: "",
 };

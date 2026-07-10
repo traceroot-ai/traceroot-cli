@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { DEFAULT_TIMEOUT_MS } from "./api/client.js";
 import { loadEnvFileFromDisk, loadOptionalEnvFileFromDisk } from "./config/envFile.js";
-import { readConfig } from "./config/manager.js";
+import { readConfig, readGlobalConfig } from "./config/manager.js";
 import { type ResolvedAuth, resolveAuth } from "./config/resolve.js";
 import type { Config } from "./config/schema.js";
 import { CliError } from "./output.js";
@@ -19,6 +19,8 @@ export interface GlobalOptions {
 export interface ContextDeps {
   env?: NodeJS.ProcessEnv;
   readConfig?: () => Config | null;
+  /** Reads the global (per-user) fallback config; defaults to the real global reader. */
+  readGlobalConfig?: () => Config | null;
   loadEnvFile?: (path: string) => Record<string, string>;
   /** Loads the auto-discovered working-directory `.env` (empty map if absent). */
   loadAutoEnvFile?: () => Record<string, string>;
@@ -68,11 +70,18 @@ export function buildContext(globalOpts: GlobalOptions, deps: ContextDeps = {}):
       const result = readConfig();
       return result.ok ? result.config : null;
     });
+  const readGlobalConfigAdapter =
+    deps.readGlobalConfig ??
+    (() => {
+      const result = readGlobalConfig();
+      return result.ok ? result.config : null;
+    });
 
   const auth = resolveAuth({
     flags: { apiKey: globalOpts.apiKey, host: globalOpts.host, envFile: globalOpts.envFile },
     env,
     readConfig: readConfigAdapter,
+    readGlobalConfig: readGlobalConfigAdapter,
     loadEnvFile,
     autoEnvFile: loadAutoEnvFile(),
   });

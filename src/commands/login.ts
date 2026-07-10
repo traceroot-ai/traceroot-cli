@@ -68,11 +68,13 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
 
   // An explicit override of either field (a higher-precedence flag/env/env-file)
   // is deliberate intent, not a bare re-invocation. Since `apiKeySource ===
-  // "config"` already implies the key was not explicitly overridden, only the
-  // host needs a separate override check (e.g. `login --host ...`).
+  // "config"` (or `"global-config"`, the read-only global fallback) already
+  // implies the key was not explicitly overridden, only the host needs a
+  // separate override check (e.g. `login --host ...`).
   const hostOverridden =
     deps.hostSource === "flag" || deps.hostSource === "env" || deps.hostSource === "env-file";
-  const alreadyLoggedIn = deps.apiKeySource === "config" && !hostOverridden;
+  const alreadyLoggedIn =
+    (deps.apiKeySource === "config" || deps.apiKeySource === "global-config") && !hostOverridden;
   const currentHost = deps.resolvedHost?.trim() || DEFAULT_HOST;
 
   let resolvedKey = deps.resolvedApiKey?.trim();
