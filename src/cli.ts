@@ -86,6 +86,19 @@ export function buildProgram(): Command {
   return program;
 }
 
+/**
+ * Ends the process with `code` once stderr has drained. The empty write is
+ * queued behind any pending stderr chunks, so its completion callback fires only
+ * after the error text has fully reached a pipe/file — then it is safe to call
+ * `process.exit` without truncation. Exiting explicitly matters: a failed request
+ * can leave a pending socket (e.g. undici's connect timeout) holding the event
+ * loop open for seconds after the error was reported.
+ */
+function exitAfterStderrDrain(code: number): void {
+  process.exitCode = code;
+  process.stderr.write("", () => process.exit(code));
+}
+
 export async function run(argv: string[]): Promise<void> {
   // Exit cleanly when a downstream reader (e.g. `head`, `jq`) closes the pipe:
   // turn the resulting EPIPE into a quiet exit instead of a Node stack trace.
@@ -97,8 +110,6 @@ export async function run(argv: string[]): Promise<void> {
     // The central catch has no resolved Context, so detect `--json` straight from
     // argv (the accepted approach) to pick the machine-readable error envelope.
     const json = argv.includes("--json");
-    // Set `process.exitCode` rather than calling `process.exit`, so a piped
-    // stderr can fully drain before the process ends instead of being truncated.
-    process.exitCode = reportError(err, { json });
+    exitAfterStderrDrain(reportError(err, { json }));
   }
 }
