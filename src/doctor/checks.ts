@@ -117,6 +117,24 @@ function localFileChecks(input: DoctorInput): DoctorCheck[] {
       status: "pass",
       message: `Global config file present at ${globalConfigPath}`,
     });
+
+    // Best-effort permission check; meaningless on win32, so skip it there.
+    if (process.platform !== "win32") {
+      try {
+        const mode = statSync(globalConfigPath).mode & 0o777;
+        const safe = (mode & 0o077) === 0;
+        checks.push({
+          name: "global_config_permissions",
+          category: "traceroot_files",
+          status: safe ? "pass" : "warn",
+          message: safe
+            ? "Global config file permissions are restrictive (0600)"
+            : `Global config file is group/world-readable (mode ${mode.toString(8)}); run \`chmod 600 ${globalConfigPath}\`.`,
+        });
+      } catch {
+        // ignore stat failures
+      }
+    }
   }
 
   if (configExists) {

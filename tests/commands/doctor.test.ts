@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -287,6 +287,37 @@ describe("runDoctor", () => {
     expect(check?.status).toBe("pass");
     expect(check?.message).toContain(globalConfigPath);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "passes the global config permission check when the file is 0600",
+    async () => {
+      const globalConfigPath = join(cwd, "global-config", "config.json");
+      mkdirSync(join(cwd, "global-config"), { recursive: true });
+      writeFileSync(globalConfigPath, JSON.stringify({ api_key: "k", host_url: "https://h" }));
+      chmodSync(globalConfigPath, 0o600);
+      const { writers } = makeWriters();
+      const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+      const check = report.checks.find((c) => c.name === "global_config_permissions");
+      expect(check?.status).toBe("pass");
+      expect(check?.message).toBe("Global config file permissions are restrictive (0600)");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "warns when the global config file is group/world-readable",
+    async () => {
+      const globalConfigPath = join(cwd, "global-config", "config.json");
+      mkdirSync(join(cwd, "global-config"), { recursive: true });
+      writeFileSync(globalConfigPath, JSON.stringify({ api_key: "k", host_url: "https://h" }));
+      chmodSync(globalConfigPath, 0o644);
+      const { writers } = makeWriters();
+      const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
+      const check = report.checks.find((c) => c.name === "global_config_permissions");
+      expect(check?.status).toBe("warn");
+      expect(check?.message).toContain("mode 644");
+      expect(check?.message).toContain(`chmod 600 ${globalConfigPath}`);
+    },
+  );
 
   it("emits valid JSON with data.checks and data.summary", async () => {
     const { writers, out, err } = makeWriters();
