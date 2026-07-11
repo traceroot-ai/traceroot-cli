@@ -79,7 +79,8 @@ function normalizeApiKey(value: string): string {
 }
 
 interface Candidate {
-  value: string | undefined;
+  /** The candidate value, or a thunk for a source that must be read lazily. */
+  value: string | undefined | (() => string | undefined);
   source: Exclude<AuthSource, "none">;
 }
 
@@ -88,10 +89,14 @@ function firstPresent(
   normalize?: (value: string) => string,
 ): ResolvedField {
   for (const candidate of candidates) {
-    if (!present(candidate.value)) {
+    // A thunk is only invoked once every higher-precedence candidate was
+    // absent, so a lazily-read source (the global config) is never touched
+    // when an explicit source already supplied the value.
+    const raw = typeof candidate.value === "function" ? candidate.value() : candidate.value;
+    if (!present(raw)) {
       continue;
     }
-    const value = normalize ? normalize(candidate.value) : candidate.value;
+    const value = normalize ? normalize(raw) : raw;
     // Normalization can empty a value (e.g. a slashes-only host); if so, fall
     // through to the next candidate rather than reporting an empty value with a
     // concrete source.
@@ -121,7 +126,16 @@ export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
 
   const fileMap: Record<string, string> = present(flags.envFile) ? loadEnvFile(flags.envFile) : {};
   const config = readConfig() ?? ({} as Partial<Config>);
-  const globalConfig = readGlobalConfig() ?? ({} as Partial<Config>);
+
+  // The global config is a pure fallback: read it lazily (and at most once) so
+  // an unreadable ~/.config/traceroot/config.json can never break resolution
+  // when a higher-precedence source (flag, env file, env, project config)
+  // already supplies the field.
+  let globalConfigCache: Partial<Config> | undefined;
+  const globalConfig = (): Partial<Config> => {
+    globalConfigCache ??= readGlobalConfig() ?? ({} as Partial<Config>);
+    return globalConfigCache;
+  };
 
   const apiKey = firstPresent(
     [
@@ -129,7 +143,7 @@ export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
       { value: fileMap.TRACEROOT_API_KEY, source: "env-file" },
       { value: env.TRACEROOT_API_KEY, source: "env" },
       { value: config.api_key, source: "config" },
-      { value: globalConfig.api_key, source: "global-config" },
+      { value: () => globalConfig().api_key, source: "global-config" },
       { value: autoEnv.TRACEROOT_API_KEY, source: "auto-env-file" },
     ],
     normalizeApiKey,
@@ -141,7 +155,7 @@ export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
       { value: fileMap.TRACEROOT_HOST_URL, source: "env-file" },
       { value: env.TRACEROOT_HOST_URL, source: "env" },
       { value: config.host_url, source: "config" },
-      { value: globalConfig.host_url, source: "global-config" },
+      { value: () => globalConfig().host_url, source: "global-config" },
       { value: autoEnv.TRACEROOT_HOST_URL, source: "auto-env-file" },
     ],
     normalizeHostUrl,

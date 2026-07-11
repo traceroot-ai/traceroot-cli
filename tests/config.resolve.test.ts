@@ -133,6 +133,64 @@ describe("resolveAuth precedence (global config fallback)", () => {
   });
 });
 
+describe("resolveAuth lazy global config read", () => {
+  const throwingGlobal = (): Config => {
+    throw new Error("EACCES: permission denied");
+  };
+
+  it("resolves flag credentials even when the global config is unreadable", () => {
+    const result = resolveAuth({
+      flags: { apiKey: "flag-key", host: "https://flag" },
+      readGlobalConfig: throwingGlobal,
+    });
+    expect(result.apiKey).toEqual({ value: "flag-key", source: "flag" });
+    expect(result.hostUrl).toEqual({ value: "https://flag", source: "flag" });
+  });
+
+  it("resolves env credentials even when the global config is unreadable", () => {
+    const result = resolveAuth({
+      env: { TRACEROOT_API_KEY: "env-key", TRACEROOT_HOST_URL: "https://env" },
+      readGlobalConfig: throwingGlobal,
+    });
+    expect(result.apiKey).toEqual({ value: "env-key", source: "env" });
+    expect(result.hostUrl).toEqual({ value: "https://env", source: "env" });
+  });
+
+  it("resolves project-config credentials even when the global config is unreadable", () => {
+    const result = resolveAuth({
+      readConfig: config({}),
+      readGlobalConfig: throwingGlobal,
+    });
+    expect(result.apiKey).toEqual({ value: "cfg-key", source: "config" });
+    expect(result.hostUrl).toEqual({ value: "https://cfg", source: "config" });
+  });
+
+  it("never reads the global config when the project config supplies both fields", () => {
+    const readGlobalConfig = vi.fn(globalConfig({}));
+    resolveAuth({ readConfig: config({}), readGlobalConfig });
+    expect(readGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  it("reads the global config at most once when both fields fall through to it", () => {
+    const readGlobalConfig = vi.fn(globalConfig({}));
+    const result = resolveAuth({ readConfig: () => null, readGlobalConfig });
+    expect(result.apiKey).toEqual({ value: "global-cfg-key", source: "global-config" });
+    expect(result.hostUrl).toEqual({ value: "https://global-cfg", source: "global-config" });
+    expect(readGlobalConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the global config when only one field falls through to it", () => {
+    const readGlobalConfig = vi.fn(globalConfig({}));
+    const result = resolveAuth({
+      readConfig: (): Config => ({ api_key: "cfg-key", host_url: "" }),
+      readGlobalConfig,
+    });
+    expect(result.apiKey).toEqual({ value: "cfg-key", source: "config" });
+    expect(result.hostUrl).toEqual({ value: "https://global-cfg", source: "global-config" });
+    expect(readGlobalConfig).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("resolveAuth when nothing is set", () => {
   it("reports none for both fields", () => {
     const result = resolveAuth();
