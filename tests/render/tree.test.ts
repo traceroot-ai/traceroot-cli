@@ -362,9 +362,29 @@ describe("truncate", () => {
     expect(out.startsWith("b".repeat(200 - "… (truncated)".length))).toBe(true);
   });
 
-  it("keeps one source character even when max cannot fit the hint", () => {
-    const out = truncate("c".repeat(50), 5);
-    expect(out.startsWith("c")).toBe(true);
-    expect(out).toContain("truncated");
+  it("drops the hint and plainly cuts when max cannot fit hint plus one char (max 13)", () => {
+    // "… (truncated)" is exactly 13 chars: no room for any kept text, so the
+    // hint is dropped rather than emitted alone.
+    const out = truncate("c".repeat(50), 13);
+    expect(out).toBe("c".repeat(13));
+    expect(out).not.toContain("truncated");
+  });
+
+  it("drops the hint and plainly cuts at a tiny max (max 10)", () => {
+    const out = truncate("c".repeat(50), 10);
+    expect(out).toBe("c".repeat(10));
+  });
+
+  it("appends the hint at the smallest max that fits it plus one char (max 14)", () => {
+    const out = truncate("c".repeat(50), 14);
+    expect(out).toBe("c… (truncated)");
+    expect(out.length).toBe(14);
+  });
+
+  it("never exceeds max for any small budget (sweep 1..20)", () => {
+    const long = "d".repeat(100);
+    for (let max = 1; max <= 20; max++) {
+      expect(truncate(long, max).length).toBeLessThanOrEqual(max);
+    }
   });
 });

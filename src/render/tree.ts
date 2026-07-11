@@ -227,13 +227,16 @@ const TRUNCATION_SUFFIX = "… (truncated)";
  * Returns `text` unchanged when its length is at most `max`, otherwise a
  * truncated form whose TOTAL length (kept text plus the truncation hint) is at
  * most `max`, so callers can budget it against a terminal width. When `max` is
- * too small to fit the hint at all, one source character is still kept so the
- * result is never just the hint. HUMAN-render only.
+ * too small for the hint plus at least one source character, the hint is
+ * dropped and the text is plainly cut at `max`, preserving the length
+ * invariant. HUMAN-render only.
  */
 export function truncate(text: string, max = 200): string {
   if (text.length <= max) {
     return text;
   }
-  const keep = Math.max(1, max - TRUNCATION_SUFFIX.length);
-  return `${text.slice(0, keep)}${TRUNCATION_SUFFIX}`;
+  if (max <= TRUNCATION_SUFFIX.length) {
+    return text.slice(0, max);
+  }
+  return `${text.slice(0, max - TRUNCATION_SUFFIX.length)}${TRUNCATION_SUFFIX}`;
 }
