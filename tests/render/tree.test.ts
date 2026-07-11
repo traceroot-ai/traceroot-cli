@@ -150,6 +150,44 @@ describe("renderTree --depth cap", () => {
   });
 });
 
+describe("renderTree --depth stacked with --max-spans", () => {
+  it("keeps the depth marker of the span sitting exactly at the span cap", () => {
+    // root (d1) → a (d2, has hidden child a1 at d3) and b (d2, later start).
+    // With --depth 2 --max-spans 2, `a` is the LAST displayed span and its
+    // depth marker must still render before the overall cap marker.
+    const spans = [
+      span({ span_id: "root", name: "root", span_start_time: "2024-01-01T00:00:00Z" }),
+      span({
+        span_id: "a",
+        parent_span_id: "root",
+        name: "a",
+        span_start_time: "2024-01-01T00:00:01Z",
+      }),
+      span({
+        span_id: "a1",
+        parent_span_id: "a",
+        name: "a1",
+        span_start_time: "2024-01-01T00:00:02Z",
+      }),
+      span({
+        span_id: "b",
+        parent_span_id: "root",
+        name: "b",
+        span_start_time: "2024-01-01T00:00:03Z",
+      }),
+    ];
+    const out = renderTree(spans, { maxDepth: 2, maxSpans: 2 });
+    const lines = out.split("\n");
+    // Both markers, with correct counts: a1 elided by depth, b elided by the cap.
+    expect(out).toContain("… 1 deeper span hidden");
+    expect(lines[lines.length - 1]).toBe("… 1 more span");
+    // Exactly: root, a, a's depth marker, then the cap marker.
+    expect(lines).toHaveLength(4);
+    expect(out).not.toContain("b [ok]");
+    expect(out).not.toContain("a1 [ok]");
+  });
+});
+
 describe("renderTree --max-spans cap", () => {
   const spans = [
     span({ span_id: "a", name: "a" }),

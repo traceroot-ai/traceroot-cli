@@ -204,7 +204,11 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
   const lines: string[] = [];
   let shown = 0;
   for (const entry of entries) {
-    if (shown >= cap) {
+    // Only SPAN lines count toward (and stop at) the cap. A depth-elision
+    // pseudo-line belonging to the last displayed span must still get through —
+    // otherwise stacking --depth with --max-spans would silently drop the only
+    // hint that the span's descendants were elided.
+    if (entry.isSpan && shown >= cap) {
       break;
     }
     lines.push(entry.text);
