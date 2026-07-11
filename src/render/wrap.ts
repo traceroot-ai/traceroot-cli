@@ -13,7 +13,8 @@
  *    styled bold.
  *  - `` `code` `` spans: the backticks are stripped (left plain).
  *  - `-`/`*`/`1.`-style list items: wrapped with a hanging indent so
- *    continuation lines align under the item's text rather than the marker.
+ *    continuation lines align under the item's text rather than the marker;
+ *    indented source lines directly under a bullet are folded into that item.
  *  - Plain paragraphs (consecutive non-blank, non-list, non-heading lines):
  *    joined and re-wrapped to `width`; blank lines are preserved as paragraph
  *    separators.
@@ -155,9 +156,17 @@ function fillLines(
  * module doc). `bold` is applied to headings and `**bold**` spans; pass the
  * identity function for a plain-text (no-ANSI) fallback.
  */
+/** An in-progress list item: its marker prefixes plus accumulated text lines. */
+interface OpenListItem {
+  firstPrefix: string;
+  contPrefix: string;
+  text: string[];
+}
+
 export function wrapMarkdown(text: string, width: number, bold: StyleFn = (s) => s): string {
   const out: string[] = [];
   let paragraph: string[] = [];
+  let listItem: OpenListItem | null = null;
 
   const flushParagraph = (): void => {
     if (paragraph.length === 0) {
@@ -168,35 +177,61 @@ export function wrapMarkdown(text: string, width: number, bold: StyleFn = (s) =>
     paragraph = [];
   };
 
+  const flushListItem = (): void => {
+    if (listItem === null) {
+      return;
+    }
+    const joined = listItem.text.join(" ").trim();
+    out.push(...fillLines(toWords(joined), width, bold, listItem.firstPrefix, listItem.contPrefix));
+    listItem = null;
+  };
+
+  // At most one of paragraph / listItem is open at a time; flush both at any
+  // block boundary (blank line, heading, new bullet).
+  const flushBlocks = (): void => {
+    flushParagraph();
+    flushListItem();
+  };
+
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trimEnd();
     if (line.trim() === "") {
-      flushParagraph();
+      flushBlocks();
       out.push("");
       continue;
     }
 
     const heading = HEADING_RE.exec(line);
     if (heading) {
-      flushParagraph();
+      flushBlocks();
       const words = toWords((heading[2] ?? "").trim()).map(boldWord);
       out.push(...fillLines(words, width, bold, "", ""));
       continue;
     }
 
-    const listItem = LIST_ITEM_RE.exec(line);
-    if (listItem) {
-      flushParagraph();
-      const [, indent, marker, rest] = listItem;
-      const firstPrefix = `${indent ?? ""}${marker ?? ""} `;
-      const contPrefix = " ".repeat(firstPrefix.length);
-      out.push(...fillLines(toWords(rest ?? ""), width, bold, firstPrefix, contPrefix));
+    const marker = LIST_ITEM_RE.exec(line);
+    if (marker) {
+      flushBlocks();
+      const firstPrefix = `${marker[1] ?? ""}${marker[2] ?? ""} `;
+      listItem = {
+        firstPrefix,
+        contPrefix: " ".repeat(firstPrefix.length),
+        text: [marker[3] ?? ""],
+      };
       continue;
     }
 
+    // An indented line directly under an open bullet continues that item, so
+    // it keeps the item's hanging indent instead of falling out flush-left.
+    if (listItem !== null && /^\s/.test(line)) {
+      listItem.text.push(line.trim());
+      continue;
+    }
+
+    flushListItem();
     paragraph.push(line.trim());
   }
-  flushParagraph();
+  flushBlocks();
 
   return out.join("\n");
 }

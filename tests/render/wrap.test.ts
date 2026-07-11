@@ -105,6 +105,37 @@ describe("wrapMarkdown", () => {
     }
   });
 
+  it("folds an indented continuation line into its list item's hanging indent", () => {
+    const wrapped = wrapMarkdown("- first\n  continuation", 80);
+    expect(wrapped).toBe("- first continuation");
+  });
+
+  it("wraps a long list item with an indented continuation under the same indent", () => {
+    const wrapped = wrapMarkdown(
+      "- a fairly long first physical line of a bullet\n  and an indented continuation line",
+      30,
+    );
+    const lines = wrapped.split("\n");
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines[0]?.startsWith("- ")).toBe(true);
+    for (const line of lines.slice(1)) {
+      expect(line.startsWith("  ")).toBe(true); // hanging indent, never flush-left
+      expect(line.startsWith("- ")).toBe(false);
+      expect(line.length).toBeLessThanOrEqual(30);
+    }
+    expect(wrapped.replace(/\s+/g, " ")).toContain("bullet and an indented continuation");
+  });
+
+  it("ends a list item at a non-indented line (back to a plain paragraph)", () => {
+    const wrapped = wrapMarkdown("- item text\nplain paragraph", 80);
+    expect(wrapped.split("\n")).toEqual(["- item text", "plain paragraph"]);
+  });
+
+  it("ends a list item at a blank line", () => {
+    const wrapped = wrapMarkdown("- item text\n\n  indented paragraph", 80);
+    expect(wrapped.split("\n")).toEqual(["- item text", "", "indented paragraph"]);
+  });
+
   it("keeps a single word longer than width on its own line (no infinite loop)", () => {
     const longWord = "x".repeat(50);
     const wrapped = wrapMarkdown(longWord, 10);
