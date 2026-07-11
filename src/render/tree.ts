@@ -220,13 +220,20 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
   return lines.join("\n");
 }
 
+/** Hint appended to truncated text; budgeted into {@link truncate}'s `max`. */
+const TRUNCATION_SUFFIX = "… (truncated)";
+
 /**
- * Returns `text` unchanged when its length is at most `max`, otherwise the first
- * `max` characters followed by a truncation hint. HUMAN-render only.
+ * Returns `text` unchanged when its length is at most `max`, otherwise a
+ * truncated form whose TOTAL length (kept text plus the truncation hint) is at
+ * most `max`, so callers can budget it against a terminal width. When `max` is
+ * too small to fit the hint at all, one source character is still kept so the
+ * result is never just the hint. HUMAN-render only.
  */
 export function truncate(text: string, max = 200): string {
   if (text.length <= max) {
     return text;
   }
-  return `${text.slice(0, max)}… (truncated)`;
+  const keep = Math.max(1, max - TRUNCATION_SUFFIX.length);
+  return `${text.slice(0, keep)}${TRUNCATION_SUFFIX}`;
 }

@@ -250,8 +250,30 @@ describe("renderTree error status_message", () => {
       width: 40,
     });
     const lines = out.split("\n");
-    expect(lines[1]?.length).toBeLessThanOrEqual(40 + "… (truncated)".length);
+    expect(lines[1]?.length).toBeLessThanOrEqual(40);
     expect(lines[1]).toContain("truncated");
+  });
+
+  it("keeps the full message line (prefix + text + hint) within an exact narrow width", () => {
+    const width = 30;
+    const out = renderTree(
+      [
+        span({ span_id: "root", name: "root" }),
+        span({
+          span_id: "bad",
+          parent_span_id: "root",
+          name: "bad",
+          status: "ERROR",
+          status_message: "y".repeat(500),
+        }),
+      ],
+      { width },
+    );
+    const msgLine = out.split("\n").find((l) => l.includes("truncated")) as string;
+    expect(msgLine).toBeDefined();
+    // The COMPLETE rendered line — indent prefix, kept text, and the
+    // "… (truncated)" hint — fits within the requested terminal width.
+    expect(msgLine.length).toBeLessThanOrEqual(width);
   });
 });
 
@@ -323,18 +345,26 @@ describe("truncate", () => {
     expect(truncate(exact, 200)).toBe(exact);
   });
 
-  it("truncates to max chars and appends a hint when over the max", () => {
+  it("caps the TOTAL output (kept text plus hint) at max when over the max", () => {
     const long = "a".repeat(250);
     const out = truncate(long, 200);
-    expect(out).toContain("a".repeat(200));
-    expect(out).not.toContain("a".repeat(201));
+    expect(out.length).toBeLessThanOrEqual(200);
     expect(out).toContain("truncated");
+    expect(out.startsWith("a".repeat(200 - "… (truncated)".length))).toBe(true);
+    expect(out).not.toContain("a".repeat(200 - "… (truncated)".length + 1));
   });
 
   it("defaults the max to 200", () => {
     const long = "b".repeat(201);
     const out = truncate(long);
+    expect(out.length).toBeLessThanOrEqual(200);
     expect(out).toContain("truncated");
-    expect(out.startsWith("b".repeat(200))).toBe(true);
+    expect(out.startsWith("b".repeat(200 - "… (truncated)".length))).toBe(true);
+  });
+
+  it("keeps one source character even when max cannot fit the hint", () => {
+    const out = truncate("c".repeat(50), 5);
+    expect(out.startsWith("c")).toBe(true);
+    expect(out).toContain("truncated");
   });
 });
