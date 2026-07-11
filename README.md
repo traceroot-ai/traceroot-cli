@@ -54,7 +54,7 @@ traceroot traces list
 | `login` | Authenticate and save credentials (validates before writing). |
 | `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
 | `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
-| `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
+| `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. Bound large traces with `--max-spans <n>`, `--depth <n>`, `--errors-only`, `--output jsonl`. |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
 | `detectors list` | List your project's detectors, newest first. The `DETECTOR ID` column is what you pass to `findings list --detector`. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `findings list` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id>`, `--trace <id>` |
@@ -74,6 +74,37 @@ traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --li
 traceroot detectors list --json | jq '.data[].detector_id'
 traceroot findings list --detector <detector-id> --since 7d --json | jq '.data[].finding_id'
 traceroot findings get --trace 99224be337d725fd5e8f2e7b45dc22ef
+```
+
+### Bounding large traces
+
+An agent trace can carry thousands of spans, which is a lot to dump into a
+terminal — or into another model's context. `traces get` has four opt-in,
+backward-compatible flags to subset the output (they apply to both the human
+tree and the JSON/JSONL bodies):
+
+| Flag | Effect |
+| :-- | :-- |
+| `--max-spans <n>` | Show at most `n` spans. JSON adds `spans_truncated: { shown, total }`; the human tree appends a `… N more spans` line. |
+| `--depth <n>` | Cap tree depth (roots are depth 1); deeper spans are dropped. The human tree marks each elided subtree with `… N deeper spans hidden`. |
+| `--errors-only` | Keep only error spans and their full ancestor chains, dropping unrelated branches. |
+| `--output jsonl` | Stream a header line (the trace minus its spans, plus `finding`) then one span per line. Implies machine output, so it works with or without `--json`, and stays `head`-safe. |
+
+The flags compose — `--errors-only` is applied first, then `--depth`, then
+`--max-spans` — and the truncation total always reflects the post-filter set.
+Truncation selects spans in tree traversal order (the order the human tree
+prints), so both views keep the same spans; JSON emits the kept spans in the
+backend's original array order.
+
+```sh
+# Just the failures and how they were reached, as JSON.
+traceroot traces get <trace-id> --errors-only --json | jq '.spans[].name'
+
+# Stream spans and grep for slow model calls without buffering the whole trace.
+traceroot traces get <trace-id> --output jsonl | grep '"model_name":"gpt-4o"'
+
+# Peek at the top of a huge trace: the header line, nothing more.
+traceroot traces get <trace-id> --output jsonl | head -1
 ```
 
 ## Skills & agents
