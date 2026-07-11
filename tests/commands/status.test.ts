@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ApiClient, Whoami } from "../../src/api/client.js";
 import { runStatus } from "../../src/commands/status.js";
+import { configPath, globalConfigPath } from "../../src/config/manager.js";
+import type { AuthSource } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -21,11 +23,11 @@ function makeWhoami(overrides: Partial<Whoami> = {}): Whoami {
   };
 }
 
-function makeContext(json: boolean): Context {
+function makeContext(json: boolean, source: AuthSource = "config"): Context {
   return {
     auth: {
-      apiKey: { value: FULL_TOKEN, source: "config" },
-      hostUrl: { value: "https://api.example.com", source: "config" },
+      apiKey: { value: FULL_TOKEN, source },
+      hostUrl: { value: "https://api.example.com", source },
     },
     json,
   };
@@ -86,6 +88,18 @@ describe("runStatus (human)", () => {
     });
 
     expect(out.data).toContain("config");
+  });
+
+  it("shows the global config path when credentials resolved from the global fallback", async () => {
+    const { writers, out } = makeWriters();
+    const who = makeWhoami();
+    await runStatus({
+      ctx: makeContext(false, "global-config"),
+      client: fakeClient(() => Promise.resolve(who)),
+      writers,
+    });
+
+    expect(out.data).toContain(globalConfigPath());
   });
 
   it("shows the key name and hint without brackets", async () => {
@@ -162,9 +176,24 @@ describe("runStatus (--json)", () => {
     expect(parsed.host).toBe("https://api.example.com");
     expect(parsed.ui_base_url).toBe("https://app.example.com");
     expect(parsed.config_source).toBe("config");
+    expect(parsed.config_path).toBe(configPath());
     // Exactly one document: stripped of its single trailing newline, no extra lines.
     expect(out.data.trimEnd().split("\n")).toHaveLength(1);
     expect(err.data).toBe("");
+  });
+
+  it("reports the global config path as config_path when the global config won", async () => {
+    const { writers, out } = makeWriters();
+    const who = makeWhoami();
+    await runStatus({
+      ctx: makeContext(true, "global-config"),
+      client: fakeClient(() => Promise.resolve(who)),
+      writers,
+    });
+
+    const parsed = JSON.parse(out.data) as Record<string, unknown>;
+    expect(parsed.config_source).toBe("global-config");
+    expect(parsed.config_path).toBe(globalConfigPath());
   });
 
   it("never prints the full api token in JSON mode", async () => {

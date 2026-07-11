@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { Command } from "commander";
 import type { ApiClient } from "../api/client.js";
-import { configPath } from "../config/manager.js";
+import { configPath, globalConfigPath } from "../config/manager.js";
 import type { AuthSource } from "../config/resolve.js";
 import type { Context } from "../context.js";
 import { type Writers, defaultWriters, writeJson } from "../output.js";
@@ -9,15 +9,29 @@ import { apiKeyLabel, identity } from "../render/identity.js";
 import { createStyler } from "../render/style.js";
 import { contextFromCommand, requireApiClient } from "./shared.js";
 
+/** The config file path that actually won, when the source is file-based. */
+function winningConfigPath(source: AuthSource): string | undefined {
+  switch (source) {
+    case "config":
+      return configPath();
+    case "global-config":
+      return globalConfigPath();
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Human-readable description of where the credentials were resolved from — and,
  * for file-based sources, the path of that file (so `Config source` answers
  * "where is my config?").
  */
 function describeSource(source: AuthSource): string {
+  const path = winningConfigPath(source);
+  if (path !== undefined) {
+    return path;
+  }
   switch (source) {
-    case "config":
-      return configPath();
     case "auto-env-file":
       return `${join(process.cwd(), ".env")} (auto-loaded)`;
     case "env-file":
@@ -61,7 +75,7 @@ export async function runStatus(deps: StatusDeps): Promise<void> {
         host: who.host,
         ui_base_url: who.ui_base_url,
         config_source: configSource,
-        config_path: configPath(),
+        config_path: winningConfigPath(configSource) ?? configPath(),
       },
       writers,
     );

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { type ApiClient, createApiClient } from "../api/client.js";
+import { configPath, globalConfigPath } from "../config/manager.js";
 import { type Context, buildContext } from "../context.js";
 import { CliError } from "../output.js";
 
@@ -23,14 +24,18 @@ export function contextFromCommand(command: Command): Context {
 export function requireApiClient(ctx: Context): ApiClient {
   const apiKey = ctx.auth.apiKey.value;
   const host = ctx.auth.hostUrl.value;
+  // Named so a user running from the "wrong" directory can see exactly where
+  // the CLI looked (project config is per-directory; the global config is a
+  // fallback). Only paths are named here — never key material.
+  const checkedPaths = `(checked ${configPath()} and ${globalConfigPath()} — config is per-directory, with a global fallback)`;
   if (apiKey === undefined) {
     throw new CliError(
-      "No API key found. Run `traceroot login`, or set TRACEROOT_API_KEY, or pass --api-key.",
+      `No API key found. Run \`traceroot login\`, set TRACEROOT_API_KEY, or pass --api-key. ${checkedPaths}`,
     );
   }
   if (host === undefined) {
     throw new CliError(
-      "No host found. Run `traceroot login`, or set TRACEROOT_HOST_URL, or pass --host.",
+      `No host found. Run \`traceroot login\`, set TRACEROOT_HOST_URL, or pass --host. ${checkedPaths}`,
     );
   }
   return createApiClient({ host, apiKey, timeoutMs: ctx.timeoutMs });

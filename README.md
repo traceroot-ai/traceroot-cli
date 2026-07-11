@@ -31,12 +31,32 @@ priority order:
 1. Flags — `--api-key`, `--host`
 2. Env file — `--env-file <path>`
 3. Env vars — `TRACEROOT_API_KEY`, `TRACEROOT_HOST_URL`
-4. Config file — `./.traceroot/config.json`
-5. Auto-discovered `./.env`
+4. Project config file — `./.traceroot/config.json` (relative to the current
+   working directory)
+5. Global config file — `~/.config/traceroot/config.json` (or
+   `$XDG_CONFIG_HOME/traceroot/config.json` when `XDG_CONFIG_HOME` is set)
+6. Auto-discovered `./.env`
 
-`traceroot login` validates the key, then writes `./.traceroot/config.json`
-(`0600`, auto-gitignored) so later commands need no flags. Override the path with
-`TRACEROOT_CONFIG_PATH`. For CI or scripts, prefer env vars or flags:
+`traceroot login` validates the key, then writes the **project** config file
+`./.traceroot/config.json` (`0600`, auto-gitignored) so later commands run from
+the same directory need no flags. Override that path with
+`TRACEROOT_CONFIG_PATH`.
+
+Because the project config is scoped to the current working directory, running
+a command from a different directory won't see it. For a key you want available
+everywhere, place it at the global fallback path
+(`~/.config/traceroot/config.json`) — `login` never writes there itself; create
+or copy it manually, e.g.:
+
+```sh
+mkdir -p ~/.config/traceroot
+cp ./.traceroot/config.json ~/.config/traceroot/config.json
+```
+
+`traceroot status` and `traceroot doctor` both report which file (if any) your
+credentials actually resolved from. If neither config file nor any of the
+above is found, the CLI's error message names both paths it checked. For CI or
+scripts, prefer env vars or flags:
 
 ```sh
 export TRACEROOT_API_KEY=tr_...

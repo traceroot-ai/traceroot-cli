@@ -1,7 +1,14 @@
 import type { Config } from "./schema.js";
 
 /** Where a resolved value came from, in precedence order (high → low). */
-export type AuthSource = "flag" | "env-file" | "env" | "config" | "auto-env-file" | "none";
+export type AuthSource =
+  | "flag"
+  | "env-file"
+  | "env"
+  | "config"
+  | "global-config"
+  | "auto-env-file"
+  | "none";
 
 export interface ResolvedField {
   value: string | undefined;
@@ -23,11 +30,19 @@ export interface ResolveAuthOptions {
   flags?: AuthFlags;
   env?: NodeJS.ProcessEnv;
   readConfig?: () => Config | null;
+  /**
+   * Reads the global (per-user) fallback config — consulted only when the
+   * project-local config (`readConfig`) has no value for a field. Lower
+   * precedence than the project config, higher than the auto-discovered
+   * `.env`.
+   */
+  readGlobalConfig?: () => Config | null;
   loadEnvFile?: (path: string) => Record<string, string>;
   /**
    * Variables auto-discovered from a `.env` in the working directory. This is
-   * the LOWEST-precedence source (below the config file); explicit sources
-   * (flags, `--env-file`, process env, config) always win over it.
+   * the LOWEST-precedence source (below the global config file); explicit
+   * sources (flags, `--env-file`, process env, project config, global config)
+   * always win over it.
    */
   autoEnvFile?: Record<string, string>;
 }
@@ -64,7 +79,8 @@ function normalizeApiKey(value: string): string {
 }
 
 interface Candidate {
-  value: string | undefined;
+  /** The candidate value, or a thunk for a source that must be read lazily. */
+  value: string | undefined | (() => string | undefined);
   source: Exclude<AuthSource, "none">;
 }
 
@@ -73,10 +89,14 @@ function firstPresent(
   normalize?: (value: string) => string,
 ): ResolvedField {
   for (const candidate of candidates) {
-    if (!present(candidate.value)) {
+    // A thunk is only invoked once every higher-precedence candidate was
+    // absent, so a lazily-read source (the global config) is never touched
+    // when an explicit source already supplied the value.
+    const raw = typeof candidate.value === "function" ? candidate.value() : candidate.value;
+    if (!present(raw)) {
       continue;
     }
-    const value = normalize ? normalize(candidate.value) : candidate.value;
+    const value = normalize ? normalize(raw) : raw;
     // Normalization can empty a value (e.g. a slashes-only host); if so, fall
     // through to the next candidate rather than reporting an empty value with a
     // concrete source.
@@ -90,20 +110,32 @@ function firstPresent(
 
 /**
  * Resolves authentication fields from (high → low) flags, an explicit env file,
- * the process environment, the config file, and finally a `.env`
- * auto-discovered in the working directory. Each field is resolved
- * independently. Never throws on missing values; only an env-file load error
- * (e.g. {@link EnvFileNotFoundError}) is allowed to propagate.
+ * the process environment, the project config file, the global fallback config
+ * file, and finally a `.env` auto-discovered in the working directory. Each
+ * field is resolved independently. Never throws on missing values; only an
+ * env-file load error (e.g. {@link EnvFileNotFoundError}) is allowed to
+ * propagate.
  */
 export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
   const flags = options.flags ?? {};
   const env = options.env ?? {};
   const readConfig = options.readConfig ?? (() => null);
+  const readGlobalConfig = options.readGlobalConfig ?? (() => null);
   const loadEnvFile = options.loadEnvFile ?? (() => ({}));
   const autoEnv = options.autoEnvFile ?? {};
 
   const fileMap: Record<string, string> = present(flags.envFile) ? loadEnvFile(flags.envFile) : {};
   const config = readConfig() ?? ({} as Partial<Config>);
+
+  // The global config is a pure fallback: read it lazily (and at most once) so
+  // an unreadable ~/.config/traceroot/config.json can never break resolution
+  // when a higher-precedence source (flag, env file, env, project config)
+  // already supplies the field.
+  let globalConfigCache: Partial<Config> | undefined;
+  const globalConfig = (): Partial<Config> => {
+    globalConfigCache ??= readGlobalConfig() ?? ({} as Partial<Config>);
+    return globalConfigCache;
+  };
 
   const apiKey = firstPresent(
     [
@@ -111,6 +143,7 @@ export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
       { value: fileMap.TRACEROOT_API_KEY, source: "env-file" },
       { value: env.TRACEROOT_API_KEY, source: "env" },
       { value: config.api_key, source: "config" },
+      { value: () => globalConfig().api_key, source: "global-config" },
       { value: autoEnv.TRACEROOT_API_KEY, source: "auto-env-file" },
     ],
     normalizeApiKey,
@@ -122,6 +155,7 @@ export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
       { value: fileMap.TRACEROOT_HOST_URL, source: "env-file" },
       { value: env.TRACEROOT_HOST_URL, source: "env" },
       { value: config.host_url, source: "config" },
+      { value: () => globalConfig().host_url, source: "global-config" },
       { value: autoEnv.TRACEROOT_HOST_URL, source: "auto-env-file" },
     ],
     normalizeHostUrl,

@@ -1,8 +1,14 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { configPath, readConfig, writeConfig } from "../src/config/manager.js";
+import {
+  configPath,
+  globalConfigPath,
+  readConfig,
+  readGlobalConfig,
+  writeConfig,
+} from "../src/config/manager.js";
 import { ConfigError } from "../src/config/schema.js";
 
 let dir: string;
@@ -63,6 +69,44 @@ describe("readConfig", () => {
     expect(result.reason).toBe("invalid-json");
     if (result.reason !== "invalid-json") throw new Error("unreachable");
     expect(result.error.code).toBe("INVALID_JSON");
+    expect(result.error.message).not.toContain("tr_secret_LEAK");
+  });
+});
+
+describe("readGlobalConfig", () => {
+  it("reads a valid config (shares parsing with readConfig)", () => {
+    const p = join(dir, "global-config.json");
+    writeFileSync(p, JSON.stringify({ api_key: "k", host_url: "https://h" }));
+    const result = readGlobalConfig(p);
+    expect(result).toEqual({
+      ok: true,
+      config: { api_key: "k", host_url: "https://h" },
+    });
+  });
+
+  it("returns missing (and does not throw) when the file is absent", () => {
+    const p = join(dir, "nope.json");
+    expect(() => readGlobalConfig(p)).not.toThrow();
+    expect(readGlobalConfig(p)).toEqual({ ok: false, reason: "missing" });
+  });
+
+  it("rejects an invalid shape identically to readConfig", () => {
+    const p = join(dir, "global-config.json");
+    writeFileSync(p, JSON.stringify({ api_key: 123, host_url: "https://h" }));
+    const result = readGlobalConfig(p);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("invalid-shape");
+  });
+
+  it("rejects invalid JSON without leaking the raw file bytes", () => {
+    const p = join(dir, "global-config.json");
+    writeFileSync(p, '{ api_key: "tr_secret_LEAK", oops');
+    const result = readGlobalConfig(p);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("invalid-json");
+    if (result.reason !== "invalid-json") throw new Error("unreachable");
     expect(result.error.message).not.toContain("tr_secret_LEAK");
   });
 });
@@ -168,5 +212,41 @@ describe("configPath", () => {
         process.env.TRACEROOT_CONFIG_PATH = previous;
       }
     }
+  });
+});
+
+describe("globalConfigPath", () => {
+  let previousXdg: string | undefined;
+
+  beforeEach(() => {
+    previousXdg = process.env.XDG_CONFIG_HOME;
+  });
+
+  afterEach(() => {
+    if (previousXdg === undefined) {
+      Reflect.deleteProperty(process.env, "XDG_CONFIG_HOME");
+    } else {
+      process.env.XDG_CONFIG_HOME = previousXdg;
+    }
+  });
+
+  it("defaults to ~/.config/traceroot/config.json when XDG_CONFIG_HOME is unset", () => {
+    Reflect.deleteProperty(process.env, "XDG_CONFIG_HOME");
+    expect(globalConfigPath()).toBe(join(homedir(), ".config", "traceroot", "config.json"));
+  });
+
+  it("honors XDG_CONFIG_HOME when set", () => {
+    process.env.XDG_CONFIG_HOME = join(dir, "xdg");
+    expect(globalConfigPath()).toBe(join(dir, "xdg", "traceroot", "config.json"));
+  });
+
+  it("prefers an explicit path argument over XDG_CONFIG_HOME", () => {
+    process.env.XDG_CONFIG_HOME = join(dir, "xdg");
+    expect(globalConfigPath(join(dir, "explicit.json"))).toBe(join(dir, "explicit.json"));
+  });
+
+  it("treats an empty XDG_CONFIG_HOME as unset", () => {
+    process.env.XDG_CONFIG_HOME = "";
+    expect(globalConfigPath()).toBe(join(homedir(), ".config", "traceroot", "config.json"));
   });
 });

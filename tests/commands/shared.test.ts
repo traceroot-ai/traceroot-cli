@@ -1,8 +1,41 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { contextFromCommand, requireApiClient } from "../../src/commands/shared.js";
+import { configPath, globalConfigPath } from "../../src/config/manager.js";
 import type { Context } from "../../src/context.js";
 import { CliError } from "../../src/output.js";
+
+// Isolate the project-local and global config paths from the real filesystem
+// (real cwd `.traceroot/config.json` and real `~/.config/traceroot/config.json`)
+// for any test that exercises the real resolution chain (`contextFromCommand`).
+let isolationDir: string;
+let prevConfigPath: string | undefined;
+let prevXdgConfigHome: string | undefined;
+
+beforeEach(() => {
+  isolationDir = mkdtempSync(join(tmpdir(), "tr-shared-"));
+  prevConfigPath = process.env.TRACEROOT_CONFIG_PATH;
+  prevXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  process.env.TRACEROOT_CONFIG_PATH = join(isolationDir, "project", "config.json");
+  process.env.XDG_CONFIG_HOME = join(isolationDir, "xdg");
+});
+
+afterEach(() => {
+  if (prevConfigPath === undefined) {
+    Reflect.deleteProperty(process.env, "TRACEROOT_CONFIG_PATH");
+  } else {
+    process.env.TRACEROOT_CONFIG_PATH = prevConfigPath;
+  }
+  if (prevXdgConfigHome === undefined) {
+    Reflect.deleteProperty(process.env, "XDG_CONFIG_HOME");
+  } else {
+    process.env.XDG_CONFIG_HOME = prevXdgConfigHome;
+  }
+  rmSync(isolationDir, { recursive: true, force: true });
+});
 
 function makeContext(
   apiKey: string | undefined,
@@ -68,6 +101,32 @@ describe("requireApiClient", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CliError);
       expect((err as CliError).message).not.toContain("tr_secret_LEAK");
+    }
+  });
+
+  it("names both checked config paths in the missing-api-key error", () => {
+    const ctx = makeContext(undefined, "https://api.example.com");
+    try {
+      requireApiClient(ctx);
+      throw new Error("expected requireApiClient to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      const message = (err as CliError).message;
+      expect(message).toContain(configPath());
+      expect(message).toContain(globalConfigPath());
+    }
+  });
+
+  it("names both checked config paths in the missing-host error", () => {
+    const ctx = makeContext("tr_present", undefined);
+    try {
+      requireApiClient(ctx);
+      throw new Error("expected requireApiClient to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CliError);
+      const message = (err as CliError).message;
+      expect(message).toContain(configPath());
+      expect(message).toContain(globalConfigPath());
     }
   });
 });
