@@ -51,6 +51,35 @@ describe("wrapMarkdown", () => {
     expect(wrapped).toBe("this is important text");
   });
 
+  it("keeps punctuation glued after a bold span (no invented space)", () => {
+    expect(wrapMarkdown("**Note**: text", 80, (s) => `[B]${s}[/B]`)).toBe("[B]Note[/B]: text");
+    expect(wrapMarkdown("**Note**: text", 80)).toBe("Note: text");
+  });
+
+  it("keeps punctuation glued around a parenthesized bold span", () => {
+    expect(wrapMarkdown("(**timeout**),", 80, (s) => `[B]${s}[/B]`)).toBe("([B]timeout[/B]),");
+    expect(wrapMarkdown("(**timeout**),", 80)).toBe("(timeout),");
+  });
+
+  it("keeps text glued directly before and after a bold span", () => {
+    expect(wrapMarkdown("pre**bold**post", 80, (s) => `[B]${s}[/B]`)).toBe("pre[B]bold[/B]post");
+    expect(wrapMarkdown("pre**bold**post", 80)).toBe("preboldpost");
+  });
+
+  it("still separates the words of a multi-word bold phrase normally", () => {
+    expect(wrapMarkdown("a **bold phrase** here", 80, (s) => `[B]${s}[/B]`)).toBe(
+      "a [B]bold[/B] [B]phrase[/B] here",
+    );
+    expect(wrapMarkdown("a **bold phrase** here", 80)).toBe("a bold phrase here");
+  });
+
+  it("counts a glued word's full visible length when deciding where to wrap", () => {
+    // "(timeout)," is one 10-column word; at width 12 it can't share a line
+    // with "aaa" (3 + 1 + 10 = 14 > 12), so it must wrap as a whole unit.
+    const wrapped = wrapMarkdown("aaa (**timeout**), bb", 12);
+    expect(wrapped.split("\n")).toEqual(["aaa", "(timeout),", "bb"]);
+  });
+
   it("strips inline code backticks without styling", () => {
     const wrapped = wrapMarkdown("call `doThing()` now", 80, (s) => `[B]${s}[/B]`);
     expect(wrapped).not.toContain("`");

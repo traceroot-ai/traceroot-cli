@@ -29,9 +29,21 @@ const LIST_ITEM_RE = /^(\s*)([-*]|\d+\.)\s+(.*)$/;
 const BOLD_SPAN_RE = /\*\*(.+?)\*\*/g;
 const CODE_SPAN_RE = /`([^`]+)`/g;
 
-interface Word {
+/** A run of same-emphasis characters within a {@link Word}. */
+interface Piece {
   plain: string;
   bold: boolean;
+}
+
+/**
+ * One wrappable unit: a maximal run of non-whitespace characters. A word can
+ * span emphasis boundaries (e.g. `(**timeout**),` is one word of three pieces:
+ * `(`, bold `timeout`, `),`), so punctuation glued to a bold span in the source
+ * stays glued in the output. `length` is the visible (unstyled) width.
+ */
+interface Word {
+  pieces: Piece[];
+  length: number;
 }
 
 /** Strips inline code backticks (left plain) then splits `**bold**` spans out. */
@@ -53,17 +65,49 @@ function tokenizeInline(text: string): Array<{ text: string; bold: boolean }> {
   return tokens;
 }
 
-/** Splits inline-tokenized text into individual words, each carrying its emphasis. */
+/**
+ * Splits inline-tokenized text into words. Whitespace in the SOURCE is the only
+ * word boundary: an emphasis edge with no whitespace around it (e.g.
+ * `**Note**:` or `pre**bold**post`) continues the current word, so no space is
+ * invented next to punctuation when the pieces are rejoined.
+ */
 function toWords(text: string): Word[] {
   const words: Word[] = [];
+  let pieces: Piece[] = [];
+
+  const flushWord = (): void => {
+    if (pieces.length > 0) {
+      words.push({ pieces, length: pieces.reduce((n, p) => n + p.plain.length, 0) });
+      pieces = [];
+    }
+  };
+
   for (const token of tokenizeInline(text)) {
-    for (const plain of token.text.split(/\s+/)) {
-      if (plain.length > 0) {
-        words.push({ plain, bold: token.bold });
+    // Split into alternating whitespace / non-whitespace runs (both kept):
+    // whitespace ends the current word; a non-whitespace run extends it.
+    for (const run of token.text.split(/(\s+)/)) {
+      if (run === "") {
+        continue;
+      }
+      if (/^\s/.test(run)) {
+        flushWord();
+      } else {
+        pieces.push({ plain: run, bold: token.bold });
       }
     }
   }
+  flushWord();
   return words;
+}
+
+/** Renders a word's pieces, applying `style` to the bold ones. */
+function renderWord(word: Word, style: StyleFn): string {
+  return word.pieces.map((p) => (p.bold ? style(p.plain) : p.plain)).join("");
+}
+
+/** A copy of `word` with every piece marked bold (for headings). */
+function boldWord(word: Word): Word {
+  return { pieces: word.pieces.map((p) => ({ ...p, bold: true })), length: word.length };
 }
 
 /**
@@ -87,18 +131,18 @@ function fillLines(
 
   const flush = (): void => {
     const prefix = lines.length === 0 ? firstPrefix : contPrefix;
-    lines.push(prefix + current.map((w) => (w.bold ? style(w.plain) : w.plain)).join(" "));
+    lines.push(prefix + current.map((w) => renderWord(w, style)).join(" "));
     current = [];
     currentLen = contPrefix.length;
   };
 
   for (const word of words) {
     const sep = current.length === 0 ? 0 : 1;
-    if (current.length > 0 && currentLen + sep + word.plain.length > safeWidth) {
+    if (current.length > 0 && currentLen + sep + word.length > safeWidth) {
       flush();
     }
     current.push(word);
-    currentLen += (current.length === 1 ? 0 : 1) + word.plain.length;
+    currentLen += (current.length === 1 ? 0 : 1) + word.length;
   }
   if (current.length > 0 || lines.length === 0) {
     flush();
@@ -135,7 +179,7 @@ export function wrapMarkdown(text: string, width: number, bold: StyleFn = (s) =>
     const heading = HEADING_RE.exec(line);
     if (heading) {
       flushParagraph();
-      const words = toWords((heading[2] ?? "").trim()).map((w) => ({ ...w, bold: true }));
+      const words = toWords((heading[2] ?? "").trim()).map(boldWord);
       out.push(...fillLines(words, width, bold, "", ""));
       continue;
     }
