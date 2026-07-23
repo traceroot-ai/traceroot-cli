@@ -1,3 +1,5 @@
+import { elapsedMs, formatDuration } from "../util/index.js";
+
 /**
  * Minimal structural shape a span needs to be rendered as a tree. A superset of
  * the fields of `SpanResponse` used here, kept local so the renderer stays a
@@ -9,6 +11,16 @@ export interface SpanLike {
   name: string;
   status?: string;
   span_start_time?: string;
+  /** End timestamp, or `null`/absent while the span is still running. */
+  span_end_time?: string | null;
+  /** Error detail, shown as its own line beneath an errored span. */
+  status_message?: string | null;
+  /** LLM model name; presence triggers the compact model/token/cost detail. */
+  model_name?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  cost?: number | null;
 }
 
 const ERROR_STATUSES = new Set(["ERROR", "error", "STATUS_CODE_ERROR"]);
@@ -17,6 +29,12 @@ const ERROR_STATUSES = new Set(["ERROR", "error", "STATUS_CODE_ERROR"]);
 // terminals; applied to the whole line, gated behind the `color` option.
 const ANSI_RESET = "\x1b[0m";
 const ANSI_RED = "\x1b[91m";
+// Dim, for the secondary LLM model/token/cost detail line, so it reads as
+// supplementary rather than competing with the span line itself.
+const ANSI_DIM = "\x1b[2m";
+
+/** Default terminal width assumed when {@link RenderTreeOptions.width} is omitted. */
+const DEFAULT_WIDTH = 80;
 
 function isError(status: string | undefined): boolean {
   return status !== undefined && ERROR_STATUSES.has(status);
@@ -30,10 +48,71 @@ function sortKey(span: SpanLike, index: number): [string, number] {
   return [span.span_start_time ?? "", index];
 }
 
+/**
+ * Compact token count for the LLM detail line, e.g. `850` → `"850 tok"`,
+ * `1200` → `"1.2k tok"`. Values at or above 1000 collapse to one decimal of
+ * thousands (trailing `.0` dropped) so the detail stays a single glanceable
+ * token.
+ */
+function formatTokens(count: number): string {
+  if (count < 1000) {
+    return `${count} tok`;
+  }
+  const thousands = (count / 1000).toFixed(1).replace(/\.0$/, "");
+  return `${thousands}k tok`;
+}
+
+/** `total_tokens` if present, else `input_tokens + output_tokens`; null if neither is known. */
+function tokenCount(span: SpanLike): number | null {
+  if (span.total_tokens !== undefined && span.total_tokens !== null) {
+    return span.total_tokens;
+  }
+  if (
+    (span.input_tokens !== undefined && span.input_tokens !== null) ||
+    (span.output_tokens !== undefined && span.output_tokens !== null)
+  ) {
+    return (span.input_tokens ?? 0) + (span.output_tokens ?? 0);
+  }
+  return null;
+}
+
+/**
+ * Compact `model · N tok · $cost` detail for an LLM span, or null when the
+ * span has no `model_name`. Tokens and cost are each omitted individually when
+ * unknown, so a span with only a model name still renders that much.
+ */
+function llmDetail(span: SpanLike): string | null {
+  if (span.model_name === undefined || span.model_name === null || span.model_name === "") {
+    return null;
+  }
+  const parts = [span.model_name];
+  const tokens = tokenCount(span);
+  if (tokens !== null) {
+    parts.push(formatTokens(tokens));
+  }
+  if (span.cost !== undefined && span.cost !== null) {
+    parts.push(`$${span.cost.toFixed(4)}`);
+  }
+  return parts.join(" · ");
+}
+
 /** Optional behavior for {@link renderTree}. */
 export interface RenderTreeOptions {
   /** When true, error span lines are colored red. Off for non-TTY / `NO_COLOR`. */
   color?: boolean;
+  /**
+   * Terminal width: durations are right-aligned to this column and error
+   * messages are truncated to it. Defaults to 80.
+   */
+  width?: number;
+  /**
+   * ISO timestamp used as "now" for the elapsed-so-far duration of a span with
+   * no `span_end_time` (still running). Passed in — rather than read via
+   * `Date.now()` inside the renderer — so this stays a pure, testable
+   * transform and agrees with whatever "now" the caller used for its own live
+   * elapsed display (e.g. the `traces get` header).
+   */
+  now?: string;
 }
 
 /**
@@ -46,6 +125,8 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     return "";
   }
   const color = options.color === true;
+  const width = options.width ?? DEFAULT_WIDTH;
+  const now = options.now;
 
   const indexOf = new Map<string, number>();
   for (const [i, span] of spans.entries()) {
@@ -85,8 +166,39 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     visited.add(span.span_id);
     const connector = isRoot ? "" : isLast ? "└─ " : "├─ ";
     const text = `${prefix}${connector}${span.name} ${marker(span.status)}`;
-    lines.push(color && isError(span.status) ? `${ANSI_RED}${text}${ANSI_RESET}` : text);
     const childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+
+    // Duration, right-aligned to `width`: end time if the span has finished,
+    // otherwise elapsed-so-far against `now` (only when the caller supplied
+    // one — a still-running span with no `now` simply shows no duration
+    // rather than silently computing one from a fresh `Date.now()`).
+    const end = span.span_end_time ?? now ?? null;
+    const durationMs =
+      span.span_start_time !== undefined ? elapsedMs(span.span_start_time, end) : null;
+    const durationText = durationMs !== null ? formatDuration(durationMs) : null;
+    const lineCore =
+      durationText === null
+        ? text
+        : `${text}${" ".repeat(Math.max(1, width - text.length - durationText.length))}${durationText}`;
+    lines.push(color && isError(span.status) ? `${ANSI_RED}${lineCore}${ANSI_RESET}` : lineCore);
+
+    // Error detail, directly beneath the span line, indented to align under
+    // the name (the same indent children continue at) and truncated to width.
+    if (isError(span.status) && span.status_message !== undefined && span.status_message !== null) {
+      const trimmed = span.status_message.trim();
+      if (trimmed.length > 0) {
+        const msgText = `${childPrefix}${truncate(trimmed, Math.max(10, width - childPrefix.length))}`;
+        lines.push(color ? `${ANSI_RED}${msgText}${ANSI_RESET}` : msgText);
+      }
+    }
+
+    // Compact LLM detail (model · tokens · cost), dim, on its own line.
+    const detail = llmDetail(span);
+    if (detail !== null) {
+      const detailText = `${childPrefix}${detail}`;
+      lines.push(color ? `${ANSI_DIM}${detailText}${ANSI_RESET}` : detailText);
+    }
+
     const children = [...(childrenOf.get(span.span_id) ?? [])].sort(byStart);
     for (const [i, child] of children.entries()) {
       walk(child, childPrefix, i === children.length - 1, false);
@@ -108,13 +220,23 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
   return lines.join("\n");
 }
 
+/** Hint appended to truncated text; budgeted into {@link truncate}'s `max`. */
+const TRUNCATION_SUFFIX = "… (truncated)";
+
 /**
- * Returns `text` unchanged when its length is at most `max`, otherwise the first
- * `max` characters followed by a truncation hint. HUMAN-render only.
+ * Returns `text` unchanged when its length is at most `max`, otherwise a
+ * truncated form whose TOTAL length (kept text plus the truncation hint) is at
+ * most `max`, so callers can budget it against a terminal width. When `max` is
+ * too small for the hint plus at least one source character, the hint is
+ * dropped and the text is plainly cut at `max`, preserving the length
+ * invariant. HUMAN-render only.
  */
 export function truncate(text: string, max = 200): string {
   if (text.length <= max) {
     return text;
   }
-  return `${text.slice(0, max)}… (truncated)`;
+  if (max <= TRUNCATION_SUFFIX.length) {
+    return text.slice(0, max);
+  }
+  return `${text.slice(0, max - TRUNCATION_SUFFIX.length)}${TRUNCATION_SUFFIX}`;
 }

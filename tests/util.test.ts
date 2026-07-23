@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CliError } from "../src/output.js";
 import {
+  elapsedMs,
   formatBytes,
   formatTimestamp,
   parseBackendTime,
@@ -63,6 +64,29 @@ describe("parseBackendTime", () => {
 
   it("returns null for an unparseable string", () => {
     expect(parseBackendTime("not-a-date")).toBeNull();
+  });
+});
+
+describe("elapsedMs", () => {
+  it("returns the millisecond difference between two zone-less UTC timestamps", () => {
+    expect(elapsedMs("2024-01-01T00:00:00Z", "2024-01-01T00:00:01.500Z")).toBe(1500);
+  });
+
+  it("treats zone-less start/end as UTC (matches parseBackendTime)", () => {
+    expect(elapsedMs("2024-01-01T00:00:00", "2024-01-01T00:00:02")).toBe(2000);
+  });
+
+  it("returns null when end is null (still running, no duration yet)", () => {
+    expect(elapsedMs("2024-01-01T00:00:00Z", null)).toBeNull();
+  });
+
+  it("returns null when either side fails to parse", () => {
+    expect(elapsedMs("not-a-date", "2024-01-01T00:00:01Z")).toBeNull();
+    expect(elapsedMs("2024-01-01T00:00:00Z", "not-a-date")).toBeNull();
+  });
+
+  it("returns null rather than a negative duration when end precedes start", () => {
+    expect(elapsedMs("2024-01-01T00:00:05Z", "2024-01-01T00:00:00Z")).toBeNull();
   });
 });
 
