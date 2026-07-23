@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { ApiClient, FindingDetail } from "../../api/client.js";
-import { type Writers, CliError, defaultWriters, writeJson } from "../../output.js";
+import { CliError, ExitCode, type Writers, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
@@ -29,10 +29,10 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   const hasTrace = traceId !== undefined && traceId.trim() !== "";
 
   if (hasFinding && hasTrace) {
-    throw new CliError("provide either a finding id or --trace, not both");
+    throw new CliError("provide either a finding id or --trace, not both", ExitCode.usage);
   }
   if (!hasFinding && !hasTrace) {
-    throw new CliError("provide a finding id, or --trace <trace-id>");
+    throw new CliError("provide a finding id, or --trace <trace-id>", ExitCode.usage);
   }
 
   const finding = hasFinding
@@ -128,6 +128,7 @@ export function registerFindingsGet(findings: Command): void {
       if (command.args.length > 1) {
         throw new CliError(
           `unexpected argument(s): ${command.args.slice(1).join(" ")}. 'findings get' takes a single finding id (or use --trace).`,
+          ExitCode.usage,
         );
       }
       const opts = command.opts();

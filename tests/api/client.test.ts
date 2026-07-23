@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createApiClient } from "../../src/api/client.js";
-import { CliError } from "../../src/output.js";
+import { CliError, ExitCode } from "../../src/output.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
 
 const API_KEY = "tr_secret_LEAK";
@@ -113,6 +113,63 @@ describe("createApiClient", () => {
     });
     await expect(client.whoami()).rejects.toBeInstanceOf(CliError);
     await expect(client.whoami()).rejects.toThrow(/https:\/\/h/);
+  });
+});
+
+describe("HTTP status → exit-code class", () => {
+  async function exitCodeOf(status: number): Promise<number> {
+    const { client } = clientWith(() => errorResponse(status, `status ${status}`));
+    const err = await client.whoami().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    return (err as CliError).exitCode;
+  }
+
+  it("maps 401 and 403 to the auth exit code", async () => {
+    expect(await exitCodeOf(401)).toBe(ExitCode.auth);
+    expect(await exitCodeOf(403)).toBe(ExitCode.auth);
+  });
+
+  it("maps 404 to the not-found exit code", async () => {
+    expect(await exitCodeOf(404)).toBe(ExitCode.notFound);
+  });
+
+  it("maps a 500 to the internal exit code", async () => {
+    expect(await exitCodeOf(500)).toBe(ExitCode.internal);
+  });
+
+  it("maps a network failure to the network exit code", async () => {
+    const { client } = clientWith(() => {
+      throw new Error("connect ECONNREFUSED");
+    });
+    const err = await client.whoami().catch((e: unknown) => e);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+  });
+
+  it("maps a request timeout to the network exit code", async () => {
+    const fetchImpl = (() =>
+      Promise.reject(new DOMException("aborted", "TimeoutError"))) as typeof fetch;
+    const client = createApiClient({
+      host: "https://h",
+      apiKey: API_KEY,
+      fetchImpl,
+      timeoutMs: 10,
+    });
+    const err = await client.whoami().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+  });
+
+  it("rejects a bad host at construction with the usage exit code", () => {
+    const fake = createFakeFetch(() => jsonResponse({}));
+    const err = ((): unknown => {
+      try {
+        createApiClient({ host: "not a url", apiKey: API_KEY, fetchImpl: fake.fetchImpl });
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
   });
 });
 

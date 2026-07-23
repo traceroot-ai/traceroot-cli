@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { type ApiClient, createApiClient } from "../api/client.js";
 import { type Context, buildContext } from "../context.js";
-import { CliError } from "../output.js";
+import { CliError, ExitCode } from "../output.js";
 
 /** Build the per-invocation Context from a command's merged (global+local) options. */
 export function contextFromCommand(command: Command): Context {
@@ -26,11 +26,13 @@ export function requireApiClient(ctx: Context): ApiClient {
   if (apiKey === undefined) {
     throw new CliError(
       "No API key found. Run `traceroot login`, or set TRACEROOT_API_KEY, or pass --api-key.",
+      ExitCode.auth,
     );
   }
   if (host === undefined) {
     throw new CliError(
       "No host found. Run `traceroot login`, or set TRACEROOT_HOST_URL, or pass --host.",
+      ExitCode.auth,
     );
   }
   return createApiClient({ host, apiKey, timeoutMs: ctx.timeoutMs });

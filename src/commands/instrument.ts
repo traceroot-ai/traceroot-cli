@@ -5,6 +5,7 @@ import { displaySkillPath } from "../agents/index.js";
 import { resolveAgentOrPrompt } from "../agents/select.js";
 import {
   CliError,
+  ExitCode,
   type Writers,
   defaultWriters,
   logInfo,
@@ -13,8 +14,8 @@ import {
 } from "../output.js";
 import { confirm, dim, isInteractive, readLine, yellow } from "../prompt.js";
 import { buildInstrumentPrompt } from "../prompts/instrumentPrompt.js";
-import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { createStyler } from "../render/style.js";
+import { type RepoDetection, detectRepo } from "../repo/detect.js";
 import { formatBytes } from "../util/index.js";
 
 /** Default location for the generated prompt when neither --print nor --output is given. */
@@ -107,6 +108,7 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
   } else {
     throw new CliError(
       `Missing required option --output.\nProvide a path to write the prompt, or use --print.\nExample:\n  traceroot instrument --agent ${agent.id} --output ${DEFAULT_PROMPT_PATH}`,
+      ExitCode.usage,
     );
   }
 

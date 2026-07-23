@@ -1,6 +1,6 @@
-import { Command, Option } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import { registerCommands } from "./commands/index.js";
-import { colorizeError, handlePipeError, reportError } from "./output.js";
+import { CliError, ExitCode, handlePipeError, reportError } from "./output.js";
 import { getVersion } from "./version.js";
 
 export function buildProgram(): Command {
@@ -8,10 +8,17 @@ export function buildProgram(): Command {
   program.name("traceroot").description("TraceRoot command line interface").version(getVersion());
   // Drop the implicit `help [command]` subcommand; `-h, --help` already covers it.
   program.helpCommand(false);
-  // Color commander's own errors (unknown command/option) the same red as the
-  // central error handler, so every error message is consistent.
+  // Make commander throw a CommanderError instead of calling process.exit, so
+  // its native failures (unknown option/command, missing option argument) reach
+  // the central handler in run() and follow the standard exit-code and `--json`
+  // envelope contract. Set before registerCommands so subcommands inherit it.
+  program.exitOverride();
+  // Suppress commander's own error printing: with exitOverride the same message
+  // travels on the thrown CommanderError and run() reports it exactly once via
+  // reportError (consistent prose/JSON shape and color). Help output is
+  // unaffected — it goes through writeOut/writeErr, not outputError.
   program.configureOutput({
-    outputError: (str, write) => write(colorizeError(str)),
+    outputError: () => {},
   });
   // Surface program-wide global flags (e.g. `--json`) in every subcommand's
   // `--help` under a "Global Options" section, so they're discoverable where
@@ -53,13 +60,29 @@ export function buildProgram(): Command {
     .option("--json", "emit machine-readable JSON output for supported commands")
     .option("--timeout <ms>", "per-request network timeout in milliseconds (default: 30000)");
   registerCommands(program);
+  // Make the exit-code contract discoverable from `traceroot --help` so scripts
+  // know how to branch on failures (mirrors the README table).
+  program.addHelpText(
+    "after",
+    [
+      "",
+      "Exit codes:",
+      "  0  success",
+      "  1  internal   unexpected/internal error",
+      "  2  usage      invalid arguments or options",
+      "  3  auth       authentication required or invalid",
+      "  4  not_found  the requested resource does not exist",
+      "  5  network    network failure or timeout (retryable)",
+      "",
+      'Under --json, failures also print {"error":{"code","message"}} to stderr.',
+    ].join("\n"),
+  );
   // Root action: lets global flags parse without a subcommand, while still
   // rejecting an unrecognized operand so unknown-command handling is preserved.
   program.action((_opts, command: Command) => {
     const operands = command.args;
     if (operands.length > 0) {
-      command.error(`error: unknown command '${operands[0]}'`, { exitCode: 1 });
-      return;
+      throw new CliError(`unknown command '${operands[0]}'`, ExitCode.usage);
     }
     // No subcommand given: show help and exit non-zero. Help goes to stderr
     // (per the output contract: human text never pollutes stdout). An explicit
@@ -67,6 +90,19 @@ export function buildProgram(): Command {
     command.help({ error: true });
   });
   return program;
+}
+
+/**
+ * Ends the process with `code` once stderr has drained. The empty write is
+ * queued behind any pending stderr chunks, so its completion callback fires only
+ * after the error text has fully reached a pipe/file — then it is safe to call
+ * `process.exit` without truncation. Exiting explicitly matters: a failed request
+ * can leave a pending socket (e.g. undici's connect timeout) holding the event
+ * loop open for seconds after the error was reported.
+ */
+function exitAfterStderrDrain(code: number): void {
+  process.exitCode = code;
+  process.stderr.write("", () => process.exit(code));
 }
 
 export async function run(argv: string[]): Promise<void> {
@@ -77,10 +113,29 @@ export async function run(argv: string[]): Promise<void> {
   try {
     await buildProgram().parseAsync(argv);
   } catch (err) {
-    const code = reportError(err);
-    process.exitCode = code;
-    if (code !== 0) {
-      process.exit(code);
+    // The central catch has no resolved Context, so detect `--json` straight from
+    // argv (the accepted approach) to pick the machine-readable error envelope.
+    const json = argv.includes("--json");
+    if (err instanceof CommanderError) {
+      if (err.exitCode === 0) {
+        // `--help` / `--version`: normal output was already written; exit 0
+        // naturally so stdout flushes on its own.
+        return;
+      }
+      if (err.code === "commander.help") {
+        // Help was already rendered (e.g. bare `traceroot`); the CommanderError
+        // message is only a placeholder, so add no error line.
+        exitAfterStderrDrain(err.exitCode);
+        return;
+      }
+      // A commander-native usage failure (unknown option, missing option
+      // argument, …). Its own printing is suppressed in buildProgram, so report
+      // it here exactly once, stripping commander's "error: " prefix (the
+      // reporter adds its own).
+      const message = err.message.replace(/^error: /, "");
+      exitAfterStderrDrain(reportError(new CliError(message, ExitCode.usage), { json }));
+      return;
     }
+    exitAfterStderrDrain(reportError(err, { json }));
   }
 }

@@ -8,7 +8,7 @@ import {
 } from "../api/client.js";
 import { writeConfig as realWriteConfig } from "../config/manager.js";
 import type { AuthSource } from "../config/resolve.js";
-import { CliError, type Writers, defaultWriters, logInfo, writeJson } from "../output.js";
+import { CliError, ExitCode, type Writers, defaultWriters, logInfo, writeJson } from "../output.js";
 import { apiKeyLabel, identity } from "../render/identity.js";
 import { createStyler } from "../render/style.js";
 import { DEFAULT_HOST } from "./constants.js";
@@ -94,10 +94,10 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
   } else if (deps.isInteractive) {
     apiKey = (await deps.promptHidden("API key: ")).trim();
   } else {
-    throw new CliError(MISSING_KEY);
+    throw new CliError(MISSING_KEY, ExitCode.auth);
   }
   if (apiKey === "") {
-    throw new CliError(MISSING_KEY);
+    throw new CliError(MISSING_KEY, ExitCode.auth);
   }
 
   let host: string;

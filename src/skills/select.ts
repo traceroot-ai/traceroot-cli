@@ -1,9 +1,9 @@
-import { type Writers, CliError, logInfo } from "../output.js";
+import { CliError, ExitCode, type Writers, logInfo } from "../output.js";
 import { type Prompt, dim, isInteractive, readLine } from "../prompt.js";
 import { createStyler } from "../render/style.js";
 import {
-  type BuiltinSkill,
   BUILTIN_SKILLS,
+  type BuiltinSkill,
   builtinSkillNames,
   requireBuiltinSkill,
 } from "./registry.js";
@@ -57,6 +57,7 @@ export async function resolveSkillOrPrompt(input: ResolveSkillInput): Promise<Bu
   if (json || !interactive) {
     throw new CliError(
       `Missing required argument <skill>.\nChoose one of: ${builtinSkillNames()}.\nExample:\n  traceroot skills install traceroot-instrument-repo`,
+      ExitCode.usage,
     );
   }
 

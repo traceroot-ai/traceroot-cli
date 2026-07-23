@@ -1,6 +1,13 @@
 import type { Command } from "commander";
 import type { ApiClient, ListDetectorsParams } from "../../api/client.js";
-import { CliError, type Writers, defaultWriters, logProgress, writeJson } from "../../output.js";
+import {
+  CliError,
+  ExitCode,
+  type Writers,
+  defaultWriters,
+  logProgress,
+  writeJson,
+} from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { formatTimestamp } from "../../util/index.js";
@@ -129,11 +136,13 @@ export function registerDetectorsList(detectors: Command): void {
           if (value !== undefined && bareDate.test(value)) {
             throw new CliError(
               `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot detectors list ${flag} "${value} ${strayJoined}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot detectors list ${flag} 2026-06-23T20:31:02Z\n  traceroot detectors list ${flag} 2026-06-23T14:31:02-06:00`,
+              ExitCode.usage,
             );
           }
         }
         throw new CliError(
           `unexpected argument(s): ${strayJoined}. 'detectors list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
+          ExitCode.usage,
         );
       }
       const opts = command.opts();

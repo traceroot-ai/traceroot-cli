@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { ApiClient } from "../../api/client.js";
 import {
   CliError,
+  ExitCode,
   type Writers,
   colorizeError,
   defaultWriters,
@@ -196,6 +197,7 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
     if (offH > 14 || offM > 59 || Number.isNaN(d.getTime()) || roundTrip !== `${date}T${time}`) {
       throw new CliError(
         `${flag} "${trimmed}": not a valid timestamp. Use ISO 8601, e.g. ${flag} 2026-06-23T17:30:00+05:30.`,
+        ExitCode.usage,
       );
     }
     return d.toISOString();
@@ -259,6 +261,7 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
       // explicit offset using a generic, valid example instead.
       throw new CliError(
         `${flag} "${trimmed}": not a valid local time (invalid date/time, or a nonexistent local time such as a DST gap). Use ISO 8601 with an explicit offset, e.g. ${flag} 2026-06-23T14:31:02-06:00.`,
+        ExitCode.usage,
       );
     }
 
@@ -275,6 +278,7 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
       const suggestion = `${ys}-${ms}-${ds}T${hs}:${mins}:${ss}${sign}${offH}:${offM}`;
       throw new CliError(
         `${flag} "${trimmed}": timezone "${abbr}" doesn't match your local timezone (${timeZone} → ${localAbbr}). Use ISO 8601 with an explicit offset instead, e.g. ${flag} ${suggestion}.`,
+        ExitCode.usage,
       );
     }
 
@@ -296,6 +300,7 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
   if (Number.isNaN(date.getTime()) || !hasValidCalendarDate(trimmed)) {
     throw new CliError(
       `${flag} must be a valid ISO 8601 timestamp, e.g. 2026-06-01 or 2026-06-01T13:00:00Z`,
+      ExitCode.usage,
     );
   }
   return date.toISOString();
@@ -315,12 +320,12 @@ export function resolveTimeRange(
 ): TimeRange {
   const { since, from, to } = opts;
   if (since !== undefined && (from !== undefined || to !== undefined)) {
-    throw new CliError("--since cannot be combined with --from/--to");
+    throw new CliError("--since cannot be combined with --from/--to", ExitCode.usage);
   }
   if (since !== undefined) {
     const startAfter = new Date(now() - parseDuration(since));
     if (Number.isNaN(startAfter.getTime())) {
-      throw new CliError(`--since ${since} is too large`);
+      throw new CliError(`--since ${since} is too large`, ExitCode.usage);
     }
     return { startAfter: startAfter.toISOString(), sinceLabel: since };
   }
@@ -336,10 +341,11 @@ export function resolveTimeRange(
     if (range.startAfter === range.endBefore) {
       throw new CliError(
         "--from and --to resolve to the same time. The lower bound is inclusive and the upper bound is exclusive, so choose a later time for --to.",
+        ExitCode.usage,
       );
     }
     if (range.startAfter > range.endBefore) {
-      throw new CliError("--from must resolve to an earlier time than --to");
+      throw new CliError("--from must resolve to an earlier time than --to", ExitCode.usage);
     }
   }
   return range;
@@ -355,11 +361,11 @@ export function parseLimit(raw: string | undefined): number | undefined {
     return undefined;
   }
   if (!/^\d+$/.test(raw)) {
-    throw new CliError("--limit must be a positive integer");
+    throw new CliError("--limit must be a positive integer", ExitCode.usage);
   }
   const value = Number.parseInt(raw, 10);
   if (!Number.isInteger(value) || value < 1) {
-    throw new CliError("--limit must be a positive integer");
+    throw new CliError("--limit must be a positive integer", ExitCode.usage);
   }
   return value;
 }
@@ -514,7 +520,7 @@ export async function runList(deps: RunListDeps): Promise<void> {
 export function onceOption(flag: string): (val: string, prev: string | undefined) => string {
   return (val: string, prev: string | undefined): string => {
     if (prev !== undefined) {
-      throw new CliError(`${flag} may only be given once`);
+      throw new CliError(`${flag} may only be given once`, ExitCode.usage);
     }
     return val;
   };
@@ -554,16 +560,19 @@ export function registerTracesList(traces: Command): void {
           const reconstructed = `${fromVal} ${strayJoined}`;
           throw new CliError(
             `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --from "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --from 2026-06-23T20:31:02Z\n  traceroot traces list --from 2026-06-23T14:31:02-06:00`,
+            ExitCode.usage,
           );
         }
         if (toVal !== undefined && bareDate.test(toVal)) {
           const reconstructed = `${toVal} ${strayJoined}`;
           throw new CliError(
             `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --to "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --to 2026-06-23T20:31:02Z\n  traceroot traces list --to 2026-06-23T14:31:02-06:00`,
+            ExitCode.usage,
           );
         }
         throw new CliError(
           `unexpected argument(s): ${strayJoined}. 'traces list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
+          ExitCode.usage,
         );
       }
       const opts = command.opts();

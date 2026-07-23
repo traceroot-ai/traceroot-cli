@@ -70,6 +70,44 @@ export function logWarn(msg: string, w: Writers = defaultWriters): void {
   w.err.write(`warning: ${msg}\n`);
 }
 
+/**
+ * Process exit codes by failure class. This is a stable, script-facing contract:
+ * scripts can branch on the code to decide whether to retry (network), re-auth
+ * (auth), give up (not-found), or fix their invocation (usage). Anything not
+ * classified stays `internal` (1).
+ */
+export const ExitCode = {
+  /** Bad invocation: unknown flag/argument, malformed value, missing required input. */
+  usage: 2,
+  /** Authentication/authorization: HTTP 401/403, or missing local credentials. */
+  auth: 3,
+  /** The requested resource does not exist: HTTP 404. */
+  notFound: 4,
+  /** Network failure or timeout — transient; a retry may succeed. */
+  network: 5,
+  /** Unexpected/internal failure. The default when nothing else applies. */
+  internal: 1,
+} as const;
+
+/**
+ * Maps a numeric exit code to its stable string code for the `--json` error
+ * envelope. Unknown codes (including the default 1) map to `"internal"`.
+ */
+export function exitCodeToString(exitCode: number): string {
+  switch (exitCode) {
+    case ExitCode.usage:
+      return "usage";
+    case ExitCode.auth:
+      return "auth";
+    case ExitCode.notFound:
+      return "not_found";
+    case ExitCode.network:
+      return "network";
+    default:
+      return "internal";
+  }
+}
+
 /** An error carrying a process exit code. */
 export class CliError extends Error {
   readonly exitCode: number;
@@ -104,12 +142,25 @@ export function handlePipeError(
 }
 
 /**
- * Reports an error to stderr (red when color is enabled) without a stack trace
- * and returns the exit code (a {@link CliError}'s `exitCode`, else 1). Never
- * writes to stdout.
+ * Reports an error to stderr without a stack trace and returns the exit code (a
+ * {@link CliError}'s `exitCode`, else {@link ExitCode.internal}). Never writes to
+ * stdout. In `opts.json` mode a single machine-readable line is written instead
+ * of prose: `{"error":{"code":"<class>","message":"<text>"}}`, where `<class>` is
+ * the stable string for the exit code. Otherwise the human-readable `error:
+ * <message>` line is written (red when color is enabled).
  */
-export function reportError(err: unknown, w: Writers = defaultWriters): number {
+export function reportError(
+  err: unknown,
+  opts: { json?: boolean } = {},
+  w: Writers = defaultWriters,
+): number {
   const message = err instanceof Error ? err.message : String(err);
-  w.err.write(`${colorizeError(`error: ${message}`, w.err)}\n`);
-  return isCliError(err) ? err.exitCode : 1;
+  const code = isCliError(err) ? err.exitCode : ExitCode.internal;
+  if (opts.json) {
+    // One compact line to stderr; stdout stays empty (the output contract).
+    w.err.write(`${JSON.stringify({ error: { code: exitCodeToString(code), message } })}\n`);
+  } else {
+    w.err.write(`${colorizeError(`error: ${message}`, w.err)}\n`);
+  }
+  return code;
 }
