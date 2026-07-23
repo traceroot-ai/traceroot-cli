@@ -1,5 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
-import type { ApiClient, FindingDetail, TraceDetail } from "../../src/api/client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  ApiClient,
+  FindingDetail,
+  TraceDetail,
+  TraceFieldsParams,
+} from "../../src/api/client.js";
 import { runGet } from "../../src/commands/traces/get.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -76,12 +81,15 @@ function fakeClient(over: {
   error?: Error;
   finding?: FindingDetail | null;
   findingError?: Error;
+  getTrace?: (traceId: string, params?: TraceFieldsParams) => Promise<TraceDetail>;
 }): ApiClient {
   return {
     whoami: () => Promise.reject(new Error("unused")),
     listTraces: () => Promise.reject(new Error("unused")),
-    getTrace: () =>
-      over.error ? Promise.reject(over.error) : Promise.resolve(over.trace as TraceDetail),
+    getTrace:
+      over.getTrace ??
+      (() =>
+        over.error ? Promise.reject(over.error) : Promise.resolve(over.trace as TraceDetail)),
     exportTrace: () => Promise.reject(new Error("unused")),
     findFindingByTrace: () =>
       over.findingError ? Promise.reject(over.findingError) : Promise.resolve(over.finding ?? null),
@@ -193,6 +201,30 @@ describe("runGet live Duration under a non-UTC timezone", () => {
       expect(liveDurationSeconds(out)).toBeLessThan(605);
     });
   }
+});
+
+describe("runGet (--fields)", () => {
+  it("passes fields through to client.getTrace", async () => {
+    const trace = detail({});
+    const getTrace = vi.fn().mockResolvedValue(trace);
+    const { writers: w } = writers();
+    await runGet({
+      client: fakeClient({ getTrace }),
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      fields: "full",
+    });
+    expect(getTrace).toHaveBeenCalledWith("t-1", { fields: "full" });
+  });
+
+  it("passes fields: undefined through to client.getTrace when omitted", async () => {
+    const trace = detail({});
+    const getTrace = vi.fn().mockResolvedValue(trace);
+    const { writers: w } = writers();
+    await runGet({ client: fakeClient({ getTrace }), json: false, writers: w, traceId: "t-1" });
+    expect(getTrace).toHaveBeenCalledWith("t-1", { fields: undefined });
+  });
 });
 
 describe("runGet (--json)", () => {

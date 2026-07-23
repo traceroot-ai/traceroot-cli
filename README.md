@@ -54,8 +54,8 @@ traceroot traces list
 | `login` | Authenticate and save credentials (validates before writing). |
 | `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
 | `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
-| `traces get <id>` | Show one trace: span tree, derived duration, I/O preview, and a link to open it. |
-| `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. `--output <dir>`, `--force` |
+| `traces get <id>` | Show one trace: span tree, derived duration, and a link to open it. Defaults to the lightweight `skeleton` projection (no per-span input/output/metadata); pass `--fields full` (or `--fields io,metadata`) to fetch span I/O. `--fields <groups>` |
+| `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. Defaults to the `full` projection (span input/output/metadata included); pass `--fields <groups>` to narrow it. `--output <dir>`, `--force`, `--fields <groups>` |
 | `detectors list` | List your project's detectors, newest first. The `DETECTOR ID` column is what you pass to `findings list --detector`. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `findings list` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id>`, `--trace <id>` |
 | `findings get [id]` | Show one finding: per-detector results and its free-text RCA. Look it up by finding id or with `--trace <id>` (exactly one). |
@@ -69,6 +69,7 @@ Run `traceroot <command> --help` for the full flag list.
 
 ```sh
 traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef
+traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef --fields full   # include span input/output/metadata
 traceroot traces export <trace-id> --output ./out
 traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --limit 5 --json | jq '.data[].trace_id'
 traceroot detectors list --json | jq '.data[].detector_id'

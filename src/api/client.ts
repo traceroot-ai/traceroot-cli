@@ -59,11 +59,20 @@ export interface ListFindingsParams {
   traceId?: string;
 }
 
+export interface TraceFieldsParams {
+  /**
+   * Field projection to request, sent verbatim as `fields`, e.g. `full` or
+   * `io,metadata`. The server validates the value; an invalid group surfaces
+   * as a normal CliError from a 400 response.
+   */
+  fields?: string;
+}
+
 export interface ApiClient {
   whoami(): Promise<Whoami>;
   listTraces(params?: ListTracesParams): Promise<TraceList>;
-  getTrace(traceId: string): Promise<TraceDetail>;
-  exportTrace(traceId: string): Promise<TraceExport>;
+  getTrace(traceId: string, params?: TraceFieldsParams): Promise<TraceDetail>;
+  exportTrace(traceId: string, params?: TraceFieldsParams): Promise<TraceExport>;
   listDetectors(params?: ListDetectorsParams): Promise<DetectorList>;
   listFindings(params?: ListFindingsParams): Promise<FindingList>;
   getFinding(findingId: string): Promise<FindingDetail>;
@@ -217,11 +226,25 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       const query = search.toString();
       return request<TraceList>(`/api/v1/public/traces${query ? `?${query}` : ""}`);
     },
-    getTrace(traceId) {
-      return request<TraceDetail>(`/api/v1/public/traces/${encodeURIComponent(traceId)}`);
+    getTrace(traceId, params) {
+      const search = new URLSearchParams();
+      if (params?.fields !== undefined) {
+        search.set("fields", params.fields);
+      }
+      const query = search.toString();
+      return request<TraceDetail>(
+        `/api/v1/public/traces/${encodeURIComponent(traceId)}${query ? `?${query}` : ""}`,
+      );
     },
-    exportTrace(traceId) {
-      return request<TraceExport>(`/api/v1/public/traces/${encodeURIComponent(traceId)}/export`);
+    exportTrace(traceId, params) {
+      const search = new URLSearchParams();
+      if (params?.fields !== undefined) {
+        search.set("fields", params.fields);
+      }
+      const query = search.toString();
+      return request<TraceExport>(
+        `/api/v1/public/traces/${encodeURIComponent(traceId)}/export${query ? `?${query}` : ""}`,
+      );
     },
     listDetectors(params) {
       const search = new URLSearchParams();

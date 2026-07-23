@@ -5,6 +5,7 @@ import { createStyler } from "../../render/style.js";
 import { renderTree } from "../../render/tree.js";
 import { formatDuration, formatTimestamp, parseBackendTime } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
+import { onceOption } from "./list.js";
 
 /** Max width for the single-line RCA preview shown inline in `traces get`. */
 const RCA_PREVIEW_MAX = 80;
@@ -31,6 +32,12 @@ export interface RunGetDeps {
   json: boolean;
   writers: Writers;
   traceId: string;
+  /**
+   * Field projection to request, sent verbatim as `fields` (e.g. `full` or
+   * `io,metadata`). Omitted means the server's default `skeleton` projection,
+   * which does not include per-span input/output/metadata.
+   */
+  fields?: string;
 }
 
 type Span = TraceDetail["spans"][number];
@@ -70,8 +77,8 @@ function elapsedMs(start: string, end: string | null): number | null {
 
 /** Core, network-free logic for `traces get`. Tests inject a fake client. */
 export async function runGet(deps: RunGetDeps): Promise<void> {
-  const { client, json, writers, traceId } = deps;
-  const trace = await client.getTrace(traceId);
+  const { client, json, writers, traceId, fields } = deps;
+  const trace = await client.getTrace(traceId, { fields });
 
   // Best-effort: surface the detector finding for this trace (findings are
   // 1-per-trace). A 404 means "not flagged" (null); any other failure must not
@@ -153,10 +160,24 @@ export function registerTracesGet(traces: Command): void {
   traces
     .command("get")
     .argument("<traceId>", "trace identifier")
+    .option(
+      "--fields <groups>",
+      "field projection to request, e.g. full or io,metadata. Default is the lightweight " +
+        "skeleton projection (no per-span input/output/metadata); pass full (or io,metadata) " +
+        "to fetch span I/O.",
+      onceOption("--fields"),
+    )
     .description("Get a single trace")
     .action(async (traceId: string, _opts, command: Command) => {
       const ctx = contextFromCommand(command);
       const client = requireApiClient(ctx);
-      await runGet({ client, json: ctx.json, writers: defaultWriters, traceId });
+      const opts = command.optsWithGlobals();
+      await runGet({
+        client,
+        json: ctx.json,
+        writers: defaultWriters,
+        traceId,
+        fields: opts.fields as string | undefined,
+      });
     });
 }
