@@ -3,7 +3,7 @@ import type { ApiClient, FindingDetail, TraceDetail } from "../../api/client.js"
 import { type Writers, colorEnabled, defaultWriters, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTree } from "../../render/tree.js";
-import { formatDuration, formatTimestamp, parseBackendTime } from "../../util/index.js";
+import { elapsedMs, formatDuration, formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** Max width for the single-line RCA preview shown inline in `traces get`. */
@@ -51,23 +51,6 @@ function isLive(spans: Span[]): boolean {
   return spans.some((span) => span.span_end_time === null);
 }
 
-/** Milliseconds between two ISO timestamps, or null when not derivable. */
-function elapsedMs(start: string, end: string | null): number | null {
-  if (end === null) {
-    return null;
-  }
-  // Parse both as zone-less UTC so the live path (end is a real-UTC ISO) and the
-  // completed path stay consistent; a bare `new Date(...)` would misread the
-  // zone-less backend start time as host-local and skew the elapsed math.
-  const startDate = parseBackendTime(start);
-  const endDate = parseBackendTime(end);
-  if (startDate === null || endDate === null) {
-    return null;
-  }
-  const ms = endDate.getTime() - startDate.getTime();
-  return Number.isFinite(ms) && ms >= 0 ? ms : null;
-}
-
 /** Core, network-free logic for `traces get`. Tests inject a fake client. */
 export async function runGet(deps: RunGetDeps): Promise<void> {
   const { client, json, writers, traceId } = deps;
@@ -92,12 +75,17 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   const styler = createStyler(writers.out);
   const label = (text: string): string => styler.bold(text);
   const live = isLive(trace.spans);
+  // Single "now" instant, reused for both the header's live elapsed duration
+  // and the per-span tree (via renderTree's `now` option), so a still-running
+  // span's elapsed-so-far agrees with the header rather than drifting apart
+  // from a second, later `Date.now()` read.
+  const nowIso = new Date().toISOString();
 
   // Live traces have no real end yet: show elapsed-so-far and a LIVE marker
   // instead of an end time. Completed traces derive end/duration from the spans.
   const end = live ? null : latestSpanEnd(trace.spans);
   const duration = live
-    ? elapsedMs(trace.trace_start_time, new Date().toISOString())
+    ? elapsedMs(trace.trace_start_time, nowIso)
     : elapsedMs(trace.trace_start_time, end);
 
   const lines: string[] = [];
@@ -135,7 +123,13 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   }
   lines.push("");
   lines.push(label("Spans:"));
-  lines.push(renderTree(trace.spans, { color: colorEnabled(writers.out) }));
+  lines.push(
+    renderTree(trace.spans, {
+      color: colorEnabled(writers.out),
+      width: process.stdout.columns ?? 80,
+      now: nowIso,
+    }),
+  );
   if (live) {
     // Indicate the tree is incomplete — more spans are still arriving.
     lines.push("  *** (live — more spans incoming)");

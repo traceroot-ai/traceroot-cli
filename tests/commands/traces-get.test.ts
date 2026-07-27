@@ -104,6 +104,68 @@ describe("runGet (human)", () => {
     expect(out.data).not.toContain("Output:");
   });
 
+  it("shows each span's own duration on its tree line", async () => {
+    const trace = detail({
+      spans: [
+        span({
+          span_id: "root",
+          name: "root-span",
+          span_start_time: "2024-01-01T00:00:00Z",
+          span_end_time: "2024-01-01T00:00:01.5Z",
+        }),
+      ],
+    });
+    const { writers: w, out } = writers();
+    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+
+    const spanLine = out.data.split("\n").find((l) => l.includes("root-span")) as string;
+    expect(spanLine).toBeDefined();
+    expect(spanLine).toContain("1.5s");
+  });
+
+  it("shows the error status_message beneath a failing span", async () => {
+    const trace = detail({
+      spans: [
+        span({
+          span_id: "root",
+          name: "root-span",
+          status: "ERROR",
+          status_message: "downstream timeout after 30s",
+        }),
+      ],
+    });
+    const { writers: w, out } = writers();
+    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+
+    const lines = out.data.split("\n");
+    const spanLineIndex = lines.findIndex((l) => l.includes("root-span"));
+    expect(spanLineIndex).toBeGreaterThanOrEqual(0);
+    expect(lines[spanLineIndex + 1]).toContain("downstream timeout after 30s");
+  });
+
+  it("shows a compact model/token/cost detail beneath an LLM span", async () => {
+    const trace = detail({
+      spans: [
+        span({
+          span_id: "root",
+          name: "root-span",
+          model_name: "claude-sonnet-4-5",
+          total_tokens: 1200,
+          cost: 0.004,
+        }),
+      ],
+    });
+    const { writers: w, out } = writers();
+    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+
+    const lines = out.data.split("\n");
+    const spanLineIndex = lines.findIndex((l) => l.includes("root-span"));
+    expect(spanLineIndex).toBeGreaterThanOrEqual(0);
+    expect(lines[spanLineIndex + 1]).toContain("claude-sonnet-4-5");
+    expect(lines[spanLineIndex + 1]).toContain("1.2k tok");
+    expect(lines[spanLineIndex + 1]).toContain("$0.0040");
+  });
+
   it("renders the trace_url as an OSC 8 hyperlink on a TTY", async () => {
     const trace = detail({});
     const out = new StringSink(true);
