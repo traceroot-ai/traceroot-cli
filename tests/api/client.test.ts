@@ -85,6 +85,28 @@ describe("createApiClient", () => {
     expect(calls[0]?.url).not.toContain("a/b c");
   });
 
+  it("sends ?fields on getTrace only when provided", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ trace: {} }));
+    await client.getTrace("t-1", { fields: "full" });
+    const url = new URL(calls[0]?.url as string);
+    expect(url.searchParams.get("fields")).toBe("full");
+
+    await client.getTrace("t-1");
+    const bareUrl = new URL(calls[1]?.url as string);
+    expect(bareUrl.searchParams.has("fields")).toBe(false);
+  });
+
+  it("sends ?fields on exportTrace only when provided", async () => {
+    const { client, calls } = clientWith(() => jsonResponse({ export: {} }));
+    await client.exportTrace("t-1", { fields: "io,metadata" });
+    const url = new URL(calls[0]?.url as string);
+    expect(url.searchParams.get("fields")).toBe("io,metadata");
+
+    await client.exportTrace("t-1");
+    const bareUrl = new URL(calls[1]?.url as string);
+    expect(bareUrl.searchParams.has("fields")).toBe(false);
+  });
+
   it("strips trailing slashes from the host", async () => {
     const fake = createFakeFetch(() => jsonResponse({}));
     const client = createApiClient({

@@ -1,8 +1,13 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ApiClient, FindingDetail, TraceExport } from "../../src/api/client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ApiClient,
+  FindingDetail,
+  TraceExport,
+  TraceFieldsParams,
+} from "../../src/api/client.js";
 import { runExport } from "../../src/commands/traces/export.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -73,12 +78,16 @@ function makeResponse(): TraceExport {
   };
 }
 
-function fakeClient(response: TraceExport, finding: FindingDetail | null = null): ApiClient {
+function fakeClient(
+  response: TraceExport,
+  finding: FindingDetail | null = null,
+  exportTrace?: (traceId: string, params?: TraceFieldsParams) => Promise<TraceExport>,
+): ApiClient {
   return {
     whoami: () => Promise.reject(new Error("not used")),
     listTraces: () => Promise.reject(new Error("not used")),
     getTrace: () => Promise.reject(new Error("not used")),
-    exportTrace: () => Promise.resolve(response),
+    exportTrace: exportTrace ?? (() => Promise.resolve(response)),
     findFindingByTrace: () => Promise.resolve(finding),
   };
 }
@@ -604,5 +613,44 @@ describe("runExport", () => {
     ).rejects.toBeInstanceOf(CliError);
 
     expect(existsSync(outputDir)).toBe(false);
+  });
+});
+
+describe("runExport (--fields)", () => {
+  it("passes fields through to client.exportTrace", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+    const exportTrace = vi.fn().mockResolvedValue(response);
+
+    await runExport({
+      client: fakeClient(response, null, exportTrace),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+      fields: "io,metadata",
+    });
+
+    expect(exportTrace).toHaveBeenCalledWith("abc123", { fields: "io,metadata" });
+  });
+
+  it("passes fields: undefined through to client.exportTrace when omitted", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+    const exportTrace = vi.fn().mockResolvedValue(response);
+
+    await runExport({
+      client: fakeClient(response, null, exportTrace),
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+    });
+
+    expect(exportTrace).toHaveBeenCalledWith("abc123", { fields: undefined });
   });
 });
