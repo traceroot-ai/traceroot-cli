@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { type RegistryDeps, ensureGroup, registerRegistryCommands } from "../registry/factory.js";
 import { GROUPS } from "../registry/naming.js";
 import { registerDoctor } from "./doctor.js";
-import { registerFindings } from "./findings.js";
 import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
 import { registerSkills } from "./skills.js";
@@ -19,7 +18,6 @@ export function registerCommands(program: Command, deps: RegistryDeps = {}): voi
   // stable across the migration, regardless of which register* below attaches
   // subcommands to it first.
   for (const group of Object.keys(GROUPS)) ensureGroup(program, group);
-  registerFindings(program);
   registerRegistryCommands(program, deps);
   registerSkills(program);
   registerInstrument(program);
