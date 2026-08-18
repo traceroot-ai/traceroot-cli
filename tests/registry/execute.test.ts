@@ -73,4 +73,32 @@ describe("executeTool", () => {
     );
     expect((err as CliError).message).not.toContain("sk-secret");
   });
+
+  function erroringBody(): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+      pull(controller) {
+        controller.error(new Error("body stream reset"));
+      },
+    });
+  }
+
+  it("keeps the status class when an HTTP error's body fails to stream", async () => {
+    // Without body buffering, the read failure would escape as a plain fetch
+    // error and demote a 401 to a retryable network failure (exit 5).
+    const brokenBodyFetch = (() =>
+      Promise.resolve(new Response(erroringBody(), { status: 401 }))) as typeof fetch;
+    const err = await executeTool(listSessions, {}, transport(brokenBodyFetch)).catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.auth);
+    expect((err as CliError).message).toBe("request failed with status 401");
+  });
+
+  it("still fails as a transport error when a SUCCESS body fails to stream", async () => {
+    const brokenBodyFetch = (() =>
+      Promise.resolve(new Response(erroringBody(), { status: 200 }))) as typeof fetch;
+    const err = await executeTool(listSessions, {}, transport(brokenBodyFetch)).catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+    expect((err as CliError).message).toContain("request to https://api.test failed:");
+  });
 });

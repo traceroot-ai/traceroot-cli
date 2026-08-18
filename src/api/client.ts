@@ -93,9 +93,10 @@ function isErrorBody(value: unknown): value is ErrorBody {
 /**
  * Classifies a non-2xx HTTP status into a CLI exit-code class so scripts can tell
  * re-auth (401/403) from give-up (404) from an unexpected server error. Anything
- * else (5xx, other 4xx) is treated as internal (1).
+ * else (5xx, other 4xx) is treated as internal (1). Shared with the registry
+ * executor so the exit-code contract has exactly one definition.
  */
-function exitCodeForStatus(status: number): number {
+export function exitCodeForStatus(status: number): number {
   if (status === 401 || status === 403) {
     return ExitCode.auth;
   }
@@ -103,6 +104,26 @@ function exitCodeForStatus(status: number): number {
     return ExitCode.notFound;
   }
   return ExitCode.internal;
+}
+
+/** Replaces every occurrence of `secret` in a message with `<redacted>`. */
+export function redactSecret(message: string, secret: string): string {
+  return message.split(secret).join("<redacted>");
+}
+
+/** The one wording for a request that hit the timeout budget. */
+export function timeoutMessage(base: string, timeoutMs: number): string {
+  return `request to ${base} timed out after ${timeoutMs / 1000}s`;
+}
+
+/** The one wording for a transport-level failure (host named, never the key). */
+export function transportFailureMessage(base: string, safeDetail: string): string {
+  return `request to ${base} failed: ${safeDetail}`;
+}
+
+/** The one wording for an HTTP error whose body carried no usable detail. */
+export function statusFallbackMessage(status: number): string {
+  return `request failed with status ${status}`;
 }
 
 /**
@@ -155,8 +176,8 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       // Deliberately do NOT interpolate the underlying error message: it could
       // echo back request contents and leak the api key. Mention only the host.
       const message = err instanceof Error ? err.message : String(err);
-      const safe = message.split(opts.apiKey).join("<redacted>");
-      throw new CliError(`request to ${base} failed: ${safe}`, ExitCode.network);
+      const safe = redactSecret(message, opts.apiKey);
+      throw new CliError(transportFailureMessage(base, safe), ExitCode.network);
     }
   }
 
@@ -166,10 +187,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   // api-key-free message naming the host and the timeout budget.
   function throwIfTimeout(err: unknown): void {
     if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
-      throw new CliError(
-        `request to ${base} timed out after ${opts.timeoutMs / 1000}s`,
-        ExitCode.network,
-      );
+      throw new CliError(timeoutMessage(base, opts.timeoutMs), ExitCode.network);
     }
   }
 
@@ -183,10 +201,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     } catch {
       // Ignore unreadable / non-JSON error bodies.
     }
-    throw new CliError(
-      detail ?? `request failed with status ${res.status}`,
-      exitCodeForStatus(res.status),
-    );
+    throw new CliError(detail ?? statusFallbackMessage(res.status), exitCodeForStatus(res.status));
   }
 
   /** Reads a JSON body, translating a body-phase timeout into the same message. */

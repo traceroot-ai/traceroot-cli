@@ -1,5 +1,12 @@
 import { ApiClient, ApiError, type RegistryEntry, bearerAuth, dispatch } from "@traceroot-ai/tools";
-import { normalizeBaseUrl } from "../api/client.js";
+import {
+  exitCodeForStatus,
+  normalizeBaseUrl,
+  redactSecret,
+  statusFallbackMessage,
+  timeoutMessage,
+  transportFailureMessage,
+} from "../api/client.js";
 import { requireAuth } from "../commands/shared.js";
 import type { Context } from "../context.js";
 import { CliError, ExitCode } from "../output.js";
@@ -24,18 +31,45 @@ export function transportFromContext(
   return transport;
 }
 
-function exitCodeForStatus(status: number): number {
-  if (status === 401 || status === 403) return ExitCode.auth;
-  if (status === 404) return ExitCode.notFound;
-  return ExitCode.internal;
+/**
+ * Buffers every response body before the registry client sees it, so a failure
+ * while STREAMING an HTTP error's body cannot demote a status-class error
+ * (401→auth, 404→not-found) to a network failure: the registry client reads the
+ * error body unguarded, and without this a body-read throw would escape before
+ * `ApiError` carries the status out. An error status whose body cannot be read
+ * is passed through with an empty body (→ the generic status message); a body
+ * failure on a SUCCESS response still throws, so timeouts keep their wording.
+ */
+function bufferedFetch(fetchImpl: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    const response = await fetchImpl(input, init);
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (err) {
+      if (!response.ok) {
+        return new Response(null, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      }
+      throw err;
+    }
+    return new Response(text.length > 0 ? text : null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
 }
 
 /**
  * Dispatches one registry tool through the shared dispatcher, translating
- * failures into the CLI's existing error contract (same classes as
- * src/api/client.ts): 401/403→auth, 404→not-found, other HTTP→internal with the
- * server's `detail` when present; timeouts and transport failures→network with
- * the api key redacted from any surfaced message.
+ * failures into the CLI's error contract (single-sourced in src/api/client.ts):
+ * 401/403→auth, 404→not-found, other HTTP→internal with the server's `detail`
+ * when present; timeouts and transport failures→network with the api key
+ * redacted from any surfaced message.
  */
 export async function executeTool(
   entry: RegistryEntry,
@@ -46,7 +80,7 @@ export async function executeTool(
     baseUrl: transport.base,
     headers: { ...bearerAuth(transport.apiKey), accept: "application/json" },
     timeoutMs: transport.timeoutMs,
-    ...(transport.fetchImpl !== undefined ? { fetchImpl: transport.fetchImpl } : {}),
+    fetchImpl: bufferedFetch(transport.fetchImpl ?? fetch),
   });
   try {
     return await dispatch(entry, args, client);
@@ -58,16 +92,13 @@ export async function executeTool(
 function translate(err: unknown, transport: Transport): unknown {
   if (err instanceof CliError) return err;
   if (err instanceof ApiError) {
-    const message = err.detail !== "" ? err.detail : `request failed with status ${err.status}`;
+    const message = err.detail !== "" ? err.detail : statusFallbackMessage(err.status);
     return new CliError(message, exitCodeForStatus(err.status));
   }
   if (err instanceof Error && err.name === "TimeoutError") {
-    return new CliError(
-      `request to ${transport.base} timed out after ${transport.timeoutMs / 1000}s`,
-      ExitCode.network,
-    );
+    return new CliError(timeoutMessage(transport.base, transport.timeoutMs), ExitCode.network);
   }
   const message = err instanceof Error ? err.message : String(err);
-  const safe = message.split(transport.apiKey).join("<redacted>");
-  return new CliError(`request to ${transport.base} failed: ${safe}`, ExitCode.network);
+  const safe = redactSecret(message, transport.apiKey);
+  return new CliError(transportFailureMessage(transport.base, safe), ExitCode.network);
 }
