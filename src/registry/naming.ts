@@ -1,0 +1,63 @@
+/**
+ * Where each registry tool surfaces in the CLI. EVERY tool must have an entry —
+ * tests/registry/naming.test.ts fails the build for an unplaced tool. Placing a
+ * brand-new endpoint is one line here; no handler code.
+ *
+ * Declaration order is meaningful: groups and subcommands register in this order,
+ * which fixes `--help` ordering.
+ */
+export type Placement =
+  | {
+      kind: "command";
+      /** [group, subcommand] or [top-level name]. */
+      path: [string, string] | [string];
+      /** Schema property names served by positional arguments, in order.
+       * Must exactly match the {placeholders} in the tool's path template. */
+      positionals?: string[];
+    }
+  | {
+      /** Dispatched by another command's enhancer; never gets its own command. */
+      kind: "companion";
+      /** Tool names of the command placements allowed to dispatch it. */
+      of: string[];
+      note: string;
+    }
+  | {
+      /** Deliberately no CLI surface. */
+      kind: "internal";
+      note: string;
+    };
+
+export const PLACEMENTS: Record<string, Placement> = {
+  list_traces: { kind: "command", path: ["traces", "list"] },
+  get_trace: { kind: "command", path: ["traces", "get"], positionals: ["trace_id"] },
+  export_trace: { kind: "command", path: ["traces", "export"], positionals: ["trace_id"] },
+  list_trace_filter_values: {
+    kind: "command",
+    path: ["traces", "filter-values"],
+    positionals: ["field"],
+  },
+  list_detectors: { kind: "command", path: ["detectors", "list"] },
+  list_findings: { kind: "command", path: ["findings", "list"] },
+  get_finding: { kind: "command", path: ["findings", "get"], positionals: ["finding_id"] },
+  get_finding_by_trace: {
+    kind: "companion",
+    of: ["get_finding", "get_trace", "export_trace"],
+    note: "reached via 'findings get --trace' and the best-effort finding lookups in 'traces get'/'traces export'",
+  },
+  list_sessions: { kind: "command", path: ["sessions", "list"] },
+  get_session: { kind: "command", path: ["sessions", "get"], positionals: ["session_id"] },
+  whoami: {
+    kind: "internal",
+    note: "served by 'status', 'login', and 'doctor' (non-tool commands, out of #65 scope); no standalone command",
+  },
+};
+
+/** Group commands in help order. Copy the description strings VERBATIM from the
+ * .description(...) calls in src/commands/traces.ts, detectors.ts, findings.ts. */
+export const GROUPS: Record<string, string> = {
+  traces: "Work with traces",
+  detectors: "Work with detectors",
+  findings: "Work with detector findings",
+  sessions: "Work with sessions",
+};
