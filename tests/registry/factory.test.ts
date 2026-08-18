@@ -85,15 +85,53 @@ describe("generated sessions commands (zero-code path)", () => {
     );
   });
 
-  it("throws at registration when an enhancer's argument count diverges from the placement's positionals", async () => {
+  it("throws at registration when an enhancer's argument count diverges from the path parameters", async () => {
     const { ENHANCERS } = await import("../../src/registry/enhancers/index.js");
-    // `get_session` is placed with one positional (session_id); an enhancer
+    // `get_session`'s path template has one parameter (session_id); an enhancer
     // that declares zero arguments must be rejected at buildProgram() time,
     // not silently drop the value at runtime.
     ENHANCERS.get_session = { arguments: () => {} };
     try {
       expect(() => buildProgram()).toThrow(
-        /enhancer for 'get_session' declares 0 argument\(s\) but its placement lists 1 positional\(s\)/,
+        /enhancer for 'get_session' declares 0 argument\(s\) but the tool's path template has 1 parameter\(s\)/,
+      );
+    } finally {
+      ENHANCERS.get_session = undefined;
+    }
+  });
+
+  it("enforces the schema's numeric bounds as usage errors before any network call", async () => {
+    // list_sessions declares limit with minimum 1 / maximum 200.
+    const low = harness(jsonResponse({ data: [] }));
+    const lowErr = await low.run("sessions", "list", "--limit", "0").catch((e) => e);
+    expect(lowErr).toBeInstanceOf(CliError);
+    expect((lowErr as CliError).message).toBe("--limit must be at least 1");
+    expect((lowErr as CliError).exitCode).toBe(ExitCode.usage);
+    expect(low.fake.calls.length).toBe(0);
+
+    const high = harness(jsonResponse({ data: [] }));
+    const highErr = await high.run("sessions", "list", "--limit", "500").catch((e) => e);
+    expect((highErr as CliError).message).toBe("--limit must be at most 200");
+    expect((highErr as CliError).exitCode).toBe(ExitCode.usage);
+    expect(high.fake.calls.length).toBe(0);
+  });
+
+  it("dispatchToolOptional throws synchronously on an invalid companion instead of resolving null", async () => {
+    const { ENHANCERS } = await import("../../src/registry/enhancers/index.js");
+    // A render that (buggily) chains .catch onto an invalid companion dispatch:
+    // the factory's validation must throw before any promise exists, so the
+    // bug surfaces instead of degrading to silent missing output.
+    ENHANCERS.get_session = {
+      render: async (_payload, ctx) => {
+        await ctx.dispatchToolOptional("get_finding_by_trace", {}).catch(() => null);
+      },
+    };
+    try {
+      const h = harness(jsonResponse({ session_id: "s-1" }));
+      const err = await h.run("sessions", "get", "s-1").catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(
+        /'get_finding_by_trace' is not a companion of 'get_session'/,
       );
     } finally {
       ENHANCERS.get_session = undefined;

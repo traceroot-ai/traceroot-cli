@@ -9,11 +9,10 @@
 export type Placement =
   | {
       kind: "command";
-      /** [group, subcommand] or [top-level name]. */
+      /** [group, subcommand] or [top-level name]. Positional arguments are
+       * derived by the factory from the tool's path template ({placeholders}),
+       * so they are never declared here. */
       path: [string, string] | [string];
-      /** Schema property names served by positional arguments, in order.
-       * Must exactly match the {placeholders} in the tool's path template. */
-      positionals?: string[];
     }
   | {
       /** Dispatched by another command's enhancer; never gets its own command. */
@@ -30,23 +29,19 @@ export type Placement =
 
 export const PLACEMENTS: Record<string, Placement> = {
   list_traces: { kind: "command", path: ["traces", "list"] },
-  get_trace: { kind: "command", path: ["traces", "get"], positionals: ["trace_id"] },
-  export_trace: { kind: "command", path: ["traces", "export"], positionals: ["trace_id"] },
-  list_trace_filter_values: {
-    kind: "command",
-    path: ["traces", "filter-values"],
-    positionals: ["field"],
-  },
+  get_trace: { kind: "command", path: ["traces", "get"] },
+  export_trace: { kind: "command", path: ["traces", "export"] },
+  list_trace_filter_values: { kind: "command", path: ["traces", "filter-values"] },
   list_detectors: { kind: "command", path: ["detectors", "list"] },
   list_findings: { kind: "command", path: ["findings", "list"] },
-  get_finding: { kind: "command", path: ["findings", "get"], positionals: ["finding_id"] },
+  get_finding: { kind: "command", path: ["findings", "get"] },
   get_finding_by_trace: {
     kind: "companion",
     of: ["get_finding", "get_trace", "export_trace"],
     note: "reached via 'findings get --trace' and the best-effort finding lookups in 'traces get'/'traces export'",
   },
   list_sessions: { kind: "command", path: ["sessions", "list"] },
-  get_session: { kind: "command", path: ["sessions", "get"], positionals: ["session_id"] },
+  get_session: { kind: "command", path: ["sessions", "get"] },
   whoami: {
     kind: "internal",
     note: "served by 'status', 'login', and 'doctor' (non-tool commands, out of #65 scope); no standalone command",

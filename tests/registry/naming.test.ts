@@ -20,15 +20,6 @@ describe("tool placements", () => {
     }
   });
 
-  it("command positionals exactly match the tool's path parameters, in order", () => {
-    for (const entry of REGISTRY) {
-      const placement = PLACEMENTS[entry.name];
-      if (placement?.kind !== "command") continue;
-      const pathParams = [...entry.path.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1]);
-      expect(placement.positionals ?? [], entry.name).toEqual(pathParams);
-    }
-  });
-
   it("companions point at command placements", () => {
     for (const [name, placement] of Object.entries(PLACEMENTS)) {
       if (placement.kind !== "companion") continue;

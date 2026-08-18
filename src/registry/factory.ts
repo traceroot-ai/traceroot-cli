@@ -5,7 +5,9 @@ import { CliError, ExitCode, type Writers, defaultWriters } from "../output.js";
 import { ENHANCERS } from "./enhancers/index.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./enhancers/types.js";
 import { executeTool, transportFromContext } from "./execute.js";
-import { onceOption } from "./flags.js";
+import { onceOption, rejectExtras } from "./flags.js";
+
+export { rejectExtras } from "./flags.js";
 import { GROUPS, PLACEMENTS, type Placement } from "./naming.js";
 import { renderDefault } from "./render.js";
 
@@ -44,6 +46,11 @@ function kebab(name: string): string {
   return name.replaceAll("_", "-");
 }
 
+/** The tool's positional arguments ARE its path parameters, in template order. */
+function pathParams(entry: RegistryEntry): string[] {
+  return [...entry.path.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1] as string);
+}
+
 /** Commander camel-cases `--start-after` to opts.startAfter; mirror it. */
 function optKey(prop: string): string {
   return prop.replace(/_([a-z0-9])/g, (_match, ch: string) => ch.toUpperCase());
@@ -58,7 +65,7 @@ function registerOne(
   const parent = placement.path.length === 2 ? ensureGroup(program, placement.path[0]) : program;
   const name = placement.path[placement.path.length - 1] as string;
   const enhancer: Enhancer | undefined = ENHANCERS[entry.name];
-  const positionals = placement.positionals ?? [];
+  const positionals = pathParams(entry);
   // Own the stray-operand contract ourselves (defaultResolveArgs / an
   // enhancer's resolveArgs via rejectExtras): commander 13 defaults
   // excessArguments to reject, which would preempt our message.
@@ -71,7 +78,7 @@ function registerOne(
     enhancer.arguments(cmd);
     if (cmd.registeredArguments.length !== positionals.length) {
       throw new Error(
-        `enhancer for '${entry.name}' declares ${cmd.registeredArguments.length} argument(s) but its placement lists ${positionals.length} positional(s) — they must match 1:1`,
+        `enhancer for '${entry.name}' declares ${cmd.registeredArguments.length} argument(s) but the tool's path template has ${positionals.length} parameter(s) — they must match 1:1`,
       );
     }
   } else {
@@ -127,6 +134,15 @@ function registerOne(
         assertKnownArgs(companion, companionArgs);
         return executeTool(companion, companionArgs, transport);
       },
+      dispatchToolOptional: (companionName, companionArgs) => {
+        // Validation throws SYNCHRONOUSLY — before any promise exists — so a
+        // programming bug (bad companion name, schema-unknown arg) escapes even
+        // when the caller chains `.catch(...)`. Only the API call itself is
+        // best-effort: any dispatch failure degrades to null.
+        const companion = requireCompanion(entry.name, companionName);
+        assertKnownArgs(companion, companionArgs);
+        return executeTool(companion, companionArgs, transport).catch(() => null);
+      },
     };
     if (enhancer?.render !== undefined) {
       await enhancer.render(payload, renderCtx);
@@ -147,18 +163,6 @@ function addSchemaFlags(cmd: Command, entry: RegistryEntry, positionals: Set<str
       // Never .default(...) here — onceOption would falsely reject the first use.
       cmd.option(`${flag} <value>`, description, onceOption(flag));
     }
-  }
-}
-
-/**
- * Rejects stray positional operands beyond what the command declared. The
- * default resolve path always calls this; an enhancer's `resolveArgs` must
- * call it too (see the contract note on {@link Enhancer.resolveArgs}) unless
- * it deliberately owns `input.extras` itself.
- */
-export function rejectExtras(input: ResolveInput): void {
-  if (input.extras.length > 0) {
-    throw new CliError(`unexpected argument(s): ${input.extras.join(" ")}`, ExitCode.usage);
   }
 }
 
@@ -188,12 +192,12 @@ function coerce(prop: string, schema: ParamSchema, raw: unknown): unknown {
   if (typeof raw !== "string") return raw;
   if (schema.type === "integer") {
     if (!/^-?\d+$/.test(raw)) throw new CliError(`${flag} must be an integer`, ExitCode.usage);
-    return Number.parseInt(raw, 10);
+    return checkRange(flag, Number.parseInt(raw, 10), schema);
   }
   if (schema.type === "number") {
     const value = Number(raw);
     if (!Number.isFinite(value)) throw new CliError(`${flag} must be a number`, ExitCode.usage);
-    return value;
+    return checkRange(flag, value, schema);
   }
   if (schema.type === "array" || schema.type === "object") {
     try {
@@ -203,6 +207,21 @@ function coerce(prop: string, schema: ParamSchema, raw: unknown): unknown {
     }
   }
   return raw;
+}
+
+/**
+ * Enforces the schema's numeric bounds client-side so a generated command's
+ * out-of-range value is a usage error (exit 2) with a clear message, not a
+ * server 422 surfaced as an internal failure.
+ */
+function checkRange(flag: string, value: number, schema: ParamSchema): number {
+  if (typeof schema.minimum === "number" && value < schema.minimum) {
+    throw new CliError(`${flag} must be at least ${schema.minimum}`, ExitCode.usage);
+  }
+  if (typeof schema.maximum === "number" && value > schema.maximum) {
+    throw new CliError(`${flag} must be at most ${schema.maximum}`, ExitCode.usage);
+  }
+  return value;
 }
 
 /**

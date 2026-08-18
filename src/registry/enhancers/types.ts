@@ -22,7 +22,15 @@ export interface RenderContext {
   writers: Writers;
   args: Record<string, unknown>;
   state: unknown;
+  /** Dispatches an allow-listed companion tool; failures reject. */
   dispatchTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Best-effort companion dispatch: API failures resolve to `null`, but the
+   * factory's internal assertions (unknown companion, schema-unknown arg)
+   * still throw SYNCHRONOUSLY — never wrap this call in a catch of your own,
+   * or a programming bug degrades into silent missing output.
+   */
+  dispatchToolOptional: (name: string, args: Record<string, unknown>) => Promise<unknown | null>;
 }
 
 /**
@@ -34,11 +42,11 @@ export interface Enhancer {
   description?: string;
   /**
    * Replaces the generated positionals entirely. Contract: must declare
-   * exactly as many arguments as the placement's `positionals` lists, in the
-   * same order — the factory enforces this at registration time and throws
-   * if the counts diverge. An override may only relax requiredness (e.g.
-   * `<x>` → `[x]`); it may never add or remove positional slots, since the
-   * factory maps `positionals[i]` to the i-th declared argument by index.
+   * exactly as many arguments as the tool's path template has {parameters},
+   * in template order — the factory enforces this at registration time and
+   * throws if the counts diverge. An override may only relax requiredness
+   * (e.g. `<x>` → `[x]`); it may never add or remove positional slots, since
+   * the factory maps the i-th path parameter to the i-th declared argument.
    */
   arguments?: (cmd: Command) => void;
   /** Replaces the schema-derived flags entirely. */
@@ -46,7 +54,8 @@ export interface Enhancer {
   /**
    * Supplying `resolveArgs` means owning `input.extras` — the factory no
    * longer rejects stray positional operands on your behalf. Call
-   * `rejectExtras(input)` (from `../factory.js`) unless you deliberately
+   * `rejectExtras(input)` (from `../flags.js`, a leaf module — never import
+   * from the factory, which imports the enhancers) unless you deliberately
    * consume the extras yourself (e.g. to produce a legacy-verbatim message).
    */
   resolveArgs?: (input: ResolveInput) => Resolved;
