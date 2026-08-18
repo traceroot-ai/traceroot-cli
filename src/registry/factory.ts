@@ -21,7 +21,12 @@ type CommandPlacement = Extract<Placement, { kind: "command" }>;
 /** Tools the factory registers today. Grows one migration task at a time as the
  * hand-written commands move onto the generated path; removed at the end of #65
  * so the factory registers every command placement. */
-const GENERATED = new Set(["list_sessions", "get_session", "list_trace_filter_values"]);
+const GENERATED = new Set([
+  "list_sessions",
+  "get_session",
+  "list_trace_filter_values",
+  "export_trace",
+]);
 
 const registryByName = new Map(REGISTRY.map((entry) => [entry.name, entry]));
 
