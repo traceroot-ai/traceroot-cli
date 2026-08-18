@@ -32,10 +32,23 @@ export interface RenderContext {
  */
 export interface Enhancer {
   description?: string;
-  /** Replaces the generated positionals entirely. */
+  /**
+   * Replaces the generated positionals entirely. Contract: must declare
+   * exactly as many arguments as the placement's `positionals` lists, in the
+   * same order — the factory enforces this at registration time and throws
+   * if the counts diverge. An override may only relax requiredness (e.g.
+   * `<x>` → `[x]`); it may never add or remove positional slots, since the
+   * factory maps `positionals[i]` to the i-th declared argument by index.
+   */
   arguments?: (cmd: Command) => void;
   /** Replaces the schema-derived flags entirely. */
   flags?: (cmd: Command) => void;
+  /**
+   * Supplying `resolveArgs` means owning `input.extras` — the factory no
+   * longer rejects stray positional operands on your behalf. Call
+   * `rejectExtras(input)` (from `../factory.js`) unless you deliberately
+   * consume the extras yourself (e.g. to produce a legacy-verbatim message).
+   */
   resolveArgs?: (input: ResolveInput) => Resolved;
   render?: (payload: unknown, ctx: RenderContext) => void | Promise<void>;
 }

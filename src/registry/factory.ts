@@ -59,10 +59,21 @@ function registerOne(
   const name = placement.path[placement.path.length - 1] as string;
   const enhancer: Enhancer | undefined = ENHANCERS[entry.name];
   const positionals = placement.positionals ?? [];
-  const cmd = parent.command(name).description(enhancer?.description ?? entry.description);
+  // Own the stray-operand contract ourselves (defaultResolveArgs / an
+  // enhancer's resolveArgs via rejectExtras): commander 13 defaults
+  // excessArguments to reject, which would preempt our message.
+  const cmd = parent
+    .command(name)
+    .description(enhancer?.description ?? entry.description)
+    .allowExcessArguments();
 
   if (enhancer?.arguments !== undefined) {
     enhancer.arguments(cmd);
+    if (cmd.registeredArguments.length !== positionals.length) {
+      throw new Error(
+        `enhancer for '${entry.name}' declares ${cmd.registeredArguments.length} argument(s) but its placement lists ${positionals.length} positional(s) — they must match 1:1`,
+      );
+    }
   } else {
     for (const prop of positionals) {
       const schema = entry.inputSchema.properties[prop];
@@ -139,14 +150,24 @@ function addSchemaFlags(cmd: Command, entry: RegistryEntry, positionals: Set<str
   }
 }
 
+/**
+ * Rejects stray positional operands beyond what the command declared. The
+ * default resolve path always calls this; an enhancer's `resolveArgs` must
+ * call it too (see the contract note on {@link Enhancer.resolveArgs}) unless
+ * it deliberately owns `input.extras` itself.
+ */
+export function rejectExtras(input: ResolveInput): void {
+  if (input.extras.length > 0) {
+    throw new CliError(`unexpected argument(s): ${input.extras.join(" ")}`, ExitCode.usage);
+  }
+}
+
 function defaultResolveArgs(
   entry: RegistryEntry,
   input: ResolveInput,
   positionals: string[],
 ): Resolved {
-  if (input.extras.length > 0) {
-    throw new CliError(`unexpected argument(s): ${input.extras.join(" ")}`, ExitCode.usage);
-  }
+  rejectExtras(input);
   const args: Record<string, unknown> = {};
   for (const prop of positionals) {
     const value = input.positionals[prop];
@@ -201,7 +222,7 @@ export function assertKnownArgs(entry: RegistryEntry, args: Record<string, unkno
   }
 }
 
-function requireCompanion(owner: string, companion: string): RegistryEntry {
+export function requireCompanion(owner: string, companion: string): RegistryEntry {
   const placement = PLACEMENTS[companion];
   if (placement?.kind !== "companion" || !placement.of.includes(owner)) {
     throw new Error(

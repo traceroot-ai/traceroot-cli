@@ -84,4 +84,50 @@ describe("generated sessions commands (zero-code path)", () => {
       /resolveArgs for 'list_sessions' produced arg 'bogus'/,
     );
   });
+
+  it("throws at registration when an enhancer's argument count diverges from the placement's positionals", async () => {
+    const { ENHANCERS } = await import("../../src/registry/enhancers/index.js");
+    // `get_session` is placed with one positional (session_id); an enhancer
+    // that declares zero arguments must be rejected at buildProgram() time,
+    // not silently drop the value at runtime.
+    ENHANCERS.get_session = { arguments: () => {} };
+    try {
+      expect(() => buildProgram()).toThrow(
+        /enhancer for 'get_session' declares 0 argument\(s\) but its placement lists 1 positional\(s\)/,
+      );
+    } finally {
+      ENHANCERS.get_session = undefined;
+    }
+  });
+
+  it("rejectExtras throws the exact stray-operand message and is a no-op on empty extras", async () => {
+    const { rejectExtras } = await import("../../src/registry/factory.js");
+    expect(() => rejectExtras({ opts: {}, positionals: {}, extras: [] })).not.toThrow();
+    let err: unknown;
+    try {
+      rejectExtras({ opts: {}, positionals: {}, extras: ["extra"] });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toBe("unexpected argument(s): extra");
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+  });
+
+  it("requireCompanion resolves a valid companion pair and throws for an invalid owner", async () => {
+    const { requireCompanion } = await import("../../src/registry/factory.js");
+    const companion = requireCompanion("get_finding", "get_finding_by_trace");
+    expect(companion.name).toBe("get_finding_by_trace");
+    expect(() => requireCompanion("get_session", "get_finding_by_trace")).toThrow(
+      /'get_finding_by_trace' is not a companion of 'get_session'/,
+    );
+  });
+
+  it("sessions list without --json renders the standard table and count footer", async () => {
+    const payload = { data: [{ session_id: "s-1" }], meta: { page: 1, limit: 50, total: 1 } };
+    const h = harness(jsonResponse(payload));
+    await h.run("sessions", "list");
+    expect(h.out.data).toContain("SESSION ID");
+    expect(h.err.data).toBe("1 item(s) | limit 50\n");
+  });
 });
