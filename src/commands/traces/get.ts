@@ -38,6 +38,8 @@ export interface RunGetDeps {
    * which does not include per-span input/output/metadata.
    */
   fields?: string;
+  /** Target project (required by the server under user credentials). */
+  projectId?: string;
 }
 
 type Span = TraceDetail["spans"][number];
@@ -60,15 +62,15 @@ function isLive(spans: Span[]): boolean {
 
 /** Core, network-free logic for `traces get`. Tests inject a fake client. */
 export async function runGet(deps: RunGetDeps): Promise<void> {
-  const { client, json, writers, traceId, fields } = deps;
-  const trace = await client.getTrace(traceId, { fields });
+  const { client, json, writers, traceId, fields, projectId } = deps;
+  const trace = await client.getTrace(traceId, { fields, projectId });
 
   // Best-effort: surface the detector finding for this trace (findings are
   // 1-per-trace). A 404 means "not flagged" (null); any other failure must not
   // break `traces get`, so it also degrades to no finding.
   let finding: FindingDetail | null = null;
   try {
-    finding = await client.findFindingByTrace(traceId);
+    finding = await client.findFindingByTrace(traceId, { projectId });
   } catch {
     finding = null;
   }
@@ -172,6 +174,7 @@ export function registerTracesGet(traces: Command): void {
         writers: defaultWriters,
         traceId,
         fields: opts.fields as string | undefined,
+        projectId: ctx.auth.projectId.value,
       });
     });
 }

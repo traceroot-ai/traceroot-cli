@@ -15,11 +15,14 @@ export interface CliResult {
 export function runCli(...args: string[]): CliResult {
   // Spawn in a fresh empty directory so the CLI's auto-discovered `.env`
   // (a lowest-precedence credential source) never picks up the repo's own
-  // `.env` and leaks credentials into otherwise-hermetic spawn tests.
+  // `.env` and leaks credentials into otherwise-hermetic spawn tests. The
+  // credentials file is pointed into the same empty directory so a developer's
+  // real session login can't leak in either.
   const cwd = mkdtempSync(join(tmpdir(), "traceroot-cli-"));
   const result = spawnSync(process.execPath, [binPath, ...args], {
     encoding: "utf8",
     cwd,
+    env: { ...process.env, TRACEROOT_CREDENTIALS_PATH: join(cwd, "credentials.json") },
   });
   return {
     stdout: result.stdout,

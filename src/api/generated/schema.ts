@@ -13,9 +13,9 @@ export interface paths {
         };
         /**
          * List Detectors
-         * @description List the detectors in the API key's project (newest first).
+         * @description List the detectors in the caller's project (newest first).
          */
-        get: operations["list_detectors_api_v1_public_detectors_get"];
+        get: operations["list_detectors"];
         put?: never;
         post?: never;
         delete?: never;
@@ -33,9 +33,9 @@ export interface paths {
         };
         /**
          * List Findings
-         * @description List recent detector findings for the API key's project (newest first).
+         * @description List recent detector findings for the caller's project (newest first).
          */
-        get: operations["list_findings_api_v1_public_detectors_findings_get"];
+        get: operations["list_findings"];
         put?: never;
         post?: never;
         delete?: never;
@@ -55,7 +55,7 @@ export interface paths {
          * Get Finding
          * @description Get a single finding by id for the key's project.
          */
-        get: operations["get_finding_api_v1_public_detectors_findings__finding_id__get"];
+        get: operations["get_finding"];
         put?: never;
         post?: never;
         delete?: never;
@@ -75,7 +75,179 @@ export interface paths {
          * Get Finding By Trace
          * @description Get the finding for a single trace (findings are 1-per-trace).
          */
-        get: operations["get_finding_by_trace_api_v1_public_detectors_traces__trace_id__finding_get"];
+        get: operations["get_finding_by_trace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/evaluation-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register an evaluation run
+         * @description Register/start a run. Idempotent on ``client_run_id`` within an evaluation.
+         */
+        post: operations["register_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/evaluation-runs/{run_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete/finalize an evaluation run
+         * @description Complete/fail a run, reporting final completeness counts.
+         */
+        post: operations["complete_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/evaluation-runs/{run_id}/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upsert one test-case result with scores
+         * @description Upsert one test-case result (and its scores). Idempotent on (run, test case).
+         */
+        post: operations["upsert_result"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Projects
+         * @description List the projects the authenticated user can access, across workspaces.
+         *
+         *     A user-credential-only discovery op (no ``project_id``). Projects are
+         *     flattened across the user's workspaces and tagged with their owning
+         *     workspace; the answer is what you pass as ``project_id`` to a project-scoped
+         *     request.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or CLI
+         *             access JWT); carries the resolved ``user_id`` and stamps the per-user
+         *             rate-limit identity.
+         *         workspace_id (str | None): Optional filter; when given, only projects in
+         *             that workspace are returned.
+         *
+         *     Returns:
+         *         PublicProjectListResponse: The accessible projects (id, name,
+         *             workspace_id, workspace_name).
+         */
+        get: operations["list_projects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sessions
+         * @description List unique sessions for the caller's project with trace counts.
+         *
+         *     Args:
+         *         auth (DualStampedAuth): Resolved credential context (API key or user
+         *             session token); scopes the read to its project and stamps the
+         *             rate-limit identity.
+         *         limit (int): Items per page (1-200).
+         *         search_query (str | None): Substring match on session id.
+         *         start_after (datetime | None): Inclusive lower bound on trace time.
+         *         end_before (datetime | None): Exclusive upper bound on trace time.
+         *
+         *     Returns:
+         *         SessionListResponse: Session summaries, newest first.
+         *
+         *     Raises:
+         *         HTTPException: 500 on a reader failure.
+         */
+        get: operations["list_sessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session
+         * @description Get one session with all its traces for the key's project.
+         *
+         *     Retention uses the silent list-style clamp rather than a 403: a session
+         *     that contains traces older than the plan window degrades to showing only
+         *     the in-window traces instead of failing outright.
+         *
+         *     Args:
+         *         auth (DualStampedAuth): Resolved credential context (API key or user
+         *             session token); scopes the read to its project and stamps the
+         *             rate-limit identity.
+         *         session_id (str): Session to fetch.
+         *         start_after (datetime | None): Inclusive lower bound on trace time.
+         *         end_before (datetime | None): Exclusive upper bound on trace time.
+         *
+         *     Returns:
+         *         SessionDetailResponse: The session overview and its traces.
+         *
+         *     Raises:
+         *         HTTPException: 404 if the session is missing or outside the key's
+         *             project, 500 on a reader failure.
+         */
+        get: operations["get_session"];
         put?: never;
         post?: never;
         delete?: never;
@@ -93,9 +265,12 @@ export interface paths {
         };
         /**
          * List Traces
-         * @description List recent traces for the API key's project (newest first).
+         * @description List recent traces for the caller's project (newest first).
+         *
+         *     Offline-evaluation traces are excluded by default; pass
+         *     ``include_evaluations=true`` to include them.
          */
-        get: operations["list_traces_api_v1_public_traces_get"];
+        get: operations["list_traces"];
         put?: never;
         /**
          * Ingest Traces
@@ -114,7 +289,52 @@ export interface paths {
          *     Body:
          *         OTLP trace data in protobuf format
          */
-        post: operations["ingest_traces_api_v1_public_traces_post"];
+        post: operations["ingest_traces"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/traces/filter-values/{field}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Trace Filter Values
+         * @description Distinct values for an open-ended categorical filter field.
+         *
+         *     The values-discovery companion to the typed ``filters`` parameter on the
+         *     trace list: the filterable field catalog lives in the generated schema,
+         *     while a field's current values are dynamic per project. Only fields the
+         *     registry marks as distinct-query (model_name, environment) are listable;
+         *     the field is resolved through the registry before it reaches SQL, so it can
+         *     never be a raw client-supplied column name.
+         *
+         *     Args:
+         *         auth (DualStampedAuth): Resolved credential context (API key or user
+         *             session token); scopes the read to its project and stamps the
+         *             rate-limit identity.
+         *         field (str): The categorical field to enumerate.
+         *         start_after (datetime | None): Lower bound on span start time (active
+         *             window).
+         *         end_before (datetime | None): Upper bound on span start time (active
+         *             window), symmetric with ``start_after`` so options match the list's
+         *             window.
+         *
+         *     Returns:
+         *         FilterValuesResponse: Distinct values ordered by descending frequency.
+         *
+         *     Raises:
+         *         HTTPException: 400 if the field is unknown or not a distinct-query
+         *             categorical, 500 on a reader failure.
+         */
+        get: operations["list_trace_filter_values"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -130,14 +350,15 @@ export interface paths {
         };
         /**
          * Get Trace
-         * @description Get a single trace for the key's project.
+         * @description Get a single trace for the caller's project.
          *
          *     Defaults to the lightweight `skeleton` projection (no per-span I/O); pass
          *     `fields=full` (or `fields=io,metadata`) for per-span input/output/metadata.
          *
          *     Args:
-         *         auth (StampedAuth): Resolved API-key context; scopes the read to its
-         *             project and stamps the rate-limit identity.
+         *         auth (DualStampedAuth): Resolved credential context (API key or user
+         *             session token); scopes the read to its project and stamps the
+         *             rate-limit identity.
          *         trace_id (str): Trace to fetch.
          *         fields (str | None): Comma-separated projection groups (e.g. ``io``,
          *             ``metadata``) or an alias (``skeleton``/``full``). ``None`` selects
@@ -151,7 +372,7 @@ export interface paths {
          *         HTTPException: 400 if `fields` is invalid, 404 if the trace is missing
          *             or outside the key's project, 500 on a reader failure.
          */
-        get: operations["get_trace_api_v1_public_traces__trace_id__get"];
+        get: operations["get_trace"];
         put?: never;
         post?: never;
         delete?: never;
@@ -169,7 +390,7 @@ export interface paths {
         };
         /**
          * Export Trace
-         * @description Export the V1 bundle (trace + spans + git_context + manifest) for the key's project.
+         * @description Export the V1 bundle (trace + spans + git_context + manifest) for the caller's project.
          *
          *     Defaults to the `full` projection — an export is explicit intent to take the
          *     complete trace, so per-span input/output/metadata are included unless the
@@ -180,8 +401,9 @@ export interface paths {
          *     full bundle.
          *
          *     Args:
-         *         auth (StampedAuth): Resolved API-key context; scopes the read to its
-         *             project and stamps the rate-limit identity.
+         *         auth (DualStampedAuth): Resolved credential context (API key or user
+         *             session token); scopes the read to its project and stamps the
+         *             rate-limit identity.
          *         trace_id (str): Trace to export.
          *         fields (str | None): Comma-separated projection groups or an alias
          *             (``skeleton``/``full``). ``None`` selects the default `full`
@@ -195,7 +417,7 @@ export interface paths {
          *         HTTPException: 400 if `fields` is invalid, 404 if the trace is missing
          *             or outside the key's project, 500 on a reader failure.
          */
-        get: operations["export_trace_api_v1_public_traces__trace_id__export_get"];
+        get: operations["export_trace"];
         put?: never;
         post?: never;
         delete?: never;
@@ -215,7 +437,40 @@ export interface paths {
          * Whoami
          * @description Return the identity the authenticated API key maps to.
          */
-        get: operations["whoami_api_v1_public_whoami_get"];
+        get: operations["whoami"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workspaces
+         * @description List the workspaces the authenticated user belongs to.
+         *
+         *     A user-credential-only discovery op (no ``project_id``). Use it, then
+         *     ``list_projects``, to resolve the project a subsequent request scopes to.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or CLI
+         *             access JWT); carries the resolved ``user_id`` and stamps the per-user
+         *             rate-limit identity.
+         *
+         *     Returns:
+         *         PublicWorkspaceListResponse: The user's workspaces (id, name, role).
+         */
+        get: operations["list_workspaces"];
         put?: never;
         post?: never;
         delete?: never;
@@ -228,6 +483,37 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * CompleteRunRequest
+         * @description Complete/fail a run, reporting final completeness counts.
+         */
+        CompleteRunRequest: {
+            /** Case Count */
+            case_count?: number | null;
+            /** Scored Count */
+            scored_count?: number | null;
+            /** Scorer Error Count */
+            scorer_error_count?: number | null;
+            /** Scorers */
+            scorers?: components["schemas"]["ScorerRef"][] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
+            /** Task Error Count */
+            task_error_count?: number | null;
+        };
+        /** CompleteRunResponse */
+        CompleteRunResponse: {
+            /** Evaluation Run Id */
+            evaluation_run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
+        };
         /**
          * DetectorItem
          * @description A detector from the project's catalog (Postgres ``detectors``).
@@ -276,6 +562,30 @@ export interface components {
             template: string | null;
         };
         /**
+         * EmittedMetric
+         * @description One metric a scorer DEFINITION emits, with its own comparison policy. The metric
+         *     ``name`` is the EMITTED-METRIC identity (what a Score row reports as ``scorer_name``),
+         *     distinct from the scorer DEFINITION name. Mirrors ``EmittedMetricSchema``.
+         */
+        EmittedMetric: {
+            /** Direction */
+            direction?: ("higher_is_better" | "lower_is_better" | "none") | null;
+            /** Name */
+            name: string;
+            /** Threshold */
+            threshold?: number | null;
+            /** Value Type */
+            value_type?: ("numeric" | "boolean" | "categorical") | null;
+        };
+        /**
+         * ErrorResponse
+         * @description The canonical public error envelope (matches the gateway's normalized shape).
+         */
+        ErrorResponse: {
+            /** Detail */
+            detail: string;
+        };
+        /**
          * ExportManifest
          * @description manifest.json: index of the bundle's parts.
          */
@@ -288,6 +598,26 @@ export interface components {
             project_id: string;
             /** Trace Id */
             trace_id: string;
+        };
+        /**
+         * FilterValueCount
+         * @description A distinct categorical value and how often it occurs.
+         */
+        FilterValueCount: {
+            /** Count */
+            count: number;
+            /** Value */
+            value: string;
+        };
+        /**
+         * FilterValuesResponse
+         * @description Distinct values for one categorical filter field, by frequency.
+         */
+        FilterValuesResponse: {
+            /** Field */
+            field: string;
+            /** Values */
+            values: components["schemas"]["FilterValueCount"][];
         };
         /**
          * FindingDetail
@@ -388,6 +718,20 @@ export interface components {
             total: number;
         };
         /**
+         * ProjectListItem
+         * @description A project the user can access, tagged with its owning workspace.
+         */
+        ProjectListItem: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Workspace Name */
+            workspace_name: string;
+        };
+        /**
          * PublicDetectorListResponse
          * @description Paginated list of the project's detectors for the public API.
          */
@@ -404,6 +748,18 @@ export interface components {
             /** Data */
             data: components["schemas"]["FindingSummary"][];
             meta: components["schemas"]["PaginationMeta"];
+        };
+        /**
+         * PublicProjectListResponse
+         * @description Account-scope discovery: the projects the user can access.
+         *
+         *     Returned by ``list_projects`` — a user-credential-only op. Projects are
+         *     flattened across the user's workspaces; an optional ``workspace_id`` query
+         *     narrows the result to one workspace.
+         */
+        PublicProjectListResponse: {
+            /** Data */
+            data: components["schemas"]["ProjectListItem"][];
         };
         /**
          * PublicTraceDetailResponse
@@ -462,6 +818,13 @@ export interface components {
             error_count: number;
             /** Input */
             input: string | null;
+            /**
+             * Metadata Map
+             * @default {}
+             */
+            metadata_map: {
+                [key: string]: string;
+            };
             /** Name */
             name: string;
             /** Output */
@@ -509,6 +872,18 @@ export interface components {
             meta: components["schemas"]["PaginationMeta"];
         };
         /**
+         * PublicWorkspaceListResponse
+         * @description Account-scope discovery: the workspaces the user can access.
+         *
+         *     Returned by ``list_workspaces`` — a user-credential-only op that needs no
+         *     ``project_id``. Not paginated: a user's workspace membership is small and
+         *     bounded.
+         */
+        PublicWorkspaceListResponse: {
+            /** Data */
+            data: components["schemas"]["WorkspaceListItem"][];
+        };
+        /**
          * RCAResult
          * @description Free-text root-cause analysis for a finding (Postgres ``detector_rcas``).
          */
@@ -517,6 +892,226 @@ export interface components {
             result: string | null;
             /** Status */
             status: string;
+        };
+        /**
+         * RegisterRunRequest
+         * @description Register/start a run. Idempotent on ``client_run_id`` within an evaluation.
+         */
+        RegisterRunRequest: {
+            /** Baseline Run Id */
+            baseline_run_id?: string | null;
+            /** Candidate Version */
+            candidate_version: string;
+            /** Case Count */
+            case_count?: number | null;
+            /** Client Run Id */
+            client_run_id?: string | null;
+            /** Dataset Id */
+            dataset_id: string;
+            /** Dataset Version Id */
+            dataset_version_id?: string | null;
+            /**
+             * Environment
+             * @default evaluation
+             */
+            environment: string;
+            /** Evaluation Key */
+            evaluation_key?: string | null;
+            /** Evaluation Name */
+            evaluation_name: string;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Scorers */
+            scorers?: components["schemas"]["ScorerRef"][];
+        };
+        /** RegisterRunResponse */
+        RegisterRunResponse: {
+            /** Dataset Version Id */
+            dataset_version_id: string;
+            /** Evaluation Id */
+            evaluation_id: string;
+            /** Evaluation Run Id */
+            evaluation_run_id: string;
+            /** Run Number */
+            run_number: number;
+            /** Run Path */
+            run_path: string;
+            /** Run Url */
+            run_url: string;
+        };
+        /**
+         * ScoreInput
+         * @description One scorer's outcome on one result. ``error`` set = the scorer failed to judge.
+         */
+        ScoreInput: {
+            /** Bool Value */
+            bool_value?: boolean | null;
+            /** Error */
+            error?: string | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** Numeric Value */
+            numeric_value?: number | null;
+            /** Passed */
+            passed?: boolean | null;
+            /** Scorer Name */
+            scorer_name: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /** String Value */
+            string_value?: string | null;
+        };
+        /**
+         * ScorerMessage
+         * @description One prompt message of an LLM-judge scorer's definition.
+         */
+        ScorerMessage: {
+            /** Content */
+            content: string;
+            /** Role */
+            role: string;
+        };
+        /**
+         * ScorerRef
+         * @description A scorer's descriptor. ``key`` is the stable SEMANTIC comparison identity
+         *     (it defaults to ``name`` when omitted — see below); ``name``/``version``/
+         *     ``language``/``source`` are provenance, NOT identity. The richer metadata is
+         *     optional and back-compatible (an old SDK sending only ``{name, version}`` stays
+         *     valid — its ``key`` falls back to ``name``). Mirrors the non-strict
+         *     ``ScorerRefSchema``, so unknown keys are ignored rather than rejected.
+         *
+         *     The DEFINITION fields (``scorer_type``, prompt/source, config) let the read-only
+         *     Scorer detail render an LLM judge's model + messages or a code scorer's snippet.
+         *
+         *     ``scorer_type`` / ``output_type`` / ``language`` are display-only, so an
+         *     unrecognised value from a newer SDK degrades to ``None`` rather than failing
+         *     run registration (which would lose the run's every result and score) —
+         *     matching ``.catch(null)`` on the Zod side. The vocabularies that drive
+         *     persistence and aggregation still reject.
+         */
+        ScorerRef: {
+            /** Description */
+            description?: string | null;
+            /** Direction */
+            direction?: ("higher_is_better" | "lower_is_better" | "none") | null;
+            /** Emitted Metrics */
+            emitted_metrics?: components["schemas"]["EmittedMetric"][] | null;
+            /** Key */
+            key?: string | null;
+            /** Language */
+            language?: ("python" | "typescript") | null;
+            /** Messages */
+            messages?: components["schemas"]["ScorerMessage"][] | null;
+            /** Metadata */
+            metadata?: unknown | null;
+            /** Model */
+            model?: string | null;
+            /** Name */
+            name: string;
+            /** Output Type */
+            output_type?: ("score" | "classification") | null;
+            /** Required Inputs */
+            required_inputs?: string[] | null;
+            /** Scorer Type */
+            scorer_type?: ("llm_judge" | "code") | null;
+            /** Source */
+            source?: string | null;
+            /** Threshold */
+            threshold?: number | null;
+            /** Value Type */
+            value_type?: ("numeric" | "boolean" | "categorical") | null;
+            /** Version */
+            version: string;
+        };
+        /**
+         * SessionDetailResponse
+         * @description Session detail with all traces for conversation view.
+         */
+        SessionDetailResponse: {
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** First Trace Time */
+            first_trace_time: string | null;
+            /** Last Trace Time */
+            last_trace_time: string | null;
+            /** Session Id */
+            session_id: string;
+            /** Total Cost */
+            total_cost?: number | null;
+            /** Total Input Tokens */
+            total_input_tokens: number | null;
+            /** Total Output Tokens */
+            total_output_tokens: number | null;
+            /** Trace Count */
+            trace_count: number;
+            /** Traces */
+            traces: components["schemas"]["SessionTraceItem"][];
+            /** User Ids */
+            user_ids: string[];
+        };
+        /**
+         * SessionListItem
+         * @description Single session with aggregated trace statistics.
+         */
+        SessionListItem: {
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** First Trace Time */
+            first_trace_time: string | null;
+            /** Input */
+            input: string | null;
+            /** Last Trace Time */
+            last_trace_time: string | null;
+            /** Output */
+            output: string | null;
+            /** Session Id */
+            session_id: string;
+            /** Total Cost */
+            total_cost?: number | null;
+            /** Total Input Tokens */
+            total_input_tokens: number | null;
+            /** Total Output Tokens */
+            total_output_tokens: number | null;
+            /** Trace Count */
+            trace_count: number;
+            /** User Ids */
+            user_ids: string[];
+        };
+        /**
+         * SessionListResponse
+         * @description Paginated list of sessions.
+         */
+        SessionListResponse: {
+            /** Data */
+            data: components["schemas"]["SessionListItem"][];
+            meta: components["schemas"]["PaginationMeta"];
+        };
+        /**
+         * SessionTraceItem
+         * @description Single trace within a session, for conversation view.
+         */
+        SessionTraceItem: {
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** Input */
+            input: string | null;
+            /** Name */
+            name: string;
+            /** Output */
+            output: string | null;
+            /** Status */
+            status: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Start Time
+             * Format: date-time
+             */
+            trace_start_time: string;
+            /** User Id */
+            user_id: string | null;
         };
         /**
          * SpanResponse
@@ -530,6 +1125,12 @@ export interface components {
          *     regression for the dashboard. Keeping the fields present (as ``null``) rather
          *     than omitting them is additive: a few bytes per span, and it matches the
          *     fields the shipped CLI's generated types already declare.
+         *
+         *     One internal-only exception: the dashboard's trace-detail read leaves a small
+         *     SDK span-path subset in ``metadata`` on the skeleton, which it needs to
+         *     rebuild the tree of an in-flight trace. The public routes drop it (see
+         *     ``rest.projection.drop_span_tree_metadata``), so for API clients the contract
+         *     above holds exactly: ``metadata`` is ``null`` unless requested.
          */
         SpanResponse: {
             /** Cost */
@@ -590,6 +1191,55 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /**
+         * UpsertResultRequest
+         * @description Upsert one test-case result. Idempotent on (``run_id``, ``test_case_id``).
+         *     ``trace_id`` may be null now and set on a later call (out-of-order arrival).
+         *
+         *     ``scores`` is genuinely optional and carries three distinct meanings, so the
+         *     out-of-order flow (POST the result with its scores, then re-POST later just to
+         *     attach the OTel ``trace_id``) cannot destroy them: absent → leave the existing
+         *     scores untouched, ``[]`` → clear them, non-empty → replace them. Do not give
+         *     this a ``default_factory=list``, which would collapse the first two cases.
+         *
+         *     Every optional field is a *partial* update: a key the caller omits keeps its
+         *     stored value, while an explicit null clears it. Sending ``scores`` replaces
+         *     the result's scores (``[]`` clears them); omitting it leaves them alone.
+         */
+        UpsertResultRequest: {
+            /** Baseline Output */
+            baseline_output?: string | null;
+            /** Candidate Output */
+            candidate_output?: string | null;
+            /** Change */
+            change?: ("improved" | "regressed" | "unchanged") | null;
+            /** Cost */
+            cost?: number | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Expected Output */
+            expected_output?: string | null;
+            /** Input */
+            input: string;
+            /** Scores */
+            scores?: components["schemas"]["ScoreInput"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "failed" | "errored" | "not_scored";
+            /** Task Error */
+            task_error?: string | null;
+            /** Test Case Id */
+            test_case_id: string;
+            /** Trace Id */
+            trace_id?: string | null;
+        };
+        /** UpsertResultResponse */
+        UpsertResultResponse: {
+            /** Evaluation Result Id */
+            evaluation_result_id: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -629,6 +1279,18 @@ export interface components {
             /** Workspace Name */
             workspace_name: string | null;
         };
+        /**
+         * WorkspaceListItem
+         * @description A workspace the authenticated user belongs to, with their role in it.
+         */
+        WorkspaceListItem: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -638,7 +1300,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    list_detectors_api_v1_public_detectors_get: {
+    list_detectors: {
         parameters: {
             query?: {
                 /** @description Items per page */
@@ -647,6 +1309,8 @@ export interface operations {
                 start_after?: string | null;
                 /** @description Only detectors created before this time (exclusive, ISO 8601) */
                 end_before?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -707,7 +1371,7 @@ export interface operations {
             };
         };
     };
-    list_findings_api_v1_public_detectors_findings_get: {
+    list_findings: {
         parameters: {
             query?: {
                 /** @description Items per page */
@@ -720,6 +1384,8 @@ export interface operations {
                 detector?: string | null;
                 /** @description Filter to a single trace */
                 trace_id?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -780,9 +1446,12 @@ export interface operations {
             };
         };
     };
-    get_finding_api_v1_public_detectors_findings__finding_id__get: {
+    get_finding: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
             header?: never;
             path: {
                 finding_id: string;
@@ -855,9 +1524,12 @@ export interface operations {
             };
         };
     };
-    get_finding_by_trace_api_v1_public_detectors_traces__trace_id__finding_get: {
+    get_finding_by_trace: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
             header?: never;
             path: {
                 trace_id: string;
@@ -930,11 +1602,486 @@ export interface operations {
             };
         };
     };
-    list_traces_api_v1_public_traces_get: {
+    register_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterRunResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    complete_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompleteRunResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    upsert_result: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpsertResultResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    list_projects: {
+        parameters: {
+            query?: {
+                /** @description Restrict the result to projects in this workspace. */
+                workspace_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicProjectListResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    list_sessions: {
         parameters: {
             query?: {
                 /** @description Items per page */
                 limit?: number;
+                /** @description Search by session_id */
+                search_query?: string | null;
+                /** @description Only sessions with traces at or after this time (inclusive, ISO 8601) */
+                start_after?: string | null;
+                /** @description Only sessions with traces before this time (exclusive, ISO 8601) */
+                end_before?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionListResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Failed to list sessions */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    get_session: {
+        parameters: {
+            query?: {
+                /** @description Only traces at or after this time (inclusive, ISO 8601) */
+                start_after?: string | null;
+                /** @description Only traces before this time (exclusive, ISO 8601) */
+                end_before?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDetailResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Session not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Failed to get session */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    list_traces: {
+        parameters: {
+            query?: {
+                /** @description Items per page */
+                limit?: number;
+                /** @description Only traces that started at or after this time (inclusive, ISO 8601) */
+                start_after?: string | null;
+                /** @description Only traces that started before this time (exclusive, ISO 8601) */
+                end_before?: string | null;
+                /** @description Include traces produced by offline-evaluation runs. Excluded by default so evaluation runs do not appear in the production trace list. */
+                include_evaluations?: boolean;
+                /** @description Filter by trace name (substring match) */
+                name?: string | null;
+                /** @description Filter by the user id recorded on the trace */
+                user_id?: string | null;
+                /** @description Search across trace_id, name, session_id, user_id */
+                search_query?: string | null;
+                /** @description JSON array of typed filter predicates ({field, op, value}); the field catalog and per-field operators are defined in the schema */
+                filters?: string;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -949,6 +2096,17 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicTraceListResponse"];
+                };
+            };
+            /** @description Invalid filters parameter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
                 };
             };
             /** @description Authentication failed */
@@ -995,7 +2153,7 @@ export interface operations {
             };
         };
     };
-    ingest_traces_api_v1_public_traces_post: {
+    ingest_traces: {
         parameters: {
             query?: never;
             header?: never;
@@ -1094,11 +2252,95 @@ export interface operations {
             };
         };
     };
-    get_trace_api_v1_public_traces__trace_id__get: {
+    list_trace_filter_values: {
+        parameters: {
+            query?: {
+                /** @description Only consider spans starting at or after this timestamp */
+                start_after?: string | null;
+                /** @description Only consider spans starting before this timestamp */
+                end_before?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                field: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilterValuesResponse"];
+                };
+            };
+            /** @description Field is not filterable by distinct values */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Failed to list filter values */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    get_trace: {
         parameters: {
             query?: {
                 /** @description Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400. */
                 fields?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path: {
@@ -1183,11 +2425,13 @@ export interface operations {
             };
         };
     };
-    export_trace_api_v1_public_traces__trace_id__export_get: {
+    export_trace: {
         parameters: {
             query?: {
                 /** @description Comma-separated field groups to include: 'core' (tree/timing/status, always included), 'usage' (tokens/cost), 'io' (per-span input/output), 'metadata' (per-span metadata). Aliases: 'skeleton' (core,usage), 'full' (everything). Unknown groups return 400. */
                 fields?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path: {
@@ -1272,7 +2516,7 @@ export interface operations {
             };
         };
     };
-    whoami_api_v1_public_whoami_get: {
+    whoami: {
         parameters: {
             query?: never;
             header?: never;
@@ -1288,6 +2532,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WhoamiResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    list_workspaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWorkspaceListResponse"];
                 };
             };
             /** @description Authentication failed */

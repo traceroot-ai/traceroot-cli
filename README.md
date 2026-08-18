@@ -13,30 +13,52 @@ npm install -g traceroot-cli    # or install the `traceroot` command
 ## Quick start
 
 ```sh
-traceroot login --api-key tr_... --host https://app.traceroot.ai  # authenticate (saves ./.traceroot/config.json)
+traceroot login                       # sign in with your browser (device flow)
 traceroot status                      # confirm who you are
-traceroot traces list --limit 10      # list recent traces
-traceroot traces get <trace-id>       # inspect one
-traceroot traces export <trace-id>    # export its bundle to a directory
-traceroot detectors list                   # list your detectors (copy a detector id)
-traceroot findings list --since 24h        # list recent detector findings
-traceroot findings get <finding-id>        # inspect one finding + its RCA
+traceroot projects list               # find a project id to scope reads to
+traceroot traces list --project <id> --limit 10   # list recent traces
+traceroot traces get <trace-id> --project <id>    # inspect one
+traceroot traces export <trace-id> --project <id> # export its bundle to a directory
+traceroot sessions list --project <id>            # list recent sessions
+traceroot detectors list --project <id>           # list your detectors (copy a detector id)
+traceroot findings list --since 24h --project <id> # list recent detector findings
+traceroot logout                      # revoke the session and clear the credential
+```
+
+Set `TRACEROOT_PROJECT_ID` (or `project_id` in the config file) once instead of
+repeating `--project`. With a project API key the project is fixed by the key,
+so `--project` is unnecessary:
+
+```sh
+traceroot login --api-key tr_...      # key mode: validates, saves ./.traceroot/config.json
+traceroot traces list --limit 10
 ```
 
 ## Configuration
 
-The CLI needs an API key (`tr_...`) and an API host. It resolves them in this
-priority order:
+The CLI authenticates with either a **browser login** (a session credential
+stored in `~/.config/traceroot/credentials.json`, exchanged for a short-lived
+access token before every request) or a **project API key** (`tr_...`, sent
+directly). The credential resolves in this priority order:
 
-1. Flags — `--api-key`, `--host`
-2. Env file — `--env-file <path>`
-3. Env vars — `TRACEROOT_API_KEY`, `TRACEROOT_HOST_URL`
-4. Config file — `./.traceroot/config.json`
-5. Auto-discovered `./.env`
+1. `--api-key` flag (API key)
+2. Env file — `--env-file <path>` (`TRACEROOT_TOKEN`, then `TRACEROOT_API_KEY`)
+3. `TRACEROOT_TOKEN` env var (session token)
+4. Credentials file — `~/.config/traceroot/credentials.json`, keyed by host
+5. `TRACEROOT_API_KEY` env var
+6. Config file — `./.traceroot/config.json`
+7. Auto-discovered `./.env`
 
-`traceroot login` validates the key, then writes `./.traceroot/config.json`
-(`0600`, auto-gitignored) so later commands need no flags. Override the path with
-`TRACEROOT_CONFIG_PATH`. For CI or scripts, prefer env vars or flags:
+The host resolves independently (`--host` > env file > `TRACEROOT_HOST_URL` >
+config > `./.env`) and defaults to `https://app.traceroot.ai`. Split dev setups
+(web app and API on different ports) can point login/token-mint at the web app
+with `--auth-host` / `TRACEROOT_AUTH_URL`.
+
+`traceroot login` runs the browser device flow by default and stores the session
+credential (`0600`) in your home config directory; with `--api-key` it validates
+the key, then writes `./.traceroot/config.json` (`0600`, auto-gitignored).
+Override the paths with `TRACEROOT_CREDENTIALS_PATH` / `TRACEROOT_CONFIG_PATH`.
+For CI or scripts, prefer a project API key via env vars or flags:
 
 ```sh
 export TRACEROOT_API_KEY=tr_...
@@ -44,16 +66,30 @@ export TRACEROOT_HOST_URL=https://app.traceroot.ai
 traceroot traces list
 ```
 
-> Your API key is a secret. The CLI only ever prints a masked hint and keeps the
-> config out of git — don't paste the full key into shared terminals.
+> Your API key and session token are secrets. The CLI only ever prints a masked
+> hint and keeps its files out of git — don't paste them into shared terminals.
+
+### Project scoping
+
+A browser login identifies *you*, not a project, so project-scoped reads
+(traces, sessions, detectors, findings) need a project id: `--project <id>` >
+`TRACEROOT_PROJECT_ID` > `project_id` in the config file. Run
+`traceroot projects list` to find one. API keys are already project-scoped and
+need none of this.
 
 ## Commands
 
 | Command | Description |
 | :-- | :-- |
-| `login` | Authenticate and save credentials (validates before writing). |
-| `status` | Show the identity your credentials resolve to — workspace, project, key hint, host, source. |
-| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
+| `login` | Sign in with the browser (device flow) and store the session credential; with `--api-key`, validate and save the key instead. |
+| `logout` | Revoke the session server-side (best-effort) and remove the local credential. |
+| `status` | Show the identity your credentials resolve to — email/workspaces (browser login) or workspace/project/key hint (API key), plus host and source. |
+| `workspaces list` | List the workspaces you can access (browser login only). |
+| `projects list` | List the projects you can access; the `PROJECT ID` column is what `--project` takes. `--workspace <id>` |
+| `sessions list` | List sessions, newest first. `--limit <n>`, `--search <q>`, `--since <dur>`, `--from`/`--to` |
+| `sessions get <id>` | Show one session: totals plus its traces. `--from`/`--to` |
+| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--name <substr>`, `--user <id>`, `--search <q>`, `--filters <json>`, `--include-evaluations` |
+| `traces filter-values <field>` | List the distinct values of a trace field (for `--filters`). `--from`/`--to` |
 | `traces get <id>` | Show one trace: span tree, derived duration, and a link to open it. Defaults to the lightweight `skeleton` projection (no per-span input/output/metadata); pass `--fields full` (or `--fields io,metadata`) to fetch span I/O. `--fields <groups>` |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. Defaults to the `full` projection (span input/output/metadata included); pass `--fields <groups>` to narrow it. `--output <dir>`, `--force`, `--fields <groups>` |
 | `detectors list` | List your project's detectors, newest first. The `DETECTOR ID` column is what you pass to `findings list --detector`. `--limit <n>`, `--since <dur>`, `--from`/`--to` |

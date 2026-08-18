@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { DEFAULT_TIMEOUT_MS } from "./api/client.js";
+import type { CredentialEntry } from "./auth/credentials.js";
 import { loadEnvFileFromDisk, loadOptionalEnvFileFromDisk } from "./config/envFile.js";
 import { readConfig } from "./config/manager.js";
 import { type ResolvedAuth, resolveAuth } from "./config/resolve.js";
@@ -10,6 +11,8 @@ import { CliError, ExitCode } from "./output.js";
 export interface GlobalOptions {
   apiKey?: string;
   host?: string;
+  authHost?: string;
+  project?: string;
   envFile?: string;
   json?: boolean;
   timeout?: string;
@@ -22,6 +25,8 @@ export interface ContextDeps {
   loadEnvFile?: (path: string) => Record<string, string>;
   /** Loads the auto-discovered working-directory `.env` (empty map if absent). */
   loadAutoEnvFile?: () => Record<string, string>;
+  /** Session-store lookup; defaults to the real credentials file. */
+  readCredential?: (host: string) => CredentialEntry | null;
 }
 
 /** Shared per-invocation context. */
@@ -73,11 +78,18 @@ export function buildContext(globalOpts: GlobalOptions, deps: ContextDeps = {}):
     });
 
   const auth = resolveAuth({
-    flags: { apiKey: globalOpts.apiKey, host: globalOpts.host, envFile: globalOpts.envFile },
+    flags: {
+      apiKey: globalOpts.apiKey,
+      host: globalOpts.host,
+      authHost: globalOpts.authHost,
+      project: globalOpts.project,
+      envFile: globalOpts.envFile,
+    },
     env,
     readConfig: readConfigAdapter,
     loadEnvFile,
     autoEnvFile: loadAutoEnvFile(),
+    readCredential: deps.readCredential,
   });
 
   const timeoutMs = resolveTimeoutMs(globalOpts.timeout, env);

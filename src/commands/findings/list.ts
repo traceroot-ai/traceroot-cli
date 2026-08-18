@@ -41,6 +41,8 @@ export interface RunFindingsDeps {
   sinceLabel?: string;
   /** IANA timezone override for the footer's human-local time display. */
   timeZone?: string;
+  /** Target project (required by the server under user credentials). */
+  projectId?: string;
 }
 
 /** Core, network-free logic for `findings list`. Tests inject a fake client. */
@@ -62,6 +64,9 @@ export async function runFindings(deps: RunFindingsDeps): Promise<void> {
   }
   if (traceId !== undefined) {
     params.traceId = traceId;
+  }
+  if (deps.projectId !== undefined) {
+    params.projectId = deps.projectId;
   }
   const res = await client.listFindings(Object.keys(params).length > 0 ? params : undefined);
 
@@ -179,6 +184,7 @@ export function registerFindingsList(findings: Command): void {
         detector: opts.detector as string | undefined,
         traceId: opts.trace as string | undefined,
         sinceLabel: range.sinceLabel,
+        projectId: ctx.auth.projectId.value,
       });
     });
 }

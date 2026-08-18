@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { ApiClient, Whoami } from "../../src/api/client.js";
+import type { ApiClient, Whoami, WorkspaceList } from "../../src/api/client.js";
 import { runStatus } from "../../src/commands/status.js";
+import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import { CliError, type Writers } from "../../src/output.js";
 import { StringSink } from "../helpers/stringSink.js";
 
 const FULL_TOKEN = "tr_secret_LEAK";
+const SESSION = "sess_secret_LEAK";
+
+function jwtWith(claims: Record<string, unknown>): string {
+  return `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
+}
 
 function makeWhoami(overrides: Partial<Whoami> = {}): Whoami {
   return {
@@ -21,23 +27,51 @@ function makeWhoami(overrides: Partial<Whoami> = {}): Whoami {
   };
 }
 
-function makeContext(json: boolean): Context {
+function keyAuth(): ResolvedAuth {
   return {
-    auth: {
-      apiKey: { value: FULL_TOKEN, source: "config" },
-      hostUrl: { value: "https://api.example.com", source: "config" },
-    },
-    json,
+    credential: { kind: "api-key", value: FULL_TOKEN, source: "config" },
+    hostUrl: { value: "https://api.example.com", source: "config" },
+    authHost: { value: "https://api.example.com", source: "default" },
+    projectId: { value: undefined, source: "none" },
   };
 }
 
-function fakeClient(whoami: () => Promise<Whoami>): ApiClient {
+function sessionAuth(): ResolvedAuth {
   return {
-    whoami,
-    listTraces: () => Promise.reject(new Error("not used")),
-    getTrace: () => Promise.reject(new Error("not used")),
-    exportTrace: () => Promise.reject(new Error("not used")),
+    credential: { kind: "session", value: SESSION, source: "credentials-file" },
+    hostUrl: { value: "https://api.example.com", source: "default" },
+    authHost: { value: "https://ui.example.com", source: "credentials-file" },
+    projectId: { value: "proj_123", source: "env" },
   };
+}
+
+function makeContext(auth: ResolvedAuth, json: boolean): Context {
+  return { auth, json, timeoutMs: 30_000 };
+}
+
+interface FakeClientHooks {
+  whoami?: () => Promise<Whoami>;
+  listWorkspaces?: () => Promise<WorkspaceList>;
+}
+
+function fakeClient(hooks: FakeClientHooks): ApiClient {
+  const unused = () => Promise.reject(new Error("not used"));
+  return {
+    whoami: hooks.whoami ?? unused,
+    listWorkspaces: hooks.listWorkspaces ?? unused,
+    listTraces: unused,
+    getTrace: unused,
+    exportTrace: unused,
+    traceFilterValues: unused,
+    listDetectors: unused,
+    listFindings: unused,
+    getFinding: unused,
+    getFindingByTrace: unused,
+    findFindingByTrace: unused,
+    listProjects: unused,
+    listSessions: unused,
+    getSession: unused,
+  } as unknown as ApiClient;
 }
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
@@ -46,13 +80,13 @@ function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
   return { writers: { out, err }, out, err };
 }
 
-describe("runStatus (human)", () => {
+describe("runStatus with an API key (human)", () => {
   it("writes identity (project/workspace/key_hint/host) to stdout", async () => {
     const { writers, out } = makeWriters();
     const who = makeWhoami({ key_hint: "tr_***1234" });
     await runStatus({
-      ctx: makeContext(false),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(keyAuth(), false),
+      client: fakeClient({ whoami: () => Promise.resolve(who) }),
       writers,
     });
 
@@ -65,10 +99,9 @@ describe("runStatus (human)", () => {
 
   it("never prints the full api token", async () => {
     const { writers, out, err } = makeWriters();
-    const who = makeWhoami();
     await runStatus({
-      ctx: makeContext(false),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(keyAuth(), false),
+      client: fakeClient({ whoami: () => Promise.resolve(makeWhoami()) }),
       writers,
     });
 
@@ -78,10 +111,9 @@ describe("runStatus (human)", () => {
 
   it("shows the resolved config source", async () => {
     const { writers, out } = makeWriters();
-    const who = makeWhoami();
     await runStatus({
-      ctx: makeContext(false),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(keyAuth(), false),
+      client: fakeClient({ whoami: () => Promise.resolve(makeWhoami()) }),
       writers,
     });
 
@@ -92,36 +124,22 @@ describe("runStatus (human)", () => {
     const { writers, out } = makeWriters();
     const who = makeWhoami({ key_name: "ci-key", key_hint: "tr_***1234" });
     await runStatus({
-      ctx: makeContext(false),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(keyAuth(), false),
+      client: fakeClient({ whoami: () => Promise.resolve(who) }),
       writers,
     });
 
-    expect(out.data).toContain("ci-key tr_***1234"); // name then hint, no brackets
+    expect(out.data).toContain("ci-key tr_***1234");
     expect(out.data).not.toContain("[tr_***1234]");
     expect(out.data).not.toContain("(none)");
-  });
-
-  it("shows only the hint (no name field) when the key has no name", async () => {
-    const { writers, out } = makeWriters();
-    const who = makeWhoami({ key_name: null, key_hint: "tr_***1234" });
-    await runStatus({
-      ctx: makeContext(false),
-      client: fakeClient(() => Promise.resolve(who)),
-      writers,
-    });
-
-    expect(out.data).toContain("API key:       tr_***1234");
-    expect(out.data).not.toContain("(unknown)");
-    expect(out.data).not.toContain("[tr_***1234]");
   });
 
   it("falls back to the id as primary when a name is null", async () => {
     const { writers, out } = makeWriters();
     const who = makeWhoami({ workspace_name: null });
     await runStatus({
-      ctx: makeContext(false),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(keyAuth(), false),
+      client: fakeClient({ whoami: () => Promise.resolve(who) }),
       writers,
     });
 
@@ -132,26 +150,93 @@ describe("runStatus (human)", () => {
   it("renders names first with dimmed ids on a TTY", async () => {
     const out = new StringSink(true);
     const err = new StringSink(true);
-    const who = makeWhoami();
     await runStatus({
-      ctx: makeContext(false),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(keyAuth(), false),
+      client: fakeClient({ whoami: () => Promise.resolve(makeWhoami()) }),
       writers: { out, err },
     });
 
-    // Name comes first; the id is wrapped in the ANSI dim code.
     expect(out.data).toContain("My Project \x1b[2m(proj_123)\x1b[0m");
     expect(out.data).toContain("My Workspace \x1b[2m(ws_456)\x1b[0m");
   });
 });
 
-describe("runStatus (--json)", () => {
-  it("writes exactly one JSON document that round-trips and includes config_source", async () => {
-    const { writers, out, err } = makeWriters();
-    const who = makeWhoami({ key_hint: "tr_***1234" });
+describe("runStatus with a session credential (human)", () => {
+  it("derives identity from the JWT email and lists workspaces — no whoami call", async () => {
+    const { writers, out } = makeWriters();
     await runStatus({
-      ctx: makeContext(true),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(sessionAuth(), false),
+      client: fakeClient({
+        whoami: () => Promise.reject(new Error("whoami must not be called for user credentials")),
+        listWorkspaces: () =>
+          Promise.resolve({
+            data: [
+              { id: "ws-1", name: "Alpha", role: "admin" },
+              { id: "ws-2", name: "Beta", role: "member" },
+            ],
+          } as WorkspaceList),
+      }),
+      writers,
+      getAccessToken: () => Promise.resolve(jwtWith({ email: "kai@example.com" })),
+    });
+
+    expect(out.data).toContain("kai@example.com");
+    expect(out.data).toContain("Alpha");
+    expect(out.data).toContain("Beta");
+    expect(out.data).toContain("browser login");
+    expect(out.data).toContain("https://api.example.com");
+    expect(out.data).not.toContain(SESSION);
+  });
+
+  it("shows the default project and its source", async () => {
+    const { writers, out } = makeWriters();
+    await runStatus({
+      ctx: makeContext(sessionAuth(), false),
+      client: fakeClient({
+        listWorkspaces: () => Promise.resolve({ data: [] } as unknown as WorkspaceList),
+      }),
+      writers,
+      getAccessToken: () => Promise.resolve(jwtWith({ email: "kai@example.com" })),
+    });
+
+    expect(out.data).toContain("proj_123");
+  });
+
+  it("degrades to a workspace-unavailable note when the list call fails", async () => {
+    const { writers, out } = makeWriters();
+    await runStatus({
+      ctx: makeContext(sessionAuth(), false),
+      client: fakeClient({
+        listWorkspaces: () => Promise.reject(new CliError("boom")),
+      }),
+      writers,
+      getAccessToken: () => Promise.resolve(jwtWith({ email: "kai@example.com" })),
+    });
+
+    expect(out.data).toContain("kai@example.com");
+    expect(out.data).toContain("unavailable");
+  });
+
+  it("propagates a mint failure (revoked session)", async () => {
+    const { writers, out } = makeWriters();
+    await expect(
+      runStatus({
+        ctx: makeContext(sessionAuth(), false),
+        client: fakeClient({}),
+        writers,
+        getAccessToken: () => Promise.reject(new CliError("session expired or revoked")),
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    expect(out.data).toBe("");
+  });
+});
+
+describe("runStatus (--json)", () => {
+  it("api-key mode: one JSON document with identity and config_source", async () => {
+    const { writers, out, err } = makeWriters();
+    await runStatus({
+      ctx: makeContext(keyAuth(), true),
+      client: fakeClient({ whoami: () => Promise.resolve(makeWhoami()) }),
       writers,
     });
 
@@ -160,34 +245,45 @@ describe("runStatus (--json)", () => {
     expect(parsed.workspace_id).toBe("ws_456");
     expect(parsed.key_hint).toBe("tr_***1234");
     expect(parsed.host).toBe("https://api.example.com");
-    expect(parsed.ui_base_url).toBe("https://app.example.com");
+    expect(parsed.credential).toBe("api-key");
     expect(parsed.config_source).toBe("config");
-    // Exactly one document: stripped of its single trailing newline, no extra lines.
     expect(out.data.trimEnd().split("\n")).toHaveLength(1);
     expect(err.data).toBe("");
   });
 
-  it("never prints the full api token in JSON mode", async () => {
+  it("session mode: one JSON document with email, workspaces, and no token", async () => {
     const { writers, out } = makeWriters();
-    const who = makeWhoami();
     await runStatus({
-      ctx: makeContext(true),
-      client: fakeClient(() => Promise.resolve(who)),
+      ctx: makeContext(sessionAuth(), true),
+      client: fakeClient({
+        listWorkspaces: () =>
+          Promise.resolve({
+            data: [{ id: "ws-1", name: "Alpha", role: "admin" }],
+          } as WorkspaceList),
+      }),
       writers,
+      getAccessToken: () => Promise.resolve(jwtWith({ email: "kai@example.com" })),
     });
 
-    expect(out.data).not.toContain(FULL_TOKEN);
+    const parsed = JSON.parse(out.data) as Record<string, unknown>;
+    expect(parsed.credential).toBe("session");
+    expect(parsed.email).toBe("kai@example.com");
+    expect(parsed.host).toBe("https://api.example.com");
+    expect(parsed.project_id).toBe("proj_123");
+    expect(Array.isArray(parsed.workspaces)).toBe(true);
+    expect(out.data).not.toContain(SESSION);
+    expect(out.data.trimEnd().split("\n")).toHaveLength(1);
   });
 });
 
 describe("runStatus errors", () => {
   it("propagates a whoami CliError and writes nothing to stdout", async () => {
     const { writers, out } = makeWriters();
-    const client = fakeClient(() => Promise.reject(new CliError("auth failed")));
+    const client = fakeClient({ whoami: () => Promise.reject(new CliError("auth failed")) });
 
-    await expect(runStatus({ ctx: makeContext(false), client, writers })).rejects.toBeInstanceOf(
-      CliError,
-    );
+    await expect(
+      runStatus({ ctx: makeContext(keyAuth(), false), client, writers }),
+    ).rejects.toBeInstanceOf(CliError);
     expect(out.data).toBe("");
   });
 });

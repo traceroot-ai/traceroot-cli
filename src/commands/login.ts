@@ -4,10 +4,18 @@ import {
   type ApiClient,
   type ApiClientOptions,
   type Whoami,
+  type WorkspaceList,
   createApiClient,
 } from "../api/client.js";
-import { writeConfig as realWriteConfig } from "../config/manager.js";
-import type { AuthSource } from "../config/resolve.js";
+import { type CredentialEntry, readCredential, writeCredential } from "../auth/credentials.js";
+import { type DeviceFlowDeps, type DeviceFlowResult, runDeviceFlow } from "../auth/deviceFlow.js";
+import { createTokenProvider, decodeJwtClaims } from "../auth/token.js";
+import {
+  readConfig as readConfigFromDisk,
+  writeConfig as realWriteConfig,
+} from "../config/manager.js";
+import type { AuthSource, ResolvedCredential } from "../config/resolve.js";
+import type { Config } from "../config/schema.js";
 import { CliError, ExitCode, type Writers, defaultWriters, logInfo, writeJson } from "../output.js";
 import { apiKeyLabel, identity } from "../render/identity.js";
 import { createStyler } from "../render/style.js";
@@ -16,38 +24,42 @@ import { contextFromCommand } from "./shared.js";
 
 /** Dependencies for {@link runLogin}; production wiring lives in {@link registerLogin}. */
 export interface LoginDeps {
-  /**
-   * The api key resolved from the full precedence chain (flags > `--env-file` >
-   * env > config > auto-discovered `.env`), if any. When absent, login prompts
-   * (interactive) or errors (non-interactive).
-   */
-  resolvedApiKey?: string;
+  /** The credential resolved from the full precedence chain (may be `none`). */
+  credential: ResolvedCredential;
   /** The host resolved from the same precedence chain, if any. */
   resolvedHost?: string;
-  json: boolean;
-  isInteractive: boolean;
-  /** Provenance of the resolved api key; `"config"` means the user is already
-   * logged in via the persisted config file (a bare `login` re-invocation). */
-  apiKeySource: AuthSource;
   /** Provenance of the resolved host. An explicit override (`flag`/`env`/
    * `env-file`) signals intent to change the host and bypasses the
-   * already-logged-in warning even when the key still comes from config. */
+   * already-logged-in warning even when the credential is persisted. */
   hostSource: AuthSource;
+  /** The device/mint host (auth-host resolution result); defaults to the host. */
+  authHost?: string;
+  json: boolean;
+  isInteractive: boolean;
   /** Prompts for a yes/no answer; resolves `false` on empty input or EOF. */
   promptConfirm: (question: string) => Promise<boolean>;
-  /** Prompts for a secret without echoing it. */
-  promptHidden: (question: string) => Promise<string>;
-  /** Prompts for a visible value, offering `def` as the default on empty input. */
-  promptVisible: (question: string, def: string) => Promise<string>;
   createClient: (opts: ApiClientOptions) => ApiClient;
-  writeConfig: (config: { api_key: string; host_url: string }) => void;
+  readConfig: () => Config | null;
+  writeConfig: (config: Config) => void;
+  /** Session-store accessors, keyed by API host. */
+  readCredentialEntry: (host: string) => CredentialEntry | null;
+  writeCredentialEntry: (host: string, entry: CredentialEntry) => void;
+  /** The RFC 8628 flow; injectable for tests. */
+  deviceFlow: (deps: DeviceFlowDeps) => Promise<DeviceFlowResult>;
+  /** Mints an access JWT from a fresh session token (identity display). */
+  mintAccessToken: (args: {
+    authHost: string;
+    sessionToken: string;
+    timeoutMs?: number;
+  }) => Promise<string>;
+  /** Environment for CI detection in the device flow; defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
+  /** Injectable timestamp for the stored entry's created_at. */
+  nowIso?: () => string;
   /** Per-request network timeout (ms) so credential validation can't hang. */
   timeoutMs?: number;
   writers: Writers;
 }
-
-const MISSING_KEY =
-  "an API key is required: pass --api-key, set TRACEROOT_API_KEY (or a .env file), or run interactively";
 
 /**
  * Timeout for the courtesy `whoami` that enriches the already-logged-in
@@ -57,64 +69,59 @@ const MISSING_KEY =
 export const WHOAMI_WARNING_TIMEOUT_MS = 5000;
 
 /**
- * Establishes credentials: takes the api key and host already resolved from the
- * precedence chain (flags > `--env-file` > env > config > auto `.env`) or, when
- * none resolved and interactive, prompts; validates them via `whoami`, and only
- * on success persists them with restrictive permissions. The full api token is
- * never printed; on validation failure no config is written.
+ * Establishes credentials. The default is the browser device flow (RFC 8628):
+ * sign in on the web app, approve the code, and the CLI stores the resulting
+ * session token (keyed by host) in the home-directory credentials file. When an
+ * API key is explicitly supplied (flag/env/env-file), the legacy key login runs
+ * instead: validate via `whoami`, then persist to the project config. A
+ * persisted credential (config key or stored session) triggers an
+ * already-logged-in warning first. No secret is ever printed.
  */
 export async function runLogin(deps: LoginDeps): Promise<void> {
-  const { writers } = deps;
+  const host = deps.resolvedHost?.trim() || DEFAULT_HOST;
 
-  // An explicit override of either field (a higher-precedence flag/env/env-file)
-  // is deliberate intent, not a bare re-invocation. Since `apiKeySource ===
-  // "config"` already implies the key was not explicitly overridden, only the
-  // host needs a separate override check (e.g. `login --host ...`).
+  // An explicit host override (flag/env/env-file) is deliberate intent to
+  // switch hosts, not a bare re-invocation — skip the already-logged-in check.
   const hostOverridden =
     deps.hostSource === "flag" || deps.hostSource === "env" || deps.hostSource === "env-file";
-  const alreadyLoggedIn = deps.apiKeySource === "config" && !hostOverridden;
-  const currentHost = deps.resolvedHost?.trim() || DEFAULT_HOST;
 
-  let resolvedKey = deps.resolvedApiKey?.trim();
-  let resolvedHost = deps.resolvedHost?.trim();
-
-  if (alreadyLoggedIn) {
-    const outcome = await reportAlreadyLoggedIn(deps, currentHost, resolvedKey ?? "");
+  const persistedSource =
+    deps.credential.source === "config" || deps.credential.source === "credentials-file";
+  if (deps.credential.value !== undefined && persistedSource && !hostOverridden) {
+    const outcome = await reportAlreadyLoggedIn(deps, host);
     if (outcome === "exit") {
       return;
     }
-    // User opted to switch: ignore persisted creds and prompt fresh below.
-    resolvedKey = undefined;
-    resolvedHost = undefined;
+    // User opted to re-login: fall through to the device flow (the default
+    // login method) regardless of which credential kind was persisted.
+    await deviceLogin(deps, host);
+    return;
   }
 
-  let apiKey: string;
-  if (resolvedKey !== undefined && resolvedKey !== "") {
-    apiKey = resolvedKey;
-  } else if (deps.isInteractive) {
-    apiKey = (await deps.promptHidden("API key: ")).trim();
-  } else {
-    throw new CliError(MISSING_KEY, ExitCode.auth);
-  }
-  if (apiKey === "") {
-    throw new CliError(MISSING_KEY, ExitCode.auth);
+  // Any resolved API key at this point is either explicitly supplied
+  // (flag/env/env-file/auto-.env) or a persisted key being re-pointed at an
+  // explicitly overridden host — both mean key login. A session token from the
+  // environment is not a login request; the device flow below replaces it.
+  if (deps.credential.kind === "api-key" && deps.credential.value !== undefined) {
+    await apiKeyLogin(deps, deps.credential.value, host);
+    return;
   }
 
-  let host: string;
-  if (resolvedHost !== undefined && resolvedHost !== "") {
-    host = resolvedHost;
-  } else if (deps.isInteractive) {
-    const answer = (await deps.promptVisible("Host", DEFAULT_HOST)).trim();
-    host = answer === "" ? DEFAULT_HOST : answer;
-  } else {
-    host = DEFAULT_HOST;
-  }
+  await deviceLogin(deps, host);
+}
 
-  const client = deps.createClient({ host, apiKey, timeoutMs: deps.timeoutMs });
+/** The legacy key login: validate via `whoami`, persist only on success. */
+async function apiKeyLogin(deps: LoginDeps, apiKey: string, host: string): Promise<void> {
+  const { writers } = deps;
+  const client = deps.createClient({
+    host,
+    auth: { kind: "api-key", key: apiKey },
+    timeoutMs: deps.timeoutMs,
+  });
   // Validate before persisting; a failure throws and leaves config untouched.
   const who = await client.whoami();
 
-  deps.writeConfig({ api_key: apiKey, host_url: host });
+  deps.writeConfig({ ...(deps.readConfig() ?? {}), api_key: apiKey, host_url: host });
 
   if (deps.json) {
     writeJson(
@@ -141,60 +148,163 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
     writers.out.write(`${lines.join("\n")}\n`);
   }
 
+  printNextHints(writers);
+}
+
+/** The default login: browser device flow → store the session token. */
+async function deviceLogin(deps: LoginDeps, host: string): Promise<void> {
+  const { writers } = deps;
+  const authHost = deps.authHost?.trim() || host;
+
+  const { sessionToken } = await deps.deviceFlow({
+    authHost,
+    timeoutMs: deps.timeoutMs,
+    env: deps.env,
+    writers,
+  });
+
+  // Identity is a courtesy: the session came from the server moments ago, so a
+  // mint hiccup (e.g. rate limit) must not fail the login that just succeeded.
+  let email: string | undefined;
+  let accessToken: string | undefined;
+  try {
+    accessToken = await deps.mintAccessToken({
+      authHost,
+      sessionToken,
+      timeoutMs: deps.timeoutMs,
+    });
+    const claims = decodeJwtClaims(accessToken);
+    email = typeof claims?.email === "string" ? claims.email : undefined;
+  } catch (err) {
+    const message = err instanceof CliError ? err.message : "could not mint an access token";
+    logInfo(`Signed in, but couldn't verify the new session yet: ${message}`, writers);
+  }
+
+  let workspaces: WorkspaceList | null = null;
+  if (accessToken !== undefined) {
+    const jwt = accessToken;
+    try {
+      workspaces = await deps
+        .createClient({
+          host,
+          auth: { kind: "token-provider", getAccessToken: () => Promise.resolve(jwt) },
+          timeoutMs: deps.timeoutMs,
+        })
+        .listWorkspaces();
+    } catch {
+      // Informational only.
+    }
+  }
+
+  const entry: CredentialEntry = { session_token: sessionToken };
+  if (authHost !== host) {
+    entry.auth_host = authHost;
+  }
+  if (email !== undefined) {
+    entry.email = email;
+  }
+  const createdAt = deps.nowIso?.() ?? new Date().toISOString();
+  entry.created_at = createdAt;
+  deps.writeCredentialEntry(host, entry);
+
+  // Persist an explicitly overridden host so subsequent reads resolve it
+  // without re-passing the flag. The production default needs no config at all.
+  const hostOverridden =
+    deps.hostSource === "flag" || deps.hostSource === "env" || deps.hostSource === "env-file";
+  if (hostOverridden && host !== DEFAULT_HOST) {
+    deps.writeConfig({ ...(deps.readConfig() ?? {}), host_url: host });
+  }
+
+  if (deps.json) {
+    writeJson(
+      {
+        status: "logged_in",
+        host,
+        auth_host: authHost,
+        email: email ?? null,
+        workspaces: workspaces?.data ?? null,
+      },
+      writers,
+    );
+    return;
+  }
+
+  const styler = createStyler(writers.out);
+  const lines = [
+    `Logged in to ${styler.dim(host)}${email !== undefined ? ` as ${styler.bold(email)}` : ""}`,
+  ];
+  if (workspaces !== null && workspaces.data.length > 0) {
+    lines.push(`  ${styler.bold("Workspaces:")} ${workspaces.data.map((w) => w.name).join(", ")}`);
+  }
+  writers.out.write(`${lines.join("\n")}\n`);
+  printNextHints(writers);
+}
+
+function printNextHints(writers: Writers): void {
   logInfo("\nNext: run `traceroot status` to confirm your identity.", writers);
   logInfo("Next: run `traceroot traces list` to see your traces.", writers);
 }
 
 /**
- * Handles a bare `login` while already logged in: warns which workspace/project
- * the saved session belongs to and, interactively, asks whether to re-login.
- *
- * To name the session it calls `whoami` with the saved key; the full token is
- * never printed. If that lookup fails (expired key, offline) it degrades to a
- * host-only warning that notes the session couldn't be verified — the warning
- * never throws. Returns `"relogin"` only when an interactive user opts to switch
- * accounts; every other path (no TTY, `--json`, or a declined prompt) returns
- * `"exit"`, leaving the existing config untouched.
+ * Handles a bare `login` while a credential is already persisted (config API
+ * key or stored session): warns who the saved credential belongs to and,
+ * interactively, asks whether to re-login. The identity lookup is best-effort
+ * and never throws; no secret is ever printed. Returns `"relogin"` only when an
+ * interactive user opts to switch; every other path (no TTY, `--json`, or a
+ * declined prompt) returns `"exit"`, leaving everything untouched.
  */
-async function reportAlreadyLoggedIn(
-  deps: LoginDeps,
-  currentHost: string,
-  savedKey: string,
-): Promise<"exit" | "relogin"> {
+async function reportAlreadyLoggedIn(deps: LoginDeps, host: string): Promise<"exit" | "relogin"> {
   const { writers } = deps;
   const styler = createStyler(writers.err);
+  const isSession = deps.credential.kind === "session";
 
   let who: Whoami | null = null;
-  try {
-    const client = deps.createClient({
-      host: currentHost,
-      apiKey: savedKey,
-      timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
-    });
-    who = await client.whoami();
-  } catch {
-    who = null;
+  let email: string | undefined;
+  if (isSession) {
+    email = deps.readCredentialEntry(host)?.email;
+  } else if (deps.credential.value !== undefined) {
+    try {
+      const client = deps.createClient({
+        host,
+        auth: { kind: "api-key", key: deps.credential.value },
+        timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
+      });
+      who = await client.whoami();
+    } catch {
+      who = null;
+    }
   }
 
   if (deps.json) {
-    writeJson(
-      who !== null
-        ? {
-            status: "already_logged_in",
-            verified: true,
-            host: who.host,
-            workspace_id: who.workspace_id,
-            workspace_name: who.workspace_name,
-            project_id: who.project_id,
-            project_name: who.project_name,
-          }
-        : { status: "already_logged_in", verified: false, host: currentHost },
-      writers,
-    );
+    if (isSession) {
+      writeJson(
+        { status: "already_logged_in", credential: "session", host, email: email ?? null },
+        writers,
+      );
+    } else {
+      writeJson(
+        who !== null
+          ? {
+              status: "already_logged_in",
+              credential: "api-key",
+              verified: true,
+              host: who.host,
+              workspace_id: who.workspace_id,
+              workspace_name: who.workspace_name,
+              project_id: who.project_id,
+              project_name: who.project_name,
+            }
+          : { status: "already_logged_in", credential: "api-key", verified: false, host },
+        writers,
+      );
+    }
     return "exit";
   }
 
-  if (who !== null) {
+  if (isSession) {
+    const asWho = email !== undefined ? ` as ${styler.bold(email)}` : "";
+    logInfo(`${styler.warn("WARNING:")} Already logged in to ${styler.dim(host)}${asWho}`, writers);
+  } else if (who !== null) {
     const lines = [
       `${styler.warn("WARNING:")} Already logged in:`,
       `  ${styler.bold("Workspace:")} ${identity(who.workspace_name, who.workspace_id, styler)}`,
@@ -203,12 +313,12 @@ async function reportAlreadyLoggedIn(
     ];
     logInfo(lines.join("\n"), writers);
   } else {
-    logInfo(`${styler.warn("WARNING:")} Already logged in to ${styler.dim(currentHost)}`, writers);
+    logInfo(`${styler.warn("WARNING:")} Already logged in to ${styler.dim(host)}`, writers);
     logInfo("  (couldn't verify the saved session).", writers);
   }
 
   if (!deps.isInteractive) {
-    logInfo("Pass --api-key or set TRACEROOT_API_KEY to switch accounts.", writers);
+    logInfo("Run `traceroot logout` first, or pass --host/--api-key to switch.", writers);
     return "exit";
   }
 
@@ -218,42 +328,6 @@ async function reportAlreadyLoggedIn(
     return "exit";
   }
   return "relogin";
-}
-
-/**
- * Reads a line from stdin without echoing the typed characters (a `*` is shown
- * per keystroke). Used only on the real interactive path.
- */
-function promptHidden(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    const asMutable = rl as unknown as { _writeToOutput?: (s: string) => void };
-    const original = asMutable._writeToOutput?.bind(rl);
-    asMutable._writeToOutput = (chunk: string): void => {
-      // Echo the prompt itself, mask everything else.
-      if (chunk.includes(question)) {
-        original?.(chunk);
-      } else {
-        process.stdout.write("*");
-      }
-    };
-    rl.question(question, (answer) => {
-      rl.close();
-      process.stdout.write("\n");
-      resolve(answer);
-    });
-  });
-}
-
-/** Reads a visible line from stdin, returning `def` on empty input. */
-function promptVisible(question: string, def: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    rl.question(`${question} [${def}]: `, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-  });
 }
 
 /** Reads a visible yes/no answer; returns `true` only for an explicit y/yes. */
@@ -271,24 +345,31 @@ function promptConfirm(question: string): Promise<boolean> {
 export function registerLogin(program: Command): void {
   program
     .command("login")
-    .description("Authenticate with TraceRoot")
+    .description("Sign in with the browser (device flow), or persist an explicit --api-key")
     .action(async (_opts, command: Command) => {
       // Reuse the standard resolution chain so `login` honors flags, --env-file,
       // env vars, an existing config, and a working-directory .env identically
       // to the read commands.
       const ctx = contextFromCommand(command);
       await runLogin({
-        resolvedApiKey: ctx.auth.apiKey.value,
+        credential: ctx.auth.credential,
         resolvedHost: ctx.auth.hostUrl.value,
+        hostSource: ctx.auth.hostUrl.source,
+        authHost: ctx.auth.authHost.value,
         json: ctx.json,
         isInteractive: process.stdin.isTTY === true,
-        apiKeySource: ctx.auth.apiKey.source,
-        hostSource: ctx.auth.hostUrl.source,
         promptConfirm,
-        promptHidden,
-        promptVisible,
         createClient: createApiClient,
+        readConfig: () => {
+          const result = readConfigFromDisk();
+          return result.ok ? result.config : null;
+        },
         writeConfig: realWriteConfig,
+        readCredentialEntry: readCredential,
+        writeCredentialEntry: writeCredential,
+        deviceFlow: runDeviceFlow,
+        mintAccessToken: ({ authHost, sessionToken, timeoutMs }) =>
+          createTokenProvider({ authHost, sessionToken, timeoutMs }).getAccessToken(),
         timeoutMs: ctx.timeoutMs,
         writers: defaultWriters,
       });

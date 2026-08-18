@@ -56,6 +56,8 @@ export function buildProgram(): Command {
   program
     .option("--api-key <key>", "API key for authentication")
     .option("--host <url>", "API host URL")
+    .option("--auth-host <url>", "auth host URL for browser login and token mint (default: --host)")
+    .option("--project <id>", "project id to scope reads to (required with a browser login)")
     .option("--env-file <path>", "path to a .env file to load")
     .option("--json", "emit machine-readable JSON output for supported commands")
     .option("--timeout <ms>", "per-request network timeout in milliseconds (default: 30000)");

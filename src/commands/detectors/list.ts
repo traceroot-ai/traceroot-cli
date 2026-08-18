@@ -37,6 +37,8 @@ export interface RunDetectorsDeps {
   sinceLabel?: string;
   /** IANA timezone override for the human-local time display. */
   timeZone?: string;
+  /** Target project (required by the server under user credentials). */
+  projectId?: string;
 }
 
 /** Core, network-free logic for `detectors list`. Tests inject a fake client. */
@@ -51,6 +53,9 @@ export async function runDetectors(deps: RunDetectorsDeps): Promise<void> {
   }
   if (endBefore !== undefined) {
     params.endBefore = endBefore;
+  }
+  if (deps.projectId !== undefined) {
+    params.projectId = deps.projectId;
   }
   const res = await client.listDetectors(Object.keys(params).length > 0 ? params : undefined);
 
@@ -162,6 +167,7 @@ export function registerDetectorsList(detectors: Command): void {
         startAfter: range.startAfter,
         endBefore: range.endBefore,
         sinceLabel: range.sinceLabel,
+        projectId: ctx.auth.projectId.value,
       });
     });
 }

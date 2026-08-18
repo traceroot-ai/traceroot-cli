@@ -36,6 +36,8 @@ function describeSource(source: AuthSource, configPath: string): string {
   switch (source) {
     case "config":
       return configPath;
+    case "credentials-file":
+      return "credentials file";
     case "auto-env-file":
       return ".env (auto-loaded)";
     case "env-file":
@@ -44,6 +46,8 @@ function describeSource(source: AuthSource, configPath: string): string {
       return "environment";
     case "flag":
       return "--api-key / --host flags";
+    case "default":
+      return "built-in default";
     default:
       return "(none)";
   }
@@ -53,16 +57,18 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
   const { auth, configPath, credentialsValid } = input;
   const checks: DoctorCheck[] = [];
 
-  // API key and host are required for CLI readiness, so their absence is a hard
-  // failure (red ✗ + non-zero exit), not a neutral warning.
-  const hasKey = auth.apiKey.value !== undefined;
+  // A credential and host are required for CLI readiness, so their absence is a
+  // hard failure (red ✗ + non-zero exit), not a neutral warning.
+  const credential = auth.credential;
+  const hasCredential = credential.kind !== "none" && credential.value !== undefined;
+  const kindLabel = credential.kind === "session" ? "Session credential" : "API key";
   checks.push({
-    name: "api_key_resolved",
+    name: "credentials_resolved",
     category: "credentials",
-    status: hasKey ? "pass" : "fail",
-    message: hasKey
-      ? `API key resolved from ${describeSource(auth.apiKey.source, configPath)}`
-      : "API key not found. Run `traceroot login`.",
+    status: hasCredential ? "pass" : "fail",
+    message: hasCredential
+      ? `${kindLabel} resolved from ${describeSource(credential.source, configPath)}`
+      : "No credentials found. Run `traceroot login`.",
   });
 
   const host = auth.hostUrl.value;

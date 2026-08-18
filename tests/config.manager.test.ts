@@ -43,15 +43,22 @@ describe("readConfig", () => {
     expect(result.error.code).toBe("INVALID_SHAPE");
   });
 
-  it("rejects an invalid shape when host_url is missing", () => {
+  it("accepts a partial config (every field is optional)", () => {
     const p = join(dir, "config.json");
     writeFileSync(p, JSON.stringify({ api_key: "k" }));
+    expect(readConfig(p)).toEqual({
+      ok: true,
+      config: { api_key: "k", host_url: undefined, project_id: undefined },
+    });
+  });
+
+  it("reads an optional project_id", () => {
+    const p = join(dir, "config.json");
+    writeFileSync(p, JSON.stringify({ host_url: "https://h", project_id: "p-1" }));
     const result = readConfig(p);
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.reason).toBe("invalid-shape");
-    if (result.reason !== "invalid-shape") throw new Error("unreachable");
-    expect(result.error.code).toBe("INVALID_SHAPE");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.config.project_id).toBe("p-1");
   });
 
   it("rejects invalid JSON without leaking the raw file bytes", () => {

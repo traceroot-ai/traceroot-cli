@@ -650,7 +650,7 @@ describe("traces list command surface", () => {
     // Should NOT produce the ISO 8601 rejection (i.e. the bare date was accepted)
     expect(result.stderr).not.toContain("ISO 8601");
     // Should fall through to the auth error, confirming that path was reached
-    expect(result.stderr.toLowerCase()).toContain("api key");
+    expect(result.stderr.toLowerCase()).toContain("no credentials found");
   });
 });
 

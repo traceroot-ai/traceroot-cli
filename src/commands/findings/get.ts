@@ -17,6 +17,8 @@ export interface RunGetDeps {
   traceId?: string;
   /** IANA timezone override for the human-local time display. */
   timeZone?: string;
+  /** Target project (required by the server under user credentials). */
+  projectId?: string;
 }
 
 /** Core, network-free logic for `findings get`. Tests inject a fake client. */
@@ -36,8 +38,8 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   }
 
   const finding = hasFinding
-    ? await client.getFinding(findingId as string)
-    : await client.getFindingByTrace(traceId as string);
+    ? await client.getFinding(findingId as string, { projectId: deps.projectId })
+    : await client.getFindingByTrace(traceId as string, { projectId: deps.projectId });
 
   if (json) {
     // Bare object, byte-for-byte the backend response (mirrors `traces get`).
@@ -140,6 +142,7 @@ export function registerFindingsGet(findings: Command): void {
         writers: defaultWriters,
         findingId,
         traceId: opts.trace as string | undefined,
+        projectId: ctx.auth.projectId.value,
       });
     });
 }

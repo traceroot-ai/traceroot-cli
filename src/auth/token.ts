@@ -1,0 +1,162 @@
+import { CliError, ExitCode } from "../output.js";
+import { getVersion } from "../version.js";
+
+/**
+ * Refresh this long before the advertised expiry. The mint route returns
+ * `expiresIn` (600s) as advisory; refreshing a minute early keeps a request
+ * from going out with a JWT that expires mid-flight.
+ */
+const REFRESH_WINDOW_MS = 60_000;
+
+export interface TokenProviderOptions {
+  /** The host that issued the session (the Next.js app) — mint calls go here. */
+  authHost: string;
+  /** The stored long-lived session token (refresh credential). Never sent on reads. */
+  sessionToken: string;
+  /** Injectable for tests; defaults to the global `fetch`. */
+  fetchImpl?: typeof globalThis.fetch;
+  /** Optional per-request timeout in milliseconds for the mint call. */
+  timeoutMs?: number;
+  /** Injectable clock for tests; defaults to `Date.now`. */
+  now?: () => number;
+}
+
+export interface TokenProvider {
+  /**
+   * A currently-valid access JWT, minting or transparently refreshing as
+   * needed. Everything that calls the API under user auth gets its bearer from
+   * here — never the raw session token.
+   */
+  getAccessToken(): Promise<string>;
+}
+
+/** Shape of a successful mint response from `POST /api/cli/token`. */
+interface MintBody {
+  accessToken?: unknown;
+  expiresIn?: unknown;
+}
+
+/**
+ * Creates the access-token provider for a stored session token: exchanges it at
+ * `POST {authHost}/api/cli/token` for a short-lived (10-min) EdDSA JWT, caches
+ * the JWT in memory, and re-mints when within a minute of expiry. A 401 from
+ * mint means the session was revoked or expired — surfaced as an auth error
+ * prompting `traceroot login`.
+ */
+export function createTokenProvider(opts: TokenProviderOptions): TokenProvider {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const now = opts.now ?? Date.now;
+  const base = opts.authHost.replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    throw new CliError(`invalid auth host URL: ${base}`, ExitCode.usage);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new CliError(
+      `unsupported auth host scheme: ${parsed.protocol} (expected http or https)`,
+      ExitCode.usage,
+    );
+  }
+
+  let cached: { jwt: string; expiresAtMs: number } | null = null;
+
+  async function mint(): Promise<string> {
+    const url = `${base}/api/cli/token`;
+    const init: RequestInit = {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${opts.sessionToken}`,
+        accept: "application/json",
+        "user-agent": `traceroot-cli/${getVersion()}`,
+      },
+    };
+    if (opts.timeoutMs !== undefined) {
+      init.signal = AbortSignal.timeout(opts.timeoutMs);
+    }
+
+    let res: Response;
+    try {
+      res = await fetchImpl(url, init);
+    } catch (err) {
+      if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
+        throw new CliError(
+          `request to ${base} timed out after ${opts.timeoutMs / 1000}s`,
+          ExitCode.network,
+        );
+      }
+      // Never echo the session token: redact it from whatever the runtime says.
+      const message = err instanceof Error ? err.message : String(err);
+      const safe = message.split(opts.sessionToken).join("<redacted>");
+      throw new CliError(`request to ${base} failed: ${safe}`, ExitCode.network);
+    }
+
+    if (res.status === 401) {
+      throw new CliError(
+        "session expired or revoked — run `traceroot login` to sign in again",
+        ExitCode.auth,
+      );
+    }
+    if (res.status === 429) {
+      throw new CliError("token mint rate limited — wait a moment and try again", ExitCode.network);
+    }
+    if (!res.ok) {
+      throw new CliError(`token mint failed with status ${res.status}`, ExitCode.internal);
+    }
+
+    let body: MintBody;
+    try {
+      body = (await res.json()) as MintBody;
+    } catch {
+      throw new CliError("token mint returned an unreadable response", ExitCode.internal);
+    }
+    if (typeof body.accessToken !== "string" || body.accessToken === "") {
+      throw new CliError("token mint returned no access token", ExitCode.internal);
+    }
+    const expiresIn = typeof body.expiresIn === "number" && body.expiresIn > 0 ? body.expiresIn : 0;
+    cached = { jwt: body.accessToken, expiresAtMs: now() + expiresIn * 1000 };
+    return body.accessToken;
+  }
+
+  return {
+    async getAccessToken() {
+      if (cached !== null && now() < cached.expiresAtMs - REFRESH_WINDOW_MS) {
+        return cached.jwt;
+      }
+      return mint();
+    },
+  };
+}
+
+/**
+ * Decodes a JWT's payload WITHOUT verifying its signature — display-only
+ * identity (e.g. the `email` claim for `status`), never an auth decision.
+ * Returns `null` for anything that doesn't parse as a JWT.
+ */
+export function decodeJwtClaims(jwt: string): Record<string, unknown> | null {
+  const parts = jwt.split(".");
+  if (parts.length !== 3 || parts[1] === undefined) {
+    return null;
+  }
+  // Reject payloads that are not base64url before decoding: Buffer silently
+  // skips invalid characters, which would turn garbage into garbage JSON.
+  if (!/^[A-Za-z0-9_-]+$/.test(parts[1])) {
+    return null;
+  }
+  let decoded: string;
+  try {
+    decoded = Buffer.from(parts[1], "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(decoded);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { registerTracesExport } from "./traces/export.js";
+import { registerTracesFilterValues } from "./traces/filterValues.js";
 import { registerTracesGet } from "./traces/get.js";
 import { registerTracesList } from "./traces/list.js";
 
@@ -10,4 +11,5 @@ export function registerTraces(program: Command): void {
   registerTracesList(traces);
   registerTracesGet(traces);
   registerTracesExport(traces);
+  registerTracesFilterValues(traces);
 }

@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { ApiClient } from "../../api/client.js";
+import type { ApiClient, ListTracesParams } from "../../api/client.js";
 import {
   CliError,
   ExitCode,
@@ -37,6 +37,18 @@ export interface RunListDeps {
    * for deterministic output.
    */
   timeZone?: string;
+  /** Target project (required by the server under user credentials). */
+  projectId?: string;
+  /** Filter by trace name (substring match). */
+  name?: string;
+  /** Filter by the user id recorded on the trace. */
+  userId?: string;
+  /** Search across trace_id, name, session_id, user_id. */
+  searchQuery?: string;
+  /** Structured filter expression (a JSON array string), forwarded verbatim. */
+  filters?: string;
+  /** Include traces produced by offline-evaluation runs. */
+  includeEvaluations?: boolean;
 }
 
 /** Resolved, backend-ready ISO time bounds derived from the CLI time flags. */
@@ -447,7 +459,7 @@ function durationOf(item: ListItem): string {
 /** Core, network-free logic for `traces list`. Tests inject a fake client. */
 export async function runList(deps: RunListDeps): Promise<void> {
   const { client, json, writers, limit, startAfter, endBefore, sinceLabel, timeZone } = deps;
-  const params: { limit?: number; startAfter?: string; endBefore?: string } = {};
+  const params: ListTracesParams = {};
   if (limit !== undefined) {
     params.limit = limit;
   }
@@ -456,6 +468,24 @@ export async function runList(deps: RunListDeps): Promise<void> {
   }
   if (endBefore !== undefined) {
     params.endBefore = endBefore;
+  }
+  if (deps.name !== undefined) {
+    params.name = deps.name;
+  }
+  if (deps.userId !== undefined) {
+    params.userId = deps.userId;
+  }
+  if (deps.searchQuery !== undefined) {
+    params.searchQuery = deps.searchQuery;
+  }
+  if (deps.filters !== undefined) {
+    params.filters = deps.filters;
+  }
+  if (deps.includeEvaluations !== undefined) {
+    params.includeEvaluations = deps.includeEvaluations;
+  }
+  if (deps.projectId !== undefined) {
+    params.projectId = deps.projectId;
   }
   const res = await client.listTraces(Object.keys(params).length > 0 ? params : undefined);
 
@@ -546,6 +576,19 @@ export function registerTracesList(traces: Command): void {
       'include traces started before this time (exclusive). Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
       onceOption("--to"),
     )
+    .option("--name <substring>", "filter by trace name (substring match)", onceOption("--name"))
+    .option("--user <id>", "filter by the user id recorded on the trace", onceOption("--user"))
+    .option(
+      "--search <query>",
+      "search across trace id, name, session id, and user id",
+      onceOption("--search"),
+    )
+    .option(
+      "--filters <json>",
+      "structured filter expression (a JSON array), validated server-side",
+      onceOption("--filters"),
+    )
+    .option("--include-evaluations", "include traces produced by offline-evaluation runs")
     .action(async (_opts, command: Command) => {
       // 1. Reject stray positional operands FIRST (before any API call).
       //    This catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
@@ -596,6 +639,12 @@ export function registerTracesList(traces: Command): void {
         startAfter: range.startAfter,
         endBefore: range.endBefore,
         sinceLabel: range.sinceLabel,
+        name: opts.name as string | undefined,
+        userId: opts.user as string | undefined,
+        searchQuery: opts.search as string | undefined,
+        filters: opts.filters as string | undefined,
+        includeEvaluations: opts.includeEvaluations === true ? true : undefined,
+        projectId: ctx.auth.projectId.value,
       });
     });
 }

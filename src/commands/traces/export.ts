@@ -26,6 +26,8 @@ export interface ExportDeps {
    * which already includes per-span input/output/metadata.
    */
   fields?: string;
+  /** Target project (required by the server under user credentials). */
+  projectId?: string;
 }
 
 /** Replaces filesystem-unsafe characters in a trace id with underscores. */
@@ -61,14 +63,17 @@ export async function runExport(deps: ExportDeps): Promise<void> {
   const { client, traceId, force, json, writers, fields } = deps;
 
   // Fetch first: a failure here must not create a half-written bundle dir.
-  const response: TraceExport = await client.exportTrace(traceId, { fields });
+  const response: TraceExport = await client.exportTrace(traceId, {
+    fields,
+    projectId: deps.projectId,
+  });
 
   // Best-effort: include the detector finding (1-per-trace) in the bundle. A 404
   // means "not flagged" (null); any other failure degrades to no finding so a
   // findings-API hiccup never blocks the export.
   let finding: FindingDetail | null = null;
   try {
-    finding = await client.findFindingByTrace(traceId);
+    finding = await client.findFindingByTrace(traceId, { projectId: deps.projectId });
   } catch {
     finding = null;
   }
@@ -162,6 +167,7 @@ export function registerTracesExport(traces: Command): void {
         json: ctx.json,
         writers: defaultWriters,
         fields: opts.fields as string | undefined,
+        projectId: ctx.auth.projectId.value,
       });
     });
 }

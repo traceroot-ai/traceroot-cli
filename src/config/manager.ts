@@ -1,13 +1,6 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { writeFileSecure } from "../util/secureFile.js";
 import { type Config, ConfigError, type ConfigReadResult } from "./schema.js";
 
 /**
@@ -38,7 +31,10 @@ function isValidShape(value: unknown): value is Config {
     return false;
   }
   const obj = value as Record<string, unknown>;
-  return typeof obj.api_key === "string" && typeof obj.host_url === "string";
+  // Every field is optional, but a present field must be a string.
+  return ["api_key", "host_url", "project_id"].every(
+    (field) => obj[field] === undefined || typeof obj[field] === "string",
+  );
 }
 
 /**
@@ -83,10 +79,15 @@ export function readConfig(path?: string): ConfigReadResult {
     };
   }
 
-  return { ok: true, config: { api_key: parsed.api_key, host_url: parsed.host_url } };
+  return {
+    ok: true,
+    config: {
+      api_key: parsed.api_key,
+      host_url: parsed.host_url,
+      project_id: parsed.project_id,
+    },
+  };
 }
-
-const SWALLOWED_CHMOD_CODES = new Set(["EPERM", "ENOSYS", "ENOTSUP"]);
 
 /**
  * Best-effort safety net: drop a `.gitignore` (`*`) into our own `.traceroot`
@@ -115,31 +116,26 @@ function ensureGitignore(dir: string): void {
  */
 export function writeConfig(config: Config, path?: string): void {
   const target = configPath(path);
-  const dir = configDir(path);
-  const tmp = join(dir, `.config.${process.pid}.tmp`);
   const payload = `${JSON.stringify(config, null, 2)}\n`;
 
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    ensureGitignore(dir);
-    writeFileSync(tmp, payload, { mode: 0o600 });
+    // ensureGitignore needs the directory to exist; writeFileSecure re-creating
+    // it afterwards is a no-op.
     try {
-      chmodSync(tmp, 0o600);
-    } catch (chmodErr) {
-      const code = (chmodErr as NodeJS.ErrnoException).code;
-      if (process.platform !== "win32" && code !== undefined && !SWALLOWED_CHMOD_CODES.has(code)) {
-        throw chmodErr;
-      }
-      // Best-effort on win32 / unsupported chmod: keep the written file.
-    }
-    renameSync(tmp, target);
-  } catch {
-    try {
-      unlinkSync(tmp);
+      ensureGitignoreDir(target);
     } catch {
-      // best-effort cleanup
+      // best-effort only
     }
+    writeFileSecure(target, payload);
+  } catch {
     // Message references only the path — never the token.
     throw new ConfigError("WRITE_FAILED", `Failed to write config to ${target}`, target);
   }
+}
+
+/** Creates the config dir (0700) and drops the best-effort `.gitignore`. */
+function ensureGitignoreDir(target: string): void {
+  const dir = dirname(target);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensureGitignore(dir);
 }

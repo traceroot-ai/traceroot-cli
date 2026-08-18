@@ -7,7 +7,11 @@ const API_KEY = "tr_secret_LEAK";
 
 function clientWith(responder: Parameters<typeof createFakeFetch>[0], host = "https://h") {
   const fake = createFakeFetch(responder);
-  const client = createApiClient({ host, apiKey: API_KEY, fetchImpl: fake.fetchImpl });
+  const client = createApiClient({
+    host,
+    auth: { kind: "api-key" as const, key: API_KEY },
+    fetchImpl: fake.fetchImpl,
+  });
   return { client, calls: fake.calls };
 }
 
@@ -20,10 +24,18 @@ describe("createApiClient", () => {
   it("rejects a non-http(s) host at construction", () => {
     const fake = createFakeFetch(() => jsonResponse({}));
     expect(() =>
-      createApiClient({ host: "file:///etc/passwd", apiKey: API_KEY, fetchImpl: fake.fetchImpl }),
+      createApiClient({
+        host: "file:///etc/passwd",
+        auth: { kind: "api-key" as const, key: API_KEY },
+        fetchImpl: fake.fetchImpl,
+      }),
     ).toThrow(CliError);
     expect(() =>
-      createApiClient({ host: "not a url", apiKey: API_KEY, fetchImpl: fake.fetchImpl }),
+      createApiClient({
+        host: "not a url",
+        auth: { kind: "api-key" as const, key: API_KEY },
+        fetchImpl: fake.fetchImpl,
+      }),
     ).toThrow(CliError);
     expect(fake.calls).toHaveLength(0);
   });
@@ -111,7 +123,7 @@ describe("createApiClient", () => {
     const fake = createFakeFetch(() => jsonResponse({}));
     const client = createApiClient({
       host: "https://h///",
-      apiKey: API_KEY,
+      auth: { kind: "api-key" as const, key: API_KEY },
       fetchImpl: fake.fetchImpl,
     });
     await client.whoami();
@@ -172,7 +184,7 @@ describe("HTTP status → exit-code class", () => {
       Promise.reject(new DOMException("aborted", "TimeoutError"))) as typeof fetch;
     const client = createApiClient({
       host: "https://h",
-      apiKey: API_KEY,
+      auth: { kind: "api-key" as const, key: API_KEY },
       fetchImpl,
       timeoutMs: 10,
     });
@@ -185,7 +197,11 @@ describe("HTTP status → exit-code class", () => {
     const fake = createFakeFetch(() => jsonResponse({}));
     const err = ((): unknown => {
       try {
-        createApiClient({ host: "not a url", apiKey: API_KEY, fetchImpl: fake.fetchImpl });
+        createApiClient({
+          host: "not a url",
+          auth: { kind: "api-key" as const, key: API_KEY },
+          fetchImpl: fake.fetchImpl,
+        });
       } catch (e) {
         return e;
       }
@@ -298,7 +314,7 @@ describe("request timeout", () => {
     const fake = createFakeFetch(() => jsonResponse({ ok: true }));
     const client = createApiClient({
       host: "https://h",
-      apiKey: API_KEY,
+      auth: { kind: "api-key" as const, key: API_KEY },
       fetchImpl: fake.fetchImpl,
       timeoutMs: 5000,
     });
@@ -310,7 +326,7 @@ describe("request timeout", () => {
     const fake = createFakeFetch(() => jsonResponse({ ok: true }));
     const client = createApiClient({
       host: "https://h",
-      apiKey: API_KEY,
+      auth: { kind: "api-key" as const, key: API_KEY },
       fetchImpl: fake.fetchImpl,
     });
     await client.whoami();
@@ -337,7 +353,7 @@ describe("request timeout", () => {
       })) as typeof fetch;
     const client = createApiClient({
       host: "https://h",
-      apiKey: API_KEY,
+      auth: { kind: "api-key" as const, key: API_KEY },
       fetchImpl,
       timeoutMs: 10,
     });
@@ -364,7 +380,7 @@ describe("request timeout", () => {
       } as unknown as Response)) as typeof fetch;
     const client = createApiClient({
       host: "https://h",
-      apiKey: API_KEY,
+      auth: { kind: "api-key" as const, key: API_KEY },
       fetchImpl,
       timeoutMs: 10,
     });
