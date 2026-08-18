@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { type RegistryDeps, ensureGroup, registerRegistryCommands } from "../registry/factory.js";
+import { GROUPS } from "../registry/naming.js";
 import { registerDetectors } from "./detectors.js";
 import { registerDoctor } from "./doctor.js";
 import { registerFindings } from "./findings.js";
@@ -12,12 +14,17 @@ import { registerTraces } from "./traces.js";
  * The single extension point for command registration. Later issues add their
  * command groups here without reshaping cli.ts.
  */
-export function registerCommands(program: Command): void {
+export function registerCommands(program: Command, deps: RegistryDeps = {}): void {
   registerLogin(program);
   registerStatus(program);
+  // Pre-create every command group (in GROUPS order) so `--help` ordering stays
+  // stable across the migration, regardless of which register* below attaches
+  // subcommands to it first.
+  for (const group of Object.keys(GROUPS)) ensureGroup(program, group);
   registerTraces(program);
   registerDetectors(program);
   registerFindings(program);
+  registerRegistryCommands(program, deps);
   registerSkills(program);
   registerInstrument(program);
   registerDoctor(program);

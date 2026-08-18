@@ -46,7 +46,7 @@ describe("buildProgram", () => {
     expect(subNames).toContain("get");
   });
 
-  it("registers list, get, and export under traces", () => {
+  it("registers list, get, export, and filter-values under traces", () => {
     const program = buildProgram();
     const traces = program.commands.find((c) => c.name() === "traces");
     expect(traces).toBeDefined();
@@ -54,6 +54,32 @@ describe("buildProgram", () => {
     expect(subNames).toContain("list");
     expect(subNames).toContain("get");
     expect(subNames).toContain("export");
+    expect(subNames).toContain("filter-values");
+  });
+
+  it("registers the sessions command with list and get subcommands", () => {
+    const program = buildProgram();
+    expect(childNames(program)).toContain("sessions");
+    const sessions = program.commands.find((c) => c.name() === "sessions");
+    expect(sessions).toBeDefined();
+    const subNames = childNames(sessions as Command);
+    expect(subNames).toContain("list");
+    expect(subNames).toContain("get");
+  });
+
+  it("registers top-level commands in the fixed help order", () => {
+    const program = buildProgram();
+    expect(childNames(program)).toEqual([
+      "login",
+      "status",
+      "traces",
+      "detectors",
+      "findings",
+      "sessions",
+      "skills",
+      "instrument",
+      "doctor",
+    ]);
   });
 
   it("registers list and install under skills", () => {
