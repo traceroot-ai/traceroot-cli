@@ -106,12 +106,13 @@ function exitCodeForStatus(status: number): number {
 }
 
 /**
- * Creates a thin typed client over the public REST API. No network activity
- * occurs on construction — only the request methods call `fetch`.
+ * Validates and normalizes a host URL: strips trailing slashes and rejects
+ * malformed URLs or unsupported schemes. Shared by {@link createApiClient} and
+ * the registry executor, which both need the same host validation ahead of a
+ * request.
  */
-export function createApiClient(opts: ApiClientOptions): ApiClient {
-  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
-  const base = opts.host.replace(/\/+$/, "");
+export function normalizeBaseUrl(host: string): string {
+  const base = host.replace(/\/+$/, "");
   let parsedHost: URL;
   try {
     parsedHost = new URL(base);
@@ -124,6 +125,16 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       ExitCode.usage,
     );
   }
+  return base;
+}
+
+/**
+ * Creates a thin typed client over the public REST API. No network activity
+ * occurs on construction — only the request methods call `fetch`.
+ */
+export function createApiClient(opts: ApiClientOptions): ApiClient {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const base = normalizeBaseUrl(opts.host);
   const headers = {
     authorization: `Bearer ${opts.apiKey}`,
     accept: "application/json",
