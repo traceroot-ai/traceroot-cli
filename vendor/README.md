@@ -4,8 +4,8 @@
 
 Built from https://github.com/traceroot-ai/traceroot commit `df3cd621`
 (`frontend/packages/tools`) on 2026-08-17, because the package is not yet
-published to npm (issue #65 explicitly allows a packed tarball during
-development). Rebuild:
+published to npm — a packed tarball stands in until its first npm release.
+Rebuild:
 
     git worktree add --detach /tmp/tools-build <commit>
     cd /tmp/tools-build/frontend/packages/tools

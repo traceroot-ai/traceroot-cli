@@ -14,9 +14,9 @@ import { registerStatus } from "./status.js";
 export function registerCommands(program: Command, deps: RegistryDeps = {}): void {
   registerLogin(program);
   registerStatus(program);
-  // Pre-create every command group (in GROUPS order) so `--help` ordering stays
-  // stable across the migration, regardless of which register* below attaches
-  // subcommands to it first.
+  // Pre-create every command group (in GROUPS order) so `--help` lists groups
+  // in a fixed order, regardless of which register* below attaches subcommands
+  // to a group first.
   for (const group of Object.keys(GROUPS)) ensureGroup(program, group);
   registerRegistryCommands(program, deps);
   registerSkills(program);

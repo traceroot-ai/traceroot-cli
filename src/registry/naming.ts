@@ -44,13 +44,11 @@ export const PLACEMENTS: Record<string, Placement> = {
   get_session: { kind: "command", path: ["sessions", "get"] },
   whoami: {
     kind: "internal",
-    note: "served by 'status', 'login', and 'doctor' (non-tool commands, out of #65 scope); no standalone command",
+    note: "served by 'status', 'login', and 'doctor'; deliberately no standalone command",
   },
 };
 
-/** Group commands in help order. These description strings were carried over
- * verbatim from the .description(...) calls in the now-deleted legacy group
- * modules (src/commands/traces.ts, detectors.ts, findings.ts). */
+/** Group commands in `--help` order, with the description each group shows. */
 export const GROUPS: Record<string, string> = {
   traces: "Work with traces",
   detectors: "Work with detectors",

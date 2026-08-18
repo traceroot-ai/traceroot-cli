@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url";
 
 // Runs as `prepublishOnly` (npm runs this automatically before `npm publish`,
 // never before `npm ci`/`npm install`/`npm pack`) so a `file:` dependency —
-// e.g. the vendored @traceroot-ai/tools tarball used during issue #65
-// development, see vendor/README.md — can never ship in a published package;
+// e.g. the vendored @traceroot-ai/tools tarball used until that package has
+// an npm release, see vendor/README.md — can never ship in a published package;
 // npm consumers cannot install a `file:` specifier that points at a path
 // that doesn't exist in their own tree.
 const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
