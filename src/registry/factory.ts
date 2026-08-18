@@ -116,6 +116,7 @@ function registerOne(
     const target =
       resolved.tool === undefined ? entry : requireCompanion(entry.name, resolved.tool);
     assertKnownArgs(target, resolved.args);
+    assertPathParamsPresent(target, resolved.args);
     const payload = await executeTool(target, resolved.args, transport);
 
     const writers = deps.writers ?? defaultWriters;
@@ -127,6 +128,7 @@ function registerOne(
       dispatchTool: (companionName, companionArgs) => {
         const companion = requireCompanion(entry.name, companionName);
         assertKnownArgs(companion, companionArgs);
+        assertPathParamsPresent(companion, companionArgs);
         return executeTool(companion, companionArgs, transport);
       },
       dispatchToolOptional: (companionName, companionArgs) => {
@@ -242,6 +244,31 @@ export function assertKnownArgs(entry: RegistryEntry, args: Record<string, unkno
       throw new Error(
         `internal: resolveArgs for '${entry.name}' produced arg '${key}' not in the tool's input schema — the dispatcher would silently drop it`,
       );
+    }
+  }
+}
+
+/**
+ * The registry dispatcher's `fillPath` throws a plain, pre-fetch Error for a
+ * missing/empty path-param value, which `translate()` in execute.ts would
+ * otherwise bucket as a retryable network failure (and leak the raw path
+ * template in the message) — a blank identifier is a usage error, not a
+ * network one. Catches it here, before dispatch, for every path this command
+ * can take: the default/enhancer-resolved args, a `resolved.tool` retarget,
+ * and a companion dispatched from `render`. `fillPath` itself only rejects an
+ * exact `""`; this also rejects whitespace-only values, since those are just
+ * as meaningless a path segment. The message mirrors commander's own `missing
+ * required argument '<name>'` so an omitted positional (caught by commander)
+ * and a blank one (caught here) read the same way.
+ */
+export function assertPathParamsPresent(entry: RegistryEntry, args: Record<string, unknown>): void {
+  const placeholders = [...entry.path.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1] as string);
+  for (const name of placeholders) {
+    const value = args[name];
+    const blank =
+      value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+    if (blank) {
+      throw new CliError(`missing required argument '${kebab(name)}'`, ExitCode.usage);
     }
   }
 }

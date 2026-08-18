@@ -48,8 +48,9 @@ export const PLACEMENTS: Record<string, Placement> = {
   },
 };
 
-/** Group commands in help order. Copy the description strings VERBATIM from the
- * .description(...) calls in src/commands/traces.ts, detectors.ts, findings.ts. */
+/** Group commands in help order. These description strings were carried over
+ * verbatim from the .description(...) calls in the now-deleted legacy group
+ * modules (src/commands/traces.ts, detectors.ts, findings.ts). */
 export const GROUPS: Record<string, string> = {
   traces: "Work with traces",
   detectors: "Work with detectors",

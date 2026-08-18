@@ -55,6 +55,26 @@ describe("generated sessions commands (zero-code path)", () => {
     expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/sessions/s-1");
   });
 
+  it("rejects a blank path-param positional as usage, before any network call", async () => {
+    // The registry dispatcher's fillPath throws a plain Error for a blank path
+    // param; without a pre-dispatch check, translate() in execute.ts buckets
+    // that as a retryable network failure and leaks the path template.
+    const h = harness(jsonResponse({ session_id: "s-1" }));
+    const err = await h.run("sessions", "get", "").catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toBe("missing required argument 'session-id'");
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect(h.fake.calls.length).toBe(0);
+  });
+
+  it("rejects a whitespace-only path-param positional as usage, before any network call", async () => {
+    const h = harness(jsonResponse({ session_id: "s-1" }));
+    const err = await h.run("sessions", "get", "   ").catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect(h.fake.calls.length).toBe(0);
+  });
+
   it("rejects a non-integer --limit before any network call", async () => {
     const h = harness(jsonResponse({ data: [] }));
     const err = await h.run("sessions", "list", "--limit", "abc").catch((e) => e);
@@ -244,6 +264,18 @@ describe("findings get (enhancer path)", () => {
     expect((err as CliError).exitCode).toBe(ExitCode.notFound);
     expect(h.out.data).toBe("");
     expect(h.fake.calls.length).toBe(1);
+  });
+
+  it("a blank finding id AND blank --trace keep findings-get's own validation message, not the generic path-param check", async () => {
+    // findings-get's resolveArgs normalizes blanks to "not provided" and throws
+    // its own usage error before the factory's generic path-param check ever
+    // sees an arg — verify that precedence still holds.
+    const h = harness(jsonResponse({ finding_id: "fnd-1" }));
+    const err = await h.run("findings", "get", "", "--trace", "").catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toBe("provide a finding id, or --trace <trace-id>");
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect(h.fake.calls.length).toBe(0);
   });
 });
 

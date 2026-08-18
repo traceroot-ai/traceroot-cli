@@ -40,7 +40,8 @@
     "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "node scripts/no-file-deps.mjs"
   },
   "dependencies": {
     "@traceroot-ai/tools": "file:vendor/traceroot-ai-tools-0.1.0.tgz",
