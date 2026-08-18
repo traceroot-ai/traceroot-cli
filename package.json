@@ -43,6 +43,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
+    "@traceroot-ai/tools": "file:vendor/traceroot-ai-tools-0.1.0.tgz",
     "commander": "^12.1.0"
   },
   "devDependencies": {
