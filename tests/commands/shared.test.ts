@@ -34,9 +34,6 @@ describe("requireApiClient", () => {
     const ctx = makeContext("tr_present", "https://api.example.com");
     const client = requireApiClient(ctx);
     expect(typeof client.whoami).toBe("function");
-    expect(typeof client.listTraces).toBe("function");
-    expect(typeof client.getTrace).toBe("function");
-    expect(typeof client.exportTrace).toBe("function");
   });
 
   it("does not perform network activity on construction", () => {

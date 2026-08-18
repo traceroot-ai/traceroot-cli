@@ -21,6 +21,8 @@ traceroot traces export <trace-id>    # export its bundle to a directory
 traceroot detectors list                   # list your detectors (copy a detector id)
 traceroot findings list --since 24h        # list recent detector findings
 traceroot findings get <finding-id>        # inspect one finding + its RCA
+traceroot sessions list                    # list recent sessions (grouped traces)
+traceroot sessions get <session-id>        # inspect one session's traces
 ```
 
 ## Configuration
@@ -56,9 +58,12 @@ traceroot traces list
 | `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `traces get <id>` | Show one trace: span tree, derived duration, and a link to open it. Defaults to the lightweight `skeleton` projection (no per-span input/output/metadata); pass `--fields full` (or `--fields io,metadata`) to fetch span I/O. `--fields <groups>` |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. Defaults to the `full` projection (span input/output/metadata included); pass `--fields <groups>` to narrow it. `--output <dir>`, `--force`, `--fields <groups>` |
+| `traces filter-values <field>` | List the current values of a categorical trace filter field (e.g. `model_name`, `environment`) for the project — use before filtering `traces list` by that field. `--start-after <time>`, `--end-before <time>` |
 | `detectors list` | List your project's detectors, newest first. The `DETECTOR ID` column is what you pass to `findings list --detector`. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `findings list` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id>`, `--trace <id>` |
 | `findings get [id]` | Show one finding: per-detector results and its free-text RCA. Look it up by finding id or with `--trace <id>` (exactly one). |
+| `sessions list` | List recent sessions (groups of traces sharing a session id), with trace counts and durations. `--limit <n>`, `--search-query <text>`, `--start-after <time>`, `--end-before <time>` |
+| `sessions get <id>` | Fetch one session with all its traces (ids, names, status, I/O summaries). `--start-after <time>`, `--end-before <time>` |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
@@ -75,7 +80,18 @@ traceroot traces list --from 2026-06-23T14:00:00Z --to 2026-06-23T20:00:00Z --li
 traceroot detectors list --json | jq '.data[].detector_id'
 traceroot findings list --detector <detector-id> --since 7d --json | jq '.data[].finding_id'
 traceroot findings get --trace 99224be337d725fd5e8f2e7b45dc22ef
+traceroot sessions get <session-id> --json | jq '.traces[].trace_id'
+traceroot traces filter-values model_name
 ```
+
+### Generated commands
+
+`traces`, `detectors`, `findings`, and `sessions` are generated from the tool
+registry shipped in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
+each entry's input schema drives its flags, and its response type drives the
+default rendering. Adding a new backend endpoint to the CLI is a registry bump
+plus one placement line in `src/registry/naming.ts` — no hand-written command
+handler needed.
 
 ### Exit codes
 

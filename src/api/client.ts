@@ -31,54 +31,8 @@ export interface ApiClientOptions {
   timeoutMs?: number;
 }
 
-export interface ListTracesParams {
-  limit?: number;
-  /** ISO 8601 lower bound (inclusive), sent as `start_after`. */
-  startAfter?: string;
-  /** ISO 8601 upper bound (exclusive), sent as `end_before`. */
-  endBefore?: string;
-}
-
-export interface ListDetectorsParams {
-  limit?: number;
-  /** ISO 8601 lower bound (inclusive) on creation time, sent as `start_after`. */
-  startAfter?: string;
-  /** ISO 8601 upper bound (exclusive) on creation time, sent as `end_before`. */
-  endBefore?: string;
-}
-
-export interface ListFindingsParams {
-  limit?: number;
-  /** ISO 8601 lower bound (inclusive), sent as `start_after`. */
-  startAfter?: string;
-  /** ISO 8601 upper bound (exclusive), sent as `end_before`. */
-  endBefore?: string;
-  /** Detector selector (id, name, or template); resolved server-side. */
-  detector?: string;
-  /** Restrict to a single trace, sent as `trace_id`. */
-  traceId?: string;
-}
-
-export interface TraceFieldsParams {
-  /**
-   * Field projection to request, sent verbatim as `fields`, e.g. `full` or
-   * `io,metadata`. The server validates the value; an invalid group surfaces
-   * as a normal CliError from a 400 response.
-   */
-  fields?: string;
-}
-
 export interface ApiClient {
   whoami(): Promise<Whoami>;
-  listTraces(params?: ListTracesParams): Promise<TraceList>;
-  getTrace(traceId: string, params?: TraceFieldsParams): Promise<TraceDetail>;
-  exportTrace(traceId: string, params?: TraceFieldsParams): Promise<TraceExport>;
-  listDetectors(params?: ListDetectorsParams): Promise<DetectorList>;
-  listFindings(params?: ListFindingsParams): Promise<FindingList>;
-  getFinding(findingId: string): Promise<FindingDetail>;
-  getFindingByTrace(traceId: string): Promise<FindingDetail>;
-  /** The finding for a trace, or `null` when the trace has none (404). */
-  findFindingByTrace(traceId: string): Promise<FindingDetail | null>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -222,104 +176,9 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     return readJson<T>(res);
   }
 
-  /** Like {@link request}, but resolves `null` on a 404 instead of throwing. */
-  async function requestOptional<T>(path: string): Promise<T | null> {
-    const res = await rawGet(path);
-    if (res.status === 404) {
-      return null;
-    }
-    if (!res.ok) {
-      await failFor(res);
-    }
-    return readJson<T>(res);
-  }
-
   return {
     whoami() {
       return request<Whoami>("/api/v1/public/whoami");
-    },
-    listTraces(params) {
-      const search = new URLSearchParams();
-      if (params?.limit !== undefined) {
-        search.set("limit", String(params.limit));
-      }
-      if (params?.startAfter !== undefined) {
-        search.set("start_after", params.startAfter);
-      }
-      if (params?.endBefore !== undefined) {
-        search.set("end_before", params.endBefore);
-      }
-      const query = search.toString();
-      return request<TraceList>(`/api/v1/public/traces${query ? `?${query}` : ""}`);
-    },
-    getTrace(traceId, params) {
-      const search = new URLSearchParams();
-      if (params?.fields !== undefined) {
-        search.set("fields", params.fields);
-      }
-      const query = search.toString();
-      return request<TraceDetail>(
-        `/api/v1/public/traces/${encodeURIComponent(traceId)}${query ? `?${query}` : ""}`,
-      );
-    },
-    exportTrace(traceId, params) {
-      const search = new URLSearchParams();
-      if (params?.fields !== undefined) {
-        search.set("fields", params.fields);
-      }
-      const query = search.toString();
-      return request<TraceExport>(
-        `/api/v1/public/traces/${encodeURIComponent(traceId)}/export${query ? `?${query}` : ""}`,
-      );
-    },
-    listDetectors(params) {
-      const search = new URLSearchParams();
-      if (params?.limit !== undefined) {
-        search.set("limit", String(params.limit));
-      }
-      if (params?.startAfter !== undefined) {
-        search.set("start_after", params.startAfter);
-      }
-      if (params?.endBefore !== undefined) {
-        search.set("end_before", params.endBefore);
-      }
-      const query = search.toString();
-      return request<DetectorList>(`/api/v1/public/detectors${query ? `?${query}` : ""}`);
-    },
-    listFindings(params) {
-      const search = new URLSearchParams();
-      if (params?.limit !== undefined) {
-        search.set("limit", String(params.limit));
-      }
-      if (params?.startAfter !== undefined) {
-        search.set("start_after", params.startAfter);
-      }
-      if (params?.endBefore !== undefined) {
-        search.set("end_before", params.endBefore);
-      }
-      if (params?.detector !== undefined) {
-        search.set("detector", params.detector);
-      }
-      if (params?.traceId !== undefined) {
-        search.set("trace_id", params.traceId);
-      }
-      const query = search.toString();
-      return request<FindingList>(`/api/v1/public/detectors/findings${query ? `?${query}` : ""}`);
-    },
-    getFinding(findingId) {
-      return request<FindingDetail>(
-        `/api/v1/public/detectors/findings/${encodeURIComponent(findingId)}`,
-      );
-    },
-    getFindingByTrace(traceId) {
-      return request<FindingDetail>(
-        `/api/v1/public/detectors/traces/${encodeURIComponent(traceId)}/finding`,
-      );
-    },
-    findFindingByTrace(traceId) {
-      return requestOptional<FindingDetail>(
-        `/api/v1/public/detectors/traces/${encodeURIComponent(traceId)}/finding`,
-      );
     },
   };
 }

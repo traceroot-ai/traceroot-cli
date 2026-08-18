@@ -32,12 +32,7 @@ function makeContext(json: boolean): Context {
 }
 
 function fakeClient(whoami: () => Promise<Whoami>): ApiClient {
-  return {
-    whoami,
-    listTraces: () => Promise.reject(new Error("not used")),
-    getTrace: () => Promise.reject(new Error("not used")),
-    exportTrace: () => Promise.reject(new Error("not used")),
-  };
+  return { whoami };
 }
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
