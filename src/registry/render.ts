@@ -14,12 +14,17 @@ interface ListShape {
   meta?: { limit?: number; total?: number };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isListShape(payload: unknown): payload is ListShape {
-  return (
-    typeof payload === "object" &&
-    payload !== null &&
-    Array.isArray((payload as { data?: unknown }).data)
-  );
+  if (typeof payload !== "object" || payload === null) return false;
+  const data = (payload as { data?: unknown }).data;
+  // Every item must be a plain object, or the table renderer would fabricate
+  // columns (a string item's "keys" are its character indexes). Anything else
+  // falls through to the key/value renderer.
+  return Array.isArray(data) && data.every(isPlainObject);
 }
 
 function cellText(value: unknown): string {
@@ -48,7 +53,14 @@ export function renderDefault(payload: unknown, opts: DefaultRenderOptions): voi
 
 function renderListPayload(payload: ListShape, opts: DefaultRenderOptions): void {
   const { writers } = opts;
-  const keys = payload.data.length > 0 ? Object.keys(payload.data[0] ?? {}) : [];
+  // Column set is the union of every row's keys (first-occurrence order), so a
+  // row 0 that happens to omit an optional field cannot hide a whole column.
+  const keys: string[] = [];
+  for (const item of payload.data) {
+    for (const key of Object.keys(item)) {
+      if (!keys.includes(key)) keys.push(key);
+    }
+  }
   if (keys.length > 0) {
     const headers = keys.map((key) => key.replaceAll("_", " ").toUpperCase());
     const rows = payload.data.map((item) => keys.map((key) => cellText(item[key])));

@@ -56,4 +56,28 @@ describe("renderDefault", () => {
       'Session id:   s-1\nTrace count:  2\nTraces:       [{"trace_id":"t-1"}]\n',
     );
   });
+
+  it("derives columns from the union of all rows, not just row 0", () => {
+    const w = writers();
+    renderDefault(
+      {
+        data: [{ id: "a" }, { id: "b", extra: "only-on-row-1" }],
+        meta: { page: 1, limit: 50, total: 2 },
+      },
+      { json: false, writers: w.writers, args: {} },
+    );
+    const [header, row1, row2] = w.out.data.split("\n");
+    expect(header).toBe("ID  EXTRA");
+    expect(row1).toBe("a");
+    expect(row2).toBe("b   only-on-row-1");
+  });
+
+  it("does not table-render a data array of non-object items", () => {
+    const w = writers();
+    renderDefault({ data: ["a", "b"] }, { json: false, writers: w.writers, args: {} });
+    // Falls through to the key/value renderer instead of fabricating
+    // per-character index columns.
+    expect(w.out.data).toBe('Data:  ["a","b"]\n');
+    expect(w.err.data).toBe("");
+  });
 });
