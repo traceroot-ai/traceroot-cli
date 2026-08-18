@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { FindingDetail } from "../../../src/api/client.js";
 import { CliError, type Writers } from "../../../src/output.js";
-import { findingsGet, renderFinding } from "../../../src/registry/enhancers/findings-get.js";
+import {
+  categoryLabel,
+  findingsGet,
+  renderFinding,
+} from "../../../src/registry/enhancers/findings-get.js";
 import { runCli } from "../../helpers/runCli.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
@@ -184,5 +188,21 @@ describe("findings get argument guards (CLI)", () => {
     const r = runCli("findings", "get", "--trace", "t1", "--trace", "t2");
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("--trace may only be given once");
+  });
+});
+
+describe("categoryLabel", () => {
+  it("pins the multi-word product labels the title-case fallback cannot produce", () => {
+    // If a CATEGORY_LABELS entry is removed or its slug renamed, the fallback
+    // would silently show a title-cased slug ("Logic") — these assertions make
+    // that drift a test failure instead of a silent UI divergence.
+    expect(categoryLabel("logic")).toBe("Logic Error");
+    expect(categoryLabel("task")).toBe("Task Completion");
+  });
+
+  it("title-cases unknown templates and maps missing ones to Unknown", () => {
+    expect(categoryLabel("prompt-injection")).toBe("Prompt-injection");
+    expect(categoryLabel(null)).toBe("Unknown");
+    expect(categoryLabel(undefined)).toBe("Unknown");
   });
 });

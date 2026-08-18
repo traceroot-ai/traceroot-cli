@@ -20,7 +20,8 @@ const CATEGORY_LABELS: Record<string, string> = {
   blank: "Blank",
 };
 
-function categoryLabel(template: string | null | undefined): string {
+/** Exported so tests can pin the multi-word labels the fallback cannot produce. */
+export function categoryLabel(template: string | null | undefined): string {
   if (!template) {
     return "Unknown";
   }

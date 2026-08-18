@@ -1,16 +1,17 @@
 import type { Command } from "commander";
 import type { DetectorList } from "../../api/client.js";
-import { CliError, ExitCode, type Writers, logProgress, writeJson } from "../../output.js";
+import type { Writers } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import {
-  buildRangeText,
-  parseLimit,
-  renderRangeSummary,
-  resolveTimeRange,
-} from "../../time/range.js";
 import { formatTimestamp } from "../../util/index.js";
-import { onceOption } from "../flags.js";
+import {
+  type ListState,
+  addListTimeFlags,
+  logListFooter,
+  rejectListExtras,
+  resolveListArgs,
+  writeListJson,
+} from "./list-shared.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 /** The no-filter range label for detectors (vs. traces' "all traces"). */
@@ -38,20 +39,10 @@ export interface RenderDetectorsOptions {
  */
 export function renderDetectors(res: DetectorList, opts: RenderDetectorsOptions): void {
   const { json, writers, limit, startAfter, endBefore, sinceLabel, timeZone } = opts;
+  const state: ListState = { limit, startAfter, endBefore, sinceLabel };
 
   if (json) {
-    writeJson(
-      {
-        ...res,
-        count: res.data.length,
-        range: {
-          label: buildRangeText({ startAfter, endBefore, sinceLabel }, (iso) => iso, ALL_DETECTORS),
-          startAfter: startAfter ?? null,
-          endBefore: endBefore ?? null,
-        },
-      },
-      writers,
-    );
+    writeListJson(res, state, writers, ALL_DETECTORS);
     return;
   }
 
@@ -70,89 +61,24 @@ export function renderDetectors(res: DetectorList, opts: RenderDetectorsOptions)
   const rendered = renderTable(headers, rows, { headerStyle: styler.bold });
   writers.out.write(`${rendered}\n`);
 
-  // Footer: "<count> detector(s) | limit <N> | <range>"
-  const returned = res.data.length;
-  const total = res.meta?.total;
-  const countText =
-    typeof total === "number" && total > returned
-      ? `${returned} of ${total} detector(s)`
-      : `${returned} detector(s)`;
-  const effectiveLimit = res.meta?.limit ?? limit ?? 50;
-  const rangeText = renderRangeSummary(
-    { startAfter, endBefore, sinceLabel },
-    timeZone,
-    ALL_DETECTORS,
-  );
-  logProgress(`${countText} | limit ${effectiveLimit} | ${rangeText}`, writers);
-}
-
-/** State threaded from `resolveArgs` to `render`. */
-interface ListState {
-  limit?: number;
-  startAfter?: string;
-  endBefore?: string;
-  sinceLabel?: string;
+  logListFooter(res, state, "detector", writers, timeZone, ALL_DETECTORS);
 }
 
 export const detectorsList: Enhancer = {
   description: "List detectors",
   flags(cmd: Command): void {
-    cmd
-      .option("--limit <n>", "maximum number of detectors to return", onceOption("--limit"))
-      .option(
-        "--since <duration>",
-        "only detectors created within a window ending now, e.g. 30m, 6h, 7d, 2w",
-        onceOption("--since"),
-      )
-      .option(
-        "--from <timestamp>",
-        'include detectors created at or after this time. Accepts ISO 8601 (e.g. 2026-06-23T14:31:02Z or 2026-06-23T14:31:02-06:00) or a quoted copied CREATED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
-        onceOption("--from"),
-      )
-      .option(
-        "--to <timestamp>",
-        'include detectors created before this time (exclusive). Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied CREATED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
-        onceOption("--to"),
-      );
+    addListTimeFlags(cmd, {
+      noun: "detectors",
+      sinceSubject: "detectors created",
+      boundSubject: "detectors created",
+      column: "CREATED",
+    });
   },
   resolveArgs(input: ResolveInput): Resolved {
     // Mirror the `traces list` hint: a copied CREATED value pasted after
     // --from/--to without quoting lands here as stray operands.
-    if (input.extras.length > 0) {
-      const strayJoined = input.extras.join(" ");
-      const fromVal = input.opts.from as string | undefined;
-      const toVal = input.opts.to as string | undefined;
-      const bareDate = /^\d{4}-\d{2}-\d{2}$/;
-      for (const [flag, value] of [
-        ["--from", fromVal],
-        ["--to", toVal],
-      ] as const) {
-        if (value !== undefined && bareDate.test(value)) {
-          throw new CliError(
-            `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot detectors list ${flag} "${value} ${strayJoined}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot detectors list ${flag} 2026-06-23T20:31:02Z\n  traceroot detectors list ${flag} 2026-06-23T14:31:02-06:00`,
-            ExitCode.usage,
-          );
-        }
-      }
-      throw new CliError(
-        `unexpected argument(s): ${strayJoined}. 'detectors list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
-        ExitCode.usage,
-      );
-    }
-    const limit = parseLimit(input.opts.limit as string | undefined);
-    const range = resolveTimeRange({
-      since: input.opts.since as string | undefined,
-      from: input.opts.from as string | undefined,
-      to: input.opts.to as string | undefined,
-    });
-    return {
-      args: {
-        ...(limit !== undefined ? { limit } : {}),
-        ...(range.startAfter !== undefined ? { start_after: range.startAfter } : {}),
-        ...(range.endBefore !== undefined ? { end_before: range.endBefore } : {}),
-      },
-      state: { limit, ...range },
-    };
+    rejectListExtras("detectors list", input);
+    return resolveListArgs(input);
   },
   render(payload: unknown, ctx: RenderContext): void {
     const state = ctx.state as ListState;
