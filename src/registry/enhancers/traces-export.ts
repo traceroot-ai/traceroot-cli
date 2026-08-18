@@ -59,7 +59,10 @@ export async function runExport(response: TraceExport, deps: ExportDeps): Promis
 
   // Best-effort: include the detector finding (1-per-trace) in the bundle. A 404
   // means "not flagged" (null); any other failure degrades to no finding so a
-  // findings-API hiccup never blocks the export.
+  // findings-API hiccup never blocks the export. The production wiring below
+  // (render's getFinding) already resolves failures to null via `.catch(() =>
+  // null)`, so this try/catch is normally a no-op; it's kept so a rejecting
+  // `getFinding` fake still degrades cleanly for the moved unit tests.
   let finding: FindingDetail | null = null;
   try {
     finding = await deps.getFinding(traceId);

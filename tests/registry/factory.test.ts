@@ -1,8 +1,11 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
 import { CliError, ExitCode } from "../../src/output.js";
-import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
+import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
 import { StringSink } from "../helpers/stringSink.js";
 
 function harness(response: Response) {
@@ -180,5 +183,38 @@ describe("generated sessions commands (zero-code path)", () => {
     await h.run("sessions", "list");
     expect(h.out.data).toContain("SESSION ID");
     expect(h.err.data).toBe("1 item(s) | limit 50\n");
+  });
+});
+
+describe("traces export (enhancer path)", () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "tr-factory-export-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("a failed export_trace dispatch never reaches render: no bundle directory is created", async () => {
+    // registerOne awaits executeTool before calling enhancer.render (see
+    // src/registry/factory.ts) — a rejected dispatch must never let runExport's
+    // mkdirSync run. --output points at a path inside a fresh temp dir so the
+    // existsSync check below is deterministic without relying on cwd.
+    const h = harness(errorResponse(404, "trace not found"));
+    const outputDir = join(tmpRoot, "bundle");
+
+    const err = await h
+      .run("traces", "export", "missing-trace", "--output", outputDir)
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.notFound);
+    expect((err as CliError).message).toBe("trace not found");
+    expect(existsSync(outputDir)).toBe(false);
+    // Only the failed export_trace dispatch happened — the best-effort finding
+    // lookup (a companion dispatch inside render) never ran.
+    expect(h.fake.calls.length).toBe(1);
   });
 });
