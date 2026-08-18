@@ -1,13 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  ApiClient,
-  FindingDetail,
-  TraceDetail,
-  TraceFieldsParams,
-} from "../../src/api/client.js";
-import { runGet } from "../../src/commands/traces/get.js";
-import { CliError, type Writers } from "../../src/output.js";
-import { StringSink } from "../helpers/stringSink.js";
+import { afterEach, describe, expect, it } from "vitest";
+import type { FindingDetail, TraceDetail } from "../../../src/api/client.js";
+import { CliError, type Writers } from "../../../src/output.js";
+import { runGet, tracesGet } from "../../../src/registry/enhancers/traces-get.js";
+import { StringSink } from "../../helpers/stringSink.js";
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -76,31 +71,19 @@ function finding(over: Partial<FindingDetail> = {}): FindingDetail {
   };
 }
 
-function fakeClient(over: {
-  trace?: TraceDetail;
-  error?: Error;
-  finding?: FindingDetail | null;
-  findingError?: Error;
-  getTrace?: (traceId: string, params?: TraceFieldsParams) => Promise<TraceDetail>;
-}): ApiClient {
-  return {
-    whoami: () => Promise.reject(new Error("unused")),
-    listTraces: () => Promise.reject(new Error("unused")),
-    getTrace:
-      over.getTrace ??
-      (() =>
-        over.error ? Promise.reject(over.error) : Promise.resolve(over.trace as TraceDetail)),
-    exportTrace: () => Promise.reject(new Error("unused")),
-    findFindingByTrace: () =>
-      over.findingError ? Promise.reject(over.findingError) : Promise.resolve(over.finding ?? null),
-  };
+/** Best-effort finding lookup fake: mirrors what the enhancer's render wires up
+ * from `ctx.dispatchTool("get_finding_by_trace", ...)`. */
+function fakeGetFinding(
+  finding: FindingDetail | null = null,
+): (traceId: string) => Promise<FindingDetail | null> {
+  return () => Promise.resolve(finding);
 }
 
 describe("runGet (human)", () => {
   it("renders the span tree and the verbatim trace_url", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
 
     // span tree
     expect(out.data).toContain("root-span");
@@ -124,7 +107,7 @@ describe("runGet (human)", () => {
       ],
     });
     const { writers: w, out } = writers();
-    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
 
     const spanLine = out.data.split("\n").find((l) => l.includes("root-span")) as string;
     expect(spanLine).toBeDefined();
@@ -143,7 +126,7 @@ describe("runGet (human)", () => {
       ],
     });
     const { writers: w, out } = writers();
-    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
 
     const lines = out.data.split("\n");
     const spanLineIndex = lines.findIndex((l) => l.includes("root-span"));
@@ -164,7 +147,7 @@ describe("runGet (human)", () => {
       ],
     });
     const { writers: w, out } = writers();
-    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
 
     const lines = out.data.split("\n");
     const spanLineIndex = lines.findIndex((l) => l.includes("root-span"));
@@ -178,11 +161,11 @@ describe("runGet (human)", () => {
     const trace = detail({});
     const out = new StringSink(true);
     const err = new StringSink(true);
-    await runGet({
-      client: fakeClient({ trace }),
+    await runGet(trace, {
       json: false,
       writers: { out, err },
       traceId: "t-1",
+      getFinding: fakeGetFinding(),
     });
     const url = "https://app.example.com/trace/t-1";
     expect(out.data).toContain(`\x1b]8;;${url}\x1b\\${url}\x1b]8;;\x1b\\`);
@@ -191,7 +174,7 @@ describe("runGet (human)", () => {
   it("does not construct a frontend URL (only the backend trace_url appears)", async () => {
     const trace = detail({ trace_url: "https://backend-built.example/abc" });
     const { writers: w, out } = writers();
-    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
     expect(out.data).toContain("https://backend-built.example/abc");
     expect(out.data).not.toContain("app.example.com");
   });
@@ -205,7 +188,7 @@ describe("runGet (human)", () => {
       ],
     });
     const { writers: w, out } = writers();
-    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
 
     // Ended = latest span end (the child's), duration = 2s from trace start.
     // (The displayed timestamp is localized, so assert the duration, not the raw string.)
@@ -219,7 +202,7 @@ describe("runGet (human)", () => {
       spans: [span({ span_id: "root", span_end_time: null })],
     });
     const { writers: w, out } = writers();
-    await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
 
     // Ongoing: no end time, a LIVE status, and a marker that more spans are coming.
     expect(out.data).not.toContain("Ended:");
@@ -256,7 +239,12 @@ describe("runGet live Duration under a non-UTC timezone", () => {
         spans: [span({ span_id: "root", span_end_time: null })],
       });
       const { writers: w, out } = writers();
-      await runGet({ client: fakeClient({ trace }), json: false, writers: w, traceId: "t-1" });
+      await runGet(trace, {
+        json: false,
+        writers: w,
+        traceId: "t-1",
+        getFinding: fakeGetFinding(),
+      });
       expect(out.data).toContain("Duration:");
       // 10 minutes = 600s; allow a small tolerance for elapsed test time.
       expect(liveDurationSeconds(out)).toBeGreaterThanOrEqual(600);
@@ -265,35 +253,11 @@ describe("runGet live Duration under a non-UTC timezone", () => {
   }
 });
 
-describe("runGet (--fields)", () => {
-  it("passes fields through to client.getTrace", async () => {
-    const trace = detail({});
-    const getTrace = vi.fn().mockResolvedValue(trace);
-    const { writers: w } = writers();
-    await runGet({
-      client: fakeClient({ getTrace }),
-      json: false,
-      writers: w,
-      traceId: "t-1",
-      fields: "full",
-    });
-    expect(getTrace).toHaveBeenCalledWith("t-1", { fields: "full" });
-  });
-
-  it("passes fields: undefined through to client.getTrace when omitted", async () => {
-    const trace = detail({});
-    const getTrace = vi.fn().mockResolvedValue(trace);
-    const { writers: w } = writers();
-    await runGet({ client: fakeClient({ getTrace }), json: false, writers: w, traceId: "t-1" });
-    expect(getTrace).toHaveBeenCalledWith("t-1", { fields: undefined });
-  });
-});
-
 describe("runGet (--json)", () => {
   it("writes exactly one doc: the full untruncated trace plus finding:null when unflagged", async () => {
     const trace = detail({});
     const { writers: w, out, err } = writers();
-    await runGet({ client: fakeClient({ trace }), json: true, writers: w, traceId: "t-1" });
+    await runGet(trace, { json: true, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
 
     const docs = out.data.trim().split("\n");
     expect(docs).toHaveLength(1);
@@ -309,11 +273,11 @@ describe("runGet (--json)", () => {
     const trace = detail({});
     const f = finding();
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({ trace, finding: f }),
+    await runGet(trace, {
       json: true,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(f),
     });
     const parsed = JSON.parse(out.data.trim());
     expect(parsed.finding).toEqual(f);
@@ -324,11 +288,11 @@ describe("runGet (finding indicator)", () => {
   it("shows a Finding line and RCA preview when the trace is flagged", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({ trace, finding: finding() }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(finding()),
     });
     expect(out.data).toContain("Finding ID:");
     expect(out.data).toContain("fnd-1");
@@ -343,11 +307,11 @@ describe("runGet (finding indicator)", () => {
   it("omits the Finding block for an unflagged trace", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({ trace, finding: null }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(null),
     });
     expect(out.data).not.toContain("Finding ID:");
     expect(out.data).not.toContain("RCA:");
@@ -356,11 +320,11 @@ describe("runGet (finding indicator)", () => {
   it("shows the Finding but no RCA line when rca is null", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({ trace, finding: finding({ rca: null }) }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(finding({ rca: null })),
     });
     expect(out.data).toContain("Finding ID:");
     expect(out.data).not.toContain("RCA:");
@@ -369,11 +333,11 @@ describe("runGet (finding indicator)", () => {
   it("shows the RCA status with no preview when the rca is still loading (result null)", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({ trace, finding: finding({ rca: { status: "running", result: null } }) }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(finding({ rca: { status: "running", result: null } })),
     });
     expect(out.data).toContain("RCA:");
     expect(out.data).toContain("running");
@@ -384,11 +348,11 @@ describe("runGet (finding indicator)", () => {
   it("shows the Finding id without a '(flagged by …)' suffix when detectors is empty", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({ trace, finding: finding({ detectors: [] }) }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(finding({ detectors: [] })),
     });
     expect(out.data).toContain("Finding ID:");
     expect(out.data).toContain("fnd-1");
@@ -399,14 +363,11 @@ describe("runGet (finding indicator)", () => {
     const trace = detail({});
     const longResult = `Root cause: ${"x".repeat(200)} TAIL_MARKER`;
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({
-        trace,
-        finding: finding({ rca: { status: "done", result: longResult } }),
-      }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(finding({ rca: { status: "done", result: longResult } })),
     });
     expect(out.data).toContain("RCA:");
     expect(out.data).toContain("…");
@@ -417,14 +378,13 @@ describe("runGet (finding indicator)", () => {
   it("strips a leading bullet and the status prefix from the RCA preview", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({
-        trace,
-        finding: finding({ rca: { status: "done", result: "- Root cause: boom" } }),
-      }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: fakeGetFinding(
+        finding({ rca: { status: "done", result: "- Root cause: boom" } }),
+      ),
     });
     expect(out.data).toContain("Root cause: boom");
     // No leading "- " bullet and no "done — " status prefix.
@@ -435,28 +395,45 @@ describe("runGet (finding indicator)", () => {
   it("still renders the trace when the finding lookup fails (best-effort)", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
-    await runGet({
-      client: fakeClient({ trace, findingError: new CliError("Failed to read finding") }),
+    await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
+      getFinding: () => Promise.reject(new CliError("Failed to read finding")),
     });
     expect(out.data).toContain("root-span"); // trace still rendered
     expect(out.data).not.toContain("Finding ID:"); // finding silently omitted
   });
 });
 
-describe("runGet (errors)", () => {
-  it("rejects and writes nothing to stdout on an unknown id", async () => {
-    const { writers: w, out } = writers();
-    await expect(
-      runGet({
-        client: fakeClient({ error: new CliError("trace not found") }),
-        json: false,
-        writers: w,
-        traceId: "missing",
-      }),
-    ).rejects.toBeInstanceOf(CliError);
-    expect(out.data).toBe("");
+// The legacy suite also had a "runGet (errors)" describe here: "rejects and
+// writes nothing to stdout on an unknown id", exercising a failed
+// client.getTrace(...) call. Under the factory, fetching get_trace happens
+// before `render` is ever invoked (see src/registry/factory.ts's
+// `registerOne`: `executeTool` is awaited, then only on success is
+// `enhancer.render` called) — so that guarantee is now inherent to the
+// factory and there is no fetch step left inside `runGet` to fail. The
+// equivalent invariant is covered at the factory level in
+// tests/registry/factory.test.ts ("traces get (enhancer path)").
+
+describe("tracesGet.resolveArgs (--fields)", () => {
+  it("threads --fields through into the dispatched args", () => {
+    const resolved = tracesGet.resolveArgs?.({
+      opts: { fields: "full" },
+      positionals: { trace_id: "t-1" },
+      extras: [],
+    });
+
+    expect(resolved?.args).toEqual({ trace_id: "t-1", fields: "full" });
+  });
+
+  it("omits fields from the dispatched args when --fields is not given", () => {
+    const resolved = tracesGet.resolveArgs?.({
+      opts: {},
+      positionals: { trace_id: "t-1" },
+      extras: [],
+    });
+
+    expect(resolved?.args).toEqual({ trace_id: "t-1" });
   });
 });

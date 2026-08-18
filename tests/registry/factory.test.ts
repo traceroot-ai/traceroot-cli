@@ -186,6 +186,25 @@ describe("generated sessions commands (zero-code path)", () => {
   });
 });
 
+describe("traces get (enhancer path)", () => {
+  it("a failed get_trace dispatch never reaches render: nothing is written and the finding lookup never runs", async () => {
+    // registerOne awaits executeTool before calling enhancer.render (see
+    // src/registry/factory.ts) — a rejected dispatch must never let runGet's
+    // rendering (or its best-effort finding lookup) run.
+    const h = harness(errorResponse(404, "trace not found"));
+
+    const err = await h.run("traces", "get", "missing-trace").catch((e) => e);
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.notFound);
+    expect((err as CliError).message).toBe("trace not found");
+    expect(h.out.data).toBe("");
+    // Only the failed get_trace dispatch happened — the best-effort finding
+    // lookup (a companion dispatch inside render) never ran.
+    expect(h.fake.calls.length).toBe(1);
+  });
+});
+
 describe("traces export (enhancer path)", () => {
   let tmpRoot: string;
 
