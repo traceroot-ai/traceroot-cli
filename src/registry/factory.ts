@@ -28,6 +28,7 @@ const GENERATED = new Set([
   "list_traces",
   "get_trace",
   "export_trace",
+  "list_detectors",
 ]);
 
 const registryByName = new Map(REGISTRY.map((entry) => [entry.name, entry]));
