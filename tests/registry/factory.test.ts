@@ -222,6 +222,31 @@ describe("traces get (enhancer path)", () => {
   });
 });
 
+describe("findings get (enhancer path)", () => {
+  it("dispatches get_finding for a finding id", async () => {
+    const h = harness(jsonResponse({ finding_id: "fnd-1" }));
+    await h.run("findings", "get", "fnd-1", "--json");
+    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/detectors/findings/fnd-1");
+  });
+
+  it("retargets to get_finding_by_trace for --trace", async () => {
+    const h = harness(jsonResponse({ finding_id: "fnd-1", trace_id: "tr-9" }));
+    await h.run("findings", "get", "--trace", "tr-9", "--json");
+    expect(h.fake.calls[0].url).toBe(
+      "https://api.test/api/v1/public/detectors/traces/tr-9/finding",
+    );
+  });
+
+  it("a failed dispatch never reaches render: nothing is written", async () => {
+    const h = harness(errorResponse(404, "finding not found"));
+    const err = await h.run("findings", "get", "fnd-missing").catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.notFound);
+    expect(h.out.data).toBe("");
+    expect(h.fake.calls.length).toBe(1);
+  });
+});
+
 describe("traces export (enhancer path)", () => {
   let tmpRoot: string;
 

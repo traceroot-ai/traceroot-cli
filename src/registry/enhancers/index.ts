@@ -1,4 +1,5 @@
 import { detectorsList } from "./detectors-list.js";
+import { findingsGet } from "./findings-get.js";
 import { tracesExport } from "./traces-export.js";
 import { tracesGet } from "./traces-get.js";
 import { tracesList } from "./traces-list.js";
@@ -11,4 +12,5 @@ export const ENHANCERS: Partial<Record<string, Enhancer>> = {
   get_trace: tracesGet,
   export_trace: tracesExport,
   list_detectors: detectorsList,
+  get_finding: findingsGet,
 };
