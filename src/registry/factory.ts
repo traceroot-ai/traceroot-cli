@@ -25,6 +25,7 @@ const GENERATED = new Set([
   "list_sessions",
   "get_session",
   "list_trace_filter_values",
+  "list_traces",
   "get_trace",
   "export_trace",
 ]);

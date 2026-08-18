@@ -186,6 +186,23 @@ describe("generated sessions commands (zero-code path)", () => {
   });
 });
 
+describe("traces list (enhancer path)", () => {
+  it("a failed list_traces dispatch never reaches render: nothing is written", async () => {
+    // registerOne awaits executeTool before calling enhancer.render (see
+    // src/registry/factory.ts) — a rejected dispatch must never let renderList
+    // print a table or footer.
+    const h = harness(errorResponse(500, "boom"));
+
+    const err = await h.run("traces", "list").catch((e) => e);
+
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.internal);
+    expect(h.out.data).toBe("");
+    expect(h.err.data).toBe("");
+    expect(h.fake.calls.length).toBe(1);
+  });
+});
+
 describe("traces get (enhancer path)", () => {
   it("a failed get_trace dispatch never reaches render: nothing is written and the finding lookup never runs", async () => {
     // registerOne awaits executeTool before calling enhancer.render (see

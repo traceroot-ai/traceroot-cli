@@ -1,11 +1,11 @@
 import type { Command } from "commander";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ApiClient, TraceList } from "../../src/api/client.js";
-import { buildProgram } from "../../src/cli.js";
-import { runList } from "../../src/commands/traces/list.js";
-import type { Writers } from "../../src/output.js";
-import { runCli } from "../helpers/runCli.js";
-import { StringSink } from "../helpers/stringSink.js";
+import type { TraceList } from "../../../src/api/client.js";
+import { buildProgram } from "../../../src/cli.js";
+import type { Writers } from "../../../src/output.js";
+import { renderList, tracesList } from "../../../src/registry/enhancers/traces-list.js";
+import { runCli } from "../../helpers/runCli.js";
+import { StringSink } from "../../helpers/stringSink.js";
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -34,22 +34,6 @@ function listItem(over: Partial<TraceList["data"][number]>): TraceList["data"][n
   };
 }
 
-interface FakeState {
-  lastListParams?: { limit?: number; startAfter?: string; endBefore?: string };
-}
-
-function fakeClient(res: TraceList, state: FakeState = {}): ApiClient {
-  return {
-    whoami: () => Promise.reject(new Error("unused")),
-    listTraces: (params?: { limit?: number; startAfter?: string; endBefore?: string }) => {
-      state.lastListParams = params;
-      return Promise.resolve(res);
-    },
-    getTrace: () => Promise.reject(new Error("unused")),
-    exportTrace: () => Promise.reject(new Error("unused")),
-  };
-}
-
 const META: TraceList["meta"] = { page: 1, limit: 50, total: 2 };
 
 /**
@@ -64,8 +48,8 @@ function cellAt(dataLine: string, headerLine: string, header: string, nextHeader
   return dataLine.slice(start, end).trim();
 }
 
-describe("runList (human)", () => {
-  it("renders ERRORS/SPANS columns in order with no STATUS column", async () => {
+describe("renderList (human)", () => {
+  it("renders ERRORS/SPANS columns in order with no STATUS column", () => {
     const res: TraceList = {
       data: [
         listItem({ trace_id: "ok-1", span_count: 4, error_count: 0 }),
@@ -74,7 +58,7 @@ describe("runList (human)", () => {
       meta: META,
     };
     const { writers: w, out, err } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
+    renderList(res, { json: false, writers: w });
 
     const lines = out.data.split("\n");
     const headerLine = lines.find((l) => l.includes("STARTED")) as string;
@@ -96,37 +80,37 @@ describe("runList (human)", () => {
     expect(err.data).not.toContain("{");
   });
 
-  it("emits no ANSI escapes when the sink is not a TTY", async () => {
+  it("emits no ANSI escapes when the sink is not a TTY", () => {
     const res: TraceList = { data: [listItem({})], meta: META };
     const { writers: w, out } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
+    renderList(res, { json: false, writers: w });
     expect(out.data).not.toContain("\x1b[");
   });
 
-  it("renders an unfinished trace (duration_ms null) with no STATUS column", async () => {
+  it("renders an unfinished trace (duration_ms null) with no STATUS column", () => {
     const res: TraceList = {
       data: [listItem({ trace_id: "unfin-1", duration_ms: null, error_count: 0 })],
       meta: META,
     };
     const { writers: w, out } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
+    renderList(res, { json: false, writers: w });
     const headerLine = out.data.split("\n").find((l) => l.includes("STARTED")) as string;
     // The row renders; liveness is no longer expressed as a STATUS label.
     expect(out.data).toContain("unfin-1");
     expect(headerLine).not.toContain("STATUS");
   });
 
-  it("bolds the header row on a TTY", async () => {
+  it("bolds the header row on a TTY", () => {
     const res: TraceList = { data: [listItem({})], meta: META };
     const out = new StringSink(true);
     const err = new StringSink(true);
-    await runList({ client: fakeClient(res), json: false, writers: { out, err } });
+    renderList(res, { json: false, writers: { out, err } });
     // The header line is wrapped in the ANSI bold code; data rows are not.
     expect(out.data).toContain("\x1b[1m");
     expect(out.data).toContain("STARTED");
   });
 
-  it("reds the whole row for an errored trace on a TTY", async () => {
+  it("reds the whole row for an errored trace on a TTY", () => {
     const res: TraceList = {
       data: [
         listItem({ trace_id: "ok-1", error_count: 0 }),
@@ -136,38 +120,38 @@ describe("runList (human)", () => {
     };
     const out = new StringSink(true);
     const err = new StringSink(true);
-    await runList({ client: fakeClient(res), json: false, writers: { out, err } });
+    renderList(res, { json: false, writers: { out, err } });
     const errLine = out.data.split("\n").find((l) => l.includes("err-1")) as string;
     const okLine = out.data.split("\n").find((l) => l.includes("ok-1")) as string;
     expect(errLine).toContain("\x1b[91m"); // bright red
     expect(okLine).not.toContain("\x1b[91m");
   });
 
-  it("does not red an unfinished trace row (error_count 0) on a TTY", async () => {
+  it("does not red an unfinished trace row (error_count 0) on a TTY", () => {
     const res: TraceList = {
       data: [listItem({ trace_id: "unfin-1", duration_ms: null, error_count: 0 })],
       meta: META,
     };
     const out = new StringSink(true);
     const err = new StringSink(true);
-    await runList({ client: fakeClient(res), json: false, writers: { out, err } });
+    renderList(res, { json: false, writers: { out, err } });
     const row = out.data.split("\n").find((l) => l.includes("unfin-1")) as string;
     // Red is keyed on error_count, not liveness, so a live row stays uncolored.
     expect(row).not.toContain("\x1b[91m");
   });
 
-  it("does NOT have a STARTED ISO column (no --wide mode exists)", async () => {
+  it("does NOT have a STARTED ISO column (no --wide mode exists)", () => {
     const res: TraceList = {
       data: [listItem({ trace_start_time: "2026-06-23T20:31:02.000000" })],
       meta: META,
     };
     const { writers: w, out } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
+    renderList(res, { json: false, writers: w });
     expect(out.data).not.toContain("STARTED ISO");
   });
 });
 
-describe("runList live DURATION under a non-UTC timezone", () => {
+describe("renderList live DURATION under a non-UTC timezone", () => {
   // Backend timestamps are zone-less UTC. A bare `new Date(...)` reads them as
   // LOCAL, which blanks the elapsed DURATION west of UTC and inflates it east.
   // These tests run under real non-UTC zones to prove the elapsed math is
@@ -190,7 +174,7 @@ describe("runList live DURATION under a non-UTC timezone", () => {
   }
 
   for (const tz of ["America/Los_Angeles", "Asia/Tokyo"]) {
-    it(`renders elapsed ~10m for a live trace (TZ=${tz})`, async () => {
+    it(`renders elapsed ~10m for a live trace (TZ=${tz})`, () => {
       process.env.TZ = tz;
       // A zone-less UTC start ~10 minutes ago (drop the trailing Z the backend omits).
       const startedZoneless = new Date(Date.now() - 10 * 60_000).toISOString().slice(0, -1);
@@ -201,7 +185,7 @@ describe("runList live DURATION under a non-UTC timezone", () => {
         meta: META,
       };
       const { writers: w, out } = writers();
-      await runList({ client: fakeClient(res), json: false, writers: w });
+      renderList(res, { json: false, writers: w });
       // 10 minutes = 600s; allow a small tolerance for elapsed test time.
       expect(liveDurationSeconds(out)).toBeGreaterThanOrEqual(600);
       expect(liveDurationSeconds(out)).toBeLessThan(605);
@@ -209,11 +193,11 @@ describe("runList live DURATION under a non-UTC timezone", () => {
   }
 });
 
-describe("runList (--json)", () => {
-  it("writes exactly one JSON doc with data, meta, count, and range keys", async () => {
+describe("renderList (--json)", () => {
+  it("writes exactly one JSON doc with data, meta, count, and range keys", () => {
     const res: TraceList = { data: [listItem({ trace_id: "j-1" })], meta: META };
     const { writers: w, out, err } = writers();
-    await runList({ client: fakeClient(res), json: true, writers: w });
+    renderList(res, { json: true, writers: w });
 
     const docs = out.data.trim().split("\n");
     expect(docs).toHaveLength(1);
@@ -228,10 +212,10 @@ describe("runList (--json)", () => {
     expect(err.data).not.toContain("{");
   });
 
-  it("JSON range.label is 'all traces' when no bounds are given", async () => {
+  it("JSON range.label is 'all traces' when no bounds are given", () => {
     const res: TraceList = { data: [listItem({ trace_id: "j-2" })], meta: META };
     const { writers: w, out } = writers();
-    await runList({ client: fakeClient(res), json: true, writers: w });
+    renderList(res, { json: true, writers: w });
     const parsed = JSON.parse(out.data.trim()) as Record<string, unknown>;
     const range = parsed.range as Record<string, unknown>;
     expect(range.label).toBe("all traces");
@@ -239,11 +223,10 @@ describe("runList (--json)", () => {
     expect(range.endBefore).toBeNull();
   });
 
-  it("JSON range.label is 'since 2m' when sinceLabel is set", async () => {
+  it("JSON range.label is 'since 2m' when sinceLabel is set", () => {
     const res: TraceList = { data: [], meta: META };
     const { writers: w, out } = writers();
-    await runList({
-      client: fakeClient(res),
+    renderList(res, {
       json: true,
       writers: w,
       startAfter: "2026-06-23T20:28:00.000Z",
@@ -256,11 +239,10 @@ describe("runList (--json)", () => {
     expect(range.endBefore).toBeNull();
   });
 
-  it("JSON range.label is 'from <ISO> to before <ISO>' for both bounds", async () => {
+  it("JSON range.label is 'from <ISO> to before <ISO>' for both bounds", () => {
     const res: TraceList = { data: [], meta: META };
     const { writers: w, out } = writers();
-    await runList({
-      client: fakeClient(res),
+    renderList(res, {
       json: true,
       writers: w,
       startAfter: "2026-06-23T20:28:35.000Z",
@@ -273,11 +255,10 @@ describe("runList (--json)", () => {
     expect(range.endBefore).toBe("2026-06-23T20:31:02.000Z");
   });
 
-  it("JSON range.label is 'from <ISO>' for startAfter-only", async () => {
+  it("JSON range.label is 'from <ISO>' for startAfter-only", () => {
     const res: TraceList = { data: [], meta: META };
     const { writers: w, out } = writers();
-    await runList({
-      client: fakeClient(res),
+    renderList(res, {
       json: true,
       writers: w,
       startAfter: "2026-06-23T20:28:35.000Z",
@@ -289,11 +270,10 @@ describe("runList (--json)", () => {
     expect(range.endBefore).toBeNull();
   });
 
-  it("JSON range.label is 'before <ISO>' for endBefore-only", async () => {
+  it("JSON range.label is 'before <ISO>' for endBefore-only", () => {
     const res: TraceList = { data: [], meta: META };
     const { writers: w, out } = writers();
-    await runList({
-      client: fakeClient(res),
+    renderList(res, {
       json: true,
       writers: w,
       endBefore: "2026-06-23T20:31:02.000Z",
@@ -305,7 +285,7 @@ describe("runList (--json)", () => {
     expect(range.endBefore).toBe("2026-06-23T20:31:02.000Z");
   });
 
-  it("JSON count equals res.data.length", async () => {
+  it("JSON count equals res.data.length", () => {
     const res: TraceList = {
       data: [
         listItem({ trace_id: "c-1" }),
@@ -315,17 +295,17 @@ describe("runList (--json)", () => {
       meta: META,
     };
     const { writers: w, out } = writers();
-    await runList({ client: fakeClient(res), json: true, writers: w });
+    renderList(res, { json: true, writers: w });
     const parsed = JSON.parse(out.data.trim()) as Record<string, unknown>;
     expect(parsed.count).toBe(3);
   });
 
-  it("exposes trace_start_time as a copyable ISO field in each trace", async () => {
+  it("exposes trace_start_time as a copyable ISO field in each trace", () => {
     // Confirm --json exposes the backend canonical field (no footer/tip on stdout).
     const trace = listItem({ trace_id: "j-ts", trace_start_time: "2026-06-23T20:31:02.000000" });
     const res: TraceList = { data: [trace], meta: META };
     const { writers: w, out, err } = writers();
-    await runList({ client: fakeClient(res), json: true, writers: w });
+    renderList(res, { json: true, writers: w });
 
     const parsed = JSON.parse(out.data.trim()) as TraceList & { count: number; range: unknown };
     expect(parsed.data[0]).toHaveProperty("trace_start_time");
@@ -335,49 +315,42 @@ describe("runList (--json)", () => {
     expect(out.data.trim().split("\n")).toHaveLength(1);
   });
 
-  it("JSON does NOT include footer or tip text in stdout", async () => {
+  it("JSON does NOT include footer or tip text in stdout", () => {
     const res: TraceList = { data: [], meta: META };
     const { writers: w, out, err } = writers();
-    await runList({ client: fakeClient(res), json: true, writers: w });
+    renderList(res, { json: true, writers: w });
     expect(out.data).not.toContain("Tip:");
     expect(out.data).not.toContain("trace(s)");
     expect(err.data).toBe("");
   });
 });
 
-describe("runList (--limit forwarding)", () => {
-  it("forwards the limit to listTraces", async () => {
-    const state: FakeState = {};
-    const res: TraceList = { data: [], meta: META };
-    const { writers: w } = writers();
-    await runList({ client: fakeClient(res, state), json: false, writers: w, limit: 5 });
-    expect(state.lastListParams).toEqual({ limit: 5 });
+describe("tracesList.resolveArgs (--limit forwarding)", () => {
+  it("forwards the limit as args.limit", () => {
+    const resolved = tracesList.resolveArgs?.({
+      opts: { limit: "5" },
+      positionals: {},
+      extras: [],
+    });
+    expect(resolved?.args).toEqual({ limit: 5 });
   });
 
-  it("omits params when no limit is given", async () => {
-    const state: FakeState = {};
-    const res: TraceList = { data: [], meta: META };
-    const { writers: w } = writers();
-    await runList({ client: fakeClient(res, state), json: false, writers: w });
-    expect(state.lastListParams).toBeUndefined();
+  it("omits args.limit when no limit is given", () => {
+    const resolved = tracesList.resolveArgs?.({ opts: {}, positionals: {}, extras: [] });
+    expect(resolved?.args).toEqual({});
   });
 });
 
-describe("runList (time-range forwarding)", () => {
-  it("forwards startAfter and endBefore to listTraces", async () => {
-    const state: FakeState = {};
-    const res: TraceList = { data: [], meta: META };
-    const { writers: w } = writers();
-    await runList({
-      client: fakeClient(res, state),
-      json: false,
-      writers: w,
-      startAfter: "2024-01-01T00:00:00.000Z",
-      endBefore: "2024-02-01T00:00:00.000Z",
+describe("tracesList.resolveArgs (time-range forwarding)", () => {
+  it("forwards start_after and end_before as args", () => {
+    const resolved = tracesList.resolveArgs?.({
+      opts: { from: "2024-01-01T00:00:00.000Z", to: "2024-02-01T00:00:00.000Z" },
+      positionals: {},
+      extras: [],
     });
-    expect(state.lastListParams).toEqual({
-      startAfter: "2024-01-01T00:00:00.000Z",
-      endBefore: "2024-02-01T00:00:00.000Z",
+    expect(resolved?.args).toEqual({
+      start_after: "2024-01-01T00:00:00.000Z",
+      end_before: "2024-02-01T00:00:00.000Z",
     });
   });
 });
@@ -444,57 +417,56 @@ describe("traces list command surface", () => {
   });
 });
 
-// ─── runList compact footer (one-line stderr) ──────────────────────────────
+// ─── renderList compact footer (one-line stderr) ───────────────────────────
 
-describe("runList compact footer (one-line stderr)", () => {
+describe("renderList compact footer (one-line stderr)", () => {
   const res0: TraceList = { data: [], meta: { page: 0, limit: 50, total: 0 } };
   const res2: TraceList = {
     data: [listItem({ trace_id: "a-1" }), listItem({ trace_id: "a-2" })],
     meta: { page: 0, limit: 50, total: 2 },
   };
 
-  it("emits '<count> trace(s) | limit <N> | all traces' (0 traces)", async () => {
+  it("emits '<count> trace(s) | limit <N> | all traces' (0 traces)", () => {
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res0), json: false, writers: w });
+    renderList(res0, { json: false, writers: w });
     expect(err.data).toContain("0 trace(s) | limit 50 | all traces");
   });
 
-  it("emits '<count> trace(s) | limit <N> | all traces' (2 traces)", async () => {
+  it("emits '<count> trace(s) | limit <N> | all traces' (2 traces)", () => {
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res2), json: false, writers: w });
+    renderList(res2, { json: false, writers: w });
     expect(err.data).toContain("2 trace(s) | limit 50 | all traces");
   });
 
-  it("shows '<returned> of <total>' and uses meta.limit when total exceeds the page", async () => {
+  it("shows '<returned> of <total>' and uses meta.limit when total exceeds the page", () => {
     const res: TraceList = {
       data: [listItem({ trace_id: "a-1" }), listItem({ trace_id: "a-2" })],
       meta: { page: 0, limit: 50, total: 137 },
     };
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
+    renderList(res, { json: false, writers: w });
     expect(err.data).toContain("2 of 137 trace(s) | limit 50 | all traces");
   });
 
-  it("falls back to the explicit --limit when meta.limit is absent", async () => {
+  it("falls back to the explicit --limit when meta.limit is absent", () => {
     const res = { data: [], meta: { page: 0, total: 0 } } as unknown as TraceList;
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w, limit: 7 });
+    renderList(res, { json: false, writers: w, limit: 7 });
     expect(err.data).toContain("0 trace(s) | limit 7 | all traces");
   });
 
-  it("does NOT emit a separate 'Range:' predicate line (old format gone)", async () => {
+  it("does NOT emit a separate 'Range:' predicate line (old format gone)", () => {
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res0), json: false, writers: w });
+    renderList(res0, { json: false, writers: w });
     expect(err.data).not.toContain("Range: all traces");
     // The count, limit and range are a single compact line (no separate tip line).
     const lines = err.data.split("\n").filter((l) => l.trim() !== "");
     expect(lines.length).toBe(1);
   });
 
-  it("emits 'limit <N> | since 2m' for sinceLabel", async () => {
+  it("emits 'limit <N> | since 2m' for sinceLabel", () => {
     const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res0),
+    renderList(res0, {
       json: false,
       writers: w,
       startAfter: "2026-06-23T20:28:00.000Z",
@@ -503,10 +475,9 @@ describe("runList compact footer (one-line stderr)", () => {
     expect(err.data).toContain("0 trace(s) | limit 50 | since 2m");
   });
 
-  it("emits a 24-hour 'from <local>' footer for startAfter-only (Denver TZ)", async () => {
+  it("emits a 24-hour 'from <local>' footer for startAfter-only (Denver TZ)", () => {
     const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res0),
+    renderList(res0, {
       json: false,
       writers: w,
       startAfter: "2026-06-23T20:29:54.000Z",
@@ -515,10 +486,9 @@ describe("runList compact footer (one-line stderr)", () => {
     expect(err.data).toContain("0 trace(s) | limit 50 | from 2026-06-23 14:29:54 MDT");
   });
 
-  it("emits a 24-hour 'before <local>' footer for endBefore-only (Denver TZ)", async () => {
+  it("emits a 24-hour 'before <local>' footer for endBefore-only (Denver TZ)", () => {
     const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res0),
+    renderList(res0, {
       json: false,
       writers: w,
       endBefore: "2026-06-23T20:31:02.000Z",
@@ -527,10 +497,9 @@ describe("runList compact footer (one-line stderr)", () => {
     expect(err.data).toContain("0 trace(s) | limit 50 | before 2026-06-23 14:31:02 MDT");
   });
 
-  it("emits a 24-hour 'from … to before …' footer for both bounds (Denver TZ)", async () => {
+  it("emits a 24-hour 'from … to before …' footer for both bounds (Denver TZ)", () => {
     const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res0),
+    renderList(res0, {
       json: false,
       writers: w,
       startAfter: "2026-06-23T20:28:35.000Z",
@@ -542,9 +511,9 @@ describe("runList compact footer (one-line stderr)", () => {
     );
   });
 
-  it("does NOT emit footer in --json mode", async () => {
+  it("does NOT emit footer in --json mode", () => {
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res0), json: true, writers: w });
+    renderList(res0, { json: true, writers: w });
     expect(err.data).toBe("");
   });
 });
@@ -619,21 +588,20 @@ describe("stray positional arg enhanced error (T6)", () => {
   });
 });
 
-// ─── runList tip line ──────────────────────────────────────────────────────
+// ─── renderList tip line ────────────────────────────────────────────────────
 
-describe("runList tip line", () => {
+describe("renderList tip line", () => {
   const res: TraceList = { data: [], meta: META };
 
-  it("does not print a Tip line in normal output (no time flag)", async () => {
+  it("does not print a Tip line in normal output (no time flag)", () => {
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res), json: false, writers: w });
+    renderList(res, { json: false, writers: w });
     expect(err.data).not.toContain("Tip:");
   });
 
-  it("does NOT show the tip when startAfter is set", async () => {
+  it("does NOT show the tip when startAfter is set", () => {
     const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res),
+    renderList(res, {
       json: false,
       writers: w,
       startAfter: "2026-06-01T00:00:00.000Z",
@@ -641,10 +609,9 @@ describe("runList tip line", () => {
     expect(err.data).not.toContain("Tip:");
   });
 
-  it("suppresses the tip for a --since-style lower-bound-only range", async () => {
+  it("suppresses the tip for a --since-style lower-bound-only range", () => {
     const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res),
+    renderList(res, {
       json: false,
       writers: w,
       startAfter: "2026-06-22T00:00:00.000Z",
@@ -654,10 +621,9 @@ describe("runList tip line", () => {
     expect(err.data).not.toContain("Tip:");
   });
 
-  it("does NOT show the tip when endBefore is set", async () => {
+  it("does NOT show the tip when endBefore is set", () => {
     const { writers: w, err } = writers();
-    await runList({
-      client: fakeClient(res),
+    renderList(res, {
       json: false,
       writers: w,
       endBefore: "2026-06-15T00:00:00.000Z",
@@ -665,9 +631,9 @@ describe("runList tip line", () => {
     expect(err.data).not.toContain("Tip:");
   });
 
-  it("does NOT show the tip in --json mode", async () => {
+  it("does NOT show the tip in --json mode", () => {
     const { writers: w, err } = writers();
-    await runList({ client: fakeClient(res), json: true, writers: w });
+    renderList(res, { json: true, writers: w });
     expect(err.data).not.toContain("Tip:");
   });
 });

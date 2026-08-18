@@ -1,10 +1,10 @@
 import type { Command } from "commander";
 import type { ApiClient, FindingDetail } from "../../api/client.js";
 import { CliError, ExitCode, type Writers, defaultWriters, writeJson } from "../../output.js";
+import { onceOption } from "../../registry/flags.js";
 import { createStyler } from "../../render/style.js";
 import { formatTimestamp } from "../../util/index.js";
 import { contextFromCommand, requireApiClient } from "../shared.js";
-import { onceOption } from "../traces/list.js";
 
 /** Dependencies for the testable core of `findings get`. */
 export interface RunGetDeps {

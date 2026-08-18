@@ -8,17 +8,17 @@ import {
   logProgress,
   writeJson,
 } from "../../output.js";
+import { onceOption } from "../../registry/flags.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { formatTimestamp } from "../../util/index.js";
-import { contextFromCommand, requireApiClient } from "../shared.js";
 import {
   buildRangeText,
-  onceOption,
   parseLimit,
   renderRangeSummary,
   resolveTimeRange,
-} from "../traces/list.js";
+} from "../../time/range.js";
+import { formatTimestamp } from "../../util/index.js";
+import { contextFromCommand, requireApiClient } from "../shared.js";
 
 /** The no-filter range label for detectors (vs. traces' "all traces"). */
 const ALL_DETECTORS = "all detectors";

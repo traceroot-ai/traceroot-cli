@@ -8,7 +8,6 @@ import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
 import { registerSkills } from "./skills.js";
 import { registerStatus } from "./status.js";
-import { registerTraces } from "./traces.js";
 
 /**
  * The single extension point for command registration. Later issues add their
@@ -21,7 +20,6 @@ export function registerCommands(program: Command, deps: RegistryDeps = {}): voi
   // stable across the migration, regardless of which register* below attaches
   // subcommands to it first.
   for (const group of Object.keys(GROUPS)) ensureGroup(program, group);
-  registerTraces(program);
   registerDetectors(program);
   registerFindings(program);
   registerRegistryCommands(program, deps);
