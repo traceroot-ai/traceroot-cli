@@ -23,7 +23,7 @@
     "opentelemetry"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.3"
   },
   "bin": {
     "traceroot": "bin/traceroot.mjs"
