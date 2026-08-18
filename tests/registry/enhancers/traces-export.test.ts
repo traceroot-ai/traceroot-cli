@@ -495,11 +495,13 @@ describe("runExport", () => {
     expect(JSON.parse(raw)).toEqual(response.manifest);
   });
 
-  it("writes no finding.json when the finding lookup fails (best-effort)", async () => {
+  it("writes no finding.json when the finding lookup resolves null (best-effort)", async () => {
+    // API failures resolve to null upstream (ctx.dispatchToolOptional), so a
+    // null finding is the "lookup failed / not flagged" contract here.
     const response = makeResponse();
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();
-    const getFinding = () => Promise.reject(new CliError("Failed to read finding"));
+    const getFinding = () => Promise.resolve(null);
 
     await runExport(response, {
       traceId: "abc123",
@@ -513,6 +515,28 @@ describe("runExport", () => {
     // Bundle still written; the finding is simply omitted.
     expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
     expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
+  });
+
+  it("propagates a rejecting getFinding and writes no bundle directory", async () => {
+    // Only API failures degrade to null (handled upstream); a rejection here is
+    // a programming bug and must surface — and since the lookup precedes mkdir,
+    // it must leave nothing on disk.
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+    const getFinding = () => Promise.reject(new CliError("Failed to read finding"));
+
+    await expect(
+      runExport(response, {
+        traceId: "abc123",
+        outputDir,
+        force: false,
+        json: false,
+        writers,
+        getFinding,
+      }),
+    ).rejects.toThrow("Failed to read finding");
+    expect(existsSync(outputDir)).toBe(false);
   });
 
   it("removes a stale finding.json when re-exporting an unflagged trace with --force", async () => {

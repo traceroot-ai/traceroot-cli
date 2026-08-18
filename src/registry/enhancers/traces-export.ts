@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import type { FindingDetail, TraceExport } from "../../api/client.js";
 import { CliError, type Writers, logProgress } from "../../output.js";
 import { createStyler } from "../../render/style.js";
-import { rejectExtras } from "../factory.js";
+import { rejectExtras } from "../flags.js";
 import { onceOption } from "../flags.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
@@ -58,17 +58,13 @@ export async function runExport(response: TraceExport, deps: ExportDeps): Promis
   const { traceId, force, json, writers } = deps;
 
   // Best-effort: include the detector finding (1-per-trace) in the bundle. A 404
-  // means "not flagged" (null); any other failure degrades to no finding so a
-  // findings-API hiccup never blocks the export. The production wiring below
-  // (render's getFinding) already resolves failures to null via `.catch(() =>
-  // null)`, so this try/catch is normally a no-op; it's kept so a rejecting
-  // `getFinding` fake still degrades cleanly for the moved unit tests.
-  let finding: FindingDetail | null = null;
-  try {
-    finding = await deps.getFinding(traceId);
-  } catch {
-    finding = null;
-  }
+  // means "not flagged" (null); any other API failure degrades to no finding so
+  // a findings-API hiccup never blocks the export. Contract: `deps.getFinding`
+  // never rejects for API failures — production wires it to
+  // `ctx.dispatchToolOptional`, which resolves null on dispatch failure while
+  // letting the factory's internal assertions throw. No catch here, so a
+  // programming bug can never masquerade as "no finding".
+  const finding: FindingDetail | null = await deps.getFinding(traceId);
 
   const timestamp = deps.now ? deps.now() : defaultTimestamp();
   const outputDir =
@@ -181,9 +177,8 @@ export const tracesExport: Enhancer = {
       writers: ctx.writers,
       getFinding: (traceId) =>
         ctx
-          .dispatchTool("get_finding_by_trace", { trace_id: traceId })
-          .then((result) => result as FindingDetail | null)
-          .catch(() => null),
+          .dispatchToolOptional("get_finding_by_trace", { trace_id: traceId })
+          .then((result) => result as FindingDetail | null),
     });
   },
 };

@@ -392,17 +392,35 @@ describe("runGet (finding indicator)", () => {
     expect(out.data).not.toContain("done");
   });
 
-  it("still renders the trace when the finding lookup fails (best-effort)", async () => {
+  it("still renders the trace when the finding lookup resolves null (best-effort)", async () => {
+    // API failures resolve to null upstream (ctx.dispatchToolOptional), so a
+    // null finding is the "lookup failed / not flagged" contract here.
     const trace = detail({});
     const { writers: w, out } = writers();
     await runGet(trace, {
       json: false,
       writers: w,
       traceId: "t-1",
-      getFinding: () => Promise.reject(new CliError("Failed to read finding")),
+      getFinding: () => Promise.resolve(null),
     });
     expect(out.data).toContain("root-span"); // trace still rendered
     expect(out.data).not.toContain("Finding ID:"); // finding silently omitted
+  });
+
+  it("propagates a rejecting getFinding instead of swallowing it", async () => {
+    // Only API failures degrade to null (handled upstream); a rejection here is
+    // a programming bug and must surface, never masquerade as "no finding".
+    const trace = detail({});
+    const { writers: w, out } = writers();
+    await expect(
+      runGet(trace, {
+        json: false,
+        writers: w,
+        traceId: "t-1",
+        getFinding: () => Promise.reject(new CliError("Failed to read finding")),
+      }),
+    ).rejects.toThrow("Failed to read finding");
+    expect(out.data).toBe(""); // the lookup precedes all output
   });
 });
 

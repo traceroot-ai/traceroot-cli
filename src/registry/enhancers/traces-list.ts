@@ -1,23 +1,17 @@
 import type { Command } from "commander";
 import type { TraceList } from "../../api/client.js";
-import {
-  CliError,
-  ExitCode,
-  type Writers,
-  colorizeError,
-  logProgress,
-  writeJson,
-} from "../../output.js";
+import { type Writers, colorizeError } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import {
-  buildRangeText,
-  parseLimit,
-  renderRangeSummary,
-  resolveTimeRange,
-} from "../../time/range.js";
 import { formatDuration, formatTimestamp, parseBackendTime } from "../../util/index.js";
-import { onceOption } from "../flags.js";
+import {
+  type ListState,
+  addListTimeFlags,
+  logListFooter,
+  rejectListExtras,
+  resolveListArgs,
+  writeListJson,
+} from "./list-shared.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 type ListItem = TraceList["data"][number];
@@ -68,21 +62,10 @@ export interface RenderListOptions {
  */
 export function renderList(res: TraceList, opts: RenderListOptions): void {
   const { json, writers, limit, startAfter, endBefore, sinceLabel, timeZone } = opts;
+  const state: ListState = { limit, startAfter, endBefore, sinceLabel };
 
   if (json) {
-    const rangeInfo = { startAfter, endBefore, sinceLabel };
-    writeJson(
-      {
-        ...res,
-        count: res.data.length,
-        range: {
-          label: buildRangeText(rangeInfo, (iso) => iso),
-          startAfter: startAfter ?? null,
-          endBefore: endBefore ?? null,
-        },
-      },
-      writers,
-    );
+    writeListJson(res, state, writers);
     return;
   }
 
@@ -105,96 +88,29 @@ export function renderList(res: TraceList, opts: RenderListOptions): void {
   });
   writers.out.write(`${rendered}\n`);
 
-  // Compact one-line footer: "<count> trace(s) | limit <N> | <range>". Copy/paste
-  // guidance lives in `--help`, the README, and the bad-timestamp errors — not in
-  // normal success output, where a repeated tip is just noise. `meta.page` is
-  // intentionally NOT surfaced here: the CLI has no pagination controls today
-  // (it would gain a `--page`/`--cursor` flag as future work).
-  const returned = res.data.length;
-  const total = res.meta?.total;
-  const countText =
-    typeof total === "number" && total > returned
-      ? `${returned} of ${total} trace(s)`
-      : `${returned} trace(s)`;
-  const effectiveLimit = res.meta?.limit ?? limit ?? 50;
-  const rangeText = renderRangeSummary({ startAfter, endBefore, sinceLabel }, timeZone);
-  logProgress(`${countText} | limit ${effectiveLimit} | ${rangeText}`, writers);
-}
-
-/** State threaded from `resolveArgs` to `render`. */
-interface ListState {
-  limit?: number;
-  startAfter?: string;
-  endBefore?: string;
-  sinceLabel?: string;
+  // Compact one-line footer. Copy/paste guidance lives in `--help`, the README,
+  // and the bad-timestamp errors — not in normal success output, where a
+  // repeated tip is just noise. `meta.page` is intentionally NOT surfaced:
+  // the CLI has no pagination controls today (it would gain a `--page`/
+  // `--cursor` flag as future work).
+  logListFooter(res, state, "trace", writers, timeZone);
 }
 
 export const tracesList: Enhancer = {
   description: "List traces",
   flags(cmd: Command): void {
-    cmd
-      .option("--limit <n>", "maximum number of traces to return", onceOption("--limit"))
-      .option(
-        "--since <duration>",
-        "only traces within a window ending now, e.g. 30m, 6h, 7d, 2w",
-        onceOption("--since"),
-      )
-      .option(
-        "--from <timestamp>",
-        'include traces started at or after this time. Accepts ISO 8601 (e.g. 2026-06-23T14:31:02Z or 2026-06-23T14:31:02-06:00) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
-        onceOption("--from"),
-      )
-      .option(
-        "--to <timestamp>",
-        'include traces started before this time (exclusive). Accepts ISO 8601 (e.g. 2026-06-23T20:31:02Z) or a quoted copied STARTED value (e.g. "2026-06-23 14:31:02 MDT"). Values with spaces MUST be quoted.',
-        onceOption("--to"),
-      );
+    addListTimeFlags(cmd, {
+      noun: "traces",
+      sinceSubject: "traces",
+      boundSubject: "traces started",
+      column: "STARTED",
+    });
   },
   resolveArgs(input: ResolveInput): Resolved {
-    // 1. Reject stray positional operands FIRST (before any API call).
-    //    This catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
-    if (input.extras.length > 0) {
-      const strayJoined = input.extras.join(" ");
-      const fromVal = input.opts.from as string | undefined;
-      const toVal = input.opts.to as string | undefined;
-      const bareDate = /^\d{4}-\d{2}-\d{2}$/;
-
-      if (fromVal !== undefined && bareDate.test(fromVal)) {
-        // Looks like the user forgot to quote: --from 2026-06-23 14:31:02 MDT
-        const reconstructed = `${fromVal} ${strayJoined}`;
-        throw new CliError(
-          `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --from "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --from 2026-06-23T20:31:02Z\n  traceroot traces list --from 2026-06-23T14:31:02-06:00`,
-          ExitCode.usage,
-        );
-      }
-      if (toVal !== undefined && bareDate.test(toVal)) {
-        const reconstructed = `${toVal} ${strayJoined}`;
-        throw new CliError(
-          `unexpected argument(s): ${strayJoined}.\n\nDid you mean to quote the timestamp?\n  traceroot traces list --to "${reconstructed}"\n\nTimestamps with spaces must be passed as one shell argument.\nISO 8601 also works:\n  traceroot traces list --to 2026-06-23T20:31:02Z\n  traceroot traces list --to 2026-06-23T14:31:02-06:00`,
-          ExitCode.usage,
-        );
-      }
-      throw new CliError(
-        `unexpected argument(s): ${strayJoined}. 'traces list' takes no positional arguments. If you meant a time filter, --from/--to take a single ISO 8601 timestamp with no spaces, e.g. --from 2026-06-23T14:29:54Z (or with an offset, 2026-06-23T14:29:54-06:00).`,
-        ExitCode.usage,
-      );
-    }
-    // 2. Validate --limit.
-    const limit = parseLimit(input.opts.limit as string | undefined);
-    // 3. Resolve time range.
-    const range = resolveTimeRange({
-      since: input.opts.since as string | undefined,
-      from: input.opts.from as string | undefined,
-      to: input.opts.to as string | undefined,
-    });
-    return {
-      args: {
-        ...(limit !== undefined ? { limit } : {}),
-        ...(range.startAfter !== undefined ? { start_after: range.startAfter } : {}),
-        ...(range.endBefore !== undefined ? { end_before: range.endBefore } : {}),
-      },
-      state: { limit, ...range },
-    };
+    // Reject stray positional operands FIRST (before any API call) — this
+    // catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
+    rejectListExtras("traces list", input);
+    return resolveListArgs(input);
   },
   render(payload: unknown, ctx: RenderContext): void {
     const state = ctx.state as ListState;
