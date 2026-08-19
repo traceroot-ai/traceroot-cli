@@ -87,8 +87,7 @@ traceroot traces filter-values model_name
 ### Generated commands
 
 `traces`, `detectors`, `findings`, and `sessions` are generated from the tool
-registry shipped in [`@traceroot-ai/tools`](https://github.com/traceroot-ai/traceroot/tree/main/frontend/packages/tools)
-(vendored as a packed tarball until it has an npm release; see `vendor/README.md`):
+registry shipped in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
 each entry's input schema drives its flags, and its response type drives the
 default rendering. Adding a new backend endpoint to the CLI is a registry bump
 plus one placement line in `src/registry/naming.ts` — no hand-written command

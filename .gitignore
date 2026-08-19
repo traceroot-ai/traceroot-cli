@@ -61,9 +61,6 @@ web_modules/
 
 # Output of 'npm pack'
 *.tgz
-# ...except vendored dependency tarballs, which are committed intentionally
-# (see vendor/README.md).
-!vendor/*.tgz
 
 # Yarn Integrity file
 .yarn-integrity

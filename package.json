@@ -44,7 +44,7 @@
     "prepublishOnly": "node scripts/no-file-deps.mjs"
   },
   "dependencies": {
-    "@traceroot-ai/tools": "file:vendor/traceroot-ai-tools-0.1.0.tgz",
+    "@traceroot-ai/tools": "0.1.0",
     "commander": "^12.1.0"
   },
   "devDependencies": {

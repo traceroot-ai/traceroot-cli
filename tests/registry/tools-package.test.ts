@@ -1,7 +1,7 @@
 import { ApiClient, ApiError, REGISTRY, bearerAuth, dispatch } from "@traceroot-ai/tools";
 import { describe, expect, it } from "vitest";
 
-describe("@traceroot-ai/tools vendored package", () => {
+describe("@traceroot-ai/tools package", () => {
   it("exposes the registry and dispatcher", () => {
     expect(REGISTRY.length).toBeGreaterThan(0);
     expect(typeof dispatch).toBe("function");
