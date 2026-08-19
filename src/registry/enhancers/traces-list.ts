@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import type { TraceList } from "../../api/client.js";
-import { type Writers, colorizeError } from "../../output.js";
+import { CliError, ExitCode, type Writers, colorizeError } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { formatDuration, formatTimestamp, parseBackendTime } from "../../util/index.js";
+import { onceOption } from "../flags.js";
 import {
   type ListState,
   addListTimeFlags,
@@ -104,13 +105,64 @@ export const tracesList: Enhancer = {
       sinceSubject: "traces",
       boundSubject: "traces started",
       column: "STARTED",
-    });
+    })
+      .option("--name <name>", "filter by trace name (substring match)", onceOption("--name"))
+      .option(
+        "--user-id <id>",
+        "filter by the user id recorded on the trace",
+        onceOption("--user-id"),
+      )
+      .option(
+        "--search-query <query>",
+        "search across trace_id, name, session_id, user_id",
+        onceOption("--search-query"),
+      )
+      .option(
+        "--include-evaluations",
+        "include traces produced by offline-evaluation runs (excluded by default)",
+      )
+      .option(
+        "--filters <json>",
+        "JSON array of typed filter predicates ({field, op, value}), e.g. " +
+          `'[{"field":"model_name","op":"in","value":["gpt-4o"]}]'. ` +
+          "Discover current values with 'traceroot traces filter-values <field>'.",
+        onceOption("--filters"),
+      );
   },
   resolveArgs(input: ResolveInput): Resolved {
     // Reject stray positional operands FIRST (before any API call) — this
     // catches split local timestamps, e.g.: --from 2026-06-23 14:29:54 MDT
     rejectListExtras("traces list", input);
-    return resolveListArgs(input);
+    const { args, state } = resolveListArgs(input);
+    const name = input.opts.name as string | undefined;
+    const userId = input.opts.userId as string | undefined;
+    const searchQuery = input.opts.searchQuery as string | undefined;
+    const filtersRaw = input.opts.filters as string | undefined;
+    let filters: unknown;
+    if (filtersRaw !== undefined) {
+      try {
+        filters = JSON.parse(filtersRaw);
+      } catch {
+        throw new CliError("--filters must be valid JSON", ExitCode.usage);
+      }
+      if (!Array.isArray(filters)) {
+        throw new CliError(
+          "--filters must be a JSON array of {field, op, value} predicates",
+          ExitCode.usage,
+        );
+      }
+    }
+    return {
+      args: {
+        ...args,
+        ...(name !== undefined ? { name } : {}),
+        ...(userId !== undefined ? { user_id: userId } : {}),
+        ...(searchQuery !== undefined ? { search_query: searchQuery } : {}),
+        ...(input.opts.includeEvaluations === true ? { include_evaluations: true } : {}),
+        ...(filters !== undefined ? { filters } : {}),
+      },
+      state,
+    };
   },
   render(payload: unknown, ctx: RenderContext): void {
     const state = ctx.state as ListState;

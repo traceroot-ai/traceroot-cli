@@ -246,6 +246,20 @@ describe("traces list (enhancer path)", () => {
   });
 });
 
+describe("traces list --filters (typed filters through the dispatcher)", () => {
+  it("JSON-stringifies the parsed filters array into the query string", async () => {
+    const h = harness(jsonResponse({ data: [], meta: { page: 1, limit: 50, total: 0 } }));
+    const predicates = '[{"field":"model_name","op":"in","value":["gpt-4o"]}]';
+    await h.run("traces", "list", "--json", "--filters", predicates, "--name", "chat");
+    const url = new URL(h.fake.calls[0].url);
+    expect(url.pathname).toBe("/api/v1/public/traces");
+    // resolveArgs parses the JSON; the registry dispatcher re-stringifies the
+    // array into the query param, matching the server's JSON-content contract.
+    expect(url.searchParams.get("filters")).toBe(predicates);
+    expect(url.searchParams.get("name")).toBe("chat");
+  });
+});
+
 describe("traces get (enhancer path)", () => {
   it("a failed get_trace dispatch never reaches render: nothing is written and the finding lookup never runs", async () => {
     // registerOne awaits executeTool before calling enhancer.render (see
