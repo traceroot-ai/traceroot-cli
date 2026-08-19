@@ -2,8 +2,8 @@
 
 ## @traceroot-ai/tools 0.1.0
 
-Built from https://github.com/traceroot-ai/traceroot commit `df3cd621`
-(`frontend/packages/tools`) on 2026-08-17, because the package is not yet
+Built from https://github.com/traceroot-ai/traceroot commit `8e7e8c60`
+(`frontend/packages/tools`) on 2026-08-19, because the package is not yet
 published to npm — a packed tarball stands in until its first npm release.
 Rebuild:
 

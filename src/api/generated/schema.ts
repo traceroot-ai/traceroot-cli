@@ -84,6 +84,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/detectors/{detector_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Detector
+         * @description Get one detector's full configuration for the key's project.
+         */
+        get: operations["get_detector"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/evaluation-runs": {
         parameters: {
             query?: never;
@@ -437,6 +457,50 @@ export interface components {
              * @enum {string}
              */
             status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
+        };
+        /**
+         * DetectorDetail
+         * @description A detector's full configuration (Postgres ``detectors`` + optional trigger).
+         *
+         *     ``trigger_conditions`` comes from ``detector_triggers.conditions`` and is
+         *     None when the detector has no trigger row (it then runs on every sampled
+         *     trace).
+         */
+        DetectorDetail: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detection Model */
+            detection_model: string | null;
+            /** Detection Provider */
+            detection_provider: string | null;
+            /** Detection Source */
+            detection_source: string | null;
+            /** Detector Id */
+            detector_id: string;
+            /** Enable Rca */
+            enable_rca: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            /** Output Schema */
+            output_schema: unknown | null;
+            /** Prompt */
+            prompt: string;
+            /** Sample Rate */
+            sample_rate: number;
+            /** Template */
+            template: string;
+            /** Trigger Conditions */
+            trigger_conditions: unknown | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /**
          * DetectorItem
@@ -1443,6 +1507,81 @@ export interface operations {
                 };
             };
             /** @description Failed to read finding */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    get_detector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                detector_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectorDetail"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Detector not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Failed to read detector */
             500: {
                 headers: {
                     [name: string]: unknown;

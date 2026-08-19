@@ -33,6 +33,7 @@ export const PLACEMENTS: Record<string, Placement> = {
   export_trace: { kind: "command", path: ["traces", "export"] },
   list_trace_filter_values: { kind: "command", path: ["traces", "filter-values"] },
   list_detectors: { kind: "command", path: ["detectors", "list"] },
+  get_detector: { kind: "command", path: ["detectors", "get"] },
   list_findings: { kind: "command", path: ["findings", "list"] },
   get_finding: { kind: "command", path: ["findings", "get"] },
   get_finding_by_trace: {

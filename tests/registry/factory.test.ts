@@ -334,3 +334,16 @@ describe("traces export (enhancer path)", () => {
     expect(h.fake.calls.length).toBe(1);
   });
 });
+
+describe("detectors get (zero-code path)", () => {
+  it("fills the path param and renders the detail as key/value by default", async () => {
+    // get_detector ships purely from the factory: one placement line in
+    // naming.ts, no enhancer, no handler code.
+    const payload = { detector_id: "det-1", name: "latency", template: "logic" };
+    const h = harness(jsonResponse(payload));
+    await h.run("detectors", "get", "det-1");
+    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/detectors/det-1");
+    expect(h.out.data).toContain("Detector id:  det-1");
+    expect(h.out.data).toContain("Name:         latency");
+  });
+});

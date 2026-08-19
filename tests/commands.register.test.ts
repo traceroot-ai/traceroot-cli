@@ -28,12 +28,13 @@ describe("buildProgram", () => {
     expect(names).toContain("doctor");
   });
 
-  it("registers the detectors command with a list subcommand", () => {
+  it("registers the detectors command with list and get subcommands", () => {
     const program = buildProgram();
     expect(childNames(program)).toContain("detectors");
     const detectors = program.commands.find((c) => c.name() === "detectors");
     expect(detectors).toBeDefined();
     expect(childNames(detectors as Command)).toContain("list");
+    expect(childNames(detectors as Command)).toContain("get");
   });
 
   it("registers the findings command with list and get subcommands", () => {
