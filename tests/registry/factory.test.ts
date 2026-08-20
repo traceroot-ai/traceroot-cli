@@ -83,6 +83,19 @@ describe("generated sessions commands (zero-code path)", () => {
     expect(() => assertKnownArgs(entry, { bogus: "x" })).toThrow(
       /resolveArgs for 'list_sessions' produced arg 'bogus'/,
     );
+    // Inherited Object.prototype keys must not slip through the `in`-style check.
+    expect(() => assertKnownArgs(entry, { toString: "x" })).toThrow(/produced arg 'toString'/);
+  });
+
+  it("rejects an unparseable date-time flag as a usage error before any network call", async () => {
+    const h = harness(jsonResponse({ data: [] }));
+    const err = await h.run("sessions", "list", "--start-after", "not-a-date").catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toBe(
+      "--start-after must be an ISO 8601 timestamp, e.g. 2026-06-01T13:00:00Z",
+    );
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect(h.fake.calls.length).toBe(0);
   });
 
   it("throws at registration when an enhancer's argument count diverges from the path parameters", async () => {

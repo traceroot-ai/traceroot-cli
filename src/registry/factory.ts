@@ -206,6 +206,15 @@ function coerce(prop: string, schema: ParamSchema, raw: unknown): unknown {
       throw new CliError(`${flag} must be valid JSON`, ExitCode.usage);
     }
   }
+  if (schema.format === "date-time" && Number.isNaN(Date.parse(raw))) {
+    // Light client-side check so an unparseable timestamp is a usage error
+    // (exit 2) instead of a server 400 surfaced as internal. The server stays
+    // authoritative on the exact accepted forms.
+    throw new CliError(
+      `${flag} must be an ISO 8601 timestamp, e.g. 2026-06-01T13:00:00Z`,
+      ExitCode.usage,
+    );
+  }
   return raw;
 }
 
@@ -233,7 +242,8 @@ function checkRange(flag: string, value: number, schema: ParamSchema): number {
  */
 export function assertKnownArgs(entry: RegistryEntry, args: Record<string, unknown>): void {
   for (const key of Object.keys(args)) {
-    if (!(key in entry.inputSchema.properties)) {
+    // Object.hasOwn, not `in`: inherited keys like "toString" must not pass.
+    if (!Object.hasOwn(entry.inputSchema.properties, key)) {
       throw new Error(
         `internal: resolveArgs for '${entry.name}' produced arg '${key}' not in the tool's input schema — the dispatcher would silently drop it`,
       );
