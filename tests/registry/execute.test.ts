@@ -93,6 +93,15 @@ describe("executeTool", () => {
     expect((err as CliError).message).toBe("request failed with status 401");
   });
 
+  it("classifies a malformed JSON body on a 2xx as internal, not network", async () => {
+    const badJsonFetch = (() =>
+      Promise.resolve(new Response("definitely-not-json", { status: 200 }))) as typeof fetch;
+    const err = await executeTool(listSessions, {}, transport(badJsonFetch)).catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.internal);
+    expect((err as CliError).message).toBe("request to https://api.test returned invalid JSON");
+  });
+
   it("still fails as a transport error when a SUCCESS body fails to stream", async () => {
     const brokenBodyFetch = (() =>
       Promise.resolve(new Response(erroringBody(), { status: 200 }))) as typeof fetch;

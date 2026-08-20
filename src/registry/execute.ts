@@ -98,6 +98,12 @@ function translate(err: unknown, transport: Transport): unknown {
   if (err instanceof Error && err.name === "TimeoutError") {
     return new CliError(timeoutMessage(transport.base, transport.timeoutMs), ExitCode.network);
   }
+  if (err instanceof SyntaxError) {
+    // A 2xx response whose body isn't valid JSON (the registry client parses
+    // success bodies unconditionally) is a server-side contract violation, not
+    // a transport failure: internal (1), never retryable network (5).
+    return new CliError(`request to ${transport.base} returned invalid JSON`, ExitCode.internal);
+  }
   const message = err instanceof Error ? err.message : String(err);
   const safe = redactSecret(message, transport.apiKey);
   return new CliError(transportFailureMessage(transport.base, safe), ExitCode.network);
