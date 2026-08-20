@@ -133,11 +133,12 @@ function registerOne(
       },
       dispatchToolOptional: (companionName, companionArgs) => {
         // Validation throws SYNCHRONOUSLY — before any promise exists — so a
-        // programming bug (bad companion name, schema-unknown arg) escapes even
-        // when the caller chains `.catch(...)`. Only the API call itself is
-        // best-effort: any dispatch failure degrades to null.
+        // programming bug (bad companion name, schema-unknown arg, blank path
+        // param) escapes even when the caller chains `.catch(...)`. Only the
+        // API call itself is best-effort: any dispatch failure degrades to null.
         const companion = requireCompanion(entry.name, companionName);
         assertKnownArgs(companion, companionArgs);
+        assertPathParamsPresent(companion, companionArgs);
         return executeTool(companion, companionArgs, transport).catch(() => null);
       },
     };

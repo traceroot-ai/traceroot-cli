@@ -174,6 +174,29 @@ describe("generated sessions commands (zero-code path)", () => {
     }
   });
 
+  it("dispatchToolOptional rejects a blank companion path param instead of resolving null", async () => {
+    const { ENHANCERS } = await import("../../src/registry/enhancers/index.js");
+    const original = ENHANCERS.get_finding;
+    // A valid companion pair (get_finding → get_finding_by_trace) but a blank
+    // path param: assertPathParamsPresent must throw synchronously, escaping
+    // the render's own .catch, instead of the dispatcher's raw error being
+    // swallowed into a silent null.
+    ENHANCERS.get_finding = {
+      render: async (_payload, ctx) => {
+        await ctx.dispatchToolOptional("get_finding_by_trace", { trace_id: "" }).catch(() => null);
+      },
+    };
+    try {
+      const h = harness(jsonResponse({ finding_id: "fnd-1" }));
+      const err = await h.run("findings", "get", "fnd-1").catch((e) => e);
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).message).toBe("missing required argument 'trace-id'");
+      expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    } finally {
+      ENHANCERS.get_finding = original;
+    }
+  });
+
   it("rejectExtras throws the exact stray-operand message and is a no-op on empty extras", async () => {
     const { rejectExtras } = await import("../../src/registry/factory.js");
     expect(() => rejectExtras({ opts: {}, positionals: {}, extras: [] })).not.toThrow();
