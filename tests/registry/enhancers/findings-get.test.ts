@@ -205,4 +205,9 @@ describe("categoryLabel", () => {
     expect(categoryLabel(null)).toBe("Unknown");
     expect(categoryLabel(undefined)).toBe("Unknown");
   });
+
+  it("does not leak inherited Object.prototype members for hostile template names", () => {
+    expect(categoryLabel("toString")).toBe("ToString");
+    expect(categoryLabel("constructor")).toBe("Constructor");
+  });
 });

@@ -25,7 +25,11 @@ export function categoryLabel(template: string | null | undefined): string {
   if (!template) {
     return "Unknown";
   }
-  return CATEGORY_LABELS[template] ?? template.charAt(0).toUpperCase() + template.slice(1);
+  // Object.hasOwn, not bare indexing: a template literally named "toString"
+  // must hit the title-case fallback, not an inherited Object.prototype method.
+  return Object.hasOwn(CATEGORY_LABELS, template)
+    ? (CATEGORY_LABELS[template] as string)
+    : template.charAt(0).toUpperCase() + template.slice(1);
 }
 
 /** Core, network-free rendering logic for `findings get`. Exported for tests. */
