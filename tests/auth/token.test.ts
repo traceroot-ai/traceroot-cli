@@ -132,6 +132,61 @@ describe("createTokenProvider", () => {
     expect((err as CliError).message).not.toContain("unreadable");
   });
 
+  it("maps a 403 from mint to an auth error prompting re-login", async () => {
+    const { provider } = providerWith(() => jsonResponse({ error: "no access" }, 403));
+    const err = await provider.getAccessToken().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.auth);
+    expect((err as CliError).message).toContain("traceroot login");
+  });
+
+  it("treats a JSON null body as malformed instead of throwing a TypeError", async () => {
+    const { provider } = providerWith(() => jsonResponse(null));
+    const err = await provider.getAccessToken().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.internal);
+    expect((err as CliError).message).toContain("malformed");
+  });
+
+  it("caches with the default TTL when expiresIn is missing (no re-mint every call)", async () => {
+    let clock = 0;
+    let minted = 0;
+    const { provider, calls } = providerWith(
+      () => {
+        minted += 1;
+        return jsonResponse({ accessToken: `jwt-${minted}`, tokenType: "Bearer" });
+      },
+      { now: () => clock },
+    );
+    await provider.getAccessToken();
+    clock += 5 * 60 * 1000; // 5 min later: well within the default 600s TTL
+    expect(await provider.getAccessToken()).toBe("jwt-1");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("collapses concurrent first-mint calls into a single request", async () => {
+    let minted = 0;
+    const { provider, calls } = providerWith(async () => {
+      minted += 1;
+      // Resolve on a later microtask so the second caller arrives mid-flight.
+      await Promise.resolve();
+      return mintResponse(`jwt-${minted}`);
+    });
+    const [a, b, c] = await Promise.all([
+      provider.getAccessToken(),
+      provider.getAccessToken(),
+      provider.getAccessToken(),
+    ]);
+    expect([a, b, c]).toEqual(["jwt-1", "jwt-1", "jwt-1"]);
+    expect(calls).toHaveLength(1);
+  });
+
   it("rejects a non-http(s) auth host at construction", () => {
     expect(() => createTokenProvider({ authHost: "not a url", sessionToken: SESSION })).toThrow(
       CliError,

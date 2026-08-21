@@ -215,6 +215,87 @@ describe("runDeviceFlow", () => {
     }
   });
 
+  it("backs off (not fatal) on a bare HTTP 429 while polling, and caps the interval", async () => {
+    const h = harness({
+      responder: (call, polls) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          return jsonResponse(CODE_RESPONSE);
+        }
+        // Many 429s in a row: must keep polling and eventually succeed.
+        return polls < 5
+          ? jsonResponse({ error: "rate limited" }, 429)
+          : jsonResponse({ access_token: "sess-1" });
+      },
+    });
+    const result = await h.run();
+    expect(result.sessionToken).toBe("sess-1");
+    // Backoff grows by 5s but is capped at 20s.
+    expect(Math.max(...h.sleeps)).toBeLessThanOrEqual(20000);
+    expect(h.sleeps.length).toBeGreaterThan(3);
+  });
+
+  it("classifies a 5xx on device/code as a network error, not an auth failure", async () => {
+    const h = harness({ responder: () => jsonResponse({ error: "down" }, 503) });
+    const err = await h.run().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+  });
+
+  it("falls back to the default interval when the server sends a non-positive interval", async () => {
+    const h = harness({
+      responder: (call, polls) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          return jsonResponse({ ...CODE_RESPONSE, interval: 0 });
+        }
+        return polls < 1 ? tokenPending() : jsonResponse({ access_token: "sess-1" });
+      },
+    });
+    await h.run();
+    // Not a zero-length busy-poll: the default 5s interval is used.
+    expect(h.sleeps.every((ms) => ms >= 5000)).toBe(true);
+  });
+
+  it("does not poll once the interval steps past the deadline", async () => {
+    const h = harness({
+      responder: (call) =>
+        call.url.endsWith("/api/auth/device/code")
+          ? jsonResponse({ ...CODE_RESPONSE, expires_in: 3 }) // deadline < one 5s interval
+          : jsonResponse({ access_token: "late" }),
+    });
+    const err = await h.run().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toContain("expired");
+    // The very first sleep already crosses the deadline, so no token poll fires.
+    expect(h.calls.some((c) => c.url.endsWith("/api/auth/device/token"))).toBe(false);
+  });
+
+  it("builds the browser URL correctly when only a verification_uri with a query is given", async () => {
+    const h = harness({
+      responder: (call) =>
+        call.url.endsWith("/api/auth/device/code")
+          ? jsonResponse({
+              device_code: "dev-1",
+              user_code: "ABCD-EFGH",
+              verification_uri: "https://ui/device?theme=dark",
+              expires_in: 1800,
+              interval: 5,
+            })
+          : jsonResponse({ access_token: "sess-1" }),
+    });
+    await h.run();
+    const url = new URL(h.opened[0] as string);
+    expect(url.searchParams.get("theme")).toBe("dark");
+    expect(url.searchParams.get("user_code")).toBe("ABCD-EFGH");
+    // No corrupted double-query.
+    expect((h.opened[0] as string).match(/\?/g)?.length).toBe(1);
+  });
+
   it("surfaces a device/code failure as a CliError", async () => {
     const h = harness({
       responder: () => jsonResponse({ error: "invalid_client" }, 400),

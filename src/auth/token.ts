@@ -8,6 +8,9 @@ import { getVersion } from "../version.js";
  */
 const REFRESH_WINDOW_MS = 60_000;
 
+/** Documented mint TTL, used when a response omits a positive `expiresIn`. */
+const DEFAULT_EXPIRES_S = 600;
+
 export interface TokenProviderOptions {
   /** The host that issued the session (the Next.js app) — mint calls go here. */
   authHost: string;
@@ -28,6 +31,8 @@ export interface TokenProvider {
    * here — never the raw session token.
    */
   getAccessToken(): Promise<string>;
+  /** Drops the cached token so the next {@link getAccessToken} re-mints. */
+  invalidate(): void;
 }
 
 /** Shape of a successful mint response from `POST /api/cli/token`. */
@@ -99,7 +104,9 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenProvider {
       throw new CliError(`request to ${base} failed: ${safe}`, ExitCode.network);
     }
 
-    if (res.status === 401) {
+    // 401 (revoked/expired) and 403 (no access) both mean the session can no
+    // longer authenticate — re-login, per the CLI's auth exit-code class.
+    if (res.status === 401 || res.status === 403) {
       throw new CliError(
         "session expired or revoked — run `traceroot login` to sign in again",
         ExitCode.auth,
@@ -112,29 +119,51 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenProvider {
       throw new CliError(`token mint failed with status ${res.status}`, ExitCode.internal);
     }
 
-    let body: MintBody;
+    let parsed: unknown;
     try {
-      body = (await res.json()) as MintBody;
+      parsed = await res.json();
     } catch (err) {
       // A stall streaming the body is a network timeout, not a malformed
       // response — match client.ts so the exit-code contract stays honest.
       throwIfTimeout(err);
       throw new CliError("token mint returned an unreadable response", ExitCode.internal);
     }
+    // A JSON `null` or a non-object body is malformed — read fields only off a
+    // real object so it never throws a raw TypeError.
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new CliError("token mint returned a malformed response", ExitCode.internal);
+    }
+    const body = parsed as MintBody;
     if (typeof body.accessToken !== "string" || body.accessToken === "") {
       throw new CliError("token mint returned no access token", ExitCode.internal);
     }
-    const expiresIn = typeof body.expiresIn === "number" && body.expiresIn > 0 ? body.expiresIn : 0;
+    // `expiresIn` is advisory; fall back to the documented default rather than
+    // collapsing the cache to zero lifetime (which would re-mint every request).
+    const expiresIn =
+      typeof body.expiresIn === "number" && body.expiresIn > 0 ? body.expiresIn : DEFAULT_EXPIRES_S;
     cached = { jwt: body.accessToken, expiresAtMs: now() + expiresIn * 1000 };
     return body.accessToken;
   }
+
+  // Collapses concurrent mints: the first caller starts the exchange and every
+  // caller awaiting before it resolves shares that one request, so a burst of
+  // parallel reads costs one mint, not N against the shared rate-limit bucket.
+  let inflight: Promise<string> | null = null;
 
   return {
     async getAccessToken() {
       if (cached !== null && now() < cached.expiresAtMs - REFRESH_WINDOW_MS) {
         return cached.jwt;
       }
-      return mint();
+      if (inflight === null) {
+        inflight = mint().finally(() => {
+          inflight = null;
+        });
+      }
+      return inflight;
+    },
+    invalidate() {
+      cached = null;
     },
   };
 }

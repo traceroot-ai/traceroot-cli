@@ -8,6 +8,10 @@ export const DEVICE_CLIENT_ID = "traceroot-cli";
 /** Fallback poll interval (seconds) when the server does not send one. */
 const DEFAULT_INTERVAL_S = 5;
 
+/** Upper bound on the backed-off poll interval (seconds), so repeated
+ * `slow_down`/429 responses can't stretch the wait past the approval window. */
+const MAX_INTERVAL_S = 20;
+
 export interface DeviceFlowDeps {
   /** The host that runs the device-authorization endpoints (the Next.js app). */
   authHost: string;
@@ -64,6 +68,17 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   const base = deps.authHost.replace(/\/+$/, "");
   const { writers } = deps;
 
+  // A timeout covers the whole request, so it can fire while connecting, reading
+  // headers, or streaming the body — translate that one cause everywhere.
+  const throwIfTimeout = (err: unknown): void => {
+    if (deps.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
+      throw new CliError(
+        `request to ${base} timed out after ${deps.timeoutMs / 1000}s`,
+        ExitCode.network,
+      );
+    }
+  };
+
   async function post(path: string, body: Record<string, string>): Promise<Response> {
     const init: RequestInit = {
       method: "POST",
@@ -80,12 +95,7 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
     try {
       return await fetchImpl(`${base}${path}`, init);
     } catch (err) {
-      if (deps.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
-        throw new CliError(
-          `request to ${base} timed out after ${deps.timeoutMs / 1000}s`,
-          ExitCode.network,
-        );
-      }
+      throwIfTimeout(err);
       // A runtime error could echo request contents, and the poll body carries
       // the device_code (pre-approval, that plus the public client_id is enough
       // to claim the session) — redact every body value, matching the bearer
@@ -98,22 +108,32 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
     }
   }
 
+  /** Reads a JSON body, mapping a body-phase timeout to the network timeout and
+   * any other parse failure to an empty object (handled by the callers). */
+  async function readBody<T>(res: Response): Promise<T> {
+    try {
+      return (await res.json()) as T;
+    } catch (err) {
+      throwIfTimeout(err);
+      return {} as T;
+    }
+  }
+
   // ---- Step 1: obtain a device + user code pair. -----------------------------
   const codeRes = await post("/api/auth/device/code", { client_id: DEVICE_CLIENT_ID });
   if (!codeRes.ok) {
+    // A 5xx/429 is a server/rate-limit failure, not an auth rejection — don't
+    // tell scripts to re-authenticate over an outage.
     throw new CliError(
       `could not start device login (status ${codeRes.status}): ${await errorHint(codeRes)}`,
-      ExitCode.auth,
+      codeRes.status >= 500 || codeRes.status === 429 ? ExitCode.network : ExitCode.auth,
     );
   }
-  const code = (await codeRes.json().catch(() => ({}))) as DeviceCodeBody;
+  const code = await readBody<DeviceCodeBody>(codeRes);
   const deviceCode = asString(code.device_code);
   const userCode = asString(code.user_code);
   const verifyUrl =
-    asString(code.verification_uri_complete) ??
-    (asString(code.verification_uri)
-      ? `${asString(code.verification_uri)}?user_code=${encodeURIComponent(userCode ?? "")}`
-      : undefined);
+    asString(code.verification_uri_complete) ?? withUserCode(code.verification_uri, userCode);
   if (deviceCode === undefined || userCode === undefined || verifyUrl === undefined) {
     throw new CliError("device login returned an incomplete response", ExitCode.internal);
   }
@@ -125,8 +145,10 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   if (!isHttpUrl(verifyUrl)) {
     throw new CliError("device login returned an invalid verification URL", ExitCode.auth);
   }
-  const expiresInS = typeof code.expires_in === "number" ? code.expires_in : 30 * 60;
-  let intervalS = typeof code.interval === "number" ? code.interval : DEFAULT_INTERVAL_S;
+  const expiresInS = positiveNumber(code.expires_in) ?? 30 * 60;
+  // A zero/negative/non-finite interval would otherwise busy-poll the token
+  // endpoint; fall back to the default.
+  let intervalS = positiveNumber(code.interval) ?? DEFAULT_INTERVAL_S;
 
   // ---- Step 2: show instructions; the browser open is best-effort. -----------
   if (env.CI === "true") {
@@ -149,21 +171,24 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
 
   // ---- Step 3: poll until approved, denied, or expired. ----------------------
   const deadline = now() + expiresInS * 1000;
+  const expired = new CliError(
+    "device login expired before approval — run `traceroot login` again",
+    ExitCode.auth,
+  );
   while (true) {
-    if (now() >= deadline) {
-      throw new CliError(
-        "device login expired before approval — run `traceroot login` again",
-        ExitCode.auth,
-      );
-    }
     await sleep(intervalS * 1000);
+    // Re-check AFTER sleeping: an interval that steps past the deadline must not
+    // send one more poll that could accept a token after expiry.
+    if (now() >= deadline) {
+      throw expired;
+    }
 
     const res = await post("/api/auth/device/token", {
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       device_code: deviceCode,
       client_id: DEVICE_CLIENT_ID,
     });
-    const body = (await res.json().catch(() => ({}))) as TokenPollBody;
+    const body = await readBody<TokenPollBody>(res);
 
     if (res.ok) {
       const sessionToken = asString(body.access_token);
@@ -173,12 +198,19 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
       return { sessionToken };
     }
 
+    // A bare HTTP 429 (the endpoint's rate limiter) carries no `error` field —
+    // back off and keep polling rather than treating it as a fatal failure.
+    if (res.status === 429) {
+      intervalS = Math.min(intervalS + 5, MAX_INTERVAL_S);
+      continue;
+    }
+
     const error = asString(body.error);
     if (error === "authorization_pending") {
       continue;
     }
     if (error === "slow_down") {
-      intervalS += 5;
+      intervalS = Math.min(intervalS + 5, MAX_INTERVAL_S);
       continue;
     }
     if (error === "access_denied") {
@@ -192,13 +224,37 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
     }
     throw new CliError(
       `device login failed (status ${res.status})${error !== undefined ? `: ${error}` : ""}`,
-      ExitCode.auth,
+      res.status >= 500 ? ExitCode.network : ExitCode.auth,
     );
   }
 }
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** A finite, strictly-positive number, or undefined for anything else. */
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * Adds `user_code` to a verification URI via URL parsing, so a URI that already
+ * carries a query or fragment gets the parameter set correctly (naive `?=`
+ * concatenation would corrupt it). Returns undefined for an unusable input.
+ */
+function withUserCode(uri: unknown, userCode: string | undefined): string | undefined {
+  const base = asString(uri);
+  if (base === undefined || userCode === undefined) {
+    return undefined;
+  }
+  try {
+    const u = new URL(base);
+    u.searchParams.set("user_code", userCode);
+    return u.href;
+  } catch {
+    return undefined;
+  }
 }
 
 /** True only for a parseable http(s) URL. */
