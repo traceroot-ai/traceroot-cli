@@ -107,6 +107,31 @@ describe("createTokenProvider", () => {
     expect((err as CliError).message).toContain("<redacted>");
   });
 
+  it("reports a body-phase timeout as a network timeout, not an unreadable response", async () => {
+    const fake = createFakeFetch(
+      () =>
+        ({
+          status: 200,
+          ok: true,
+          json: () => Promise.reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })),
+        }) as unknown as Response,
+    );
+    const provider = createTokenProvider({
+      authHost: "https://ui",
+      sessionToken: SESSION,
+      fetchImpl: fake.fetchImpl,
+      timeoutMs: 30_000,
+    });
+    const err = await provider.getAccessToken().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+    expect((err as CliError).message).toContain("timed out");
+    expect((err as CliError).message).not.toContain("unreadable");
+  });
+
   it("rejects a non-http(s) auth host at construction", () => {
     expect(() => createTokenProvider({ authHost: "not a url", sessionToken: SESSION })).toThrow(
       CliError,

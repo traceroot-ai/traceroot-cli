@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runDeviceFlow } from "../../src/auth/deviceFlow.js";
+import { browserOpenCommand, runDeviceFlow } from "../../src/auth/deviceFlow.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { type FetchCall, createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -194,6 +194,27 @@ describe("runDeviceFlow", () => {
     expect(plain.err.data).not.toContain("TRACEROOT_API_KEY");
   });
 
+  it("rejects a non-http verification URL without opening or polling", async () => {
+    for (const bad of ["javascript:alert(1)", "file:///etc/passwd", "not a url"]) {
+      const h = harness({
+        responder: (call) =>
+          call.url.endsWith("/api/auth/device/code")
+            ? jsonResponse({ ...CODE_RESPONSE, verification_uri_complete: bad })
+            : jsonResponse({ access_token: "sess-1" }),
+      });
+      const err = await h.run().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(CliError);
+      expect((err as CliError).message).toContain("verification URL");
+      // Never printed, never handed to the opener, never polled.
+      expect(h.opened).toEqual([]);
+      expect(h.err.data).not.toContain(bad);
+      expect(h.calls.some((c) => c.url.endsWith("/api/auth/device/token"))).toBe(false);
+    }
+  });
+
   it("surfaces a device/code failure as a CliError", async () => {
     const h = harness({
       responder: () => jsonResponse({ error: "invalid_client" }, 400),
@@ -203,5 +224,21 @@ describe("runDeviceFlow", () => {
       (e: unknown) => e,
     );
     expect(err).toBeInstanceOf(CliError);
+  });
+});
+
+describe("browserOpenCommand", () => {
+  it("never routes the URL through cmd.exe on Windows", () => {
+    const [cmd, args] = browserOpenCommand("win32", "https://ui/device?user_code=A&b=2");
+    // cmd.exe re-parses metacharacters (& | ^ etc.) → command injection. rundll32
+    // receives the URL as a single non-shell argument, so it cannot.
+    expect(cmd).not.toBe("cmd");
+    expect(cmd).toBe("rundll32");
+    expect(args).toEqual(["url.dll,FileProtocolHandler", "https://ui/device?user_code=A&b=2"]);
+  });
+
+  it("uses the native opener on macOS and Linux", () => {
+    expect(browserOpenCommand("darwin", "https://ui/d")).toEqual(["open", ["https://ui/d"]]);
+    expect(browserOpenCommand("linux", "https://ui/d")).toEqual(["xdg-open", ["https://ui/d"]]);
   });
 });

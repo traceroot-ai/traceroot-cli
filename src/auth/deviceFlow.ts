@@ -117,6 +117,14 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   if (deviceCode === undefined || userCode === undefined || verifyUrl === undefined) {
     throw new CliError("device login returned an incomplete response", ExitCode.internal);
   }
+  // The verification URL is server-supplied and gets both printed and handed to
+  // the OS browser opener, so reject anything that is not plain http(s) before
+  // either happens: a file:/javascript:/custom-scheme URL (a compromised or
+  // MITM'd auth host) must never be opened, and the http(s) gate plus the
+  // shell-free opener below close the classic browser-opener injection.
+  if (!isHttpUrl(verifyUrl)) {
+    throw new CliError("device login returned an invalid verification URL", ExitCode.auth);
+  }
   const expiresInS = typeof code.expires_in === "number" ? code.expires_in : 30 * 60;
   let intervalS = typeof code.interval === "number" ? code.interval : DEFAULT_INTERVAL_S;
 
@@ -193,6 +201,34 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+/** True only for a parseable http(s) URL. */
+function isHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The opener command + argv for a platform. On Windows this deliberately avoids
+ * `cmd /c start`: cmd.exe re-parses its command line and treats `& | ^ < >` as
+ * shell metacharacters, which a hostile verification URL could exploit for
+ * command injection. `rundll32 url.dll,FileProtocolHandler <url>` receives the
+ * URL as one non-shell argument, so nothing re-interprets it. Exported for
+ * tests; the URL is already validated as http(s) by the caller.
+ */
+export function browserOpenCommand(platform: NodeJS.Platform, url: string): [string, string[]] {
+  if (platform === "darwin") {
+    return ["open", [url]];
+  }
+  if (platform === "win32") {
+    return ["rundll32", ["url.dll,FileProtocolHandler", url]];
+  }
+  return ["xdg-open", [url]];
+}
+
 /** Best-effort `error`/`error_description` extraction for a failure message. */
 async function errorHint(res: Response): Promise<string> {
   try {
@@ -208,15 +244,10 @@ async function errorHint(res: Response): Promise<string> {
  * waits on the browser. Resolves `false` when the spawn fails synchronously.
  */
 async function openBrowserForPlatform(url: string): Promise<boolean> {
-  const [cmd, args] =
-    process.platform === "darwin"
-      ? ["open", [url]]
-      : process.platform === "win32"
-        ? ["cmd", ["/c", "start", "", url]]
-        : ["xdg-open", [url]];
+  const [cmd, args] = browserOpenCommand(process.platform, url);
   return new Promise((resolve) => {
     try {
-      const child = spawn(cmd, args as string[], { stdio: "ignore", detached: true });
+      const child = spawn(cmd, args, { stdio: "ignore", detached: true });
       child.on("error", () => resolve(false));
       child.unref();
       resolve(true);

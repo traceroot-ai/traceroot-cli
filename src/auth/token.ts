@@ -76,16 +76,23 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenProvider {
       init.signal = AbortSignal.timeout(opts.timeoutMs);
     }
 
-    let res: Response;
-    try {
-      res = await fetchImpl(url, init);
-    } catch (err) {
+    // The timeout deadline covers the whole request, so it can fire while
+    // connecting, reading headers, or streaming the body. Translate that one
+    // cause into a network-class timeout wherever it surfaces.
+    const throwIfTimeout = (err: unknown): void => {
       if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
         throw new CliError(
           `request to ${base} timed out after ${opts.timeoutMs / 1000}s`,
           ExitCode.network,
         );
       }
+    };
+
+    let res: Response;
+    try {
+      res = await fetchImpl(url, init);
+    } catch (err) {
+      throwIfTimeout(err);
       // Never echo the session token: redact it from whatever the runtime says.
       const message = err instanceof Error ? err.message : String(err);
       const safe = message.split(opts.sessionToken).join("<redacted>");
@@ -108,7 +115,10 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenProvider {
     let body: MintBody;
     try {
       body = (await res.json()) as MintBody;
-    } catch {
+    } catch (err) {
+      // A stall streaming the body is a network timeout, not a malformed
+      // response — match client.ts so the exit-code contract stays honest.
+      throwIfTimeout(err);
       throw new CliError("token mint returned an unreadable response", ExitCode.internal);
     }
     if (typeof body.accessToken !== "string" || body.accessToken === "") {
