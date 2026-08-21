@@ -308,6 +308,66 @@ describe("runDeviceFlow", () => {
   });
 });
 
+describe("runDeviceFlow timeouts and malformed bodies", () => {
+  const noopWriters = () => ({ out: new StringSink(), err: new StringSink() });
+
+  function run(fetchImpl: typeof fetch) {
+    return runDeviceFlow({
+      authHost: "https://ui",
+      fetchImpl,
+      timeoutMs: 30_000,
+      sleep: async () => {},
+      now: () => 0,
+      openBrowser: async () => true,
+      env: {},
+      writers: noopWriters(),
+    });
+  }
+
+  it("maps a request-phase timeout to a network error", async () => {
+    const fetchImpl = (async () => {
+      throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+    }) as unknown as typeof fetch;
+    const err = await run(fetchImpl).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+    expect((err as CliError).message).toContain("timed out");
+  });
+
+  it("maps a body-phase timeout on device/code to a network error", async () => {
+    const fetchImpl = (async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(Object.assign(new Error("aborted"), { name: "TimeoutError" })),
+      }) as unknown as Response) as unknown as typeof fetch;
+    const err = await run(fetchImpl).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+  });
+
+  it("treats a JSON null body as incomplete, never a raw TypeError", async () => {
+    const fetchImpl = (async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(null),
+      }) as unknown as Response) as unknown as typeof fetch;
+    const err = await run(fetchImpl).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toContain("incomplete");
+  });
+});
+
 describe("browserOpenCommand", () => {
   it("never routes the URL through cmd.exe on Windows", () => {
     const [cmd, args] = browserOpenCommand("win32", "https://ui/device?user_code=A&b=2");

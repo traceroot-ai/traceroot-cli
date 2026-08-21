@@ -170,6 +170,27 @@ describe("createTokenProvider", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("rejects a non-finite expiresIn and uses the default TTL (not a forever cache)", async () => {
+    let clock = 0;
+    let minted = 0;
+    const { provider, calls } = providerWith(
+      () => {
+        minted += 1;
+        return jsonResponse({
+          accessToken: `jwt-${minted}`,
+          tokenType: "Bearer",
+          expiresIn: Number.POSITIVE_INFINITY,
+        });
+      },
+      { now: () => clock },
+    );
+    await provider.getAccessToken();
+    // Past the default 600s TTL: a forever-cache would still return jwt-1.
+    clock += 20 * 60 * 1000;
+    expect(await provider.getAccessToken()).toBe("jwt-2");
+    expect(calls).toHaveLength(2);
+  });
+
   it("collapses concurrent first-mint calls into a single request", async () => {
     let minted = 0;
     const { provider, calls } = providerWith(async () => {

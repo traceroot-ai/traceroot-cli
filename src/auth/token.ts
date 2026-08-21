@@ -138,9 +138,12 @@ export function createTokenProvider(opts: TokenProviderOptions): TokenProvider {
       throw new CliError("token mint returned no access token", ExitCode.internal);
     }
     // `expiresIn` is advisory; fall back to the documented default rather than
-    // collapsing the cache to zero lifetime (which would re-mint every request).
+    // collapsing the cache to zero lifetime (re-mint every request) — and reject
+    // a non-finite value (e.g. Infinity), which would cache the JWT forever.
     const expiresIn =
-      typeof body.expiresIn === "number" && body.expiresIn > 0 ? body.expiresIn : DEFAULT_EXPIRES_S;
+      typeof body.expiresIn === "number" && Number.isFinite(body.expiresIn) && body.expiresIn > 0
+        ? body.expiresIn
+        : DEFAULT_EXPIRES_S;
     cached = { jwt: body.accessToken, expiresAtMs: now() + expiresIn * 1000 };
     return body.accessToken;
   }

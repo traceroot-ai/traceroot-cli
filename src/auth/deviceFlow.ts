@@ -109,23 +109,30 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   }
 
   /** Reads a JSON body, mapping a body-phase timeout to the network timeout and
-   * any other parse failure to an empty object (handled by the callers). */
+   * any non-object body (a `null`, an array, a parse failure) to an empty object
+   * — so callers read fields off a real object and never hit a raw TypeError. */
   async function readBody<T>(res: Response): Promise<T> {
+    let parsed: unknown;
     try {
-      return (await res.json()) as T;
+      parsed = await res.json();
     } catch (err) {
       throwIfTimeout(err);
       return {} as T;
     }
+    return (typeof parsed === "object" && parsed !== null ? parsed : {}) as T;
   }
 
   // ---- Step 1: obtain a device + user code pair. -----------------------------
   const codeRes = await post("/api/auth/device/code", { client_id: DEVICE_CLIENT_ID });
   if (!codeRes.ok) {
-    // A 5xx/429 is a server/rate-limit failure, not an auth rejection — don't
-    // tell scripts to re-authenticate over an outage.
+    // Read the error body through readBody so a body-phase timeout on the error
+    // response stays a network error rather than being reported as an auth
+    // failure. A 5xx/429 is a server/rate-limit failure, not an auth rejection.
+    const errBody = await readBody<Record<string, unknown>>(codeRes);
+    const hint =
+      asString(errBody.error_description) ?? asString(errBody.error) ?? "unexpected response";
     throw new CliError(
-      `could not start device login (status ${codeRes.status}): ${await errorHint(codeRes)}`,
+      `could not start device login (status ${codeRes.status}): ${hint}`,
       codeRes.status >= 500 || codeRes.status === 429 ? ExitCode.network : ExitCode.auth,
     );
   }
@@ -283,16 +290,6 @@ export function browserOpenCommand(platform: NodeJS.Platform, url: string): [str
     return ["rundll32", ["url.dll,FileProtocolHandler", url]];
   }
   return ["xdg-open", [url]];
-}
-
-/** Best-effort `error`/`error_description` extraction for a failure message. */
-async function errorHint(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as Record<string, unknown>;
-    return asString(body.error_description) ?? asString(body.error) ?? "unexpected response";
-  } catch {
-    return "unexpected response";
-  }
 }
 
 /**
