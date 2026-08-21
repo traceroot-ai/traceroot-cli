@@ -25,6 +25,18 @@ function providerWith(
 }
 
 describe("createTokenProvider", () => {
+  it("rejects a malformed auth host as a usage error at construction", () => {
+    let thrown: unknown;
+    try {
+      createTokenProvider({ authHost: "not a url", sessionToken: SESSION });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).exitCode).toBe(ExitCode.usage);
+    expect((thrown as CliError).message).not.toContain(SESSION);
+  });
+
   it("mints via POST /api/cli/token with the session bearer and user-agent", async () => {
     const { provider, calls } = providerWith(() => mintResponse());
     const token = await provider.getAccessToken();
@@ -173,22 +185,34 @@ describe("createTokenProvider", () => {
   it("rejects a non-finite expiresIn and uses the default TTL (not a forever cache)", async () => {
     let clock = 0;
     let minted = 0;
-    const { provider, calls } = providerWith(
-      () => {
-        minted += 1;
-        return jsonResponse({
-          accessToken: `jwt-${minted}`,
-          tokenType: "Bearer",
-          expiresIn: Number.POSITIVE_INFINITY,
-        });
-      },
-      { now: () => clock },
-    );
-    await provider.getAccessToken();
-    // Past the default 600s TTL: a forever-cache would still return jwt-1.
+    // jsonResponse would JSON.stringify Infinity into `null`, exercising the
+    // missing-field path instead of the Number.isFinite guard — so deliver a
+    // real Infinity through .json() to hit the branch under test.
+    const fetchImpl = (async () => {
+      minted += 1;
+      return {
+        status: 200,
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            accessToken: `jwt-${minted}`,
+            tokenType: "Bearer",
+            expiresIn: Number.POSITIVE_INFINITY,
+          }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const provider = createTokenProvider({
+      authHost: "https://ui",
+      sessionToken: SESSION,
+      fetchImpl,
+      now: () => clock,
+    });
+    expect(await provider.getAccessToken()).toBe("jwt-1");
+    // Past the default 600s TTL: a forever-cache (Infinity accepted) would still
+    // return jwt-1, so this proves the guard fell back to a finite TTL.
     clock += 20 * 60 * 1000;
     expect(await provider.getAccessToken()).toBe("jwt-2");
-    expect(calls).toHaveLength(2);
+    expect(minted).toBe(2);
   });
 
   it("collapses concurrent first-mint calls into a single request", async () => {
@@ -208,9 +232,11 @@ describe("createTokenProvider", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("rejects a non-http(s) auth host at construction", () => {
-    expect(() => createTokenProvider({ authHost: "not a url", sessionToken: SESSION })).toThrow(
-      CliError,
+  it("rejects a non-http(s) auth host scheme at construction", () => {
+    // A value that PARSES as a URL, so this drives the scheme guard — the
+    // malformed-URL branch is covered by the construction test above.
+    expect(() => createTokenProvider({ authHost: "ftp://ui", sessionToken: SESSION })).toThrow(
+      /unsupported host scheme/,
     );
   });
 });

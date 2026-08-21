@@ -1,3 +1,4 @@
+import { normalizeBaseUrl } from "../api/client.js";
 import { CliError, ExitCode } from "../output.js";
 import { getVersion } from "../version.js";
 
@@ -51,7 +52,9 @@ interface MintBody {
 export function createTokenProvider(opts: TokenProviderOptions): TokenProvider {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const now = opts.now ?? Date.now;
-  const base = opts.authHost.replace(/\/+$/, "");
+  // Same validation as the API client: a malformed/non-http(s) auth host is a
+  // usage error up front, not a garbage URL handed to fetch.
+  const base = normalizeBaseUrl(opts.authHost);
   let parsed: URL;
   try {
     parsed = new URL(base);

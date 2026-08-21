@@ -258,6 +258,147 @@ describe("runDeviceFlow", () => {
     expect(h.sleeps.every((ms) => ms >= 5000)).toBe(true);
   });
 
+  it("clamps an absurdly large server interval instead of overflowing setTimeout", async () => {
+    const h = harness({
+      responder: (call, polls) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          // 10^10 seconds → 10^13 ms, past setTimeout's 32-bit delay, which
+          // Node would clamp to ~1ms and turn the poll into a busy-loop.
+          return jsonResponse({ ...CODE_RESPONSE, interval: 10_000_000_000, expires_in: 3600 });
+        }
+        return polls < 1 ? tokenPending() : jsonResponse({ access_token: "sess-1" });
+      },
+    });
+    await h.run();
+    expect(h.sleeps[0]).toBe(900_000); // capped at 15 minutes
+  });
+
+  it("raises a sub-second server interval to one second instead of hammering", async () => {
+    const h = harness({
+      responder: (call, polls) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          return jsonResponse({ ...CODE_RESPONSE, interval: 0.01 });
+        }
+        return polls < 2 ? tokenPending() : jsonResponse({ access_token: "sess-1" });
+      },
+    });
+    await h.run();
+    expect(h.sleeps.every((ms) => ms >= 1000)).toBe(true);
+  });
+
+  it("caps an absurd expires_in so the local deadline stays bounded", async () => {
+    let clockAtLastPoll = 0;
+    const h = harness({
+      responder: (call, polls) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          // Effectively-infinite window; the local cap (24h) must still bound it.
+          return jsonResponse({ ...CODE_RESPONSE, expires_in: Number.MAX_SAFE_INTEGER });
+        }
+        clockAtLastPoll = polls;
+        return tokenPending();
+      },
+    });
+    await expect(h.run()).rejects.toThrow(/did not complete|expired/i);
+    // 24h window at the 5s interval: bounded, far from MAX_SAFE_INTEGER polls.
+    expect(clockAtLastPoll).toBeLessThanOrEqual((24 * 60 * 60) / 5 + 2);
+  });
+
+  it("rejects a malformed auth host as a usage error before any request", async () => {
+    const fake = createFakeFetch(() => jsonResponse({}));
+    const err = await runDeviceFlow({
+      authHost: "not a url",
+      fetchImpl: fake.fetchImpl,
+      writers: { out: new StringSink(), err: new StringSink() },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("redacts a device_code echoed in a server error message", async () => {
+    const h = harness({
+      responder: (call) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          return jsonResponse(CODE_RESPONSE);
+        }
+        // A hostile/buggy server echoing the device_code in its error text.
+        return jsonResponse({ error: `unknown grant for ${CODE_RESPONSE.device_code}` }, 400);
+      },
+    });
+    const err = await h.run().catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).message).toContain("<redacted>");
+    expect((err as CliError).message).not.toContain(CODE_RESPONSE.device_code);
+  });
+
+  it("classifies a success-body stream failure as network, not malformed data", async () => {
+    const erroring = () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.error(new Error("body stream reset"));
+        },
+      });
+    const h = harness({
+      responder: (call) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          return jsonResponse(CODE_RESPONSE);
+        }
+        // A 200 whose body dies mid-stream: a transport fault, not a protocol one.
+        return new Response(erroring(), { status: 200 });
+      },
+    });
+    const err = await h.run().catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+    expect((err as CliError).message).toContain("failed while reading the response");
+  });
+
+  it("clamps the sleep to the approval window when expires_in is shorter than the interval", async () => {
+    const h = harness({
+      responder: (call) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          // 10s window, 15-minute interval: expiry must hit at ~10s, not ~15min.
+          return jsonResponse({ ...CODE_RESPONSE, expires_in: 10, interval: 900 });
+        }
+        return tokenPending();
+      },
+    });
+    await expect(h.run()).rejects.toThrow(/expired/);
+    expect(h.sleeps).toEqual([10_000]); // one window-length sleep, then expiry
+  });
+
+  it("still honors one +5s slow_down step above a long server interval", async () => {
+    const h = harness({
+      responder: (call, polls) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          return jsonResponse({ ...CODE_RESPONSE, interval: 60, expires_in: 3600 });
+        }
+        if (polls <= 2) return jsonResponse({ error: "slow_down" }, 400);
+        return polls < 4 ? tokenPending() : jsonResponse({ access_token: "sess-1" });
+      },
+    });
+    await h.run();
+    // 60s initial; the backoff request is honored once (65s) and then capped —
+    // never ignored, never shrunk to the 20s small-interval cap.
+    expect(h.sleeps[0]).toBe(60_000);
+    expect(h.sleeps.slice(1).every((ms) => ms === 65_000)).toBe(true);
+  });
+
+  it("never shrinks a long server interval on slow_down", async () => {
+    const h = harness({
+      responder: (call, polls) => {
+        if (call.url.endsWith("/api/auth/device/code")) {
+          return jsonResponse({ ...CODE_RESPONSE, interval: 60, expires_in: 3600 });
+        }
+        if (polls === 1) return jsonResponse({ error: "slow_down" }, 400);
+        return polls < 3 ? tokenPending() : jsonResponse({ access_token: "sess-1" });
+      },
+    });
+    await h.run();
+    // The 60s server interval stays 60s after slow_down — not clamped down to 20s.
+    expect(h.sleeps.every((ms) => ms >= 60_000)).toBe(true);
+  });
+
   it("does not poll once the interval steps past the deadline", async () => {
     const h = harness({
       responder: (call) =>

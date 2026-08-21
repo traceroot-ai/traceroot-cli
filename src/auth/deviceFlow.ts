@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { normalizeBaseUrl } from "../api/client.js";
 import { CliError, ExitCode, type Writers, logInfo } from "../output.js";
 import { getVersion } from "../version.js";
 
@@ -11,6 +12,31 @@ const DEFAULT_INTERVAL_S = 5;
 /** Upper bound on the backed-off poll interval (seconds), so repeated
  * `slow_down`/429 responses can't stretch the wait past the approval window. */
 const MAX_INTERVAL_S = 20;
+
+/** Upper bound on the server-sent initial interval (seconds). Anything larger
+ * is nonsense for a 30-minute approval window — and an oversized value would
+ * overflow `setTimeout`'s 32-bit delay, which Node clamps to ~1ms, turning the
+ * polite poll into a busy-loop hammering the token endpoint. */
+const MAX_SERVER_INTERVAL_S = 900;
+
+/** Upper bound on the server-sent approval window (seconds). The server's real
+ * window is 30 minutes; a wildly larger value must not leave the local
+ * deadline effectively unbounded. */
+const MAX_EXPIRES_S = 24 * 60 * 60;
+
+/**
+ * The next interval after a `slow_down`/429: +5s, capped at
+ * {@link MAX_INTERVAL_S} for ordinary intervals, and never below the current
+ * interval — a server that asked for a long interval up front must not see its
+ * backoff response shrink the wait, but still gets one honored +5s step.
+ */
+function backedOff(intervalS: number, initialIntervalS: number): number {
+  // Honor the backoff request even above the small-interval cap: one +5s step
+  // past the server's own initial interval, never past the global maximum, and
+  // never a decrease.
+  const cap = Math.min(Math.max(MAX_INTERVAL_S, initialIntervalS + 5), MAX_SERVER_INTERVAL_S);
+  return Math.max(intervalS, Math.min(intervalS + 5, cap));
+}
 
 export interface DeviceFlowDeps {
   /** The host that runs the device-authorization endpoints (the Next.js app). */
@@ -65,7 +91,10 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   const now = deps.now ?? Date.now;
   const openBrowser = deps.openBrowser ?? openBrowserForPlatform;
   const env = deps.env ?? process.env;
-  const base = deps.authHost.replace(/\/+$/, "");
+  // Same validation as the API client: reject malformed/non-http(s) hosts up
+  // front (usage error) instead of handing fetch a garbage URL that surfaces
+  // as a confusing network failure.
+  const base = normalizeBaseUrl(deps.authHost);
   const { writers } = deps;
 
   // A timeout covers the whole request, so it can fire while connecting, reading
@@ -109,15 +138,22 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   }
 
   /** Reads a JSON body, mapping a body-phase timeout to the network timeout and
-   * any non-object body (a `null`, an array, a parse failure) to an empty object
-   * — so callers read fields off a real object and never hit a raw TypeError. */
+   * any non-object body (a `null`, an array, malformed JSON) to an empty object
+   * — so callers read fields off a real object and never hit a raw TypeError.
+   * A transport failure while STREAMING a SUCCESS body is different: that is a
+   * retryable network fault, not a malformed server response. On an error
+   * response it still degrades to `{}` so the status classification survives
+   * (mirroring the registry executor's buffered-body contract). */
   async function readBody<T>(res: Response): Promise<T> {
     let parsed: unknown;
     try {
       parsed = await res.json();
     } catch (err) {
       throwIfTimeout(err);
-      return {} as T;
+      if (err instanceof SyntaxError || !res.ok) {
+        return {} as T;
+      }
+      throw new CliError(`request to ${base} failed while reading the response`, ExitCode.network);
     }
     return (typeof parsed === "object" && parsed !== null ? parsed : {}) as T;
   }
@@ -152,10 +188,19 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   if (!isHttpUrl(verifyUrl)) {
     throw new CliError("device login returned an invalid verification URL", ExitCode.auth);
   }
-  const expiresInS = positiveNumber(code.expires_in) ?? 30 * 60;
-  // A zero/negative/non-finite interval would otherwise busy-poll the token
-  // endpoint; fall back to the default.
-  let intervalS = positiveNumber(code.interval) ?? DEFAULT_INTERVAL_S;
+  // Cap the approval window: an absurdly large expires_in would push the local
+  // deadline effectively to "never", leaving the poll loop bounded only by the
+  // server's own expiry response.
+  const expiresInS = Math.min(positiveNumber(code.expires_in) ?? 30 * 60, MAX_EXPIRES_S);
+  // Bound the poll interval on both sides: a zero/negative/non-finite value
+  // falls back to the default, a sub-second one is raised to 1s (no hammering
+  // the token endpoint with millisecond sleeps), and an absurdly large one is
+  // clamped so it can't overflow setTimeout into a ~1ms busy-loop.
+  const initialIntervalS = Math.min(
+    Math.max(positiveNumber(code.interval) ?? DEFAULT_INTERVAL_S, 1),
+    MAX_SERVER_INTERVAL_S,
+  );
+  let intervalS = initialIntervalS;
 
   // ---- Step 2: show instructions; the browser open is best-effort. -----------
   if (env.CI === "true") {
@@ -183,7 +228,9 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
     ExitCode.auth,
   );
   while (true) {
-    await sleep(intervalS * 1000);
+    // Sleep no longer than the time left in the window: a poll interval longer
+    // than expires_in must fail at expiry, not interval-many seconds later.
+    await sleep(Math.min(intervalS * 1000, Math.max(deadline - now(), 0)));
     // Re-check AFTER sleeping: an interval that steps past the deadline must not
     // send one more poll that could accept a token after expiry.
     if (now() >= deadline) {
@@ -208,7 +255,7 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
     // A bare HTTP 429 (the endpoint's rate limiter) carries no `error` field —
     // back off and keep polling rather than treating it as a fatal failure.
     if (res.status === 429) {
-      intervalS = Math.min(intervalS + 5, MAX_INTERVAL_S);
+      intervalS = backedOff(intervalS, initialIntervalS);
       continue;
     }
 
@@ -217,7 +264,7 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
       continue;
     }
     if (error === "slow_down") {
-      intervalS = Math.min(intervalS + 5, MAX_INTERVAL_S);
+      intervalS = backedOff(intervalS, initialIntervalS);
       continue;
     }
     if (error === "access_denied") {
@@ -229,8 +276,11 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
         ExitCode.auth,
       );
     }
+    // The error text is server-provided; if it echoes the device_code back
+    // (pre-approval it is enough to claim the session), redact it.
+    const safeError = error?.split(deviceCode).join("<redacted>");
     throw new CliError(
-      `device login failed (status ${res.status})${error !== undefined ? `: ${error}` : ""}`,
+      `device login failed (status ${res.status})${safeError !== undefined ? `: ${safeError}` : ""}`,
       res.status >= 500 ? ExitCode.network : ExitCode.auth,
     );
   }
