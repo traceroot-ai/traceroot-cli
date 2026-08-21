@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeFileSecure } from "../util/secureFile.js";
@@ -50,10 +50,17 @@ function hostKey(host: string): string {
 }
 
 function isEntry(value: unknown): value is CredentialEntry {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const entry = value as Record<string, unknown>;
+  // The optional fields must be strings when present: a malformed auth_host
+  // would otherwise flow to the mint/logout path as a non-URL.
   return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as Record<string, unknown>).session_token === "string"
+    typeof entry.session_token === "string" &&
+    ["auth_host", "email", "created_at"].every(
+      (field) => entry[field] === undefined || typeof entry[field] === "string",
+    )
   );
 }
 
@@ -76,20 +83,81 @@ function loadFile(path: string): CredentialsFile {
   } catch {
     return empty;
   }
-  if (typeof parsed !== "object" || parsed === null) {
+  if (!isStoreShape(parsed)) {
     return empty;
   }
-  const hosts = (parsed as Record<string, unknown>).hosts;
-  if (typeof hosts !== "object" || hosts === null) {
-    return empty;
+  // isStoreShape validated every entry, so the map can be taken as-is.
+  return { version: 1, hosts: parsed.hosts };
+}
+
+/**
+ * The store shape this version reads and writes: a plain object with
+ * `version: 1` and a plain-object `hosts` map. Anything else (an array, a
+ * future/unknown version) is NOT usable — and, importantly, is treated as
+ * corrupt by the write path so it gets preserved as a `.corrupt` sidecar
+ * instead of being silently rewritten as v1 (which would drop whatever the
+ * incompatible file carried).
+ */
+function isStoreShape(
+  parsed: unknown,
+): parsed is { version: 1; hosts: Record<string, CredentialEntry> } {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return false;
   }
-  const valid: Record<string, CredentialEntry> = {};
-  for (const [host, entry] of Object.entries(hosts)) {
-    if (isEntry(entry)) {
-      valid[host] = entry;
-    }
+  const store = parsed as Record<string, unknown>;
+  if (
+    store.version !== 1 ||
+    typeof store.hosts !== "object" ||
+    store.hosts === null ||
+    Array.isArray(store.hosts)
+  ) {
+    return false;
   }
-  return { version: 1, hosts: valid };
+  // EVERY entry must be valid: a store with one malformed entry is corrupt, not
+  // "the good entries" — silently dropping the bad one here would let the next
+  // rewrite (writeCredential/deleteCredential) discard its token for good.
+  return Object.values(store.hosts).every(isEntry);
+}
+
+/**
+ * True when the file exists but does not parse as a credentials store — a
+ * corrupt or partially-written file. A missing file is not corrupt.
+ */
+function isCorrupt(path: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (err) {
+    // A file that EXISTS but cannot be read (EACCES, EISDIR, …) must be
+    // sidelined like a corrupt one: treating it as missing would let the next
+    // write replace it with a fresh snapshot, erasing every stored host.
+    return (err as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+  try {
+    return !isStoreShape(JSON.parse(raw) as unknown);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Before a write, preserve a corrupt/unparseable store by renaming it to a
+ * `.corrupt` sidecar instead of silently overwriting it — otherwise one bad
+ * byte would wipe every other host's credential (load reads it as empty, and
+ * the next write persists that empty store). Best-effort: never blocks the write.
+ */
+function backupIfCorrupt(path: string): void {
+  if (!isCorrupt(path)) {
+    return;
+  }
+  try {
+    renameSync(path, `${path}.corrupt`);
+    // The sidecar may still hold session tokens; clamp it to 0600 in case the
+    // corrupt file arrived with looser permissions.
+    chmodSync(`${path}.corrupt`, 0o600);
+  } catch {
+    // best-effort — a failed backup must not block login/logout
+  }
 }
 
 /** The stored credential for `host`, or `null` when none is stored. */
@@ -105,6 +173,7 @@ export function readCredential(host: string, path?: string): CredentialEntry | n
  */
 export function writeCredential(host: string, entry: CredentialEntry, path?: string): void {
   const target = path ?? credentialsPath();
+  backupIfCorrupt(target);
   const file = loadFile(target);
   file.hosts[hostKey(host)] = entry;
   writeFileSecure(target, `${JSON.stringify(file, null, 2)}\n`);

@@ -16,7 +16,16 @@ export function writeFileSecure(target: string, payload: string): void {
   const tmp = join(dir, `.${basename(target)}.${process.pid}.tmp`);
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(tmp, payload, { mode: 0o600 });
+    // Remove any stale/planted file (or symlink — unlink removes the link
+    // itself) at the temp path, then create it EXCLUSIVELY: `wx` refuses to
+    // open an existing path and never follows a symlink, so a pre-created
+    // symlink cannot redirect the secret payload elsewhere.
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // usually ENOENT — nothing stale to remove
+    }
+    writeFileSync(tmp, payload, { mode: 0o600, flag: "wx" });
     try {
       chmodSync(tmp, 0o600);
     } catch (chmodErr) {
