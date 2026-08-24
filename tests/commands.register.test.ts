@@ -47,7 +47,7 @@ describe("buildProgram", () => {
     expect(subNames).toContain("get");
   });
 
-  it("registers list, get, export, and filter-values under traces", () => {
+  it("registers list, get, and export under traces — filter-values is deferred", () => {
     const program = buildProgram();
     const traces = program.commands.find((c) => c.name() === "traces");
     expect(traces).toBeDefined();
@@ -55,17 +55,30 @@ describe("buildProgram", () => {
     expect(subNames).toContain("list");
     expect(subNames).toContain("get");
     expect(subNames).toContain("export");
-    expect(subNames).toContain("filter-values");
+    expect(subNames).not.toContain("filter-values");
   });
 
-  it("registers the sessions command with list and get subcommands", () => {
+  it("traces list keeps only the basic filters (advanced filters deferred to SQL queries)", () => {
     const program = buildProgram();
-    expect(childNames(program)).toContain("sessions");
-    const sessions = program.commands.find((c) => c.name() === "sessions");
-    expect(sessions).toBeDefined();
-    const subNames = childNames(sessions as Command);
-    expect(subNames).toContain("list");
-    expect(subNames).toContain("get");
+    const traces = program.commands.find((c) => c.name() === "traces");
+    const list = traces?.commands.find((c) => c.name() === "list");
+    expect(list).toBeDefined();
+    const longs = (list as Command).options.map((o) => o.long);
+    expect(longs).toEqual(expect.arrayContaining(["--limit", "--since", "--from", "--to"]));
+    for (const gone of [
+      "--name",
+      "--user-id",
+      "--search-query",
+      "--include-evaluations",
+      "--filters",
+    ]) {
+      expect(longs).not.toContain(gone);
+    }
+  });
+
+  it("does not register a sessions command (deferred until the SQL query surface lands)", () => {
+    const program = buildProgram();
+    expect(childNames(program)).not.toContain("sessions");
   });
 
   it("registers top-level commands in the fixed help order", () => {
@@ -76,7 +89,6 @@ describe("buildProgram", () => {
       "traces",
       "detectors",
       "findings",
-      "sessions",
       "skills",
       "instrument",
       "doctor",

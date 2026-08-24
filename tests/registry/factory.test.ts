@@ -5,15 +5,28 @@ import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
 import { CliError, ExitCode } from "../../src/output.js";
+import { GROUPS, PLACEMENTS, type Placement } from "../../src/registry/naming.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
 import { StringSink } from "../helpers/stringSink.js";
+
+// The sessions tools have no production CLI surface (deferred until the SQL
+// query surface lands) and no enhancer, which makes them the ideal fixture for
+// the zero-code path: schema-derived flags, coercion/bounds, and default
+// rendering. Re-place them here, test-only, on top of the real PLACEMENTS.
+const FIXTURE_PLACEMENTS: Record<string, Placement> = {
+  ...PLACEMENTS,
+  list_sessions: { kind: "command", path: ["sessions", "list"] },
+  get_session: { kind: "command", path: ["sessions", "get"] },
+};
+const FIXTURE_GROUPS: Record<string, string> = { ...GROUPS, sessions: "Work with sessions" };
+const FIXTURE_REGISTRY = { placements: FIXTURE_PLACEMENTS, groups: FIXTURE_GROUPS };
 
 function harness(response: Response) {
   const fake = createFakeFetch(() => response);
   const out = new StringSink();
   const err = new StringSink();
   const program = buildProgram({
-    registry: { fetchImpl: fake.fetchImpl, writers: { out, err } },
+    registry: { fetchImpl: fake.fetchImpl, writers: { out, err }, ...FIXTURE_REGISTRY },
   });
   const run = (...argv: string[]) =>
     program.parseAsync(["--api-key", "k", "--host", "https://api.test", ...argv], { from: "user" });
@@ -27,16 +40,16 @@ function findCommand(program: Command, group: string, name: string): Command {
   return cmd;
 }
 
-describe("generated sessions commands (zero-code path)", () => {
-  it("registers sessions list/get and traces filter-values with schema-derived flags", () => {
-    const program = buildProgram();
+describe("generated commands (zero-code path, sessions re-placed as test fixture)", () => {
+  it("registers fixture sessions list/get with schema-derived flags; filter-values has no CLI surface", () => {
+    const program = buildProgram({ registry: FIXTURE_REGISTRY });
     const list = findCommand(program, "sessions", "list");
     expect(list.options.map((o) => o.long)).toEqual(
       expect.arrayContaining(["--limit", "--search-query", "--start-after", "--end-before"]),
     );
     const get = findCommand(program, "sessions", "get");
     expect(get.registeredArguments.map((a) => a.name())).toEqual(["session-id"]);
-    findCommand(program, "traces", "filter-values");
+    expect(() => findCommand(program, "traces", "filter-values")).toThrow(/not registered/);
   });
 
   it("sessions list --json emits the raw response and passes schema args as query params", async () => {
@@ -128,7 +141,7 @@ describe("generated sessions commands (zero-code path)", () => {
     // not silently drop the value at runtime.
     ENHANCERS.get_session = { arguments: () => {} };
     try {
-      expect(() => buildProgram()).toThrow(
+      expect(() => buildProgram({ registry: FIXTURE_REGISTRY })).toThrow(
         /enhancer for 'get_session' declares 0 argument\(s\) but the tool's path template has 1 parameter\(s\)/,
       );
     } finally {
@@ -243,20 +256,6 @@ describe("traces list (enhancer path)", () => {
     expect(h.out.data).toBe("");
     expect(h.err.data).toBe("");
     expect(h.fake.calls.length).toBe(1);
-  });
-});
-
-describe("traces list --filters (typed filters through the dispatcher)", () => {
-  it("JSON-stringifies the parsed filters array into the query string", async () => {
-    const h = harness(jsonResponse({ data: [], meta: { page: 1, limit: 50, total: 0 } }));
-    const predicates = '[{"field":"model_name","op":"in","value":["gpt-4o"]}]';
-    await h.run("traces", "list", "--json", "--filters", predicates, "--name", "chat");
-    const url = new URL(h.fake.calls[0].url);
-    expect(url.pathname).toBe("/api/v1/public/traces");
-    // resolveArgs parses the JSON; the registry dispatcher re-stringifies the
-    // array into the query param, matching the server's JSON-content contract.
-    expect(url.searchParams.get("filters")).toBe(predicates);
-    expect(url.searchParams.get("name")).toBe("chat");
   });
 });
 

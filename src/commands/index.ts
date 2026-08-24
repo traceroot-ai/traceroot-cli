@@ -17,7 +17,8 @@ export function registerCommands(program: Command, deps: RegistryDeps = {}): voi
   // Pre-create every command group (in GROUPS order) so `--help` lists groups
   // in a fixed order, regardless of which register* below attaches subcommands
   // to a group first.
-  for (const group of Object.keys(GROUPS)) ensureGroup(program, group);
+  const groups = deps.groups ?? GROUPS;
+  for (const group of Object.keys(groups)) ensureGroup(program, group, groups);
   registerRegistryCommands(program, deps);
   registerSkills(program);
   registerInstrument(program);

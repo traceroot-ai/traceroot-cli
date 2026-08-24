@@ -341,45 +341,6 @@ describe("tracesList.resolveArgs (--limit forwarding)", () => {
   });
 });
 
-describe("tracesList.resolveArgs (typed filters and search params)", () => {
-  it("forwards --name/--user-id/--search-query/--include-evaluations as schema args", () => {
-    const resolved = tracesList.resolveArgs?.({
-      opts: { name: "chat", userId: "user-42", searchQuery: "sess", includeEvaluations: true },
-      positionals: {},
-      extras: [],
-    });
-    expect(resolved?.args).toEqual({
-      name: "chat",
-      user_id: "user-42",
-      search_query: "sess",
-      include_evaluations: true,
-    });
-  });
-
-  it("parses --filters into a JSON array arg", () => {
-    const resolved = tracesList.resolveArgs?.({
-      opts: { filters: '[{"field":"model_name","op":"in","value":["gpt-4o"]}]' },
-      positionals: {},
-      extras: [],
-    });
-    expect(resolved?.args).toEqual({
-      filters: [{ field: "model_name", op: "in", value: ["gpt-4o"] }],
-    });
-  });
-
-  it("rejects invalid --filters JSON as a usage error", () => {
-    expect(() =>
-      tracesList.resolveArgs?.({ opts: { filters: "not json" }, positionals: {}, extras: [] }),
-    ).toThrow("--filters must be valid JSON");
-  });
-
-  it("rejects non-array --filters JSON as a usage error", () => {
-    expect(() =>
-      tracesList.resolveArgs?.({ opts: { filters: '{"field":"x"}' }, positionals: {}, extras: [] }),
-    ).toThrow("--filters must be a JSON array of {field, op, value} predicates");
-  });
-});
-
 describe("tracesList.resolveArgs (time-range forwarding)", () => {
   it("forwards start_after and end_before as args", () => {
     const resolved = tracesList.resolveArgs?.({

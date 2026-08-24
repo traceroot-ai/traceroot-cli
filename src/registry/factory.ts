@@ -14,22 +14,30 @@ import { renderDefault } from "./render.js";
 export interface RegistryDeps {
   fetchImpl?: typeof fetch;
   writers?: Writers;
+  /** Test seam: override which tools surface as commands (default PLACEMENTS). */
+  placements?: Record<string, Placement>;
+  /** Test seam: group descriptions for injected placements (default GROUPS). */
+  groups?: Record<string, string>;
 }
 
 type CommandPlacement = Extract<Placement, { kind: "command" }>;
 
 const registryByName = new Map(REGISTRY.map((entry) => [entry.name, entry]));
 
-export function ensureGroup(program: Command, name: string): Command {
+export function ensureGroup(
+  program: Command,
+  name: string,
+  groups: Record<string, string> = GROUPS,
+): Command {
   const existing = program.commands.find((cmd) => cmd.name() === name);
   if (existing !== undefined) return existing;
-  const description = GROUPS[name];
+  const description = groups[name];
   if (description === undefined) throw new Error(`no group description for '${name}'`);
   return program.command(name).description(description).helpCommand(false);
 }
 
 export function registerRegistryCommands(program: Command, deps: RegistryDeps = {}): void {
-  for (const [tool, placement] of Object.entries(PLACEMENTS)) {
+  for (const [tool, placement] of Object.entries(deps.placements ?? PLACEMENTS)) {
     if (placement.kind !== "command") continue;
     const entry = registryByName.get(tool);
     if (entry === undefined) continue; // parity + naming tests report this properly
@@ -57,7 +65,8 @@ function registerOne(
   placement: CommandPlacement,
   deps: RegistryDeps,
 ): void {
-  const parent = placement.path.length === 2 ? ensureGroup(program, placement.path[0]) : program;
+  const parent =
+    placement.path.length === 2 ? ensureGroup(program, placement.path[0], deps.groups) : program;
   const name = placement.path[placement.path.length - 1] as string;
   const enhancer: Enhancer | undefined = ENHANCERS[entry.name];
   const positionals = pathParams(entry);

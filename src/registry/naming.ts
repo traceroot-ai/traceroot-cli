@@ -31,7 +31,10 @@ export const PLACEMENTS: Record<string, Placement> = {
   list_traces: { kind: "command", path: ["traces", "list"] },
   get_trace: { kind: "command", path: ["traces", "get"] },
   export_trace: { kind: "command", path: ["traces", "export"] },
-  list_trace_filter_values: { kind: "command", path: ["traces", "filter-values"] },
+  list_trace_filter_values: {
+    kind: "internal",
+    note: "deliberately no CLI surface: per-field trace filtering belongs to the SQL query surface",
+  },
   list_detectors: { kind: "command", path: ["detectors", "list"] },
   get_detector: { kind: "command", path: ["detectors", "get"] },
   list_findings: { kind: "command", path: ["findings", "list"] },
@@ -41,8 +44,14 @@ export const PLACEMENTS: Record<string, Placement> = {
     of: ["get_finding", "get_trace", "export_trace"],
     note: "reached via 'findings get --trace' and the best-effort finding lookups in 'traces get'/'traces export'",
   },
-  list_sessions: { kind: "command", path: ["sessions", "list"] },
-  get_session: { kind: "command", path: ["sessions", "get"] },
+  list_sessions: {
+    kind: "internal",
+    note: "deliberately no CLI surface: session reading belongs to the SQL query surface",
+  },
+  get_session: {
+    kind: "internal",
+    note: "deliberately no CLI surface: session reading belongs to the SQL query surface",
+  },
   whoami: {
     kind: "internal",
     note: "served by 'status', 'login', and 'doctor'; deliberately no standalone command",
@@ -54,5 +63,4 @@ export const GROUPS: Record<string, string> = {
   traces: "Work with traces",
   detectors: "Work with detectors",
   findings: "Work with detector findings",
-  sessions: "Work with sessions",
 };
