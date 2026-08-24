@@ -14,6 +14,7 @@ function findingItem(over: Partial<FindingList["data"][number]> = {}): FindingLi
   return {
     finding_id: "fnd-1",
     project_id: "p-1",
+    run_ids: ["run-1", "run-2"],
     trace_id: "tr-1",
     summary: "a finding summary",
     timestamp: "2024-01-01T00:00:00Z",
@@ -27,6 +28,33 @@ function listResult(over: Partial<FindingList> = {}): FindingList {
 }
 
 describe("renderFindings", () => {
+  it("renders an empty RUN IDS cell when the finding has no runs or the server predates the field", () => {
+    const { writers: w, out } = writers();
+    renderFindings(
+      listResult({
+        data: [
+          findingItem({ run_ids: [] }),
+          findingItem({ run_ids: undefined as unknown as string[], finding_id: "fnd-2" }),
+        ],
+        meta: { page: 0, limit: 50, total: 2 },
+      }),
+      { json: false, writers: w, timeZone: "UTC" },
+    );
+    expect(out.data).toContain("fnd-1");
+    expect(out.data).toContain("fnd-2");
+    expect(out.data).not.toContain("undefined");
+  });
+
+  it("renders legacy hyphenated (UUID-form) finding ids stripped of hyphens", () => {
+    const { writers: w, out } = writers();
+    renderFindings(
+      listResult({ data: [findingItem({ finding_id: "9402640d-c949-4150-ac84-458ea7b95190" })] }),
+      { json: false, writers: w, timeZone: "UTC" },
+    );
+    expect(out.data).toContain("9402640dc9494150ac84458ea7b95190");
+    expect(out.data).not.toContain("9402640d-c949");
+  });
+
   it("renders a human table with finding columns and a footer", () => {
     const { writers: w, out, err } = writers();
     renderFindings(listResult({ data: [findingItem({ detectors: ["failure", "logic"] })] }), {
@@ -34,9 +62,13 @@ describe("renderFindings", () => {
       writers: w,
       timeZone: "UTC",
     });
-    for (const header of ["TIME", "FINDING ID", "TRACE ID", "DETECTOR NAME"]) {
+    // Mirrors the UI's detector-runs ordering: run id -> trace id -> finding id.
+    for (const header of ["TIME", "RUN IDS", "TRACE ID", "FINDING ID", "DETECTOR NAME"]) {
       expect(out.data).toContain(header);
     }
+    expect(out.data.indexOf("RUN IDS")).toBeLessThan(out.data.indexOf("TRACE ID"));
+    expect(out.data.indexOf("TRACE ID")).toBeLessThan(out.data.indexOf("FINDING ID"));
+    expect(out.data).toContain("run-1,run-2");
     // summary is intentionally not a column (kept out of the list table)
     expect(out.data).not.toContain("SUMMARY");
     expect(out.data).toContain("fnd-1");

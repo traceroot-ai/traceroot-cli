@@ -5,6 +5,7 @@ import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { formatTimestamp } from "../../util/index.js";
 import { onceOption } from "../flags.js";
+import { sanitizeFindingId } from "./finding-id.js";
 import {
   type ListState,
   addListTimeFlags,
@@ -47,11 +48,17 @@ export function renderFindings(res: FindingList, opts: RenderFindingsOptions): v
     return;
   }
 
-  const headers = ["TIME", "FINDING ID", "TRACE ID", "DETECTOR NAME"];
+  // Id ordering mirrors the UI's detector-runs table: run id -> trace id ->
+  // finding id. A finding that fired N detectors has N producing runs (one per
+  // (trace, detector)), so RUN IDS is a comma-joined list; empty when no run
+  // row references the finding (e.g. findings that predate run recording).
+  const headers = ["TIME", "RUN IDS", "TRACE ID", "FINDING ID", "DETECTOR NAME"];
   const rows = res.data.map((item) => [
     formatTimestamp(item.timestamp, timeZone),
-    item.finding_id,
+    // `?? []` tolerates servers that predate the run_ids field.
+    (item.run_ids ?? []).join(","),
     item.trace_id,
+    sanitizeFindingId(item.finding_id),
     item.detectors.join(","),
   ]);
 
@@ -63,7 +70,9 @@ export function renderFindings(res: FindingList, opts: RenderFindingsOptions): v
 }
 
 export const findingsList: Enhancer = {
-  description: "List detector findings",
+  description:
+    "List detector findings. RUN IDS lists every detector run that produced the finding — " +
+    "one run per triggered detector on the trace, so a finding fired by N detectors shows N run ids.",
   flags(cmd: Command): void {
     addListTimeFlags(cmd, {
       noun: "findings",

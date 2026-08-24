@@ -4,6 +4,7 @@ import { CliError, ExitCode, type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { formatTimestamp } from "../../util/index.js";
 import { onceOption } from "../flags.js";
+import { sanitizeFindingId } from "./finding-id.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 /**
@@ -39,8 +40,13 @@ export function renderFinding(finding: FindingDetail, writers: Writers, timeZone
   const lines: string[] = [];
 
   // Aligned header fields (values line up under column 13).
-  lines.push(`${label("Finding ID:")} ${finding.finding_id}`);
+  // Id ordering mirrors the UI's detector-runs table: run id -> trace id ->
+  // finding id. "none" when no run row references the finding.
+  lines.push(
+    `${label("Run IDs:")}    ${(finding.run_ids ?? []).length > 0 ? finding.run_ids.join(", ") : "none"}`,
+  );
   lines.push(`${label("Trace ID:")}   ${finding.trace_id}`);
+  lines.push(`${label("Finding ID:")} ${sanitizeFindingId(finding.finding_id)}`);
   lines.push(`${label("Time:")}       ${formatTimestamp(finding.timestamp, timeZone)}`);
   lines.push(`${label("Summary:")}    ${finding.summary}`);
 
@@ -79,7 +85,9 @@ export function renderFinding(finding: FindingDetail, writers: Writers, timeZone
 }
 
 export const findingsGet: Enhancer = {
-  description: "Get a single detector finding",
+  description:
+    "Get a single detector finding. Run IDs lists every detector run that produced it " +
+    "(one per triggered detector on the trace).",
   arguments(cmd: Command): void {
     cmd.argument("[findingId]", "finding identifier");
   },
@@ -111,7 +119,7 @@ export const findingsGet: Enhancer = {
       throw new CliError("provide a finding id, or --trace <trace-id>", ExitCode.usage);
     }
     return hasFinding
-      ? { args: { finding_id: findingId as string } }
+      ? { args: { finding_id: sanitizeFindingId(findingId as string) } }
       : { tool: "get_finding_by_trace", args: { trace_id: traceId as string } };
   },
   render(payload: unknown, ctx: RenderContext): void {

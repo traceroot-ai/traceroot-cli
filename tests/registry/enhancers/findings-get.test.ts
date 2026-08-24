@@ -32,6 +32,7 @@ function resultItem(
 function detail(over: Partial<FindingDetail> = {}): FindingDetail {
   return {
     finding_id: "fnd-1",
+    run_ids: ["run-9"],
     project_id: "p-1",
     trace_id: "tr-1",
     summary: "a finding summary",
@@ -47,8 +48,13 @@ describe("renderFinding", () => {
   it("renders Finding / Detectors / RCA blocks for a finding id", () => {
     const { writers: w } = writers();
     const out = renderFinding(detail(), w, "UTC");
+    expect(out).toContain("Run IDs:");
+    expect(out).toContain("run-9");
     expect(out).toContain("Finding ID:");
     expect(out).toContain("fnd-1");
+    // Mirrors the UI's id ordering: run id -> trace id -> finding id.
+    expect(out.indexOf("Run IDs:")).toBeLessThan(out.indexOf("Trace ID:"));
+    expect(out.indexOf("Trace ID:")).toBeLessThan(out.indexOf("Finding ID:"));
     expect(out).toContain("Trace ID:");
     expect(out).toContain("tr-1");
     expect(out).toContain("Detector:");
@@ -113,7 +119,29 @@ describe("findingsGet.render (--json)", () => {
   });
 });
 
+it("renders Run IDs: none when no run references the finding", () => {
+  const { writers: w } = writers();
+  const out = renderFinding(detail({ run_ids: [] }), w);
+  expect(out).toContain("Run IDs:    none");
+});
+
+it("renders a legacy hyphenated finding id stripped of hyphens", () => {
+  const { writers: w } = writers();
+  const out = renderFinding(detail({ finding_id: "9402640d-c949-4150-ac84-458ea7b95190" }), w);
+  expect(out).toContain("9402640dc9494150ac84458ea7b95190");
+  expect(out).not.toContain("9402640d-c949");
+});
+
 describe("findingsGet.resolveArgs", () => {
+  it("strips hyphens from a legacy UUID-form finding id before lookup", () => {
+    const resolved = findingsGet.resolveArgs?.({
+      opts: {},
+      positionals: { finding_id: "9402640d-c949-4150-ac84-458ea7b95190" },
+      extras: [],
+    });
+    expect(resolved).toEqual({ args: { finding_id: "9402640dc9494150ac84458ea7b95190" } });
+  });
+
   it("resolves a finding id to args.finding_id (no retargeting)", () => {
     const resolved = findingsGet.resolveArgs?.({
       opts: {},

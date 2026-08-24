@@ -621,6 +621,11 @@ export interface components {
             rca: components["schemas"]["RCAResult"] | null;
             /** Results */
             results: components["schemas"]["DetectorResultItem"][];
+            /**
+             * Run Ids
+             * @default []
+             */
+            run_ids: string[];
             /** Summary */
             summary: string;
             /**
@@ -642,6 +647,11 @@ export interface components {
             finding_id: string;
             /** Project Id */
             project_id: string;
+            /**
+             * Run Ids
+             * @default []
+             */
+            run_ids: string[];
             /** Summary */
             summary: string;
             /**
