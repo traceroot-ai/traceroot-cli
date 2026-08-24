@@ -40,8 +40,11 @@ describe("renderFindings", () => {
       }),
       { json: false, writers: w, timeZone: "UTC" },
     );
-    expect(out.data).toContain("fnd-1");
-    expect(out.data).toContain("fnd-2");
+    // The RUN IDS column must survive (header present) with genuinely blank
+    // cells: between TIME and TRACE ID only column padding — no placeholder.
+    expect(out.data).toContain("RUN IDS");
+    expect(out.data).toMatch(/2024-01-01 00:00:00 UTC\s{2,}tr-1\s{2,}fnd-1/);
+    expect(out.data).toMatch(/2024-01-01 00:00:00 UTC\s{2,}tr-1\s{2,}fnd-2/);
     expect(out.data).not.toContain("undefined");
   });
 
