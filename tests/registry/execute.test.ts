@@ -1,7 +1,7 @@
 import { REGISTRY } from "@traceroot-ai/tools";
 import { describe, expect, it } from "vitest";
 import { CliError, ExitCode } from "../../src/output.js";
-import { executeTool } from "../../src/registry/execute.js";
+import { executeTool, transportFromContext } from "../../src/registry/execute.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
 
 const listSessions = REGISTRY.find((entry) => entry.name === "list_sessions");
@@ -203,5 +203,84 @@ describe("executeTool session (token-provider) auth", () => {
     ).catch((e) => e);
     expect((err as CliError).message).toContain("<redacted>");
     expect((err as CliError).message).not.toContain("jwt-secret");
+  });
+});
+
+describe("executeTool project scoping", () => {
+  function scopedTransport(fetchImpl: typeof fetch, projectId?: string) {
+    const t: {
+      base: string;
+      auth: { kind: "api-key"; key: string };
+      timeoutMs: number;
+      fetchImpl: typeof fetch;
+      projectId?: string;
+    } = {
+      base: "https://api.test",
+      auth: { kind: "api-key", key: "sk" },
+      timeoutMs: 30_000,
+      fetchImpl,
+    };
+    if (projectId !== undefined) t.projectId = projectId;
+    return t;
+  }
+
+  it("injects a resolved project_id into the query", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ data: [] }));
+    await executeTool(listSessions, { limit: 5 }, scopedTransport(fake.fetchImpl, "p-1"));
+    expect(fake.calls[0].url).toContain("project_id=p-1");
+  });
+
+  it("omits project_id when none is resolved", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ data: [] }));
+    await executeTool(listSessions, { limit: 5 }, scopedTransport(fake.fetchImpl));
+    expect(fake.calls[0].url).not.toContain("project_id");
+  });
+
+  it("leaves a caller-supplied project_id untouched", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ data: [] }));
+    await executeTool(
+      listSessions,
+      { project_id: "explicit" },
+      scopedTransport(fake.fetchImpl, "p-1"),
+    );
+    expect(fake.calls[0].url).toContain("project_id=explicit");
+    expect(fake.calls[0].url).not.toContain("p-1");
+  });
+
+  it("appends a projects-list hint to the missing-project_id 400", async () => {
+    const fake = createFakeFetch(() =>
+      errorResponse(400, "project_id query parameter is required for user credentials"),
+    );
+    const err = await executeTool(listSessions, {}, scopedTransport(fake.fetchImpl)).catch(
+      (e) => e,
+    );
+    expect((err as CliError).message).toContain("traceroot projects list");
+    expect((err as CliError).exitCode).toBe(ExitCode.internal);
+  });
+});
+
+describe("transportFromContext project scoping", () => {
+  function ctxWith(kind: "api-key" | "session", projectId: string | undefined) {
+    return {
+      auth: {
+        credential: { kind, value: kind === "api-key" ? "tr_k" : "sess_k", source: "env" as const },
+        hostUrl: { value: "https://api.test", source: "env" as const },
+        authHost: { value: "https://ui.test", source: "default" as const },
+        projectId: {
+          value: projectId,
+          source: projectId === undefined ? ("none" as const) : ("env" as const),
+        },
+      },
+      json: false,
+      timeoutMs: 30_000,
+    };
+  }
+
+  it("carries the default project for a session credential", () => {
+    expect(transportFromContext(ctxWith("session", "p-1")).projectId).toBe("p-1");
+  });
+
+  it("ignores the default project for an api key (already project-scoped)", () => {
+    expect(transportFromContext(ctxWith("api-key", "p-1")).projectId).toBeUndefined();
   });
 });

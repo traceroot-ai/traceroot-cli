@@ -87,6 +87,8 @@ describe("buildProgram", () => {
       "login",
       "logout",
       "status",
+      "workspaces",
+      "projects",
       "traces",
       "detectors",
       "findings",
