@@ -8,6 +8,7 @@ const hermetic = {
   readConfig: () => null,
   loadEnvFile: () => ({}),
   loadAutoEnvFile: () => ({}),
+  readCredential: () => null,
 };
 
 describe("buildContext", () => {
@@ -23,24 +24,25 @@ describe("buildContext", () => {
 
   it("routes injected flags into auth resolution", () => {
     const ctx = buildContext({ apiKey: "X" }, hermetic);
-    expect(ctx.auth.apiKey.source).toBe("flag");
-    expect(ctx.auth.apiKey.value).toBe("X");
+    expect(ctx.auth.credential).toEqual({ kind: "api-key", value: "X", source: "flag" });
   });
 
   it("falls back to the auto-discovered .env at the lowest precedence", () => {
     const ctx = buildContext(
       {},
       {
-        env: {},
-        readConfig: () => null,
-        loadEnvFile: () => ({}),
+        ...hermetic,
         loadAutoEnvFile: () => ({
           TRACEROOT_API_KEY: "auto-key",
           TRACEROOT_HOST_URL: "https://auto",
         }),
       },
     );
-    expect(ctx.auth.apiKey).toEqual({ value: "auto-key", source: "auto-env-file" });
+    expect(ctx.auth.credential).toEqual({
+      kind: "api-key",
+      value: "auto-key",
+      source: "auto-env-file",
+    });
     expect(ctx.auth.hostUrl).toEqual({ value: "https://auto", source: "auto-env-file" });
   });
 
@@ -75,16 +77,24 @@ describe("buildContext", () => {
     expect(() => buildContext({ timeout: "5.5" }, hermetic)).toThrow(CliError);
   });
 
+  it("rejects a timeout past Node's 32-bit timer range as a usage error", () => {
+    // Past 2^31-1 ms, AbortSignal.timeout either clamps to ~1ms (instant
+    // timeouts) or throws a raw RangeError — both must be caught here instead.
+    expect(() => buildContext({ timeout: "2147483648" }, hermetic)).toThrow(CliError);
+    expect(() => buildContext({ timeout: "99999999999" }, hermetic)).toThrow(CliError);
+    // The boundary itself is valid.
+    expect(buildContext({ timeout: "2147483647" }, hermetic).timeoutMs).toBe(2_147_483_647);
+  });
+
   it("lets the config file win over the auto-discovered .env", () => {
     const ctx = buildContext(
       {},
       {
-        env: {},
+        ...hermetic,
         readConfig: () => ({ api_key: "cfg-key", host_url: "https://cfg" }),
-        loadEnvFile: () => ({}),
         loadAutoEnvFile: () => ({ TRACEROOT_API_KEY: "auto-key" }),
       },
     );
-    expect(ctx.auth.apiKey).toEqual({ value: "cfg-key", source: "config" });
+    expect(ctx.auth.credential).toEqual({ kind: "api-key", value: "cfg-key", source: "config" });
   });
 });

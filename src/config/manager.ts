@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { CliError, ExitCode } from "../output.js";
 import { writeFileSecure } from "../util/secureFile.js";
 import { type Config, ConfigError, type ConfigReadResult } from "./schema.js";
 
@@ -31,7 +32,14 @@ function isValidShape(value: unknown): value is Config {
     return false;
   }
   const obj = value as Record<string, unknown>;
-  return typeof obj.api_key === "string" && typeof obj.host_url === "string";
+  // Every field is optional, but a present field must be a string — and a JSON
+  // array (which is an object with none of these fields) is not a config.
+  return (
+    !Array.isArray(value) &&
+    ["api_key", "host_url", "project_id"].every(
+      (field) => obj[field] === undefined || typeof obj[field] === "string",
+    )
+  );
 }
 
 /**
@@ -76,7 +84,36 @@ export function readConfig(path?: string): ConfigReadResult {
     };
   }
 
-  return { ok: true, config: { api_key: parsed.api_key, host_url: parsed.host_url } };
+  return {
+    ok: true,
+    config: {
+      api_key: parsed.api_key,
+      host_url: parsed.host_url,
+      project_id: parsed.project_id,
+    },
+  };
+}
+
+/**
+ * Loads the config for the resolution chain and the login/logout config-merge
+ * writes. A missing file is `null` (no config is a normal state), but an
+ * existing-but-invalid file throws a CliError rather than reading as absent:
+ * silently discarding it would drop credentials to a lower-precedence source
+ * and, on the merge-write path, overwrite the malformed file — destroying
+ * whatever the user meant to fix. The path (never the contents) is named.
+ */
+export function loadConfigOrThrow(path?: string): Config | null {
+  const result = readConfig(path);
+  if (result.ok) {
+    return result.config;
+  }
+  if (result.reason === "missing") {
+    return null;
+  }
+  throw new CliError(
+    `${result.error.message}. Fix or remove the file, then retry.`,
+    ExitCode.usage,
+  );
 }
 
 /**

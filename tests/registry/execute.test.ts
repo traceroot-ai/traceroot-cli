@@ -10,7 +10,12 @@ if (listSessions === undefined || getSession === undefined)
   throw new Error("registry fixture missing");
 
 function transport(fetchImpl: typeof fetch) {
-  return { base: "https://api.test", apiKey: "sk-secret", timeoutMs: 30_000, fetchImpl };
+  return {
+    base: "https://api.test",
+    auth: { kind: "api-key" as const, key: "sk-secret" },
+    timeoutMs: 30_000,
+    fetchImpl,
+  };
 }
 
 describe("executeTool", () => {
@@ -109,5 +114,94 @@ describe("executeTool", () => {
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).exitCode).toBe(ExitCode.network);
     expect((err as CliError).message).toContain("request to https://api.test failed:");
+  });
+});
+
+describe("executeTool session (token-provider) auth", () => {
+  function sessionTransport(
+    fetchImpl: typeof fetch,
+    getAccessToken: () => Promise<string>,
+    invalidate: () => void = () => {},
+  ) {
+    return {
+      base: "https://api.test",
+      auth: { kind: "token-provider" as const, getAccessToken, invalidate },
+      timeoutMs: 30_000,
+      fetchImpl,
+    };
+  }
+
+  it("mints a bearer per dispatch and sends a traceroot-cli user-agent", async () => {
+    let minted = 0;
+    const fake = createFakeFetch(() => jsonResponse({ data: [] }));
+    await executeTool(
+      listSessions,
+      {},
+      sessionTransport(fake.fetchImpl, async () => {
+        minted += 1;
+        return `jwt-${minted}`;
+      }),
+    );
+    const headers = fake.calls[0].init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer jwt-1");
+    expect(headers["user-agent"]).toMatch(/^traceroot-cli\//);
+  });
+
+  it("re-mints and retries once on a 401, then succeeds", async () => {
+    let calls = 0;
+    let minted = 0;
+    let invalidated = 0;
+    const fake = createFakeFetch(() => {
+      calls += 1;
+      return calls === 1 ? errorResponse(401, "expired") : jsonResponse({ data: [] });
+    });
+    await executeTool(
+      listSessions,
+      {},
+      sessionTransport(
+        fake.fetchImpl,
+        async () => {
+          minted += 1;
+          return `jwt-${minted}`;
+        },
+        () => {
+          invalidated += 1;
+        },
+      ),
+    );
+    expect(calls).toBe(2);
+    expect(invalidated).toBe(1);
+    expect((fake.calls[1].init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer jwt-2",
+    );
+  });
+
+  it("surfaces a persistent 401 after a single retry", async () => {
+    let calls = 0;
+    const fake = createFakeFetch(() => {
+      calls += 1;
+      return errorResponse(401, "nope");
+    });
+    const err = await executeTool(
+      listSessions,
+      {},
+      sessionTransport(fake.fetchImpl, async () => "jwt"),
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.auth);
+    expect(calls).toBe(2); // original + one retry, no more
+  });
+
+  it("redacts a minted bearer from transport failures", async () => {
+    const failingFetch = (() => {
+      throw new Error("boom jwt-secret boom");
+    }) as unknown as typeof fetch;
+    const err = await executeTool(
+      listSessions,
+      {},
+      sessionTransport(failingFetch, async () => "jwt-secret"),
+    ).catch((e) => e);
+    expect((err as CliError).message).toContain("<redacted>");
+    expect((err as CliError).message).not.toContain("jwt-secret");
   });
 });

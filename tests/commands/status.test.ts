@@ -24,15 +24,22 @@ function makeWhoami(overrides: Partial<Whoami> = {}): Whoami {
 function makeContext(json: boolean): Context {
   return {
     auth: {
-      apiKey: { value: FULL_TOKEN, source: "config" },
+      credential: { kind: "api-key", value: FULL_TOKEN, source: "config" },
       hostUrl: { value: "https://api.example.com", source: "config" },
+      authHost: { value: "https://api.example.com", source: "default" },
+      projectId: { value: undefined, source: "none" },
     },
     json,
+    timeoutMs: 30_000,
   };
 }
 
 function fakeClient(whoami: () => Promise<Whoami>): ApiClient {
-  return { whoami };
+  return {
+    whoami,
+    listWorkspaces: () => Promise.reject(new Error("not used")),
+    listProjects: () => Promise.reject(new Error("not used")),
+  };
 }
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {

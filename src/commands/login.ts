@@ -281,12 +281,16 @@ export function registerLogin(program: Command): void {
       // env vars, an existing config, and a working-directory .env identically
       // to the read commands.
       const ctx = contextFromCommand(command);
+      // Interim mapping onto the key-only login until the device-flow login
+      // lands: a session credential resolves here as "no key".
+      const credential = ctx.auth.credential;
+      const apiKey = credential.kind === "api-key" ? credential.value : undefined;
       await runLogin({
-        resolvedApiKey: ctx.auth.apiKey.value,
+        resolvedApiKey: apiKey,
         resolvedHost: ctx.auth.hostUrl.value,
         json: ctx.json,
         isInteractive: process.stdin.isTTY === true,
-        apiKeySource: ctx.auth.apiKey.source,
+        apiKeySource: apiKey !== undefined ? credential.source : "none",
         hostSource: ctx.auth.hostUrl.source,
         promptConfirm,
         promptHidden,

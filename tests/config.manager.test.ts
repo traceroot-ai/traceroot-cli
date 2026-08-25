@@ -2,8 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { configPath, readConfig, writeConfig } from "../src/config/manager.js";
+import { configPath, loadConfigOrThrow, readConfig, writeConfig } from "../src/config/manager.js";
 import { ConfigError } from "../src/config/schema.js";
+import { CliError, ExitCode } from "../src/output.js";
 
 let dir: string;
 
@@ -43,15 +44,31 @@ describe("readConfig", () => {
     expect(result.error.code).toBe("INVALID_SHAPE");
   });
 
-  it("rejects an invalid shape when host_url is missing", () => {
+  it("rejects a JSON array (an object with none of the fields is not a config)", () => {
     const p = join(dir, "config.json");
-    writeFileSync(p, JSON.stringify({ api_key: "k" }));
+    writeFileSync(p, "[]");
     const result = readConfig(p);
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.reason).toBe("invalid-shape");
-    if (result.reason !== "invalid-shape") throw new Error("unreachable");
-    expect(result.error.code).toBe("INVALID_SHAPE");
+  });
+
+  it("accepts a partial config (every field is optional)", () => {
+    const p = join(dir, "config.json");
+    writeFileSync(p, JSON.stringify({ api_key: "k" }));
+    expect(readConfig(p)).toEqual({
+      ok: true,
+      config: { api_key: "k", host_url: undefined, project_id: undefined },
+    });
+  });
+
+  it("reads an optional project_id", () => {
+    const p = join(dir, "config.json");
+    writeFileSync(p, JSON.stringify({ host_url: "https://h", project_id: "p-1" }));
+    const result = readConfig(p);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.config.project_id).toBe("p-1");
   });
 
   it("rejects invalid JSON without leaking the raw file bytes", () => {
@@ -168,5 +185,43 @@ describe("configPath", () => {
         process.env.TRACEROOT_CONFIG_PATH = previous;
       }
     }
+  });
+});
+
+describe("loadConfigOrThrow", () => {
+  it("returns the config when valid", () => {
+    const p = join(dir, "config.json");
+    writeFileSync(p, JSON.stringify({ api_key: "k", host_url: "https://h" }));
+    expect(loadConfigOrThrow(p)).toEqual({
+      api_key: "k",
+      host_url: "https://h",
+      project_id: undefined,
+    });
+  });
+
+  it("returns null when the file is missing (a normal state)", () => {
+    expect(loadConfigOrThrow(join(dir, "nope.json"))).toBeNull();
+  });
+
+  it("throws a usage CliError on invalid JSON instead of silently discarding it", () => {
+    const p = join(dir, "config.json");
+    writeFileSync(p, "{ not json");
+    let thrown: unknown;
+    try {
+      loadConfigOrThrow(p);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).exitCode).toBe(ExitCode.usage);
+    // The path is named; the (possibly secret-bearing) contents are not.
+    expect((thrown as CliError).message).toContain(p);
+    expect((thrown as CliError).message).not.toContain("not json");
+  });
+
+  it("throws on an invalid shape (a present field of the wrong type)", () => {
+    const p = join(dir, "config.json");
+    writeFileSync(p, JSON.stringify({ api_key: 123 }));
+    expect(() => loadConfigOrThrow(p)).toThrow(CliError);
   });
 });

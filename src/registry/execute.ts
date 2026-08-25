@@ -7,14 +7,31 @@ import {
   timeoutMessage,
   transportFailureMessage,
 } from "../api/client.js";
-import { requireAuth } from "../commands/shared.js";
+import { createTokenProvider } from "../auth/token.js";
+import { requireAccess } from "../commands/shared.js";
 import type { Context } from "../context.js";
 import { CliError, ExitCode } from "../output.js";
+import { getVersion } from "../version.js";
+
+/**
+ * How the registry transport obtains the bearer for a dispatch.
+ *
+ * - `api-key`: a static project key, used verbatim.
+ * - `token-provider`: user (session) auth. `getAccessToken` mints/refreshes the
+ *   short-lived access JWT; a 401 calls `invalidate` and re-mints once.
+ */
+export type TransportAuth =
+  | { kind: "api-key"; key: string }
+  | {
+      kind: "token-provider";
+      getAccessToken: () => Promise<string>;
+      invalidate: () => void;
+    };
 
 export interface Transport {
   /** Normalized host (no trailing slash), already URL/scheme validated. */
   base: string;
-  apiKey: string;
+  auth: TransportAuth;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
 }
@@ -23,8 +40,31 @@ export function transportFromContext(
   ctx: Context,
   deps: { fetchImpl?: typeof fetch } = {},
 ): Transport {
-  const { host, apiKey } = requireAuth(ctx);
-  const transport: Transport = { base: normalizeBaseUrl(host), apiKey, timeoutMs: ctx.timeoutMs };
+  const access = requireAccess(ctx);
+  let auth: TransportAuth;
+  if (access.kind === "api-key") {
+    auth = { kind: "api-key", key: access.value };
+  } else {
+    // The mint must go through the caller's fetch too: with the global fetch a
+    // test fake could never intercept /api/cli/token, and a generated command
+    // would make an uncontrolled real request before its faked read.
+    const provider = createTokenProvider({
+      authHost: access.authHost,
+      sessionToken: access.value,
+      timeoutMs: ctx.timeoutMs,
+      ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
+    });
+    auth = {
+      kind: "token-provider",
+      getAccessToken: () => provider.getAccessToken(),
+      invalidate: () => provider.invalidate(),
+    };
+  }
+  const transport: Transport = {
+    base: normalizeBaseUrl(access.host),
+    auth,
+    timeoutMs: ctx.timeoutMs,
+  };
   if (deps.fetchImpl !== undefined) {
     transport.fetchImpl = deps.fetchImpl;
   }
@@ -76,20 +116,42 @@ export async function executeTool(
   args: Record<string, unknown>,
   transport: Transport,
 ): Promise<unknown> {
-  const client = new ApiClient({
-    baseUrl: transport.base,
-    headers: { ...bearerAuth(transport.apiKey), accept: "application/json" },
-    timeoutMs: transport.timeoutMs,
-    fetchImpl: bufferedFetch(transport.fetchImpl ?? fetch),
-  });
-  try {
-    return await dispatch(entry, args, client);
-  } catch (err) {
-    throw translate(err, transport);
+  const userAgent = `traceroot-cli/${getVersion()}`;
+  let refreshed = false;
+  while (true) {
+    const bearer =
+      transport.auth.kind === "api-key"
+        ? transport.auth.key
+        : await transport.auth.getAccessToken();
+    const client = new ApiClient({
+      baseUrl: transport.base,
+      headers: { ...bearerAuth(bearer), accept: "application/json", "user-agent": userAgent },
+      timeoutMs: transport.timeoutMs,
+      fetchImpl: bufferedFetch(transport.fetchImpl ?? fetch),
+    });
+    try {
+      return await dispatch(entry, args, client);
+    } catch (err) {
+      // A 401 under session auth usually means the cached access JWT just
+      // expired or was rotated: drop it, re-mint, and retry the dispatch once.
+      // A second 401 (or a revoked session, whose re-mint itself throws auth)
+      // propagates. An api key never retries.
+      if (
+        err instanceof ApiError &&
+        err.status === 401 &&
+        transport.auth.kind === "token-provider" &&
+        !refreshed
+      ) {
+        refreshed = true;
+        transport.auth.invalidate();
+        continue;
+      }
+      throw translate(err, transport, bearer);
+    }
   }
 }
 
-function translate(err: unknown, transport: Transport): unknown {
+function translate(err: unknown, transport: Transport, bearer: string): unknown {
   if (err instanceof CliError) return err;
   if (err instanceof ApiError) {
     const message = err.detail !== "" ? err.detail : statusFallbackMessage(err.status);
@@ -105,6 +167,6 @@ function translate(err: unknown, transport: Transport): unknown {
     return new CliError(`request to ${transport.base} returned invalid JSON`, ExitCode.internal);
   }
   const message = err instanceof Error ? err.message : String(err);
-  const safe = redactSecret(message, transport.apiKey);
+  const safe = redactSecret(message, bearer);
   return new CliError(transportFailureMessage(transport.base, safe), ExitCode.network);
 }

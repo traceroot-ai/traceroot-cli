@@ -1,6 +1,8 @@
 import type { Command } from "commander";
 import { createApiClient } from "../api/client.js";
+import { createTokenProvider } from "../auth/token.js";
 import { configPath } from "../config/manager.js";
+import type { ResolvedCredential } from "../config/resolve.js";
 import type { Context } from "../context.js";
 import { buildDoctorReport } from "../doctor/checks.js";
 import type { DoctorCheck, DoctorReport } from "../doctor/types.js";
@@ -27,7 +29,7 @@ export interface RunDoctorDeps {
   configPath: string;
   writers: Writers;
   /** Network credential validation; omitted in tests to stay offline. */
-  verifyCredentials?: (host: string, apiKey: string) => Promise<boolean>;
+  verifyCredentials?: (host: string, credential: ResolvedCredential) => Promise<boolean>;
   /** Injectable repo detection; defaults to scanning `cwd`. */
   detection?: RepoDetection;
 }
@@ -42,11 +44,16 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
   const { ctx, cwd, env, writers } = deps;
   const detection = deps.detection ?? detectRepo(cwd);
 
-  const apiKey = ctx.auth.apiKey.value;
+  const credential = ctx.auth.credential;
   const host = ctx.auth.hostUrl.value;
   let credentialsValid: boolean | null = null;
-  if (apiKey !== undefined && host !== undefined && deps.verifyCredentials !== undefined) {
-    credentialsValid = await deps.verifyCredentials(host, apiKey);
+  if (
+    credential.kind !== "none" &&
+    credential.value !== undefined &&
+    host !== undefined &&
+    deps.verifyCredentials !== undefined
+  ) {
+    credentialsValid = await deps.verifyCredentials(host, credential);
   }
 
   const report = buildDoctorReport({
@@ -96,11 +103,31 @@ export function registerDoctor(program: Command): void {
         env: process.env,
         configPath: configPath(),
         writers: defaultWriters,
-        verifyCredentials: async (host, apiKey) => {
+        verifyCredentials: async (host, credential) => {
           try {
+            if (credential.kind === "session") {
+              // whoami is API-key-only. Mint through the provider AND make a
+              // session-capable read against the public API host, so doctor
+              // validates both hosts the way the api-key whoami path does.
+              const provider = createTokenProvider({
+                authHost: ctx.auth.authHost.value ?? host,
+                sessionToken: credential.value ?? "",
+                timeoutMs: ctx.timeoutMs,
+              });
+              await createApiClient({
+                host,
+                auth: {
+                  kind: "token-provider",
+                  getAccessToken: () => provider.getAccessToken(),
+                  invalidate: () => provider.invalidate(),
+                },
+                timeoutMs: ctx.timeoutMs,
+              }).listWorkspaces();
+              return true;
+            }
             await createApiClient({
               host,
-              auth: { kind: "api-key", key: apiKey },
+              auth: { kind: "api-key", key: credential.value ?? "" },
               timeoutMs: ctx.timeoutMs,
             }).whoami();
             return true;

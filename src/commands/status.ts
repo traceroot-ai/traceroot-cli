@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { Command } from "commander";
 import type { ApiClient } from "../api/client.js";
+import { credentialsPath } from "../auth/credentials.js";
 import { configPath } from "../config/manager.js";
 import type { AuthSource } from "../config/resolve.js";
 import type { Context } from "../context.js";
@@ -18,6 +19,10 @@ function describeSource(source: AuthSource): string {
   switch (source) {
     case "config":
       return configPath();
+    case "credentials-file":
+      return credentialsPath();
+    case "default":
+      return "built-in default";
     case "auto-env-file":
       return `${join(process.cwd(), ".env")} (auto-loaded)`;
     case "env-file":
@@ -47,7 +52,7 @@ export interface StatusDeps {
 export async function runStatus(deps: StatusDeps): Promise<void> {
   const { ctx, client, writers } = deps;
   const who = await client.whoami();
-  const configSource = ctx.auth.apiKey.source;
+  const configSource = ctx.auth.credential.source;
 
   if (ctx.json) {
     writeJson(
