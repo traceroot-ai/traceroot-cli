@@ -1,4 +1,5 @@
 import { CliError, ExitCode } from "../output.js";
+import { getVersion } from "../version.js";
 import type { paths } from "./generated/schema.js";
 
 /** Default per-request timeout when a caller doesn't specify one. */
@@ -18,10 +19,35 @@ export type TraceExport = Ok200<paths["/api/v1/public/traces/{trace_id}/export"]
 export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"]>;
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
+export type WorkspaceList = Ok200<paths["/api/v1/public/workspaces"]["get"]>;
+export type ProjectList = Ok200<paths["/api/v1/public/projects"]["get"]>;
+
+/**
+ * How the client obtains the bearer for each request.
+ *
+ * - `api-key`: a static project API key, sent verbatim.
+ * - `token-provider`: user (session) auth. The provider is asked for a bearer on
+ *   EVERY request — it caches and re-mints the short-lived access JWT internally
+ *   — so a token refresh between two calls is picked up transparently.
+ */
+export type ApiAuth =
+  | { kind: "api-key"; key: string }
+  | {
+      kind: "token-provider";
+      getAccessToken: () => Promise<string>;
+      /**
+       * Drops the provider's cached token so the next `getAccessToken` re-mints.
+       * Called by the client after a 401 to recover a token that expired or was
+       * rotated mid-session, then retry the request once. Required: a cached
+       * provider that cannot be invalidated would make the retry resend the
+       * same stale bearer.
+       */
+      invalidate: () => void;
+    };
 
 export interface ApiClientOptions {
   host: string;
-  apiKey: string;
+  auth: ApiAuth;
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchImpl?: typeof globalThis.fetch;
   /**
@@ -31,8 +57,17 @@ export interface ApiClientOptions {
   timeoutMs?: number;
 }
 
+/** Restrict `listProjects` to one workspace (sent as the `workspace_id` query). */
+export interface ListProjectsParams {
+  workspaceId?: string;
+}
+
 export interface ApiClient {
   whoami(): Promise<Whoami>;
+  /** Account-scope discovery (user-credential only; a project API key gets 403). */
+  listWorkspaces(): Promise<WorkspaceList>;
+  /** Account-scope discovery (user-credential only; a project API key gets 403). */
+  listProjects(params?: ListProjectsParams): Promise<ProjectList>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -103,6 +138,18 @@ export function normalizeBaseUrl(host: string): string {
   return base;
 }
 
+/** Serializes defined params into a `?a=b&c=d` query string (empty when none). */
+function toQuery(params: Record<string, string | number | boolean | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) {
+      search.set(key, String(value));
+    }
+  }
+  const query = search.toString();
+  return query ? `?${query}` : "";
+}
+
 /**
  * Creates a thin typed client over the public REST API. No network activity
  * occurs on construction — only the request methods call `fetch`.
@@ -110,35 +157,68 @@ export function normalizeBaseUrl(host: string): string {
 export function createApiClient(opts: ApiClientOptions): ApiClient {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const base = normalizeBaseUrl(opts.host);
-  const headers = {
-    authorization: `Bearer ${opts.apiKey}`,
-    accept: "application/json",
-  };
+  const userAgent = `traceroot-cli/${getVersion()}`;
+
+  /**
+   * Resolves the bearer for one request. In token-provider mode this may mint
+   * (or transparently refresh) an access JWT; a provider failure propagates
+   * unchanged and no network request is made for the read itself.
+   */
+  function resolveBearer(): Promise<string> {
+    return opts.auth.kind === "api-key"
+      ? Promise.resolve(opts.auth.key)
+      : opts.auth.getAccessToken();
+  }
 
   async function rawGet(path: string): Promise<Response> {
     const url = `${base}${path}`;
-    const init: RequestInit = { method: "GET", headers };
-    if (opts.timeoutMs !== undefined) {
-      // A fresh signal per request; aborts the fetch on timeout so a stalled
-      // socket can't hang the process indefinitely.
-      init.signal = AbortSignal.timeout(opts.timeoutMs);
-    }
-    try {
-      return await fetchImpl(url, init);
-    } catch (err) {
-      throwIfTimeout(err);
-      // Deliberately do NOT interpolate the underlying error message: it could
-      // echo back request contents and leak the api key. Mention only the host.
-      const message = err instanceof Error ? err.message : String(err);
-      const safe = redactSecret(message, opts.apiKey);
-      throw new CliError(transportFailureMessage(base, safe), ExitCode.network);
+    let refreshed = false;
+    while (true) {
+      const bearer = await resolveBearer();
+      const init: RequestInit = {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${bearer}`,
+          accept: "application/json",
+          "user-agent": userAgent,
+        },
+      };
+      if (opts.timeoutMs !== undefined) {
+        // A fresh signal per request; aborts the fetch on timeout so a stalled
+        // socket can't hang the process indefinitely.
+        init.signal = AbortSignal.timeout(opts.timeoutMs);
+      }
+      let res: Response;
+      try {
+        res = await fetchImpl(url, init);
+      } catch (err) {
+        throwIfTimeout(err);
+        // Deliberately do NOT interpolate the underlying error message raw: it
+        // could echo request contents and leak the bearer. Redact it first.
+        const message = err instanceof Error ? err.message : String(err);
+        const safe = redactSecret(message, bearer);
+        throw new CliError(transportFailureMessage(base, safe), ExitCode.network);
+      }
+      // A 401 in token-provider mode usually means the cached access JWT just
+      // expired or was rotated: drop it, re-mint, and retry the request once
+      // before surfacing the error. A second 401 (or a revoked session, which
+      // makes the re-mint itself throw an auth error) propagates normally.
+      if (res.status === 401 && opts.auth.kind === "token-provider" && !refreshed) {
+        refreshed = true;
+        opts.auth.invalidate();
+        // The abandoned 401 response's body is never read; cancel it so its
+        // stream/socket doesn't linger for the rest of the process.
+        await res.body?.cancel().catch(() => {});
+        continue;
+      }
+      return res;
     }
   }
 
   // `AbortSignal.timeout` rejects with a DOMException named "TimeoutError". The
   // deadline covers the whole request, so it can fire while connecting, reading
   // headers, or streaming the body; report all of them with one friendly,
-  // api-key-free message naming the host and the timeout budget.
+  // credential-free message naming the host and the timeout budget.
   function throwIfTimeout(err: unknown): void {
     if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
       throw new CliError(timeoutMessage(base, opts.timeoutMs), ExitCode.network);
@@ -179,6 +259,13 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   return {
     whoami() {
       return request<Whoami>("/api/v1/public/whoami");
+    },
+    listWorkspaces() {
+      return request<WorkspaceList>("/api/v1/public/workspaces");
+    },
+    listProjects(params) {
+      const query = toQuery({ workspace_id: params?.workspaceId });
+      return request<ProjectList>(`/api/v1/public/projects${query}`);
     },
   };
 }

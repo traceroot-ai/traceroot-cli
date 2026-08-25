@@ -30,7 +30,11 @@ interface Harness {
   out: StringSink;
   err: StringSink;
   writeConfigCalls: Array<{ api_key: string; host_url: string }>;
-  createClientCalls: Array<{ host: string; apiKey: string; timeoutMs?: number }>;
+  createClientCalls: Array<{
+    host: string;
+    auth: { kind: string; key: string };
+    timeoutMs?: number;
+  }>;
 }
 
 function makeHarness(): Harness {
@@ -93,7 +97,10 @@ describe("runLogin non-interactive", () => {
     // promptHidden rejects in baseDeps, so reaching it would fail the test.
     await runLogin(baseDeps(h, { resolvedApiKey: FULL_TOKEN, resolvedHost: "https://h" }));
 
-    expect(h.createClientCalls[0]).toEqual({ host: "https://h", apiKey: FULL_TOKEN });
+    expect(h.createClientCalls[0]).toEqual({
+      host: "https://h",
+      auth: { kind: "api-key", key: FULL_TOKEN },
+    });
     expect(h.writeConfigCalls).toHaveLength(1);
   });
 
@@ -203,7 +210,7 @@ describe("runLogin already logged in (non-interactive)", () => {
     expect(h.createClientCalls).toHaveLength(1);
     expect(h.createClientCalls[0]).toEqual({
       host: "https://h",
-      apiKey: FULL_TOKEN,
+      auth: { kind: "api-key", key: FULL_TOKEN },
       timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
     });
     expect(h.err.data).toContain("WARNING:");
@@ -274,7 +281,10 @@ describe("runLogin already logged in (non-interactive)", () => {
     );
 
     expect(h.createClientCalls).toHaveLength(1);
-    expect(h.createClientCalls[0]).toEqual({ host: "https://new-host", apiKey: FULL_TOKEN });
+    expect(h.createClientCalls[0]).toEqual({
+      host: "https://new-host",
+      auth: { kind: "api-key", key: FULL_TOKEN },
+    });
     expect(h.writeConfigCalls).toHaveLength(1);
     expect(h.writeConfigCalls[0]).toEqual({ api_key: FULL_TOKEN, host_url: "https://new-host" });
     expect(h.err.data).not.toContain("Already logged in");
@@ -325,10 +335,13 @@ describe("runLogin already logged in (interactive)", () => {
     // validates the freshly entered account that actually gets persisted.
     expect(h.createClientCalls[0]).toEqual({
       host: "https://old-host",
-      apiKey: FULL_TOKEN,
+      auth: { kind: "api-key", key: FULL_TOKEN },
       timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
     });
-    expect(h.createClientCalls).toContainEqual({ host: "https://new-host", apiKey: NEW_TOKEN });
+    expect(h.createClientCalls).toContainEqual({
+      host: "https://new-host",
+      auth: { kind: "api-key", key: NEW_TOKEN },
+    });
     expect(h.writeConfigCalls).toHaveLength(1);
     expect(h.writeConfigCalls[0]).toEqual({ api_key: NEW_TOKEN, host_url: "https://new-host" });
     expect(h.out.data).not.toContain(FULL_TOKEN);
@@ -352,7 +365,9 @@ describe("runLogin already logged in (interactive)", () => {
       }),
     );
 
-    expect(h.createClientCalls).toEqual([{ host: "https://new-host", apiKey: FULL_TOKEN }]);
+    expect(h.createClientCalls).toEqual([
+      { host: "https://new-host", auth: { kind: "api-key", key: FULL_TOKEN } },
+    ]);
     expect(h.writeConfigCalls).toEqual([{ api_key: FULL_TOKEN, host_url: "https://new-host" }]);
     expect(h.err.data).not.toContain("Already logged in");
   });

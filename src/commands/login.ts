@@ -110,7 +110,11 @@ export async function runLogin(deps: LoginDeps): Promise<void> {
     host = DEFAULT_HOST;
   }
 
-  const client = deps.createClient({ host, apiKey, timeoutMs: deps.timeoutMs });
+  const client = deps.createClient({
+    host,
+    auth: { kind: "api-key", key: apiKey },
+    timeoutMs: deps.timeoutMs,
+  });
   // Validate before persisting; a failure throws and leaves config untouched.
   const who = await client.whoami();
 
@@ -168,7 +172,7 @@ async function reportAlreadyLoggedIn(
   try {
     const client = deps.createClient({
       host: currentHost,
-      apiKey: savedKey,
+      auth: { kind: "api-key", key: savedKey },
       timeoutMs: WHOAMI_WARNING_TIMEOUT_MS,
     });
     who = await client.whoami();

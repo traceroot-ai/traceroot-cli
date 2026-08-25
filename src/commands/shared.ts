@@ -44,5 +44,10 @@ export function requireAuth(ctx: Context): { host: string; apiKey: string } {
  * The api key is NEVER included in the error message.
  */
 export function requireApiClient(ctx: Context): ApiClient {
-  return createApiClient({ ...requireAuth(ctx), timeoutMs: ctx.timeoutMs });
+  const { host, apiKey } = requireAuth(ctx);
+  return createApiClient({
+    host,
+    auth: { kind: "api-key", key: apiKey },
+    timeoutMs: ctx.timeoutMs,
+  });
 }
