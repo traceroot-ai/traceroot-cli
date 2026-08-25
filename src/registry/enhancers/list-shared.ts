@@ -1,3 +1,4 @@
+import { REGISTRY } from "@traceroot-ai/tools";
 import type { Command } from "commander";
 import { CliError, ExitCode, type Writers, logProgress, writeJson } from "../../output.js";
 import {
@@ -8,6 +9,18 @@ import {
 } from "../../time/range.js";
 import { onceOption } from "../flags.js";
 import type { ResolveInput } from "./types.js";
+
+/**
+ * Upper bound for --limit on the curated list commands, taken from the
+ * registry so a server-side change flows through the npm bump instead of
+ * drifting here. Every list tool declares the same bound; list_traces is the
+ * representative entry.
+ */
+const LIST_LIMIT_MAX: number | undefined = (() => {
+  const schema = REGISTRY.find((entry) => entry.name === "list_traces")?.inputSchema.properties
+    .limit;
+  return typeof schema?.maximum === "number" ? schema.maximum : undefined;
+})();
 
 /**
  * The pieces every curated list command (traces/detectors/findings list)
@@ -94,7 +107,7 @@ export function resolveListArgs(input: ResolveInput): {
   args: Record<string, unknown>;
   state: ListState;
 } {
-  const limit = parseLimit(input.opts.limit as string | undefined);
+  const limit = parseLimit(input.opts.limit as string | undefined, LIST_LIMIT_MAX);
   const range = resolveTimeRange({
     since: input.opts.since as string | undefined,
     from: input.opts.from as string | undefined,

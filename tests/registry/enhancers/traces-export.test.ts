@@ -380,6 +380,28 @@ describe("runExport", () => {
     expect(err.data.length).toBeGreaterThan(0);
   });
 
+  it("canonicalizes a legacy hyphenated finding id in the flagged warning but not in --json", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle-legacy");
+    const { writers, out, err } = makeWriters();
+
+    await runExport(response, {
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: true,
+      writers,
+      getFinding: fakeGetFinding(
+        makeFinding({ finding_id: "9402640d-c949-4150-ac84-458ea7b95190" }),
+      ),
+    });
+
+    expect(err.data).toContain("finding 9402640dc9494150ac84458ea7b95190");
+    expect(err.data).not.toContain("9402640d-c949");
+    // --json carries the server's stored form untouched.
+    expect(out.data).toContain('"finding_id":"9402640d-c949-4150-ac84-458ea7b95190"');
+  });
+
   it("writes finding.json and reports the finding when the trace is flagged", async () => {
     const response = makeResponse();
     const outputDir = join(tmpRoot, "bundle");

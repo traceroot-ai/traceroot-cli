@@ -1,3 +1,4 @@
+import { sanitizeFindingId } from "./finding-id.js";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
@@ -117,7 +118,7 @@ export async function runExport(response: TraceExport, deps: ExportDeps): Promis
     const by = finding.detectors.length > 0 ? ` by ${finding.detectors.join(", ")}` : "";
     const styler = createStyler(writers.err);
     writers.err.write(
-      `${styler.warn(`Flagged${by} — finding ${finding.finding_id} in finding.json`)}\n`,
+      `${styler.warn(`Flagged${by} — finding ${sanitizeFindingId(finding.finding_id)} in finding.json`)}\n`,
     );
   }
 

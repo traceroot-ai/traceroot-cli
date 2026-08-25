@@ -304,6 +304,19 @@ describe("runGet (finding indicator)", () => {
     expect(out.data).toContain("findings get fnd-1"); // pointer to full detail
   });
 
+  it("renders a legacy hyphenated finding id dashless, including the findings get pointer", async () => {
+    const { writers: w, out } = writers();
+    await runGet(detail({}), {
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      getFinding: fakeGetFinding(finding({ finding_id: "9402640d-c949-4150-ac84-458ea7b95190" })),
+    });
+    expect(out.data).toContain("9402640dc9494150ac84458ea7b95190");
+    expect(out.data).toContain("findings get 9402640dc9494150ac84458ea7b95190");
+    expect(out.data).not.toContain("9402640d-c949");
+  });
+
   it("omits the Finding block for an unflagged trace", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();

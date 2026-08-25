@@ -326,6 +326,12 @@ describe("renderList (--json)", () => {
 });
 
 describe("tracesList.resolveArgs (--limit forwarding)", () => {
+  it("rejects a --limit above the schema maximum as a usage error (parity with generated commands)", () => {
+    expect(() =>
+      tracesList.resolveArgs?.({ opts: { limit: "999999" }, positionals: {}, extras: [] }),
+    ).toThrow("--limit must be at most 200");
+  });
+
   it("forwards the limit as args.limit", () => {
     const resolved = tracesList.resolveArgs?.({
       opts: { limit: "5" },

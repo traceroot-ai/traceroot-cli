@@ -187,6 +187,11 @@ describe("resolveTimeRange", () => {
 });
 
 describe("parseLimit", () => {
+  it("enforces an upper bound when given, matching the generated path's wording", () => {
+    expect(() => parseLimit("999999", 200)).toThrow("--limit must be at most 200");
+    expect(parseLimit("200", 200)).toBe(200);
+  });
+
   it("returns undefined when absent", () => {
     expect(parseLimit(undefined)).toBeUndefined();
   });

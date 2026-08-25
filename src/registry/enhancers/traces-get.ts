@@ -1,3 +1,4 @@
+import { sanitizeFindingId } from "./finding-id.js";
 import type { Command } from "commander";
 import type { FindingDetail, TraceDetail } from "../../api/client.js";
 import { type Writers, colorEnabled, writeJson } from "../../output.js";
@@ -113,7 +114,7 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
     lines.push("");
     const detectors =
       finding.detectors.length > 0 ? `  (flagged by ${finding.detectors.join(", ")})` : "";
-    lines.push(`${label("Finding ID:")} ${finding.finding_id}${detectors}`);
+    lines.push(`${label("Finding ID:")} ${sanitizeFindingId(finding.finding_id)}${detectors}`);
     if (finding.rca !== null) {
       // Show the RCA text directly; only fall back to the status (e.g. while it
       // is still being generated) when there is no result yet.
@@ -122,7 +123,7 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
     }
     lines.push(
       styler.warn(
-        `            run 'traceroot findings get ${finding.finding_id}' for the full finding`,
+        `            run 'traceroot findings get ${sanitizeFindingId(finding.finding_id)}' for the full finding`,
       ),
     );
   }

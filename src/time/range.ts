@@ -318,7 +318,7 @@ export function resolveTimeRange(
  * backend default applies) and throws a {@link CliError} for anything that is
  * not a positive integer.
  */
-export function parseLimit(raw: string | undefined): number | undefined {
+export function parseLimit(raw: string | undefined, max?: number): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
@@ -328,6 +328,12 @@ export function parseLimit(raw: string | undefined): number | undefined {
   const value = Number.parseInt(raw, 10);
   if (!Number.isInteger(value) || value < 1) {
     throw new CliError("--limit must be a positive integer", ExitCode.usage);
+  }
+  // Same bound and wording as the generated path's checkRange, so curated and
+  // generated commands reject an oversized --limit identically (exit 2, not a
+  // server 422 surfacing as an internal error).
+  if (max !== undefined && value > max) {
+    throw new CliError(`--limit must be at most ${max}`, ExitCode.usage);
   }
   return value;
 }
