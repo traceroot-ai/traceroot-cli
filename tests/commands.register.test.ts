@@ -85,6 +85,7 @@ describe("buildProgram", () => {
     const program = buildProgram();
     expect(childNames(program)).toEqual([
       "login",
+      "logout",
       "status",
       "traces",
       "detectors",
