@@ -98,7 +98,11 @@ export function registerDoctor(program: Command): void {
         writers: defaultWriters,
         verifyCredentials: async (host, apiKey) => {
           try {
-            await createApiClient({ host, apiKey, timeoutMs: ctx.timeoutMs }).whoami();
+            await createApiClient({
+              host,
+              auth: { kind: "api-key", key: apiKey },
+              timeoutMs: ctx.timeoutMs,
+            }).whoami();
             return true;
           } catch {
             return false;
