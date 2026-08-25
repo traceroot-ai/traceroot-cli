@@ -1,16 +1,11 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ApiClient,
-  FindingDetail,
-  TraceExport,
-  TraceFieldsParams,
-} from "../../src/api/client.js";
-import { runExport } from "../../src/commands/traces/export.js";
-import { CliError, type Writers } from "../../src/output.js";
-import { StringSink } from "../helpers/stringSink.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { FindingDetail, TraceExport } from "../../../src/api/client.js";
+import { CliError, type Writers } from "../../../src/output.js";
+import { runExport, tracesExport } from "../../../src/registry/enhancers/traces-export.js";
+import { StringSink } from "../../helpers/stringSink.js";
 
 function makeFinding(over: Partial<FindingDetail> = {}): FindingDetail {
   return {
@@ -78,28 +73,12 @@ function makeResponse(): TraceExport {
   };
 }
 
-function fakeClient(
-  response: TraceExport,
+/** Best-effort finding lookup fake: mirrors what the enhancer's render wires up
+ * from `ctx.dispatchTool("get_finding_by_trace", ...)`. */
+function fakeGetFinding(
   finding: FindingDetail | null = null,
-  exportTrace?: (traceId: string, params?: TraceFieldsParams) => Promise<TraceExport>,
-): ApiClient {
-  return {
-    whoami: () => Promise.reject(new Error("not used")),
-    listTraces: () => Promise.reject(new Error("not used")),
-    getTrace: () => Promise.reject(new Error("not used")),
-    exportTrace: exportTrace ?? (() => Promise.resolve(response)),
-    findFindingByTrace: () => Promise.resolve(finding),
-  };
-}
-
-function throwingClient(error: unknown): ApiClient {
-  return {
-    whoami: () => Promise.reject(new Error("not used")),
-    listTraces: () => Promise.reject(new Error("not used")),
-    getTrace: () => Promise.reject(new Error("not used")),
-    exportTrace: () => Promise.reject(error),
-    findFindingByTrace: () => Promise.resolve(null),
-  };
+): (traceId: string) => Promise<FindingDetail | null> {
+  return () => Promise.resolve(finding);
 }
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
@@ -124,13 +103,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     const listing = readdirSync(outputDir).sort();
@@ -147,13 +126,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     const parsed = JSON.parse(readFileSync(join(outputDir, "trace.json"), "utf8"));
@@ -165,13 +144,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     expect(JSON.parse(readFileSync(join(outputDir, "spans.json"), "utf8"))).toEqual(response.spans);
@@ -188,13 +167,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     const raw = readFileSync(join(outputDir, "trace.json"), "utf8");
@@ -208,12 +187,12 @@ describe("runExport", () => {
     const cwd = process.cwd();
     process.chdir(tmpRoot);
     try {
-      await runExport({
-        client: fakeClient(response),
+      await runExport(response, {
         traceId: "abc123",
         force: false,
         json: false,
         writers,
+        getFinding: fakeGetFinding(),
         now: () => "2026-06-05T12-00-00Z",
       });
     } finally {
@@ -230,12 +209,12 @@ describe("runExport", () => {
     const cwd = process.cwd();
     process.chdir(tmpRoot);
     try {
-      await runExport({
-        client: fakeClient(response),
+      await runExport(response, {
         traceId: "a/b\\c:d",
         force: false,
         json: false,
         writers,
+        getFinding: fakeGetFinding(),
         now: () => "2026-06-05T12-00-00Z",
       });
     } finally {
@@ -253,12 +232,12 @@ describe("runExport", () => {
     const cwd = process.cwd();
     process.chdir(tmpRoot);
     try {
-      await runExport({
-        client: fakeClient(response),
+      await runExport(response, {
         traceId: "../../evil",
         force: false,
         json: false,
         writers,
+        getFinding: fakeGetFinding(),
         now: () => "2026-06-05T12-00-00Z",
       });
     } finally {
@@ -278,12 +257,12 @@ describe("runExport", () => {
     process.chdir(tmpRoot);
     try {
       // No injected clock: exercises the real defaultTimestamp().
-      await runExport({
-        client: fakeClient(response),
+      await runExport(response, {
         traceId: "abc",
         force: false,
         json: false,
         writers,
+        getFinding: fakeGetFinding(),
       });
     } finally {
       process.chdir(cwd);
@@ -304,13 +283,13 @@ describe("runExport", () => {
     writeFileSync(sentinel, "keep me", "utf8");
 
     await expect(
-      runExport({
-        client: fakeClient(response),
+      runExport(response, {
         traceId: "abc123",
         outputDir,
         force: false,
         json: false,
         writers,
+        getFinding: fakeGetFinding(),
       }),
     ).rejects.toBeInstanceOf(CliError);
 
@@ -326,13 +305,13 @@ describe("runExport", () => {
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(join(outputDir, "sentinel.txt"), "old", "utf8");
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: true,
       json: false,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
@@ -345,13 +324,13 @@ describe("runExport", () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(outputDir, { recursive: true });
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
@@ -362,13 +341,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers, out, err } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     expect(out.data.trim()).toBe(outputDir);
@@ -381,13 +360,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers, out, err } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: true,
       writers,
+      getFinding: fakeGetFinding(),
     });
 
     const lines = out.data.trimEnd().split("\n");
@@ -401,18 +380,40 @@ describe("runExport", () => {
     expect(err.data.length).toBeGreaterThan(0);
   });
 
-  it("writes finding.json and reports the finding when the trace is flagged", async () => {
+  it("canonicalizes a legacy hyphenated finding id in the flagged warning but not in --json", async () => {
     const response = makeResponse();
-    const outputDir = join(tmpRoot, "bundle");
+    const outputDir = join(tmpRoot, "bundle-legacy");
     const { writers, out, err } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response, makeFinding()),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: true,
       writers,
+      getFinding: fakeGetFinding(
+        makeFinding({ finding_id: "9402640d-c949-4150-ac84-458ea7b95190" }),
+      ),
+    });
+
+    expect(err.data).toContain("finding 9402640dc9494150ac84458ea7b95190");
+    expect(err.data).not.toContain("9402640d-c949");
+    // --json carries the server's stored form untouched.
+    expect(out.data).toContain('"finding_id":"9402640d-c949-4150-ac84-458ea7b95190"');
+  });
+
+  it("writes finding.json and reports the finding when the trace is flagged", async () => {
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers, out, err } = makeWriters();
+
+    await runExport(response, {
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: true,
+      writers,
+      getFinding: fakeGetFinding(makeFinding()),
     });
 
     // finding.json is written with the full FindingDetail (finding id + rca).
@@ -431,13 +432,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers, err } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response, makeFinding()),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(makeFinding()),
     });
 
     expect(err.data).toContain(
@@ -451,13 +452,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers, err } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response, null),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(null),
     });
 
     expect(err.data).toContain(
@@ -471,13 +472,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers, out } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response, makeFinding()),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: true,
       writers,
+      getFinding: fakeGetFinding(makeFinding()),
     });
 
     const manifest = JSON.parse(readFileSync(join(outputDir, "manifest.json"), "utf8"));
@@ -502,13 +503,13 @@ describe("runExport", () => {
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();
 
-    await runExport({
-      client: fakeClient(response, null),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(null),
     });
 
     const raw = readFileSync(join(outputDir, "manifest.json"), "utf8");
@@ -516,20 +517,48 @@ describe("runExport", () => {
     expect(JSON.parse(raw)).toEqual(response.manifest);
   });
 
-  it("writes no finding.json when the finding lookup fails (best-effort)", async () => {
+  it("writes no finding.json when the finding lookup resolves null (best-effort)", async () => {
+    // API failures resolve to null upstream (ctx.dispatchToolOptional), so a
+    // null finding is the "lookup failed / not flagged" contract here.
     const response = makeResponse();
     const outputDir = join(tmpRoot, "bundle");
     const { writers } = makeWriters();
-    const client: ApiClient = {
-      ...fakeClient(response),
-      findFindingByTrace: () => Promise.reject(new CliError("Failed to read finding")),
-    };
+    const getFinding = () => Promise.resolve(null);
 
-    await runExport({ client, traceId: "abc123", outputDir, force: false, json: false, writers });
+    await runExport(response, {
+      traceId: "abc123",
+      outputDir,
+      force: false,
+      json: false,
+      writers,
+      getFinding,
+    });
 
     // Bundle still written; the finding is simply omitted.
     expect(existsSync(join(outputDir, "trace.json"))).toBe(true);
     expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
+  });
+
+  it("propagates a rejecting getFinding and writes no bundle directory", async () => {
+    // Only API failures degrade to null (handled upstream); a rejection here is
+    // a programming bug and must surface — and since the lookup precedes mkdir,
+    // it must leave nothing on disk.
+    const response = makeResponse();
+    const outputDir = join(tmpRoot, "bundle");
+    const { writers } = makeWriters();
+    const getFinding = () => Promise.reject(new CliError("Failed to read finding"));
+
+    await expect(
+      runExport(response, {
+        traceId: "abc123",
+        outputDir,
+        force: false,
+        json: false,
+        writers,
+        getFinding,
+      }),
+    ).rejects.toThrow("Failed to read finding");
+    expect(existsSync(outputDir)).toBe(false);
   });
 
   it("removes a stale finding.json when re-exporting an unflagged trace with --force", async () => {
@@ -542,13 +571,13 @@ describe("runExport", () => {
     writeFileSync(join(outputDir, "finding.json"), '{"finding_id":"stale"}\n', "utf8");
 
     // The current trace is unflagged (finding lookup → null).
-    await runExport({
-      client: fakeClient(response, null),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: true,
       json: false,
       writers,
+      getFinding: fakeGetFinding(null),
     });
 
     // The stale finding.json must not survive — the bundle would otherwise carry a
@@ -564,13 +593,13 @@ describe("runExport", () => {
 
     // Seed the directory as a prior *flagged* export would have left it: a
     // finding.json plus a 5-entry manifest.
-    await runExport({
-      client: fakeClient(response, makeFinding()),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: false,
       json: false,
       writers,
+      getFinding: fakeGetFinding(makeFinding()),
     });
     expect(existsSync(join(outputDir, "finding.json"))).toBe(true);
     expect(JSON.parse(readFileSync(join(outputDir, "manifest.json"), "utf8")).files).toContain(
@@ -578,13 +607,13 @@ describe("runExport", () => {
     );
 
     // Re-export the same trace, now unflagged, with --force.
-    await runExport({
-      client: fakeClient(response, null),
+    await runExport(response, {
       traceId: "abc123",
       outputDir,
       force: true,
       json: false,
       writers,
+      getFinding: fakeGetFinding(null),
     });
 
     expect(existsSync(join(outputDir, "finding.json"))).toBe(false);
@@ -597,60 +626,32 @@ describe("runExport", () => {
     ]);
   });
 
-  it("propagates a fetch failure and creates no bundle dir or files", async () => {
-    const outputDir = join(tmpRoot, "bundle");
-    const { writers } = makeWriters();
-
-    await expect(
-      runExport({
-        client: throwingClient(new CliError("trace not found")),
-        traceId: "missing",
-        outputDir,
-        force: false,
-        json: false,
-        writers,
-      }),
-    ).rejects.toBeInstanceOf(CliError);
-
-    expect(existsSync(outputDir)).toBe(false);
-  });
+  // The legacy suite also had "propagates a fetch failure and creates no bundle
+  // dir or files" here. Under the factory, fetching export_trace happens before
+  // `render` is ever invoked (see src/registry/factory.ts's `registerOne`:
+  // `executeTool` is awaited, then only on success is `enhancer.render` called) —
+  // so that guarantee is now inherent to the factory and there is no fetch step
+  // left inside `runExport` to fail.
 });
 
-describe("runExport (--fields)", () => {
-  it("passes fields through to client.exportTrace", async () => {
-    const response = makeResponse();
-    const outputDir = join(tmpRoot, "bundle");
-    const { writers } = makeWriters();
-    const exportTrace = vi.fn().mockResolvedValue(response);
-
-    await runExport({
-      client: fakeClient(response, null, exportTrace),
-      traceId: "abc123",
-      outputDir,
-      force: false,
-      json: false,
-      writers,
-      fields: "io,metadata",
+describe("tracesExport.resolveArgs (--fields)", () => {
+  it("threads --fields through into the dispatched args", () => {
+    const resolved = tracesExport.resolveArgs?.({
+      opts: { fields: "io,metadata" },
+      positionals: { trace_id: "abc123" },
+      extras: [],
     });
 
-    expect(exportTrace).toHaveBeenCalledWith("abc123", { fields: "io,metadata" });
+    expect(resolved?.args).toEqual({ trace_id: "abc123", fields: "io,metadata" });
   });
 
-  it("passes fields: undefined through to client.exportTrace when omitted", async () => {
-    const response = makeResponse();
-    const outputDir = join(tmpRoot, "bundle");
-    const { writers } = makeWriters();
-    const exportTrace = vi.fn().mockResolvedValue(response);
-
-    await runExport({
-      client: fakeClient(response, null, exportTrace),
-      traceId: "abc123",
-      outputDir,
-      force: false,
-      json: false,
-      writers,
+  it("omits fields from the dispatched args when --fields is not given", () => {
+    const resolved = tracesExport.resolveArgs?.({
+      opts: {},
+      positionals: { trace_id: "abc123" },
+      extras: [],
     });
 
-    expect(exportTrace).toHaveBeenCalledWith("abc123", { fields: undefined });
+    expect(resolved?.args).toEqual({ trace_id: "abc123" });
   });
 });

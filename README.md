@@ -77,6 +77,15 @@ traceroot findings list --detector <detector-id> --since 7d --json | jq '.data[]
 traceroot findings get --trace 99224be337d725fd5e8f2e7b45dc22ef
 ```
 
+### Generated commands
+
+`traces`, `detectors`, and `findings` are generated from the tool
+registry shipped in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
+each entry's input schema drives its flags, and its response type drives the
+default rendering. Adding a new backend endpoint to the CLI is a registry bump
+plus one placement line in `src/registry/naming.ts` — no hand-written command
+handler needed.
+
 ### Exit codes
 
 Every command exits with a class-specific code so scripts can branch on the kind

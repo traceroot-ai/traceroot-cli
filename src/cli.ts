@@ -1,9 +1,14 @@
 import { Command, CommanderError, Option } from "commander";
 import { registerCommands } from "./commands/index.js";
 import { CliError, ExitCode, handlePipeError, reportError } from "./output.js";
+import type { RegistryDeps } from "./registry/factory.js";
 import { getVersion } from "./version.js";
 
-export function buildProgram(): Command {
+export interface BuildOverrides {
+  registry?: RegistryDeps;
+}
+
+export function buildProgram(overrides: BuildOverrides = {}): Command {
   const program = new Command();
   program.name("traceroot").description("TraceRoot command line interface").version(getVersion());
   // Drop the implicit `help [command]` subcommand; `-h, --help` already covers it.
@@ -59,7 +64,7 @@ export function buildProgram(): Command {
     .option("--env-file <path>", "path to a .env file to load")
     .option("--json", "emit machine-readable JSON output for supported commands")
     .option("--timeout <ms>", "per-request network timeout in milliseconds (default: 30000)");
-  registerCommands(program);
+  registerCommands(program, overrides.registry);
   // Make the exit-code contract discoverable from `traceroot --help` so scripts
   // know how to branch on failures (mirrors the README table).
   program.addHelpText(

@@ -16,11 +16,11 @@ export function contextFromCommand(command: Command): Context {
 }
 
 /**
- * Returns an authenticated API client from a resolved Context, or throws a
- * CliError (clean stderr, non-zero exit) when the api key or host is unresolved.
- * The api key is NEVER included in the error message.
+ * Resolves the api key and host from a Context, or throws a CliError (clean
+ * stderr, non-zero exit) when either is unresolved. The api key is NEVER
+ * included in the error message.
  */
-export function requireApiClient(ctx: Context): ApiClient {
+export function requireAuth(ctx: Context): { host: string; apiKey: string } {
   const apiKey = ctx.auth.apiKey.value;
   const host = ctx.auth.hostUrl.value;
   if (apiKey === undefined) {
@@ -35,5 +35,14 @@ export function requireApiClient(ctx: Context): ApiClient {
       ExitCode.auth,
     );
   }
-  return createApiClient({ host, apiKey, timeoutMs: ctx.timeoutMs });
+  return { host, apiKey };
+}
+
+/**
+ * Returns an authenticated API client from a resolved Context, or throws a
+ * CliError (clean stderr, non-zero exit) when the api key or host is unresolved.
+ * The api key is NEVER included in the error message.
+ */
+export function requireApiClient(ctx: Context): ApiClient {
+  return createApiClient({ ...requireAuth(ctx), timeoutMs: ctx.timeoutMs });
 }

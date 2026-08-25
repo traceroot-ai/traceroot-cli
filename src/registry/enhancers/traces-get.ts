@@ -1,11 +1,13 @@
+import { sanitizeFindingId } from "./finding-id.js";
 import type { Command } from "commander";
-import type { ApiClient, FindingDetail, TraceDetail } from "../../api/client.js";
-import { type Writers, colorEnabled, defaultWriters, writeJson } from "../../output.js";
+import type { FindingDetail, TraceDetail } from "../../api/client.js";
+import { type Writers, colorEnabled, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTree } from "../../render/tree.js";
 import { elapsedMs, formatDuration, formatTimestamp } from "../../util/index.js";
-import { contextFromCommand, requireApiClient } from "../shared.js";
-import { onceOption } from "./list.js";
+import { rejectExtras } from "../flags.js";
+import { onceOption } from "../flags.js";
+import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 /** Max width for the single-line RCA preview shown inline in `traces get`. */
 const RCA_PREVIEW_MAX = 80;
@@ -28,16 +30,11 @@ function rcaPreview(result: string): string {
 
 /** Dependencies for the testable core of `traces get`. */
 export interface RunGetDeps {
-  client: ApiClient;
+  traceId: string;
   json: boolean;
   writers: Writers;
-  traceId: string;
-  /**
-   * Field projection to request, sent verbatim as `fields` (e.g. `full` or
-   * `io,metadata`). Omitted means the server's default `skeleton` projection,
-   * which does not include per-span input/output/metadata.
-   */
-  fields?: string;
+  /** Best-effort finding lookup; resolves to null when there is none. */
+  getFinding: (traceId: string) => Promise<FindingDetail | null>;
 }
 
 type Span = TraceDetail["spans"][number];
@@ -58,20 +55,22 @@ function isLive(spans: Span[]): boolean {
   return spans.some((span) => span.span_end_time === null);
 }
 
-/** Core, network-free logic for `traces get`. Tests inject a fake client. */
-export async function runGet(deps: RunGetDeps): Promise<void> {
-  const { client, json, writers, traceId, fields } = deps;
-  const trace = await client.getTrace(traceId, { fields });
+/**
+ * Core, network-free rendering logic for `traces get`. The trace itself is
+ * fetched by the factory before `render` runs, so this operates on an
+ * already-fetched trace; tests inject a fake `getFinding`.
+ */
+export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void> {
+  const { json, writers, traceId } = deps;
 
   // Best-effort: surface the detector finding for this trace (findings are
-  // 1-per-trace). A 404 means "not flagged" (null); any other failure must not
-  // break `traces get`, so it also degrades to no finding.
-  let finding: FindingDetail | null = null;
-  try {
-    finding = await client.findFindingByTrace(traceId);
-  } catch {
-    finding = null;
-  }
+  // 1-per-trace). A 404 means "not flagged" (null); any other API failure must
+  // not break `traces get`, so it also degrades to no finding. Contract:
+  // `deps.getFinding` never rejects for API failures — production wires it to
+  // `ctx.dispatchToolOptional`, which resolves null on dispatch failure while
+  // letting the factory's internal assertions throw. No catch here, so a
+  // programming bug can never masquerade as "no finding".
+  const finding: FindingDetail | null = await deps.getFinding(traceId);
 
   if (json) {
     // FULL untruncated trace, plus the finding (or null) so scripts get it in one call.
@@ -115,7 +114,7 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
     lines.push("");
     const detectors =
       finding.detectors.length > 0 ? `  (flagged by ${finding.detectors.join(", ")})` : "";
-    lines.push(`${label("Finding ID:")} ${finding.finding_id}${detectors}`);
+    lines.push(`${label("Finding ID:")} ${sanitizeFindingId(finding.finding_id)}${detectors}`);
     if (finding.rca !== null) {
       // Show the RCA text directly; only fall back to the status (e.g. while it
       // is still being generated) when there is no result yet.
@@ -124,7 +123,7 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
     }
     lines.push(
       styler.warn(
-        `            run 'traceroot findings get ${finding.finding_id}' for the full finding`,
+        `            run 'traceroot findings get ${sanitizeFindingId(finding.finding_id)}' for the full finding`,
       ),
     );
   }
@@ -150,28 +149,45 @@ export async function runGet(deps: RunGetDeps): Promise<void> {
   writers.out.write(`${lines.join("\n")}\n`);
 }
 
-export function registerTracesGet(traces: Command): void {
-  traces
-    .command("get")
-    .argument("<traceId>", "trace identifier")
-    .option(
+/** State threaded from `resolveArgs` to `render`. */
+interface GetState {
+  traceId: string;
+}
+
+export const tracesGet: Enhancer = {
+  description: "Get a single trace",
+  arguments(cmd: Command): void {
+    cmd.argument("<traceId>", "trace identifier");
+  },
+  flags(cmd: Command): void {
+    cmd.option(
       "--fields <groups>",
       "field projection to request, e.g. full or io,metadata. Default is the lightweight " +
         "skeleton projection (no per-span input/output/metadata); pass full (or io,metadata) " +
         "to fetch span I/O.",
       onceOption("--fields"),
-    )
-    .description("Get a single trace")
-    .action(async (traceId: string, _opts, command: Command) => {
-      const ctx = contextFromCommand(command);
-      const client = requireApiClient(ctx);
-      const opts = command.optsWithGlobals();
-      await runGet({
-        client,
-        json: ctx.json,
-        writers: defaultWriters,
-        traceId,
-        fields: opts.fields as string | undefined,
-      });
+    );
+  },
+  resolveArgs(input: ResolveInput): Resolved {
+    rejectExtras(input);
+    const traceId = input.positionals.trace_id as string;
+    const fields = input.opts.fields as string | undefined;
+    const state: GetState = { traceId };
+    return {
+      args: { trace_id: traceId, ...(fields !== undefined ? { fields } : {}) },
+      state,
+    };
+  },
+  async render(payload: unknown, ctx: RenderContext): Promise<void> {
+    const state = ctx.state as GetState;
+    await runGet(payload as TraceDetail, {
+      traceId: state.traceId,
+      json: ctx.json,
+      writers: ctx.writers,
+      getFinding: (traceId) =>
+        ctx
+          .dispatchToolOptional("get_finding_by_trace", { trace_id: traceId })
+          .then((result) => result as FindingDetail | null),
     });
-}
+  },
+};

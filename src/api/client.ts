@@ -31,54 +31,8 @@ export interface ApiClientOptions {
   timeoutMs?: number;
 }
 
-export interface ListTracesParams {
-  limit?: number;
-  /** ISO 8601 lower bound (inclusive), sent as `start_after`. */
-  startAfter?: string;
-  /** ISO 8601 upper bound (exclusive), sent as `end_before`. */
-  endBefore?: string;
-}
-
-export interface ListDetectorsParams {
-  limit?: number;
-  /** ISO 8601 lower bound (inclusive) on creation time, sent as `start_after`. */
-  startAfter?: string;
-  /** ISO 8601 upper bound (exclusive) on creation time, sent as `end_before`. */
-  endBefore?: string;
-}
-
-export interface ListFindingsParams {
-  limit?: number;
-  /** ISO 8601 lower bound (inclusive), sent as `start_after`. */
-  startAfter?: string;
-  /** ISO 8601 upper bound (exclusive), sent as `end_before`. */
-  endBefore?: string;
-  /** Detector selector (id, name, or template); resolved server-side. */
-  detector?: string;
-  /** Restrict to a single trace, sent as `trace_id`. */
-  traceId?: string;
-}
-
-export interface TraceFieldsParams {
-  /**
-   * Field projection to request, sent verbatim as `fields`, e.g. `full` or
-   * `io,metadata`. The server validates the value; an invalid group surfaces
-   * as a normal CliError from a 400 response.
-   */
-  fields?: string;
-}
-
 export interface ApiClient {
   whoami(): Promise<Whoami>;
-  listTraces(params?: ListTracesParams): Promise<TraceList>;
-  getTrace(traceId: string, params?: TraceFieldsParams): Promise<TraceDetail>;
-  exportTrace(traceId: string, params?: TraceFieldsParams): Promise<TraceExport>;
-  listDetectors(params?: ListDetectorsParams): Promise<DetectorList>;
-  listFindings(params?: ListFindingsParams): Promise<FindingList>;
-  getFinding(findingId: string): Promise<FindingDetail>;
-  getFindingByTrace(traceId: string): Promise<FindingDetail>;
-  /** The finding for a trace, or `null` when the trace has none (404). */
-  findFindingByTrace(traceId: string): Promise<FindingDetail | null>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -93,9 +47,10 @@ function isErrorBody(value: unknown): value is ErrorBody {
 /**
  * Classifies a non-2xx HTTP status into a CLI exit-code class so scripts can tell
  * re-auth (401/403) from give-up (404) from an unexpected server error. Anything
- * else (5xx, other 4xx) is treated as internal (1).
+ * else (5xx, other 4xx) is treated as internal (1). Shared with the registry
+ * executor so the exit-code contract has exactly one definition.
  */
-function exitCodeForStatus(status: number): number {
+export function exitCodeForStatus(status: number): number {
   if (status === 401 || status === 403) {
     return ExitCode.auth;
   }
@@ -105,13 +60,34 @@ function exitCodeForStatus(status: number): number {
   return ExitCode.internal;
 }
 
+/** Replaces every occurrence of `secret` in a message with `<redacted>`. */
+export function redactSecret(message: string, secret: string): string {
+  return message.split(secret).join("<redacted>");
+}
+
+/** The one wording for a request that hit the timeout budget. */
+export function timeoutMessage(base: string, timeoutMs: number): string {
+  return `request to ${base} timed out after ${timeoutMs / 1000}s`;
+}
+
+/** The one wording for a transport-level failure (host named, never the key). */
+export function transportFailureMessage(base: string, safeDetail: string): string {
+  return `request to ${base} failed: ${safeDetail}`;
+}
+
+/** The one wording for an HTTP error whose body carried no usable detail. */
+export function statusFallbackMessage(status: number): string {
+  return `request failed with status ${status}`;
+}
+
 /**
- * Creates a thin typed client over the public REST API. No network activity
- * occurs on construction — only the request methods call `fetch`.
+ * Validates and normalizes a host URL: strips trailing slashes and rejects
+ * malformed URLs or unsupported schemes. Shared by {@link createApiClient} and
+ * the registry executor, which both need the same host validation ahead of a
+ * request.
  */
-export function createApiClient(opts: ApiClientOptions): ApiClient {
-  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
-  const base = opts.host.replace(/\/+$/, "");
+export function normalizeBaseUrl(host: string): string {
+  const base = host.replace(/\/+$/, "");
   let parsedHost: URL;
   try {
     parsedHost = new URL(base);
@@ -124,6 +100,16 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       ExitCode.usage,
     );
   }
+  return base;
+}
+
+/**
+ * Creates a thin typed client over the public REST API. No network activity
+ * occurs on construction — only the request methods call `fetch`.
+ */
+export function createApiClient(opts: ApiClientOptions): ApiClient {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const base = normalizeBaseUrl(opts.host);
   const headers = {
     authorization: `Bearer ${opts.apiKey}`,
     accept: "application/json",
@@ -144,8 +130,8 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
       // Deliberately do NOT interpolate the underlying error message: it could
       // echo back request contents and leak the api key. Mention only the host.
       const message = err instanceof Error ? err.message : String(err);
-      const safe = message.split(opts.apiKey).join("<redacted>");
-      throw new CliError(`request to ${base} failed: ${safe}`, ExitCode.network);
+      const safe = redactSecret(message, opts.apiKey);
+      throw new CliError(transportFailureMessage(base, safe), ExitCode.network);
     }
   }
 
@@ -155,10 +141,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
   // api-key-free message naming the host and the timeout budget.
   function throwIfTimeout(err: unknown): void {
     if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
-      throw new CliError(
-        `request to ${base} timed out after ${opts.timeoutMs / 1000}s`,
-        ExitCode.network,
-      );
+      throw new CliError(timeoutMessage(base, opts.timeoutMs), ExitCode.network);
     }
   }
 
@@ -172,10 +155,7 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     } catch {
       // Ignore unreadable / non-JSON error bodies.
     }
-    throw new CliError(
-      detail ?? `request failed with status ${res.status}`,
-      exitCodeForStatus(res.status),
-    );
+    throw new CliError(detail ?? statusFallbackMessage(res.status), exitCodeForStatus(res.status));
   }
 
   /** Reads a JSON body, translating a body-phase timeout into the same message. */
@@ -196,104 +176,9 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     return readJson<T>(res);
   }
 
-  /** Like {@link request}, but resolves `null` on a 404 instead of throwing. */
-  async function requestOptional<T>(path: string): Promise<T | null> {
-    const res = await rawGet(path);
-    if (res.status === 404) {
-      return null;
-    }
-    if (!res.ok) {
-      await failFor(res);
-    }
-    return readJson<T>(res);
-  }
-
   return {
     whoami() {
       return request<Whoami>("/api/v1/public/whoami");
-    },
-    listTraces(params) {
-      const search = new URLSearchParams();
-      if (params?.limit !== undefined) {
-        search.set("limit", String(params.limit));
-      }
-      if (params?.startAfter !== undefined) {
-        search.set("start_after", params.startAfter);
-      }
-      if (params?.endBefore !== undefined) {
-        search.set("end_before", params.endBefore);
-      }
-      const query = search.toString();
-      return request<TraceList>(`/api/v1/public/traces${query ? `?${query}` : ""}`);
-    },
-    getTrace(traceId, params) {
-      const search = new URLSearchParams();
-      if (params?.fields !== undefined) {
-        search.set("fields", params.fields);
-      }
-      const query = search.toString();
-      return request<TraceDetail>(
-        `/api/v1/public/traces/${encodeURIComponent(traceId)}${query ? `?${query}` : ""}`,
-      );
-    },
-    exportTrace(traceId, params) {
-      const search = new URLSearchParams();
-      if (params?.fields !== undefined) {
-        search.set("fields", params.fields);
-      }
-      const query = search.toString();
-      return request<TraceExport>(
-        `/api/v1/public/traces/${encodeURIComponent(traceId)}/export${query ? `?${query}` : ""}`,
-      );
-    },
-    listDetectors(params) {
-      const search = new URLSearchParams();
-      if (params?.limit !== undefined) {
-        search.set("limit", String(params.limit));
-      }
-      if (params?.startAfter !== undefined) {
-        search.set("start_after", params.startAfter);
-      }
-      if (params?.endBefore !== undefined) {
-        search.set("end_before", params.endBefore);
-      }
-      const query = search.toString();
-      return request<DetectorList>(`/api/v1/public/detectors${query ? `?${query}` : ""}`);
-    },
-    listFindings(params) {
-      const search = new URLSearchParams();
-      if (params?.limit !== undefined) {
-        search.set("limit", String(params.limit));
-      }
-      if (params?.startAfter !== undefined) {
-        search.set("start_after", params.startAfter);
-      }
-      if (params?.endBefore !== undefined) {
-        search.set("end_before", params.endBefore);
-      }
-      if (params?.detector !== undefined) {
-        search.set("detector", params.detector);
-      }
-      if (params?.traceId !== undefined) {
-        search.set("trace_id", params.traceId);
-      }
-      const query = search.toString();
-      return request<FindingList>(`/api/v1/public/detectors/findings${query ? `?${query}` : ""}`);
-    },
-    getFinding(findingId) {
-      return request<FindingDetail>(
-        `/api/v1/public/detectors/findings/${encodeURIComponent(findingId)}`,
-      );
-    },
-    getFindingByTrace(traceId) {
-      return request<FindingDetail>(
-        `/api/v1/public/detectors/traces/${encodeURIComponent(traceId)}/finding`,
-      );
-    },
-    findFindingByTrace(traceId) {
-      return requestOptional<FindingDetail>(
-        `/api/v1/public/detectors/traces/${encodeURIComponent(traceId)}/finding`,
-      );
     },
   };
 }

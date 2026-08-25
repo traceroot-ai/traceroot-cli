@@ -23,7 +23,7 @@
     "opentelemetry"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.3"
   },
   "bin": {
     "traceroot": "bin/traceroot.mjs"
@@ -40,9 +40,11 @@
     "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "node scripts/no-file-deps.mjs"
   },
   "dependencies": {
+    "@traceroot-ai/tools": "0.1.0",
     "commander": "^12.1.0"
   },
   "devDependencies": {
