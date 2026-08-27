@@ -5,8 +5,10 @@ import { registerDoctor } from "./doctor.js";
 import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
 import { registerLogout } from "./logout.js";
+import { registerProjects } from "./projects.js";
 import { registerSkills } from "./skills.js";
 import { registerStatus } from "./status.js";
+import { registerWorkspaces } from "./workspaces.js";
 
 /**
  * The single extension point for command registration. Later issues add their
@@ -16,6 +18,9 @@ export function registerCommands(program: Command, deps: RegistryDeps = {}): voi
   registerLogin(program);
   registerLogout(program);
   registerStatus(program);
+  // Account-scope discovery (user-credential reads the registry does not carry).
+  registerWorkspaces(program);
+  registerProjects(program);
   // Pre-create every command group (in GROUPS order) so `--help` lists groups
   // in a fixed order, regardless of which register* below attaches subcommands
   // to a group first.

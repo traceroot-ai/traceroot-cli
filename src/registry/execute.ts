@@ -33,6 +33,13 @@ export interface Transport {
   base: string;
   auth: TransportAuth;
   timeoutMs: number;
+  /**
+   * Default project to scope reads to. User credentials require it on every
+   * project-scoped read; an api key may match or omit it. Injected into each
+   * dispatch's query (see {@link executeTool}) so the whole generated command
+   * surface is scoped from one place.
+   */
+  projectId?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -65,6 +72,13 @@ export function transportFromContext(
     auth,
     timeoutMs: ctx.timeoutMs,
   };
+  // Only a session needs the default project (the server requires project_id
+  // for user credentials). An api key is already project-scoped — carrying a
+  // leftover TRACEROOT_PROJECT_ID from an earlier browser-login setup would
+  // 400/403 every read against an unrelated project.
+  if (access.kind === "session" && ctx.auth.projectId.value !== undefined) {
+    transport.projectId = ctx.auth.projectId.value;
+  }
   if (deps.fetchImpl !== undefined) {
     transport.fetchImpl = deps.fetchImpl;
   }
@@ -105,6 +119,41 @@ function bufferedFetch(fetchImpl: typeof fetch): typeof fetch {
 }
 
 /**
+ * Scopes a dispatch to the resolved default project. The registry entries carry
+ * no `project_id` param (it is optional on the backend), so when one is resolved
+ * we clone the entry to declare `project_id` and set it in the args — the
+ * dispatcher then routes it to the query string. A call that already carries a
+ * `project_id` (a companion that set its own) is left untouched.
+ */
+function withProjectScope(
+  entry: RegistryEntry,
+  args: Record<string, unknown>,
+  transport: Transport,
+): { entry: RegistryEntry; args: Record<string, unknown> } {
+  if (transport.projectId === undefined) {
+    return { entry, args };
+  }
+  // A value already in args (a companion that set its own) is kept, not clobbered.
+  const scopedArgs = "project_id" in args ? args : { ...args, project_id: transport.projectId };
+  // Self-retiring: once the registry declares project_id itself, keep its
+  // (richer) schema untouched and only inject the arg.
+  if ("project_id" in entry.inputSchema.properties) {
+    return { entry, args: scopedArgs };
+  }
+  // Declare project_id on a clone so the dispatcher routes it to the query.
+  return {
+    entry: {
+      ...entry,
+      inputSchema: {
+        ...entry.inputSchema,
+        properties: { ...entry.inputSchema.properties, project_id: { type: "string" } },
+      },
+    },
+    args: scopedArgs,
+  };
+}
+
+/**
  * Dispatches one registry tool through the shared dispatcher, translating
  * failures into the CLI's error contract (single-sourced in src/api/client.ts):
  * 401/403→auth, 404→not-found, other HTTP→internal with the server's `detail`
@@ -117,6 +166,7 @@ export async function executeTool(
   transport: Transport,
 ): Promise<unknown> {
   const userAgent = `traceroot-cli/${getVersion()}`;
+  const { entry: dispatchEntry, args: dispatchArgs } = withProjectScope(entry, args, transport);
   let refreshed = false;
   while (true) {
     const bearer =
@@ -130,7 +180,7 @@ export async function executeTool(
       fetchImpl: bufferedFetch(transport.fetchImpl ?? fetch),
     });
     try {
-      return await dispatch(entry, args, client);
+      return await dispatch(dispatchEntry, dispatchArgs, client);
     } catch (err) {
       // A 401 under session auth usually means the cached access JWT just
       // expired or was rotated: drop it, re-mint, and retry the dispatch once.
@@ -154,7 +204,12 @@ export async function executeTool(
 function translate(err: unknown, transport: Transport, bearer: string): unknown {
   if (err instanceof CliError) return err;
   if (err instanceof ApiError) {
-    const message = err.detail !== "" ? err.detail : statusFallbackMessage(err.status);
+    let message = err.detail !== "" ? err.detail : statusFallbackMessage(err.status);
+    // The server's instructive 400 for a user credential with no project scope
+    // names the backend op (`list_projects`); translate it into the CLI flags.
+    if (message.includes("project_id query parameter is required")) {
+      message = `${message}\nHint: run \`traceroot projects list\`, then pass --project <id> (or set TRACEROOT_PROJECT_ID).`;
+    }
     return new CliError(message, exitCodeForStatus(err.status));
   }
   if (err instanceof Error && err.name === "TimeoutError") {
