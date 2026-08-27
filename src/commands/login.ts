@@ -361,7 +361,9 @@ async function reportAlreadyLoggedIn(deps: LoginDeps, host: string): Promise<"ex
   }
 
   if (!deps.isInteractive) {
-    logInfo("Run `traceroot login` interactively, or pass --host/--api-key to switch.", writers);
+    // `traceroot logout` registers alongside this command (same change), so the
+    // recovery it names actually exists.
+    logInfo("Run `traceroot logout` first, or pass --host/--api-key to switch.", writers);
     return "exit";
   }
 

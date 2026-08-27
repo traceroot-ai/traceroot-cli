@@ -1,14 +1,15 @@
 import { join } from "node:path";
 import type { Command } from "commander";
-import type { ApiClient } from "../api/client.js";
+import type { ApiClient, WorkspaceList } from "../api/client.js";
 import { credentialsPath } from "../auth/credentials.js";
+import { decodeJwtClaims } from "../auth/token.js";
 import { configPath } from "../config/manager.js";
 import type { AuthSource } from "../config/resolve.js";
 import type { Context } from "../context.js";
-import { type Writers, defaultWriters, writeJson } from "../output.js";
+import { CliError, ExitCode, type Writers, defaultWriters, writeJson } from "../output.js";
 import { apiKeyLabel, identity } from "../render/identity.js";
 import { createStyler } from "../render/style.js";
-import { contextFromCommand, requireApiClient } from "./shared.js";
+import { contextFromCommand, requireAuthedClient } from "./shared.js";
 
 /**
  * Human-readable description of where the credentials were resolved from — and,
@@ -21,16 +22,16 @@ function describeSource(source: AuthSource): string {
       return configPath();
     case "credentials-file":
       return credentialsPath();
-    case "default":
-      return "built-in default";
     case "auto-env-file":
       return `${join(process.cwd(), ".env")} (auto-loaded)`;
     case "env-file":
       return "--env-file";
     case "env":
-      return "environment (TRACEROOT_API_KEY / TRACEROOT_HOST_URL)";
+      return "environment (TRACEROOT_API_KEY / TRACEROOT_TOKEN / TRACEROOT_HOST_URL)";
     case "flag":
       return "--api-key / --host flags";
+    case "default":
+      return "built-in default";
     default:
       return "(none)";
   }
@@ -41,15 +42,30 @@ export interface StatusDeps {
   ctx: Context;
   client: ApiClient;
   writers: Writers;
+  /**
+   * Session mode only: mints (or returns the cached) access JWT. Identity comes
+   * from its `email` claim — `whoami` is API-key-only server-side and would 401
+   * for a user credential.
+   */
+  getAccessToken?: () => Promise<string>;
 }
 
 /**
- * Shows the authenticated identity for the resolved credentials. In `--json`
- * mode writes exactly one JSON document to stdout; otherwise writes a readable
- * block. The full api token is never printed (only the backend `key_hint`).
- * A whoami failure propagates as a thrown error (nothing on stdout).
+ * Shows the authenticated identity for the resolved credential. API-key mode
+ * asks `whoami`; session mode derives identity from the access JWT plus
+ * `list_workspaces` (no whoami — that endpoint rejects user credentials). In
+ * `--json` mode writes exactly one JSON document to stdout. No secret is ever
+ * printed. A failure propagates as a thrown error (nothing on stdout).
  */
 export async function runStatus(deps: StatusDeps): Promise<void> {
+  if (deps.ctx.auth.credential.kind === "session") {
+    await sessionStatus(deps);
+    return;
+  }
+  await apiKeyStatus(deps);
+}
+
+async function apiKeyStatus(deps: StatusDeps): Promise<void> {
   const { ctx, client, writers } = deps;
   const who = await client.whoami();
   const configSource = ctx.auth.credential.source;
@@ -57,6 +73,7 @@ export async function runStatus(deps: StatusDeps): Promise<void> {
   if (ctx.json) {
     writeJson(
       {
+        credential: "api-key",
         project_id: who.project_id,
         project_name: who.project_name,
         workspace_id: who.workspace_id,
@@ -87,12 +104,99 @@ export async function runStatus(deps: StatusDeps): Promise<void> {
   writers.out.write(`${lines.join("\n")}\n`);
 }
 
+async function sessionStatus(deps: StatusDeps): Promise<void> {
+  const { ctx, client, writers } = deps;
+  if (deps.getAccessToken === undefined) {
+    // A wiring bug (session context without a provider), but it must still
+    // follow the exit-code contract rather than escape as a bare Error.
+    throw new CliError("session status requires a token provider", ExitCode.internal);
+  }
+  // A mint failure (revoked/expired session) propagates: status must say
+  // re-login is needed rather than pretend a dead session is fine.
+  const jwt = await deps.getAccessToken();
+  const claims = decodeJwtClaims(jwt);
+  const email = typeof claims?.email === "string" ? claims.email : undefined;
+
+  // Workspace membership is informational; a read failure must not hide the
+  // identity we already verified via mint — EXCEPT an auth failure: the freshly
+  // minted JWT being rejected means the session is not actually usable, and
+  // status must say so rather than report a healthy login.
+  let workspaces: WorkspaceList | null = null;
+  try {
+    workspaces = await client.listWorkspaces();
+  } catch (err) {
+    if (err instanceof CliError && err.exitCode === ExitCode.auth) {
+      throw err;
+    }
+    workspaces = null;
+  }
+
+  const host = ctx.auth.hostUrl.value;
+  const authHost = ctx.auth.authHost.value;
+  const projectId = ctx.auth.projectId;
+  const credentialSource = ctx.auth.credential.source;
+
+  if (ctx.json) {
+    writeJson(
+      {
+        credential: "session",
+        email: email ?? null,
+        host,
+        auth_host: authHost,
+        project_id: projectId.value ?? null,
+        project_source: projectId.value !== undefined ? projectId.source : null,
+        workspaces: workspaces?.data ?? null,
+        config_source: credentialSource,
+        config_path: credentialsPath(),
+      },
+      writers,
+    );
+    return;
+  }
+
+  const styler = createStyler(writers.out);
+  const label = (text: string): string => styler.bold(text);
+
+  const lines = [
+    `${label("Logged in as:")}  ${email ?? "(unknown)"}`,
+    `${label("Credential:")}    session (browser login)`,
+    `${label("Host:")}          ${host ?? "(unset)"}`,
+  ];
+  if (authHost !== undefined && authHost !== host) {
+    lines.push(`${label("Auth host:")}     ${authHost}`);
+  }
+  lines.push(
+    `${label("Project:")}       ${
+      projectId.value !== undefined
+        ? `${projectId.value} ${styler.dim(`(${describeSource(projectId.source)})`)}`
+        : "(none — pass --project or run `traceroot projects list`)"
+    }`,
+  );
+  lines.push(
+    `${label("Workspaces:")}    ${
+      workspaces === null
+        ? "(unavailable)"
+        : workspaces.data.length === 0
+          ? "(none)"
+          : workspaces.data.map((w) => identity(w.name, w.id, styler)).join(", ")
+    }`,
+  );
+  lines.push(`${label("Config source:")} ${describeSource(credentialSource)}`);
+  writers.out.write(`${lines.join("\n")}\n`);
+}
+
 export function registerStatus(program: Command): void {
   program
     .command("status")
     .description("Show authentication status")
     .action(async (_opts, command: Command) => {
       const ctx = contextFromCommand(command);
-      await runStatus({ ctx, client: requireApiClient(ctx), writers: defaultWriters });
+      const authed = requireAuthedClient(ctx);
+      await runStatus({
+        ctx,
+        client: authed.client,
+        writers: defaultWriters,
+        getAccessToken: authed.getAccessToken,
+      });
     });
 }

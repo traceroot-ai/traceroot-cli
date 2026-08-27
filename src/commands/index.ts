@@ -4,6 +4,7 @@ import { GROUPS } from "../registry/naming.js";
 import { registerDoctor } from "./doctor.js";
 import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
+import { registerLogout } from "./logout.js";
 import { registerSkills } from "./skills.js";
 import { registerStatus } from "./status.js";
 
@@ -13,6 +14,7 @@ import { registerStatus } from "./status.js";
  */
 export function registerCommands(program: Command, deps: RegistryDeps = {}): void {
   registerLogin(program);
+  registerLogout(program);
   registerStatus(program);
   // Pre-create every command group (in GROUPS order) so `--help` lists groups
   // in a fixed order, regardless of which register* below attaches subcommands
