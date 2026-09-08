@@ -7,15 +7,39 @@ import {
   timeoutMessage,
   transportFailureMessage,
 } from "../api/client.js";
-import { requireAuth } from "../commands/shared.js";
+import { createTokenProvider } from "../auth/token.js";
+import { requireAccess } from "../commands/shared.js";
 import type { Context } from "../context.js";
 import { CliError, ExitCode } from "../output.js";
+import { getVersion } from "../version.js";
+
+/**
+ * How the registry transport obtains the bearer for a dispatch.
+ *
+ * - `api-key`: a static project key, used verbatim.
+ * - `token-provider`: user (session) auth. `getAccessToken` mints/refreshes the
+ *   short-lived access JWT; a 401 calls `invalidate` and re-mints once.
+ */
+export type TransportAuth =
+  | { kind: "api-key"; key: string }
+  | {
+      kind: "token-provider";
+      getAccessToken: () => Promise<string>;
+      invalidate: () => void;
+    };
 
 export interface Transport {
   /** Normalized host (no trailing slash), already URL/scheme validated. */
   base: string;
-  apiKey: string;
+  auth: TransportAuth;
   timeoutMs: number;
+  /**
+   * Default project to scope reads to. User credentials require it on every
+   * project-scoped read; an api key may match or omit it. Injected into each
+   * dispatch's query (see {@link executeTool}) so the whole generated command
+   * surface is scoped from one place.
+   */
+  projectId?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -23,8 +47,38 @@ export function transportFromContext(
   ctx: Context,
   deps: { fetchImpl?: typeof fetch } = {},
 ): Transport {
-  const { host, apiKey } = requireAuth(ctx);
-  const transport: Transport = { base: normalizeBaseUrl(host), apiKey, timeoutMs: ctx.timeoutMs };
+  const access = requireAccess(ctx);
+  let auth: TransportAuth;
+  if (access.kind === "api-key") {
+    auth = { kind: "api-key", key: access.value };
+  } else {
+    // The mint must go through the caller's fetch too: with the global fetch a
+    // test fake could never intercept /api/cli/token, and a generated command
+    // would make an uncontrolled real request before its faked read.
+    const provider = createTokenProvider({
+      authHost: access.authHost,
+      sessionToken: access.value,
+      timeoutMs: ctx.timeoutMs,
+      ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
+    });
+    auth = {
+      kind: "token-provider",
+      getAccessToken: () => provider.getAccessToken(),
+      invalidate: () => provider.invalidate(),
+    };
+  }
+  const transport: Transport = {
+    base: normalizeBaseUrl(access.host),
+    auth,
+    timeoutMs: ctx.timeoutMs,
+  };
+  // Only a session needs the default project (the server requires project_id
+  // for user credentials). An api key is already project-scoped — carrying a
+  // leftover TRACEROOT_PROJECT_ID from an earlier browser-login setup would
+  // 400/403 every read against an unrelated project.
+  if (access.kind === "session" && ctx.auth.projectId.value !== undefined) {
+    transport.projectId = ctx.auth.projectId.value;
+  }
   if (deps.fetchImpl !== undefined) {
     transport.fetchImpl = deps.fetchImpl;
   }
@@ -65,6 +119,41 @@ function bufferedFetch(fetchImpl: typeof fetch): typeof fetch {
 }
 
 /**
+ * Scopes a dispatch to the resolved default project. The registry entries carry
+ * no `project_id` param (it is optional on the backend), so when one is resolved
+ * we clone the entry to declare `project_id` and set it in the args — the
+ * dispatcher then routes it to the query string. A call that already carries a
+ * `project_id` (a companion that set its own) is left untouched.
+ */
+function withProjectScope(
+  entry: RegistryEntry,
+  args: Record<string, unknown>,
+  transport: Transport,
+): { entry: RegistryEntry; args: Record<string, unknown> } {
+  if (transport.projectId === undefined) {
+    return { entry, args };
+  }
+  // A value already in args (a companion that set its own) is kept, not clobbered.
+  const scopedArgs = "project_id" in args ? args : { ...args, project_id: transport.projectId };
+  // Self-retiring: once the registry declares project_id itself, keep its
+  // (richer) schema untouched and only inject the arg.
+  if ("project_id" in entry.inputSchema.properties) {
+    return { entry, args: scopedArgs };
+  }
+  // Declare project_id on a clone so the dispatcher routes it to the query.
+  return {
+    entry: {
+      ...entry,
+      inputSchema: {
+        ...entry.inputSchema,
+        properties: { ...entry.inputSchema.properties, project_id: { type: "string" } },
+      },
+    },
+    args: scopedArgs,
+  };
+}
+
+/**
  * Dispatches one registry tool through the shared dispatcher, translating
  * failures into the CLI's error contract (single-sourced in src/api/client.ts):
  * 401/403→auth, 404→not-found, other HTTP→internal with the server's `detail`
@@ -76,23 +165,51 @@ export async function executeTool(
   args: Record<string, unknown>,
   transport: Transport,
 ): Promise<unknown> {
-  const client = new ApiClient({
-    baseUrl: transport.base,
-    headers: { ...bearerAuth(transport.apiKey), accept: "application/json" },
-    timeoutMs: transport.timeoutMs,
-    fetchImpl: bufferedFetch(transport.fetchImpl ?? fetch),
-  });
-  try {
-    return await dispatch(entry, args, client);
-  } catch (err) {
-    throw translate(err, transport);
+  const userAgent = `traceroot-cli/${getVersion()}`;
+  const { entry: dispatchEntry, args: dispatchArgs } = withProjectScope(entry, args, transport);
+  let refreshed = false;
+  while (true) {
+    const bearer =
+      transport.auth.kind === "api-key"
+        ? transport.auth.key
+        : await transport.auth.getAccessToken();
+    const client = new ApiClient({
+      baseUrl: transport.base,
+      headers: { ...bearerAuth(bearer), accept: "application/json", "user-agent": userAgent },
+      timeoutMs: transport.timeoutMs,
+      fetchImpl: bufferedFetch(transport.fetchImpl ?? fetch),
+    });
+    try {
+      return await dispatch(dispatchEntry, dispatchArgs, client);
+    } catch (err) {
+      // A 401 under session auth usually means the cached access JWT just
+      // expired or was rotated: drop it, re-mint, and retry the dispatch once.
+      // A second 401 (or a revoked session, whose re-mint itself throws auth)
+      // propagates. An api key never retries.
+      if (
+        err instanceof ApiError &&
+        err.status === 401 &&
+        transport.auth.kind === "token-provider" &&
+        !refreshed
+      ) {
+        refreshed = true;
+        transport.auth.invalidate();
+        continue;
+      }
+      throw translate(err, transport, bearer);
+    }
   }
 }
 
-function translate(err: unknown, transport: Transport): unknown {
+function translate(err: unknown, transport: Transport, bearer: string): unknown {
   if (err instanceof CliError) return err;
   if (err instanceof ApiError) {
-    const message = err.detail !== "" ? err.detail : statusFallbackMessage(err.status);
+    let message = err.detail !== "" ? err.detail : statusFallbackMessage(err.status);
+    // The server's instructive 400 for a user credential with no project scope
+    // names the backend op (`list_projects`); translate it into the CLI flags.
+    if (message.includes("project_id query parameter is required")) {
+      message = `${message}\nHint: run \`traceroot projects list\`, then pass --project <id> (or set TRACEROOT_PROJECT_ID).`;
+    }
     return new CliError(message, exitCodeForStatus(err.status));
   }
   if (err instanceof Error && err.name === "TimeoutError") {
@@ -105,6 +222,6 @@ function translate(err: unknown, transport: Transport): unknown {
     return new CliError(`request to ${transport.base} returned invalid JSON`, ExitCode.internal);
   }
   const message = err instanceof Error ? err.message : String(err);
-  const safe = redactSecret(message, transport.apiKey);
+  const safe = redactSecret(message, bearer);
   return new CliError(transportFailureMessage(transport.base, safe), ExitCode.network);
 }

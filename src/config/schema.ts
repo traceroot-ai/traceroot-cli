@@ -1,10 +1,14 @@
 /**
- * Shape of the persisted CLI configuration (~/.traceroot/config.json).
- * Both fields are required.
+ * Shape of the persisted CLI configuration (./.traceroot/config.json). Every
+ * field is optional: an API-key login persists `api_key` + `host_url`, a
+ * device-flow (session) login stores its credential in the home-directory
+ * credentials file and only persists `host_url` here when it differs from the
+ * default, and `project_id` is the default project for user-credential reads.
  */
 export interface Config {
-  api_key: string;
-  host_url: string;
+  api_key?: string;
+  host_url?: string;
+  project_id?: string;
 }
 
 /**

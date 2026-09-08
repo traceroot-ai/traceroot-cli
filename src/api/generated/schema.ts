@@ -164,6 +164,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Projects
+         * @description List the projects the authenticated user can access, across workspaces.
+         *
+         *     A user-credential-only discovery op (no ``project_id``). Projects are
+         *     flattened across the user's workspaces and tagged with their owning
+         *     workspace; the answer is what you pass as ``project_id`` to a project-scoped
+         *     request.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or CLI
+         *             access JWT); carries the resolved ``user_id`` and stamps the per-user
+         *             rate-limit identity.
+         *         workspace_id (str | None): Optional filter; when given, only projects in
+         *             that workspace are returned.
+         *
+         *     Returns:
+         *         PublicProjectListResponse: The accessible projects (id, name,
+         *             workspace_id, workspace_name).
+         */
+        get: operations["list_projects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/sessions": {
         parameters: {
             query?: never;
@@ -415,6 +453,39 @@ export interface paths {
          * @description Return the identity the authenticated API key maps to.
          */
         get: operations["whoami"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workspaces
+         * @description List the workspaces the authenticated user belongs to.
+         *
+         *     A user-credential-only discovery op (no ``project_id``). Use it, then
+         *     ``list_projects``, to resolve the project a subsequent request scopes to.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or CLI
+         *             access JWT); carries the resolved ``user_id`` and stamps the per-user
+         *             rate-limit identity.
+         *
+         *     Returns:
+         *         PublicWorkspaceListResponse: The user's workspaces (id, name, role).
+         */
+        get: operations["list_workspaces"];
         put?: never;
         post?: never;
         delete?: never;
@@ -716,6 +787,20 @@ export interface components {
             total: number;
         };
         /**
+         * ProjectListItem
+         * @description A project the user can access, tagged with its owning workspace.
+         */
+        ProjectListItem: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Workspace Id */
+            workspace_id: string;
+            /** Workspace Name */
+            workspace_name: string;
+        };
+        /**
          * PublicDetectorListResponse
          * @description Paginated list of the project's detectors for the public API.
          */
@@ -732,6 +817,18 @@ export interface components {
             /** Data */
             data: components["schemas"]["FindingSummary"][];
             meta: components["schemas"]["PaginationMeta"];
+        };
+        /**
+         * PublicProjectListResponse
+         * @description Account-scope discovery: the projects the user can access.
+         *
+         *     Returned by ``list_projects`` — a user-credential-only op. Projects are
+         *     flattened across the user's workspaces; an optional ``workspace_id`` query
+         *     narrows the result to one workspace.
+         */
+        PublicProjectListResponse: {
+            /** Data */
+            data: components["schemas"]["ProjectListItem"][];
         };
         /**
          * PublicTraceDetailResponse
@@ -842,6 +939,18 @@ export interface components {
             /** Data */
             data: components["schemas"]["PublicTraceListItem"][];
             meta: components["schemas"]["PaginationMeta"];
+        };
+        /**
+         * PublicWorkspaceListResponse
+         * @description Account-scope discovery: the workspaces the user can access.
+         *
+         *     Returned by ``list_workspaces`` — a user-credential-only op that needs no
+         *     ``project_id``. Not paginated: a user's workspace membership is small and
+         *     bounded.
+         */
+        PublicWorkspaceListResponse: {
+            /** Data */
+            data: components["schemas"]["WorkspaceListItem"][];
         };
         /**
          * RCAResult
@@ -1238,6 +1347,18 @@ export interface components {
             workspace_id: string;
             /** Workspace Name */
             workspace_name: string | null;
+        };
+        /**
+         * WorkspaceListItem
+         * @description A workspace the authenticated user belongs to, with their role in it.
+         */
+        WorkspaceListItem: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
         };
     };
     responses: never;
@@ -1850,6 +1971,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    list_projects: {
+        parameters: {
+            query?: {
+                /** @description Restrict the result to projects in this workspace. */
+                workspace_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicProjectListResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -2479,6 +2654,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WhoamiResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    list_workspaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicWorkspaceListResponse"];
                 };
             };
             /** @description Authentication failed */

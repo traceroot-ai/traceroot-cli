@@ -410,7 +410,7 @@ describe("traces list command surface", () => {
 
   it("still accepts a bare date --from with no stray args", () => {
     // A lone --from 2026-06-23 (deliberate bare date) should NOT be rejected.
-    // Without API key it will fail on requireApiClient, not on stray-args or
+    // Without a credential it will fail on the auth guard, not on stray-args or
     // timestamp validation — proving the bare date was accepted as valid.
     const result = runCli("traces", "list", "--from", "2026-06-23");
     expect(result.status).not.toBe(0);
@@ -419,7 +419,7 @@ describe("traces list command surface", () => {
     // Should NOT produce the ISO 8601 rejection (i.e. the bare date was accepted)
     expect(result.stderr).not.toContain("ISO 8601");
     // Should fall through to the auth error, confirming that path was reached
-    expect(result.stderr.toLowerCase()).toContain("api key");
+    expect(result.stderr.toLowerCase()).toContain("no credentials found");
   });
 });
 

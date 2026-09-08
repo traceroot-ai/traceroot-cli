@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { DEFAULT_TIMEOUT_MS } from "./api/client.js";
+import type { CredentialEntry } from "./auth/credentials.js";
 import { loadEnvFileFromDisk, loadOptionalEnvFileFromDisk } from "./config/envFile.js";
-import { readConfig } from "./config/manager.js";
+import { loadConfigOrThrow } from "./config/manager.js";
 import { type ResolvedAuth, resolveAuth } from "./config/resolve.js";
 import type { Config } from "./config/schema.js";
 import { CliError, ExitCode } from "./output.js";
@@ -10,6 +11,8 @@ import { CliError, ExitCode } from "./output.js";
 export interface GlobalOptions {
   apiKey?: string;
   host?: string;
+  authHost?: string;
+  project?: string;
   envFile?: string;
   json?: boolean;
   timeout?: string;
@@ -22,6 +25,8 @@ export interface ContextDeps {
   loadEnvFile?: (path: string) => Record<string, string>;
   /** Loads the auto-discovered working-directory `.env` (empty map if absent). */
   loadAutoEnvFile?: () => Record<string, string>;
+  /** Session-store lookup; defaults to the real credentials file. */
+  readCredential?: (host: string) => CredentialEntry | null;
 }
 
 /** Shared per-invocation context. */
@@ -32,10 +37,14 @@ export interface Context {
   timeoutMs: number;
 }
 
+/** Node's max timer delay (2^31−1 ms, ~24.8 days) — the ceiling for --timeout. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 /**
  * Resolves the per-request timeout (ms) with precedence: `--timeout` flag >
  * `TRACEROOT_TIMEOUT_MS` env > {@link DEFAULT_TIMEOUT_MS}. Throws a CliError on
- * a value that isn't a positive integer number of milliseconds.
+ * a value that isn't a positive integer number of milliseconds within Node's
+ * timer range.
  */
 function resolveTimeoutMs(flag: string | undefined, env: NodeJS.ProcessEnv): number {
   const raw = flag ?? env.TRACEROOT_TIMEOUT_MS;
@@ -44,15 +53,19 @@ function resolveTimeoutMs(flag: string | undefined, env: NodeJS.ProcessEnv): num
   }
   // Require a plain positive integer of milliseconds. A bare `Number()` would
   // silently accept hex (`0x10`), scientific (`1e2`), and padded/decimal forms,
-  // so match the same digits-only rule `--limit` uses.
+  // so match the same digits-only rule `--limit` uses. Bound it to Node's
+  // 32-bit timer range too: past 2^31-1 ms, `AbortSignal.timeout`/`setTimeout`
+  // either clamp to ~1ms (instant timeouts on every request) or throw a raw
+  // RangeError — both must surface here as a usage error instead.
   const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed) || Number.parseInt(trimmed, 10) <= 0) {
+  const parsed = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : Number.NaN;
+  if (!(parsed > 0 && parsed <= MAX_TIMEOUT_MS)) {
     throw new CliError(
-      `invalid timeout: ${raw} (expected a positive integer of milliseconds)`,
+      `invalid timeout: ${raw} (expected a positive integer of milliseconds, at most ${MAX_TIMEOUT_MS})`,
       ExitCode.usage,
     );
   }
-  return Number.parseInt(trimmed, 10);
+  return parsed;
 }
 
 /**
@@ -65,19 +78,21 @@ export function buildContext(globalOpts: GlobalOptions, deps: ContextDeps = {}):
   // Auto-discover a `.env` in the working directory (lowest-precedence source).
   const loadAutoEnvFile =
     deps.loadAutoEnvFile ?? (() => loadOptionalEnvFileFromDisk(join(process.cwd(), ".env")));
-  const readConfigAdapter =
-    deps.readConfig ??
-    (() => {
-      const result = readConfig();
-      return result.ok ? result.config : null;
-    });
+  const readConfigAdapter = deps.readConfig ?? (() => loadConfigOrThrow());
 
   const auth = resolveAuth({
-    flags: { apiKey: globalOpts.apiKey, host: globalOpts.host, envFile: globalOpts.envFile },
+    flags: {
+      apiKey: globalOpts.apiKey,
+      host: globalOpts.host,
+      authHost: globalOpts.authHost,
+      project: globalOpts.project,
+      envFile: globalOpts.envFile,
+    },
     env,
     readConfig: readConfigAdapter,
     loadEnvFile,
     autoEnvFile: loadAutoEnvFile(),
+    readCredential: deps.readCredential,
   });
 
   const timeoutMs = resolveTimeoutMs(globalOpts.timeout, env);

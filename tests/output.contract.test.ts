@@ -7,13 +7,20 @@ import { describe, expect, it } from "vitest";
 
 const binPath = fileURLToPath(new URL("../bin/traceroot.mjs", import.meta.url));
 
-// Isolate from any real ~/.traceroot/config.json and ambient credentials so
-// `status` deterministically resolves no credentials and exercises the failure
-// contract (non-zero exit, empty stdout, error on stderr) on every machine.
+// Isolate from any real config, ambient credentials, AND a developer's browser
+// session so `status` deterministically resolves no credentials and exercises
+// the failure contract (non-zero exit, empty stdout, error on stderr) on every
+// machine. Every credential source must be neutralized: the project config
+// (TRACEROOT_CONFIG_PATH), the api-key/host env vars, the session-token env var
+// (TRACEROOT_TOKEN), and the home-directory credentials store — pointed at a
+// non-existent path so a real `traceroot login` on this machine can't flip the
+// expected no-credentials failure into a live prod mint call.
 const isolatedEnv: NodeJS.ProcessEnv = {
   ...process.env,
   TRACEROOT_CONFIG_PATH: join(tmpdir(), "traceroot-cli-no-such-config", "config.json"),
+  TRACEROOT_CREDENTIALS_PATH: join(tmpdir(), "traceroot-cli-no-such-creds", "credentials.json"),
   TRACEROOT_API_KEY: "",
+  TRACEROOT_TOKEN: "",
   TRACEROOT_HOST_URL: "",
 };
 

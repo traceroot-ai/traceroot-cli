@@ -45,14 +45,18 @@ function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
 
 function makeCtx(opts: { apiKey?: string; host?: string; json?: boolean }): Context {
   const auth: ResolvedAuth = {
-    apiKey: opts.apiKey
-      ? { value: opts.apiKey, source: "config" }
-      : { value: undefined, source: "none" },
+    credential: opts.apiKey
+      ? { kind: "api-key", value: opts.apiKey, source: "config" }
+      : { kind: "none", value: undefined, source: "none" },
     hostUrl: opts.host
       ? { value: opts.host, source: "config" }
       : { value: undefined, source: "none" },
+    authHost: opts.host
+      ? { value: opts.host, source: "default" }
+      : { value: undefined, source: "none" },
+    projectId: { value: undefined, source: "none" },
   };
-  return { auth, json: opts.json ?? false };
+  return { auth, json: opts.json ?? false, timeoutMs: 30_000 };
 }
 
 const detection: RepoDetection = {
@@ -90,7 +94,7 @@ describe("runDoctor", () => {
       ...baseDeps(cwd, writers),
       ctx: makeCtx({}),
     });
-    const key = report.checks.find((c) => c.name === "api_key_resolved");
+    const key = report.checks.find((c) => c.name === "credentials_resolved");
     const host = report.checks.find((c) => c.name === "host_resolved");
     const skill = report.checks.find((c) => c.name === "skill_instrument");
     // Required credentials → fail (red ✗); optional skill → warn (gray -).
@@ -129,10 +133,10 @@ describe("runDoctor", () => {
   it("uses concise, login-pointing wording for missing credentials and config", async () => {
     const { writers } = makeWriters();
     const report = await runDoctor({ ...baseDeps(cwd, writers), ctx: makeCtx({}) });
-    const key = report.checks.find((c) => c.name === "api_key_resolved");
+    const key = report.checks.find((c) => c.name === "credentials_resolved");
     const host = report.checks.find((c) => c.name === "host_resolved");
     const config = report.checks.find((c) => c.name === "config_file_present");
-    expect(key?.message).toBe("API key not found. Run `traceroot login`.");
+    expect(key?.message).toBe("No credentials found. Run `traceroot login`.");
     expect(host?.message).toBe("Host not found. Run `traceroot login`.");
     expect(key?.message).not.toContain("set TRACEROOT_API_KEY");
     expect(config?.message).toBe("No config file found");
@@ -144,7 +148,7 @@ describe("runDoctor", () => {
     const err = new StringSink(true);
     await runDoctor({ ...baseDeps(cwd, { out, err }), ctx: makeCtx({}) });
     // Red ✗ glyph present; missing API key uses it (not the gray "-").
-    expect(out.data).toContain("\x1b[91m✗\x1b[0m API key not found");
+    expect(out.data).toContain("\x1b[91m✗\x1b[0m No credentials found");
   });
 
   it("redacts embedded credentials/query from the resolved host (shows origin only)", async () => {
