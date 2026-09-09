@@ -23,11 +23,21 @@ jobs:
     permissions:
       id-token: write # npm provenance
     steps:
+      # actions/checkout resolves a bare ref as refs/heads/<ref> before
+      # refs/tags/<ref>, so a branch named v9.9.9 would shadow a tag of the
+      # same name and publish that branch head. Require a real release, then
+      # check out its tag explicitly.
+      - name: Verify the tag is a published release
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
       - uses: actions/checkout@v4
         with:
-          # On the release event this is the tag already; on dispatch, build
-          # the tag the input names, never main.
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: refs/tags/${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
