@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## Development Requirements
 
-- Node.js 20+
+- Node.js 20.19+ or 22.12+ (the test toolchain needs it; the published CLI still runs on Node 20.3+ as declared in `package.json` engines)
 - `npm`: Node.js package manager
 - `git`
 
