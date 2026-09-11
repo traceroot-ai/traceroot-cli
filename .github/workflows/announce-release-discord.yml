@@ -4,10 +4,9 @@
 # one-line title link for releases. The post's name + avatar come from the
 # Discord webhook's own config (set those in Discord, not here).
 #
-# Two triggers:
-#   - release: published   -> auto-announce every new release (uses the event payload)
-#   - workflow_dispatch     -> re-announce ANY existing tag on demand, for testing
-#                              the Discord path without cutting a real release
+# One trigger (see the TODO on `on:` below):
+#   - workflow_dispatch -> announce ANY existing tag on demand. The automatic
+#                          `release: published` trigger is temporarily gated.
 #
 # Setup (one-time):
 #   1. Discord: #release channel -> Edit Channel -> Integrations -> Webhooks ->
@@ -18,8 +17,25 @@
 name: Announce Release to Discord
 
 on:
-  release:
-    types: [published]
+  # TODO: restore the `release: published` trigger below once one release has
+  # published cleanly on OIDC trusted publishing.
+  #
+  # Why it is gated: this workflow and `publish.yml` both fire on
+  # `release: published`, so a release whose publish step fails (e.g. the npm
+  # trusted-publisher record is missing) is still announced to Discord as if it
+  # shipped. Until that path is proven, announce manually via workflow_dispatch
+  # after confirming the version is on npm.
+  #
+  # Note for whoever restores this: gating the announce on an npm existence
+  # check instead is NOT a drop-in fix — both workflows start at the same
+  # moment, and `publish.yml` lints/builds/tests before publishing, so an
+  # immediate `npm view` would fail on a perfectly good release. That needs a
+  # poll-with-timeout, or a `workflow_run` trigger on "Publish npm Package"
+  # (which carries no release payload, so the tag must be re-derived from
+  # `github.event.workflow_run.head_branch`).
+  #
+  # release:
+  #   types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -42,8 +58,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL }}
           REPO: ${{ github.repository }}
-          # The tag from whichever trigger fired; passed via env (never inlined)
-          # so it can't break or inject into the script.
+          # The dispatch tag; passed via env (never inlined) so it can't break
+          # or inject into the script. EV_TAG stays wired for the gated
+          # `release: published` trigger and is empty until that is restored.
           INPUT_TAG: ${{ github.event.inputs.tag }}
           EV_TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -54,9 +71,9 @@ jobs:
             exit 1
           fi
 
-          # Both triggers resolve to a tag, then fetch the release the same way,
-          # so a manual workflow_dispatch run exercises the exact path a real
-          # release:published takes.
+          # Resolve a tag, then fetch the release by tag. The event trigger only
+          # ever used its payload for the tag, so a dispatch run reproduces the
+          # exact path a real release:published took.
           TAG="${INPUT_TAG:-$EV_TAG}"
           rel="$(gh release view "$TAG" --repo "$REPO" --json name,url,body)"
           NAME="$(printf '%s' "$rel" | jq -r '.name')"
