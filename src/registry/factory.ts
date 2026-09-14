@@ -327,11 +327,18 @@ export function assertPathParamsPresent(entry: RegistryEntry, args: Record<strin
  * Treats `null` the same as `undefined`: an explicit null in a --from-file
  * document is exactly the kind of "missing" this validator exists to catch
  * before it becomes a server rejection.
+ *
+ * A missing `project_id` under an api key gets an extra hint: `--project`
+ * only ever populates `transport.projectId` for a session credential
+ * (execute.ts's `transportFromContext`), so an api-key user who reaches for
+ * `--project` needs to be told to pass `--project-id` (or set `project_id` in
+ * `--from-file`) instead — the injection this validator otherwise defers to
+ * will never fire for them.
  */
 export function assertRequiredArgs(
   entry: RegistryEntry,
   args: Record<string, unknown>,
-  transport?: { projectId?: string },
+  transport?: { projectId?: string; auth?: { kind: string } },
 ): void {
   const missing = entry.inputSchema.required.filter((name) => {
     const value = args[name];
@@ -342,10 +349,14 @@ export function assertRequiredArgs(
     return true;
   });
   if (missing.length > 0) {
+    const hint =
+      missing.includes("project_id") && transport?.auth?.kind === "api-key"
+        ? " (an API key does not carry --project; pass --project-id or set project_id in --from-file)"
+        : "";
     throw new CliError(
       `missing required ${missing.length === 1 ? "field" : "fields"}: ${missing
         .map((name) => `--${kebab(name)}`)
-        .join(", ")}`,
+        .join(", ")}${hint}`,
       ExitCode.usage,
     );
   }

@@ -98,6 +98,51 @@ describe("assertRequiredArgs", () => {
       assertRequiredArgs(createAlert, argsWithoutProjectId, { projectId: "p-1" }),
     ).not.toThrow();
   });
+
+  it("hints an api-key user toward --project-id (finding 2): --project never resolves for them", () => {
+    // transportFromContext only ever sets transport.projectId for a session
+    // credential; an api-key user who reaches for --project is missing the
+    // field entirely and needs to be pointed at --project-id instead.
+    let thrown: unknown;
+    try {
+      assertRequiredArgs(createAlert, argsWithoutProjectId, { auth: { kind: "api-key" } });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).exitCode).toBe(ExitCode.usage);
+    expect((thrown as CliError).message).toContain("--project-id");
+    expect((thrown as CliError).message).toContain(
+      "an API key does not carry --project; pass --project-id or set project_id in --from-file",
+    );
+  });
+
+  it("omits the api-key hint for a session credential with no default project configured", () => {
+    let thrown: unknown;
+    try {
+      assertRequiredArgs(createAlert, argsWithoutProjectId, { auth: { kind: "token-provider" } });
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as CliError).message).not.toContain("API key");
+  });
+
+  it("omits the api-key hint for a field other than project_id", () => {
+    // "name" is missing, not project_id — the hint would be irrelevant noise.
+    let thrown: unknown;
+    try {
+      assertRequiredArgs(
+        createAlert,
+        { ...argsWithoutProjectId, project_id: "p-1", name: undefined },
+        {
+          auth: { kind: "api-key" },
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as CliError).message).not.toContain("API key");
+  });
 });
 
 describe("assertEnums", () => {
