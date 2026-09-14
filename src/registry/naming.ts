@@ -59,15 +59,15 @@ export const PLACEMENTS: Record<string, Placement> = {
   list_alerts: { kind: "command", path: ["alerts", "list"] },
   get_alert: { kind: "command", path: ["alerts", "get"] },
   create_alert: { kind: "command", path: ["alerts", "create"] },
-  list_dashboards: { kind: "internal", note: "placed as a command in a later task" },
-  get_dashboard: { kind: "internal", note: "placed as a command in a later task" },
-  create_dashboard: { kind: "internal", note: "placed as a command in a later task" },
+  list_dashboards: { kind: "command", path: ["dashboards", "list"] },
+  get_dashboard: { kind: "command", path: ["dashboards", "get"] },
+  create_dashboard: { kind: "command", path: ["dashboards", "create"] },
   list_workspaces: { kind: "command", path: ["workspaces", "list"] },
   list_projects: { kind: "command", path: ["projects", "list"] },
-  create_workspace: { kind: "internal", note: "placed as a command in a later task" },
-  create_project: { kind: "internal", note: "placed as a command in a later task" },
-  create_detector: { kind: "internal", note: "placed as a command in a later task" },
-  create_widget: { kind: "internal", note: "placed as a command in a later task" },
+  create_workspace: { kind: "command", path: ["workspaces", "create"] },
+  create_project: { kind: "command", path: ["projects", "create"] },
+  create_detector: { kind: "command", path: ["detectors", "create"] },
+  create_widget: { kind: "command", path: ["widgets", "create"] },
 };
 
 /** Group commands in `--help` order, with the description each group shows. */
@@ -78,4 +78,6 @@ export const GROUPS: Record<string, string> = {
   detectors: "Work with detectors",
   findings: "Work with detector findings",
   alerts: "Work with threshold alerts",
+  dashboards: "Work with dashboards",
+  widgets: "Work with dashboard widgets",
 };
