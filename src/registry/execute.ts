@@ -119,6 +119,18 @@ function bufferedFetch(fetchImpl: typeof fetch): typeof fetch {
 }
 
 /**
+ * True when a tool's declared tenancy makes it eligible for project_id
+ * injection: a read (no `policy`) or a project-tenancy write. An account- or
+ * workspace-scoped write (`create_workspace`, `create_project`) is not — the
+ * server would reject a project id neither op accepts. Shared with the
+ * factory's `assertRequiredArgs` so required-arg validation never demands a
+ * `--project-id` flag that this same injection is about to supply.
+ */
+export function acceptsProjectScope(entry: RegistryEntry): boolean {
+  return entry.policy === undefined || entry.policy.tenancy === "project";
+}
+
+/**
  * Scopes a dispatch to the resolved default project. The registry entries carry
  * no `project_id` param (it is optional on the backend), so when one is resolved
  * we clone the entry to declare `project_id` and set it in the args — the
@@ -130,11 +142,7 @@ function withProjectScope(
   args: Record<string, unknown>,
   transport: Transport,
 ): { entry: RegistryEntry; args: Record<string, unknown> } {
-  // A write declares its scope. Only a project-tenancy write takes a
-  // project_id: create_workspace is account-scoped and create_project is
-  // workspace-scoped, so injecting one would be rejected by the server.
-  // Reads carry no policy and keep the read behaviour unchanged.
-  if (entry.policy !== undefined && entry.policy.tenancy !== "project") {
+  if (!acceptsProjectScope(entry)) {
     return { entry, args };
   }
   if (transport.projectId === undefined) {

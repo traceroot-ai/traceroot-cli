@@ -1,7 +1,11 @@
 import { REGISTRY } from "@traceroot-ai/tools";
 import { describe, expect, it } from "vitest";
 import { CliError, ExitCode } from "../../src/output.js";
-import { executeTool, transportFromContext } from "../../src/registry/execute.js";
+import {
+  acceptsProjectScope,
+  executeTool,
+  transportFromContext,
+} from "../../src/registry/execute.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
 
 const listSessions = REGISTRY.find((entry) => entry.name === "list_sessions");
@@ -314,5 +318,16 @@ describe("withProjectScope tenancy gating", () => {
     await executeTool(createAlert, { name: "a" }, scoped(fake.fetchImpl, "p-1"));
     const body = JSON.parse(String(fake.calls[0].init.body));
     expect(body.project_id).toBe("p-1");
+  });
+
+  it("acceptsProjectScope: false for an account-tenancy write, true for a project-tenancy write and for a read", () => {
+    // Shared with the factory's assertRequiredArgs (write-path.test.ts), so a
+    // required project_id is only ever treated as "will be injected" on
+    // exactly the entries withProjectScope itself would inject into.
+    const listSessions = REGISTRY.find((e) => e.name === "list_sessions");
+    if (listSessions === undefined) throw new Error("registry fixture missing");
+    expect(acceptsProjectScope(createWorkspace)).toBe(false);
+    expect(acceptsProjectScope(createAlert)).toBe(true);
+    expect(acceptsProjectScope(listSessions)).toBe(true); // reads carry no policy
   });
 });
