@@ -97,8 +97,8 @@ need none of this.
 | `dashboards list` | List the project's dashboards. |
 | `dashboards get <id>` | Show one dashboard. |
 | `dashboards create` | Create a dashboard. `--from-file <path>`, `--name`, `--description` |
-| `widgets create` | Add a widget to a dashboard. `--from-file <path>` |
-| `detectors create` | Create a detector. `--from-file <path>` |
+| `widgets create` | Add a widget to a dashboard. `--from-file <path>`, `--dashboard-id`, `--title`, `--type`, `--spec` |
+| `detectors create` | Create a detector. `--from-file <path>`, `--name`, `--template`, `--prompt` |
 | `projects create` | Create a project in a workspace. `--from-file <path>`, `--name`, `--workspace-id` |
 | `workspaces create` | Create a workspace. `--from-file <path>`, `--name` |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
@@ -122,19 +122,25 @@ traceroot alerts create --from-file rule.json --threshold 2000
 
 Individual flags override fields from the file. Required fields and enum
 values are checked locally, so a typo fails immediately as a usage error
-(exit 2) rather than as a server rejection. `--project` (or
-`TRACEROOT_PROJECT_ID`) supplies the project for project-scoped writes, so the
-file describes the thing being created, not where it goes.
+(exit 2) rather than as a server rejection (types in a `--from-file` document
+itself are validated by the server, not locally). Under a browser login,
+`--project` (or `TRACEROOT_PROJECT_ID`) supplies the project for
+project-scoped writes, so the file describes the thing being created, not
+where it goes. An API key is already scoped to one project and does not carry
+`--project` — pass `--project-id` instead (or set `project_id` in
+`--from-file`).
 
 ### Generated commands
 
-`traces`, `detectors`, and `findings` are generated from the tool
-registry shipped in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
+`traces`, `detectors`, `findings`, `alerts`, `dashboards`, `widgets`,
+`workspaces`, and `projects` are generated from the tool registry shipped in
+[`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
 each entry's input schema drives its flags, and its response type drives the
 default rendering. Adding a new backend endpoint to the CLI is a registry bump
 plus one placement line in `src/registry/naming.ts` — no hand-written command
-handler needed. `login`, `logout`, `status`, `workspaces`, and `projects`
-stay hand-written: they are account-scope or auth flows with no registry entry.
+handler needed. `login`, `logout`, `status`, `skills`, `instrument`, and
+`doctor` stay hand-written: they are auth flows or local tooling with no
+registry entry.
 
 ```sh
 traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef
