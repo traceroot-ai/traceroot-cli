@@ -23,10 +23,27 @@ describe("workspaces list rendering", () => {
     expect(header.indexOf("NAME")).toBeLessThan(header.indexOf("WORKSPACE ID"));
   });
 
+  it("renders the row's name, role, and id", () => {
+    const { writers, out } = makeWriters();
+    renderWorkspacesList(RES, { json: false, writers });
+    expect(out.data).toContain("Alpha");
+    expect(out.data).toContain("ADMIN");
+    expect(out.data).toContain("ws-1");
+  });
+
   it("counts in the footer", () => {
     const { writers, err } = makeWriters();
     renderWorkspacesList(RES, { json: false, writers });
     expect(err.data).toContain("1 workspace(s)");
+  });
+
+  it("emits one JSON document with a count", () => {
+    const { writers, out } = makeWriters();
+    renderWorkspacesList(RES, { json: true, writers });
+    const parsed = JSON.parse(out.data) as { data: unknown[]; count: number };
+    expect(parsed.count).toBe(1);
+    expect(parsed.data).toHaveLength(1);
+    expect(out.data.trimEnd().split("\n")).toHaveLength(1);
   });
 });
 
@@ -47,5 +64,17 @@ describe("projects list rendering", () => {
     const { writers, err } = makeWriters();
     renderProjectsList(RES, { json: false, writers });
     expect(err.data).toContain("1 project(s)");
+    // Success output stays tip-free (guidance lives in --help and the
+    // missing-project_id 400 hint), so the footer is just the count.
+    expect(err.data).not.toContain("--project");
+  });
+
+  it("emits one JSON document with a count", () => {
+    const { writers, out } = makeWriters();
+    renderProjectsList(RES, { json: true, writers });
+    const parsed = JSON.parse(out.data) as { data: unknown[]; count: number };
+    expect(parsed.count).toBe(1);
+    expect(parsed.data).toHaveLength(1);
+    expect(out.data.trimEnd().split("\n")).toHaveLength(1);
   });
 });
