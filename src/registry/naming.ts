@@ -62,14 +62,8 @@ export const PLACEMENTS: Record<string, Placement> = {
   list_dashboards: { kind: "internal", note: "placed as a command in a later task" },
   get_dashboard: { kind: "internal", note: "placed as a command in a later task" },
   create_dashboard: { kind: "internal", note: "placed as a command in a later task" },
-  list_workspaces: {
-    kind: "internal",
-    note: "served by the curated 'workspaces list' until converted",
-  },
-  list_projects: {
-    kind: "internal",
-    note: "served by the curated 'projects list' until converted",
-  },
+  list_workspaces: { kind: "command", path: ["workspaces", "list"] },
+  list_projects: { kind: "command", path: ["projects", "list"] },
   create_workspace: { kind: "internal", note: "placed as a command in a later task" },
   create_project: { kind: "internal", note: "placed as a command in a later task" },
   create_detector: { kind: "internal", note: "placed as a command in a later task" },
@@ -78,6 +72,8 @@ export const PLACEMENTS: Record<string, Placement> = {
 
 /** Group commands in `--help` order, with the description each group shows. */
 export const GROUPS: Record<string, string> = {
+  workspaces: "Discover your workspaces (user credentials)",
+  projects: "Discover your projects (user credentials)",
   traces: "Work with traces",
   detectors: "Work with detectors",
   findings: "Work with detector findings",

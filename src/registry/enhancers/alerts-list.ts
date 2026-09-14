@@ -3,8 +3,7 @@ import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { formatTimestamp } from "../../util/index.js";
-import { onceOption } from "../flags.js";
-import { rejectExtras } from "../flags.js";
+import { onceOption, rejectExtras } from "../flags.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 interface AlertSummary {

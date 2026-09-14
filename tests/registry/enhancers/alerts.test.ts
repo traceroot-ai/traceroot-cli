@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Writers } from "../../../src/output.js";
+import { renderAlertDetail } from "../../../src/registry/enhancers/alerts-get.js";
 import { renderAlertsList } from "../../../src/registry/enhancers/alerts-list.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
@@ -52,8 +53,6 @@ describe("alerts list rendering", () => {
     expect(out.data.trimEnd().split("\n")).toHaveLength(1);
   });
 });
-
-import { renderAlertDetail } from "../../../src/registry/enhancers/alerts-get.js";
 
 const DETAIL = {
   ...RES.data[0],
