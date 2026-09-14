@@ -23,6 +23,9 @@ Examples:
   # recent error spans, written to a CSV file
   traceroot sql "SELECT span_id, name, status_message FROM spans WHERE status = 'ERROR' ORDER BY span_start_time DESC LIMIT 100" --csv --output errors.csv
 
+  # list the tables and columns a query may use
+  traceroot sql schema
+
   # a bound parameter, and a query read from a file
   traceroot sql "SELECT name, duration_ms FROM spans WHERE duration_ms > {min_ms:Int64} LIMIT 20" --param min_ms=5000
   traceroot sql --file slow_spans.sql

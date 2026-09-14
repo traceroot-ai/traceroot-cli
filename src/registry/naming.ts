@@ -69,10 +69,7 @@ export const PLACEMENTS: Record<string, Placement> = {
   create_detector: { kind: "command", path: ["detectors", "create"] },
   create_widget: { kind: "command", path: ["widgets", "create"] },
   run_sql: { kind: "command", path: ["sql"] },
-  get_sql_schema: {
-    kind: "internal",
-    note: "no CLI surface yet: 'sql schema' needs a renderer for the table and column listing",
-  },
+  get_sql_schema: { kind: "command", path: ["sql", "schema"] },
   get_dashboard_data: {
     kind: "internal",
     note: "deliberately no CLI surface: a whole dashboard's data is read in the web app",
@@ -93,4 +90,5 @@ export const GROUPS: Record<string, string> = {
   alerts: "Work with threshold alerts",
   dashboards: "Work with dashboards",
   widgets: "Work with dashboard widgets",
+  sql: "Query your spans and traces with SQL",
 };

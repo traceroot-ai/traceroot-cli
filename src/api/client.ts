@@ -21,6 +21,7 @@ export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{find
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
 export type WorkspaceList = Ok200<paths["/api/v1/public/workspaces"]["get"]>;
 export type SqlResult = Ok200<paths["/api/v1/public/sql"]["post"]>;
+export type SqlSchema = Ok200<paths["/api/v1/public/sql/schema"]["get"]>;
 
 /**
  * How the client obtains the bearer for each request.

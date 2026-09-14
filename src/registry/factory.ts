@@ -74,8 +74,16 @@ function registerOne(
   // Own the stray-operand contract ourselves (defaultResolveArgs / an
   // enhancer's resolveArgs via rejectExtras): commander 13 defaults
   // excessArguments to reject, which would preempt our message.
-  const cmd = parent
-    .command(name)
+  // A top-level command can also be a group: `sql` runs a query and `sql schema`
+  // is its subcommand. The group already exists (registerCommands pre-creates
+  // every GROUPS entry), so reuse it rather than register a second `sql`. Any
+  // other name collision still throws, as commander does for duplicates.
+  const groups = deps.groups ?? GROUPS;
+  const existingGroup =
+    placement.path.length === 1 && Object.hasOwn(groups, name)
+      ? program.commands.find((command) => command.name() === name)
+      : undefined;
+  const cmd = (existingGroup ?? parent.command(name))
     .description(enhancer?.description ?? entry.description)
     .allowExcessArguments();
 
@@ -115,6 +123,7 @@ function registerOne(
 
   cmd.action(async (...actionArgs: unknown[]) => {
     const command = actionArgs[actionArgs.length - 1] as Command;
+    if (placement.path.length === 2) rejectGroupOptions(command);
     const declared = command.registeredArguments.length;
     const values = command.processedArgs.slice(0, declared) as (string | undefined)[];
     const positionalRecord: Record<string, string | undefined> = {};
@@ -186,6 +195,24 @@ function registerOne(
       renderDefault(payload, { json: ctx.json, writers, args });
     }
   });
+}
+
+/**
+ * Commander parses a parent's options wherever they appear, so on a group that is
+ * also a command (`sql`), `sql schema --csv` would hand `--csv` to `sql` and run
+ * the subcommand as if it were never given. Refuse it instead of dropping it.
+ */
+function rejectGroupOptions(command: Command): void {
+  const group = command.parent;
+  if (group === null) return;
+  for (const option of group.options) {
+    if (group.getOptionValue(option.attributeName()) !== undefined) {
+      throw new CliError(
+        `${option.long ?? option.flags} is not an option of '${group.name()} ${command.name()}'`,
+        ExitCode.usage,
+      );
+    }
+  }
 }
 
 function addSchemaFlags(cmd: Command, entry: RegistryEntry, positionals: Set<string>): void {

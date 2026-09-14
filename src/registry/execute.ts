@@ -220,6 +220,9 @@ function translate(err: unknown, transport: Transport, bearer: string, tool: str
     if (tool === "run_sql" && message.includes("exceeded the maximum")) {
       message = `${message}\nHint: add a LIMIT, select fewer columns, or filter on span_start_time or trace_start_time to scan less data.`;
     }
+    if (tool === "run_sql" && message.includes("does not exist in the public schema")) {
+      message = `${message}\nHint: run \`traceroot sql schema\` to list the tables and columns a query may use.`;
+    }
     return new CliError(message, exitCodeForStatus(err.status));
   }
   if (err instanceof Error && err.name === "TimeoutError") {
