@@ -84,13 +84,23 @@ need none of this.
 | `logout` | Revoke the session server-side (best-effort) and remove the local credential. |
 | `status` | Show the identity your credentials resolve to — email/workspaces (browser login) or workspace/project/key hint (API key), plus host and source. |
 | `workspaces list` | List the workspaces you can access (browser login only). |
-| `projects list` | List the projects you can access, across workspaces; the `PROJECT ID` column is what `--project` takes. |
+| `projects list` | List the projects you can access, across workspaces; the `PROJECT ID` column is what `--project` takes. `--workspace-id <id>` |
 | `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (field filters belong to the upcoming SQL query surface) |
 | `traces get <id>` | Show one trace: span tree, derived duration, and a link to open it. Defaults to the lightweight `skeleton` projection (no per-span input/output/metadata); pass `--fields full` (or `--fields io,metadata`) to fetch span I/O. `--fields <groups>` |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. Defaults to the `full` projection (span input/output/metadata included); pass `--fields <groups>` to narrow it. `--output <dir>`, `--force`, `--fields <groups>` |
 | `detectors list` | List your project's detectors, newest first. The `DETECTOR ID` column is what you pass to `findings list --detector`. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
 | `findings list` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id>`, `--trace <id>` |
 | `findings get [id]` | Show one finding: per-detector results and its free-text RCA. Look it up by finding id or with `--trace <id>` (exactly one). |
+| `alerts list` | List the project's threshold alerts with their status, severity and rule. `--limit <n>`, `--page <n>`, `--search <q>` |
+| `alerts get <id>` | Show one alert's full rule, filters, renotify and evaluation state. |
+| `alerts create` | Create a threshold alert. Takes the rule as JSON: `--from-file <path>` (or `-` for stdin), with flags overriding single fields. |
+| `dashboards list` | List the project's dashboards. |
+| `dashboards get <id>` | Show one dashboard. |
+| `dashboards create` | Create a dashboard. `--from-file <path>`, `--name`, `--description` |
+| `widgets create` | Add a widget to a dashboard. `--from-file <path>` |
+| `detectors create` | Create a detector. `--from-file <path>` |
+| `projects create` | Create a project in a workspace. `--from-file <path>`, `--name`, `--workspace-id` |
+| `workspaces create` | Create a workspace. `--from-file <path>`, `--name` |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
@@ -98,6 +108,23 @@ need none of this.
 
 Add `--json` to any command for a single machine-readable document on stdout.
 Run `traceroot <command> --help` for the full flag list.
+
+### Creating things
+
+Write commands take their whole body as one JSON document, because rules and
+specs nest more deeply than flags express comfortably:
+
+```sh
+traceroot alerts create --from-file rule.json
+jq '.threshold = 2000' rule.json | traceroot alerts create --from-file -
+traceroot alerts create --from-file rule.json --threshold 2000
+```
+
+Individual flags override fields from the file. Required fields and enum
+values are checked locally, so a typo fails immediately as a usage error
+(exit 2) rather than as a server rejection. `--project` (or
+`TRACEROOT_PROJECT_ID`) supplies the project for project-scoped writes, so the
+file describes the thing being created, not where it goes.
 
 ### Generated commands
 
