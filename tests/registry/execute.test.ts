@@ -284,3 +284,35 @@ describe("transportFromContext project scoping", () => {
     expect(transportFromContext(ctxWith("api-key", "p-1")).projectId).toBeUndefined();
   });
 });
+
+describe("withProjectScope tenancy gating", () => {
+  function scoped(fetchImpl: typeof fetch, projectId: string) {
+    return {
+      base: "https://api.test",
+      auth: { kind: "api-key" as const, key: "sk" },
+      timeoutMs: 30_000,
+      projectId,
+      fetchImpl,
+    };
+  }
+  const createWorkspace = REGISTRY.find((e) => e.name === "create_workspace");
+  const createAlert = REGISTRY.find((e) => e.name === "create_alert");
+  if (createWorkspace === undefined || createAlert === undefined) {
+    throw new Error("registry fixture missing");
+  }
+
+  it("does not inject project_id into an account-tenancy write", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ id: "ws-1" }));
+    await executeTool(createWorkspace, { name: "w" }, scoped(fake.fetchImpl, "p-1"));
+    const body = JSON.parse(String(fake.calls[0].init.body));
+    expect(body.project_id).toBeUndefined();
+    expect(fake.calls[0].url).not.toContain("project_id");
+  });
+
+  it("still injects project_id into a project-tenancy write", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ id: "alr-1" }));
+    await executeTool(createAlert, { name: "a" }, scoped(fake.fetchImpl, "p-1"));
+    const body = JSON.parse(String(fake.calls[0].init.body));
+    expect(body.project_id).toBe("p-1");
+  });
+});

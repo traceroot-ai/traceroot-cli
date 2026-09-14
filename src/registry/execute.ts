@@ -130,6 +130,13 @@ function withProjectScope(
   args: Record<string, unknown>,
   transport: Transport,
 ): { entry: RegistryEntry; args: Record<string, unknown> } {
+  // A write declares its scope. Only a project-tenancy write takes a
+  // project_id: create_workspace is account-scoped and create_project is
+  // workspace-scoped, so injecting one would be rejected by the server.
+  // Reads carry no policy and keep the read behaviour unchanged.
+  if (entry.policy !== undefined && entry.policy.tenancy !== "project") {
+    return { entry, args };
+  }
   if (transport.projectId === undefined) {
     return { entry, args };
   }

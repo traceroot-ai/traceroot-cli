@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { type ParamSchema, REGISTRY, type RegistryEntry } from "@traceroot-ai/tools";
 import type { Command } from "commander";
 import { contextFromCommand } from "../commands/shared.js";
@@ -102,6 +103,16 @@ function registerOne(
     addSchemaFlags(cmd, entry, new Set(positionals));
   }
 
+  // Write commands accept their whole body as one JSON document. Added by the
+  // factory (not addSchemaFlags) so it exists even when an enhancer owns flags.
+  if (entry.method !== "get") {
+    cmd.option(
+      "--from-file <path>",
+      "read body params from a JSON file ('-' reads stdin); individual flags override its fields",
+      onceOption("--from-file"),
+    );
+  }
+
   cmd.action(async (...actionArgs: unknown[]) => {
     const command = actionArgs[actionArgs.length - 1] as Command;
     const declared = command.registeredArguments.length;
@@ -126,6 +137,8 @@ function registerOne(
       resolved.tool === undefined ? entry : requireCompanion(entry.name, resolved.tool);
     assertKnownArgs(target, resolved.args);
     assertPathParamsPresent(target, resolved.args);
+    assertRequiredArgs(target, resolved.args);
+    assertEnums(target, resolved.args);
     const payload = await executeTool(target, resolved.args, transport);
 
     const writers = deps.writers ?? defaultWriters;
@@ -180,12 +193,17 @@ function defaultResolveArgs(
 ): Resolved {
   rejectExtras(input);
   const args: Record<string, unknown> = {};
+  // File first: flags parsed below overwrite these, so a --from-file document
+  // is a baseline that individual flags can tweak.
+  const fromFile = input.opts.fromFile;
+  if (typeof fromFile === "string") {
+    Object.assign(args, readBodyFile(fromFile));
+  }
   for (const prop of positionals) {
     const value = input.positionals[prop];
     if (value !== undefined) args[prop] = value;
   }
   for (const [prop, schema] of Object.entries(entry.inputSchema.properties)) {
-    if (prop in args) continue;
     const raw = input.opts[optKey(prop)];
     if (raw === undefined) continue;
     args[prop] = coerce(prop, schema, raw);
@@ -281,6 +299,69 @@ export function assertPathParamsPresent(entry: RegistryEntry, args: Record<strin
       throw new CliError(`missing required argument '${kebab(name)}'`, ExitCode.usage);
     }
   }
+}
+
+/**
+ * Enforces the tool's `inputSchema.required` before dispatch. The factory
+ * previously checked only path params, which was enough for reads; a write
+ * carries most of its contract in the body, and a missing field would
+ * otherwise surface as a server rejection instead of a usage error.
+ */
+export function assertRequiredArgs(entry: RegistryEntry, args: Record<string, unknown>): void {
+  const missing = entry.inputSchema.required.filter((name) => args[name] === undefined);
+  if (missing.length > 0) {
+    throw new CliError(
+      `missing required ${missing.length === 1 ? "field" : "fields"}: ${missing
+        .map((name) => `--${kebab(name)}`)
+        .join(", ")}`,
+      ExitCode.usage,
+    );
+  }
+}
+
+/**
+ * Enforces schema `enum` constraints on the merged args. `coerce` handles
+ * types, formats and numeric bounds for flag values but never enums, and a
+ * value supplied through `--from-file` bypasses `coerce` entirely — so this
+ * runs over the final args, whatever their source.
+ */
+export function assertEnums(entry: RegistryEntry, args: Record<string, unknown>): void {
+  for (const [prop, schema] of Object.entries(entry.inputSchema.properties)) {
+    const allowed = schema.enum;
+    if (!Array.isArray(allowed)) continue;
+    const value = args[prop];
+    if (value === undefined) continue;
+    if (!allowed.includes(value)) {
+      throw new CliError(`--${kebab(prop)} must be one of: ${allowed.join(", ")}`, ExitCode.usage);
+    }
+  }
+}
+
+/**
+ * Reads a write command's body params from a JSON file, or from stdin when the
+ * path is `-`. Nested params (an alert's `renotify` object and `filters` array,
+ * a widget's `spec`) are impractical as shell-quoted flags, so the whole body
+ * travels as one document; individual flags still override single fields.
+ */
+export function readBodyFile(path: string): Record<string, unknown> {
+  let raw: string;
+  try {
+    raw = path === "-" ? readFileSync(0, "utf8") : readFileSync(path, "utf8");
+  } catch {
+    // Never interpolate the fs error: it adds errno noise without telling the
+    // user anything actionable beyond the path they typed.
+    throw new CliError(`--from-file could not read ${path}`, ExitCode.usage);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new CliError("--from-file must contain valid JSON", ExitCode.usage);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new CliError("--from-file must contain a JSON object of body params", ExitCode.usage);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 export function requireCompanion(owner: string, companion: string): RegistryEntry {
