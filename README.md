@@ -85,7 +85,7 @@ need none of this.
 | `status` | Show the identity your credentials resolve to — email/workspaces (browser login) or workspace/project/key hint (API key), plus host and source. |
 | `workspaces list` | List the workspaces you can access (browser login only). |
 | `projects list` | List the projects you can access, across workspaces; the `PROJECT ID` column is what `--project` takes. `--workspace-id <id>` |
-| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (field filters belong to the upcoming SQL query surface) |
+| `traces list` | List traces for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to` (for field filters, use `sql`) |
 | `traces get <id>` | Show one trace: span tree, derived duration, and a link to open it. Defaults to the lightweight `skeleton` projection (no per-span input/output/metadata); pass `--fields full` (or `--fields io,metadata`) to fetch span I/O. `--fields <groups>` |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. Defaults to the `full` projection (span input/output/metadata included); pass `--fields <groups>` to narrow it. `--output <dir>`, `--force`, `--fields <groups>` |
 | `detectors list` | List your project's detectors, newest first. The `DETECTOR ID` column is what you pass to `findings list --detector`. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
@@ -101,6 +101,8 @@ need none of this.
 | `detectors create` | Create a detector. `--from-file <path>`, `--name`, `--template`, `--prompt` |
 | `projects create` | Create a project in a workspace. `--from-file <path>`, `--name`, `--workspace-id` |
 | `workspaces create` | Create a workspace. `--from-file <path>`, `--name` |
+| `sql [query]` | Run one read-only SQL query over your project's spans and traces. Prints a table, CSV with `--csv`, or JSON with `--json`. `--file <path>`, `--param <name=value>`, `--max-rows <n>`, `--output <file>` |
+| `sql schema` | List the tables and columns a query may reference, with their types. |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
@@ -133,8 +135,10 @@ where it goes. An API key is already scoped to one project and does not carry
 ### Generated commands
 
 `traces`, `detectors`, `findings`, `alerts`, `dashboards`, `widgets`,
-`workspaces`, and `projects` are generated from the tool registry shipped in
-[`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
+`workspaces`, `projects`, and `sql` are generated from the tool registry shipped
+in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools)
+(vendored as a packed tarball until a release carries the SQL tools; see
+`vendor/README.md`):
 each entry's input schema drives its flags, and its response type drives the
 default rendering. Adding a new backend endpoint to the CLI is a registry bump
 plus one placement line in `src/registry/naming.ts` — no hand-written command
@@ -151,6 +155,48 @@ traceroot detectors list --json | jq '.data[].detector_id'
 traceroot findings list --detector <detector-id> --since 7d --json | jq '.data[].finding_id'
 traceroot findings get --trace 99224be337d725fd5e8f2e7b45dc22ef
 ```
+
+### SQL queries
+
+`traceroot sql` runs one read-only `SELECT` against your project's own trace
+data. The schema is analytical: `spans` and `traces` with their metric and
+dimension columns, while span and trace input and output payloads are not
+queryable. `traceroot sql schema` lists every column a query may use.
+
+```sh
+# spans in the last 24 hours
+traceroot sql "SELECT count() AS spans FROM spans WHERE span_start_time >= now() - INTERVAL 1 DAY"
+
+# p95 latency by model
+traceroot sql "SELECT model_name, quantile(0.95)(duration_ms) AS p95_ms FROM spans WHERE model_name IS NOT NULL GROUP BY model_name ORDER BY p95_ms DESC"
+
+# cost by model over the last week
+traceroot sql "SELECT model_name, sum(cost) AS total_cost FROM spans WHERE span_start_time >= now() - INTERVAL 7 DAY GROUP BY model_name ORDER BY total_cost DESC"
+
+# export a week of spans to CSV
+traceroot sql "SELECT span_id, trace_id, name, duration_ms, model_name, cost FROM spans WHERE span_start_time >= now() - INTERVAL 7 DAY" --csv --output spans.csv
+
+# recent error spans
+traceroot sql "SELECT span_id, name, status_message FROM spans WHERE status = 'ERROR' ORDER BY span_start_time DESC LIMIT 100"
+
+# the tables and columns available
+traceroot sql schema
+```
+
+| Output | How | Notes |
+| :-- | :-- | :-- |
+| Table | default | Column names as headers, `NULL` for nulls; the row count goes to stderr. |
+| CSV | `--csv` | RFC 4180 quoting; nulls are empty cells. Cannot be combined with `--json`. |
+| JSON | `--json` | The full response on one line: `columns`, `rows`, `row_count`, `truncated`, `elapsed_ms`. |
+| File | `--output <file>` | Writes any of the above to a file instead of stdout. |
+
+Quote the whole query as one argument, or keep it in a file and pass
+`--file <path>`. Values for `{name:Type}` placeholders go in `--param name=value`,
+once per name. Results are capped by the server: when more rows matched than
+were returned, table and CSV output warn on stderr and JSON sets `truncated`.
+`--max-rows <n>` asks for fewer rows, never more than the server allows. A
+query stopped by a server limit on time, memory, or result size fails with a
+hint to narrow it.
 
 ### Exit codes
 
