@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Writers } from "../../../src/output.js";
 import { renderAlertDetail } from "../../../src/registry/enhancers/alerts-get.js";
-import { renderAlertsList } from "../../../src/registry/enhancers/alerts-list.js";
+import { alertsList, renderAlertsList } from "../../../src/registry/enhancers/alerts-list.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
@@ -65,6 +65,52 @@ const DETAIL = {
   update_time: "2026-09-02T00:00:00Z",
   last_error: null,
 };
+
+describe("alertsList.resolveArgs (--limit/--page forwarding)", () => {
+  it("rejects a non-numeric --limit as a usage error instead of shipping NaN", () => {
+    expect(() =>
+      alertsList.resolveArgs?.({ opts: { limit: "abc" }, positionals: {}, extras: [] }),
+    ).toThrow("--limit must be a positive integer");
+  });
+
+  it("forwards a valid --limit as args.limit", () => {
+    const resolved = alertsList.resolveArgs?.({
+      opts: { limit: "5" },
+      positionals: {},
+      extras: [],
+    });
+    expect(resolved?.args).toEqual({ limit: 5 });
+  });
+
+  it("omits args.limit when no --limit is given", () => {
+    const resolved = alertsList.resolveArgs?.({ opts: {}, positionals: {}, extras: [] });
+    expect(resolved?.args).toEqual({});
+  });
+
+  it("rejects a non-numeric --page as a usage error instead of shipping NaN", () => {
+    expect(() =>
+      alertsList.resolveArgs?.({ opts: { page: "abc" }, positionals: {}, extras: [] }),
+    ).toThrow("--page must be a non-negative integer");
+  });
+
+  it("accepts --page 0 (zero-based paging)", () => {
+    const resolved = alertsList.resolveArgs?.({
+      opts: { page: "0" },
+      positionals: {},
+      extras: [],
+    });
+    expect(resolved?.args).toEqual({ page: 0 });
+  });
+
+  it("forwards a later --page as args.page", () => {
+    const resolved = alertsList.resolveArgs?.({
+      opts: { page: "2" },
+      positionals: {},
+      extras: [],
+    });
+    expect(resolved?.args).toEqual({ page: 2 });
+  });
+});
 
 describe("alerts get rendering", () => {
   it("renders the rule, filters and renotify as a key/value block", () => {

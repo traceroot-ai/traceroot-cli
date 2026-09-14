@@ -1,7 +1,8 @@
 import type { Command } from "commander";
-import { type Writers, logProgress, writeJson } from "../../output.js";
+import { CliError, ExitCode, type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
+import { parseLimit } from "../../time/range.js";
 import { formatTimestamp } from "../../util/index.js";
 import { onceOption, rejectExtras } from "../flags.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
@@ -69,6 +70,19 @@ export function renderAlertsList(res: AlertListResponse, opts: RenderAlertsListO
   logProgress(`${res.data.length} alert(s)${suffix}`, writers);
 }
 
+/**
+ * Parses --page: a non-negative integer, zero-based (page 0 is the first
+ * page). Deliberately not `parseLimit`: that helper rejects `value < 1`,
+ * which would wrongly reject the valid `--page 0`.
+ */
+function parsePage(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  if (!/^\d+$/.test(raw)) {
+    throw new CliError("--page must be a non-negative integer", ExitCode.usage);
+  }
+  return Number.parseInt(raw, 10);
+}
+
 export const alertsList: Enhancer = {
   description: "List the project's threshold alerts",
   flags(cmd: Command): void {
@@ -80,11 +94,13 @@ export const alertsList: Enhancer = {
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
     const args: Record<string, unknown> = {};
-    const limit = input.opts.limit;
-    const page = input.opts.page;
+    // No local maximum: range bounds are validated server-side (deliberate);
+    // this only rejects a non-numeric value before it becomes `limit=NaN`.
+    const limit = parseLimit(input.opts.limit as string | undefined);
+    const page = parsePage(input.opts.page as string | undefined);
     const search = input.opts.search;
-    if (typeof limit === "string") args.limit = Number.parseInt(limit, 10);
-    if (typeof page === "string") args.page = Number.parseInt(page, 10);
+    if (limit !== undefined) args.limit = limit;
+    if (page !== undefined) args.page = page;
     if (typeof search === "string") args.search_query = search;
     return { args };
   },
