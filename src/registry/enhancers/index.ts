@@ -1,3 +1,5 @@
+import { alertsGet } from "./alerts-get.js";
+import { alertsList } from "./alerts-list.js";
 import { detectorsList } from "./detectors-list.js";
 import { findingsGet } from "./findings-get.js";
 import { findingsList } from "./findings-list.js";
@@ -15,4 +17,6 @@ export const ENHANCERS: Partial<Record<string, Enhancer>> = {
   list_detectors: detectorsList,
   get_finding: findingsGet,
   list_findings: findingsList,
+  list_alerts: alertsList,
+  get_alert: alertsGet,
 };

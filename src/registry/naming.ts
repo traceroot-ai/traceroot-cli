@@ -56,9 +56,9 @@ export const PLACEMENTS: Record<string, Placement> = {
     kind: "internal",
     note: "served by 'status', 'login', and 'doctor'; deliberately no standalone command",
   },
-  list_alerts: { kind: "internal", note: "placed as a command in a later task" },
-  get_alert: { kind: "internal", note: "placed as a command in a later task" },
-  create_alert: { kind: "internal", note: "placed as a command in a later task" },
+  list_alerts: { kind: "command", path: ["alerts", "list"] },
+  get_alert: { kind: "command", path: ["alerts", "get"] },
+  create_alert: { kind: "command", path: ["alerts", "create"] },
   list_dashboards: { kind: "internal", note: "placed as a command in a later task" },
   get_dashboard: { kind: "internal", note: "placed as a command in a later task" },
   create_dashboard: { kind: "internal", note: "placed as a command in a later task" },
@@ -81,4 +81,5 @@ export const GROUPS: Record<string, string> = {
   traces: "Work with traces",
   detectors: "Work with detectors",
   findings: "Work with detector findings",
+  alerts: "Work with threshold alerts",
 };

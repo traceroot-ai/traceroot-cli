@@ -92,6 +92,7 @@ describe("buildProgram", () => {
       "traces",
       "detectors",
       "findings",
+      "alerts",
       "skills",
       "instrument",
       "doctor",
