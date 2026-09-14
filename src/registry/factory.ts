@@ -125,6 +125,7 @@ function registerOne(
       opts: command.opts(),
       positionals: positionalRecord,
       extras: command.args.slice(declared),
+      json: command.optsWithGlobals().json === true,
     };
     const resolved =
       enhancer?.resolveArgs !== undefined

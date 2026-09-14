@@ -6,6 +6,10 @@ export interface ResolveInput {
   opts: Record<string, unknown>;
   positionals: Record<string, string | undefined>;
   extras: string[];
+  /** Whether the global `--json` flag is set, so an enhancer can refuse a
+   * conflicting output flag before anything is dispatched. The factory always
+   * fills it; direct callers may omit it to mean `false`. */
+  json?: boolean;
 }
 
 /** The tool args to dispatch, optionally redirecting to a companion tool and

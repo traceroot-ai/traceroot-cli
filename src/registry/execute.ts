@@ -201,12 +201,12 @@ export async function executeTool(
         transport.auth.invalidate();
         continue;
       }
-      throw translate(err, transport, bearer);
+      throw translate(err, transport, bearer, entry.name);
     }
   }
 }
 
-function translate(err: unknown, transport: Transport, bearer: string): unknown {
+function translate(err: unknown, transport: Transport, bearer: string, tool: string): unknown {
   if (err instanceof CliError) return err;
   if (err instanceof ApiError) {
     let message = err.detail !== "" ? err.detail : statusFallbackMessage(err.status);
@@ -214,6 +214,11 @@ function translate(err: unknown, transport: Transport, bearer: string): unknown 
     // names the backend op (`list_projects`); translate it into the CLI flags.
     if (message.includes("project_id query parameter is required")) {
       message = `${message}\nHint: run \`traceroot projects list\`, then pass --project <id> (or set TRACEROOT_PROJECT_ID).`;
+    }
+    // A query stopped by a server cap (time, memory, result size) is fixed by
+    // asking for less, which the server's sentence does not say.
+    if (tool === "run_sql" && message.includes("exceeded the maximum")) {
+      message = `${message}\nHint: add a LIMIT, select fewer columns, or filter on span_start_time or trace_start_time to scan less data.`;
     }
     return new CliError(message, exitCodeForStatus(err.status));
   }
