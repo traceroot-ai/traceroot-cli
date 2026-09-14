@@ -10,11 +10,19 @@ describe("@traceroot-ai/tools package", () => {
     expect(bearerAuth("k")).toEqual({ Authorization: "Bearer k" });
   });
 
-  it("every entry is a GET with an object input schema", () => {
+  it("every entry has an object input schema, and every write carries a policy", () => {
     for (const entry of REGISTRY) {
-      expect(entry.method).toBe("get");
+      expect(["get", "post"]).toContain(entry.method);
       expect(entry.inputSchema.type).toBe("object");
       expect(entry.inputSchema.additionalProperties).toBe(false);
+      if (entry.method !== "get") {
+        // The package guarantees a policy on every non-GET entry; the CLI
+        // relies on policy.tenancy to decide project-scope injection.
+        expect(entry.policy).toBeDefined();
+        expect(["none", "approval"]).toContain(entry.policy?.approvalClass);
+        expect(["account", "workspace", "project"]).toContain(entry.policy?.tenancy);
+        expect(entry.bodyParams?.length ?? 0).toBeGreaterThan(0);
+      }
     }
   });
 });

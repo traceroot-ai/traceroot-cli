@@ -5,21 +5,9 @@ OpenAPI schema. `openapi.json` is the ONLY cross-repo artifact; nothing in the
 build graph imports the backend.
 
 - Backend source: `backend/rest/openapi/public.json`
-- Backend commit: `8e7e8c60`
-- sha256(openapi.json): `036e1a7f2b6e30a86bd6c9f91196134466cfd44b2ad676433f921133fcb4236d`
-- Vendored on: 2026-08-25
-
-### Account-scope splice (temporary)
-
-The `/api/v1/public/workspaces` and `/api/v1/public/projects` operations (and
-their `WorkspaceListItem` / `ProjectListItem` / `Public*ListResponse` schemas)
-are spliced in from the still-open CLI-auth server stack
-(branch `feat/cli-credential-jwt`, backend commit `42b04570`); backend main
-`8e7e8c60` does not expose them yet. They carry no `x-tool`, so they are absent
-from the `@traceroot-ai/tools` registry and reach the CLI only through the
-curated `workspaces`/`projects` commands, not the generated command surface.
-Once that branch lands on backend main, drop this splice: a plain wholesale
-refresh (below) picks the endpoints up with their `x-tool` annotations.
+- Backend commit: `f478877c`
+- sha256(openapi.json): `939a54e22b30dfee054f8aa3042d3b33d64c6fa6060dabe152284a6464d411ff`
+- Vendored on: 2026-09-14
 
 ## Refresh
 
