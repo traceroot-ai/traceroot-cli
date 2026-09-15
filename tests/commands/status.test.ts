@@ -59,7 +59,6 @@ function fakeClient(hooks: FakeClientHooks): ApiClient {
   return {
     whoami: hooks.whoami ?? unused,
     listWorkspaces: hooks.listWorkspaces ?? unused,
-    listProjects: unused,
   };
 }
 

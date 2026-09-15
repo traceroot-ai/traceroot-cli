@@ -20,7 +20,6 @@ export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
 export type WorkspaceList = Ok200<paths["/api/v1/public/workspaces"]["get"]>;
-export type ProjectList = Ok200<paths["/api/v1/public/projects"]["get"]>;
 
 /**
  * How the client obtains the bearer for each request.
@@ -57,17 +56,10 @@ export interface ApiClientOptions {
   timeoutMs?: number;
 }
 
-/** Restrict `listProjects` to one workspace (sent as the `workspace_id` query). */
-export interface ListProjectsParams {
-  workspaceId?: string;
-}
-
 export interface ApiClient {
   whoami(): Promise<Whoami>;
   /** Account-scope discovery (user-credential only; a project API key gets 403). */
   listWorkspaces(): Promise<WorkspaceList>;
-  /** Account-scope discovery (user-credential only; a project API key gets 403). */
-  listProjects(params?: ListProjectsParams): Promise<ProjectList>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -136,18 +128,6 @@ export function normalizeBaseUrl(host: string): string {
     );
   }
   return base;
-}
-
-/** Serializes defined params into a `?a=b&c=d` query string (empty when none). */
-function toQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) {
-      search.set(key, String(value));
-    }
-  }
-  const query = search.toString();
-  return query ? `?${query}` : "";
 }
 
 /**
@@ -262,10 +242,6 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     },
     listWorkspaces() {
       return request<WorkspaceList>("/api/v1/public/workspaces");
-    },
-    listProjects(params) {
-      const query = toQuery({ workspace_id: params?.workspaceId });
-      return request<ProjectList>(`/api/v1/public/projects${query}`);
     },
   };
 }
