@@ -52,6 +52,27 @@ describe("alerts list rendering", () => {
     expect(JSON.parse(out.data).data).toHaveLength(1);
     expect(out.data.trimEnd().split("\n")).toHaveLength(1);
   });
+
+  it("shows 'never' when an alert has not been evaluated", () => {
+    const { writers, out } = makeWriters();
+    const res = { ...RES, data: [{ ...RES.data[0], last_evaluated_at: null }] };
+    renderAlertsList(res, { json: false, writers, timeZone: "UTC" });
+    expect(out.data).toContain("never");
+  });
+
+  it("omits the capacity suffix when meta.capacity is absent", () => {
+    const { writers, err } = makeWriters();
+    renderAlertsList({ data: RES.data }, { json: false, writers, timeZone: "UTC" });
+    expect(err.data).toContain("1 alert(s)");
+    expect(err.data).not.toContain("/");
+  });
+
+  it("renders an empty list as a header-only table with a zero footer", () => {
+    const { writers, out, err } = makeWriters();
+    renderAlertsList({ data: [] }, { json: false, writers, timeZone: "UTC" });
+    expect(out.data).toContain("ALERT ID");
+    expect(err.data).toContain("0 alert(s)");
+  });
 });
 
 const DETAIL = {
@@ -110,6 +131,26 @@ describe("alertsList.resolveArgs (--limit/--page forwarding)", () => {
     });
     expect(resolved?.args).toEqual({ page: 2 });
   });
+
+  it("rejects a --page beyond the safe-integer range instead of forwarding an imprecise value", () => {
+    expect(() =>
+      alertsList.resolveArgs?.({
+        opts: { page: "99999999999999999999" },
+        positionals: {},
+        extras: [],
+      }),
+    ).toThrow("--page must be a non-negative integer");
+  });
+
+  it("rejects a --limit beyond the safe-integer range instead of forwarding an imprecise value", () => {
+    expect(() =>
+      alertsList.resolveArgs?.({
+        opts: { limit: "99999999999999999999" },
+        positionals: {},
+        extras: [],
+      }),
+    ).toThrow("--limit must be a positive integer");
+  });
 });
 
 describe("alerts get rendering", () => {
@@ -127,5 +168,53 @@ describe("alerts get rendering", () => {
     renderAlertDetail({ ...DETAIL, filters: [] }, { json: false, writers, timeZone: "UTC" });
     expect(out.data).toContain("Filters:");
     expect(out.data).toContain("none");
+  });
+
+  it("omits the creator when it is null", () => {
+    const { writers, out } = makeWriters();
+    renderAlertDetail({ ...DETAIL, creator: null }, { json: false, writers, timeZone: "UTC" });
+    expect(out.data).toContain("Created:");
+    expect(out.data).not.toContain(" by ");
+  });
+
+  it("renders a renotify interval of null as a bare 'every'", () => {
+    const { writers, out } = makeWriters();
+    renderAlertDetail(
+      { ...DETAIL, renotify: { mode: "EVERY", interval_minutes: null } },
+      { json: false, writers, timeZone: "UTC" },
+    );
+    expect(out.data).toMatch(/Renotify:\s+every\n/);
+  });
+
+  it("renders a non-EVERY renotify mode as off", () => {
+    const { writers, out } = makeWriters();
+    renderAlertDetail(
+      { ...DETAIL, renotify: { mode: "OFF" } },
+      { json: false, writers, timeZone: "UTC" },
+    );
+    expect(out.data).toMatch(/Renotify:\s+off\n/);
+  });
+
+  it("shows 'never' for an alert that has not been evaluated", () => {
+    const { writers, out } = makeWriters();
+    renderAlertDetail(
+      { ...DETAIL, last_evaluated_at: null },
+      { json: false, writers, timeZone: "UTC" },
+    );
+    expect(out.data).toMatch(/Last eval:\s+never\n/);
+  });
+
+  it("only prints a Last error line when there is one", () => {
+    const a = makeWriters();
+    renderAlertDetail(DETAIL, { json: false, writers: a.writers, timeZone: "UTC" });
+    expect(a.out.data).not.toContain("Last error:");
+
+    const b = makeWriters();
+    renderAlertDetail(
+      { ...DETAIL, last_error: "query timed out" },
+      { json: false, writers: b.writers, timeZone: "UTC" },
+    );
+    expect(b.out.data).toContain("Last error:");
+    expect(b.out.data).toContain("query timed out");
   });
 });

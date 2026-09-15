@@ -325,8 +325,10 @@ export function parseLimit(raw: string | undefined, max?: number): number | unde
   if (!/^\d+$/.test(raw)) {
     throw new CliError("--limit must be a positive integer", ExitCode.usage);
   }
+  // isSafeInteger, not isInteger: a long digit run passes the regex but
+  // parses to an imprecise value (or Infinity) that would be forwarded as-is.
   const value = Number.parseInt(raw, 10);
-  if (!Number.isInteger(value) || value < 1) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new CliError("--limit must be a positive integer", ExitCode.usage);
   }
   // Same bound and wording as the generated path's checkRange, so curated and

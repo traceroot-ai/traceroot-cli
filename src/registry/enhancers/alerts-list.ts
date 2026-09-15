@@ -80,7 +80,13 @@ function parsePage(raw: string | undefined): number | undefined {
   if (!/^\d+$/.test(raw)) {
     throw new CliError("--page must be a non-negative integer", ExitCode.usage);
   }
-  return Number.parseInt(raw, 10);
+  // The regex admits any digit run; past 2^53 parseInt is imprecise or
+  // Infinity, which would be forwarded as a "valid" page.
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(value)) {
+    throw new CliError("--page must be a non-negative integer", ExitCode.usage);
+  }
+  return value;
 }
 
 export const alertsList: Enhancer = {
