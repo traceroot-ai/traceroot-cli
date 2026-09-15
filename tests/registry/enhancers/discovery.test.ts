@@ -16,11 +16,12 @@ describe("workspaces list rendering", () => {
   it("keeps the columns 0.3.0 shipped, with the id last", () => {
     const { writers, out } = makeWriters();
     renderWorkspacesList(RES, { json: false, writers });
-    const header = out.data.split("\n")[0];
-    expect(header).toContain("NAME");
-    expect(header).toContain("ROLE");
-    expect(header).toContain("WORKSPACE ID");
-    expect(header.indexOf("NAME")).toBeLessThan(header.indexOf("WORKSPACE ID"));
+    // Exact order, not presence: a reorder of columns must fail this guard.
+    const header = out.data
+      .split("\n")[0]
+      .trim()
+      .split(/\s{2,}/);
+    expect(header).toEqual(["NAME", "ROLE", "WORKSPACE ID"]);
   });
 
   it("renders the row's name, role, and id", () => {
@@ -51,6 +52,16 @@ describe("projects list rendering", () => {
   const RES = {
     data: [{ id: "p-1", name: "Checkout", workspace_id: "ws-1", workspace_name: "Alpha" }],
   };
+
+  it("keeps the columns 0.3.0 shipped, with the id last", () => {
+    const { writers, out } = makeWriters();
+    renderProjectsList(RES, { json: false, writers });
+    const header = out.data
+      .split("\n")[0]
+      .trim()
+      .split(/\s{2,}/);
+    expect(header).toEqual(["NAME", "WORKSPACE", "PROJECT ID"]);
+  });
 
   it("shows the workspace name and never the workspace id", () => {
     const { writers, out } = makeWriters();

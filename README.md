@@ -122,8 +122,8 @@ traceroot alerts create --from-file rule.json --threshold 2000
 
 Individual flags override fields from the file. Required fields and enum
 values are checked locally, so a typo fails immediately as a usage error
-(exit 2) rather than as a server rejection (types in a `--from-file` document
-itself are validated by the server, not locally). Under a browser login,
+(exit 2) rather than as a server rejection (types and nested structure inside a
+`--from-file` document are validated by the server, not locally). Under a browser login,
 `--project` (or `TRACEROOT_PROJECT_ID`) supplies the project for
 project-scoped writes, so the file describes the thing being created, not
 where it goes. An API key is already scoped to one project and does not carry
