@@ -70,7 +70,10 @@ describe("alerts list rendering", () => {
   it("renders an empty list as a header-only table with a zero footer", () => {
     const { writers, out, err } = makeWriters();
     renderAlertsList({ data: [] }, { json: false, writers, timeZone: "UTC" });
-    expect(out.data).toContain("ALERT ID");
+    // Header only — exactly one line, so a placeholder or stray row fails here.
+    const lines = out.data.trimEnd().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("ALERT ID");
     expect(err.data).toContain("0 alert(s)");
   });
 });
