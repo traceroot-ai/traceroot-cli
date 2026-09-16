@@ -370,8 +370,14 @@ export function assertRequiredArgs(
  */
 export function assertEnums(entry: RegistryEntry, args: Record<string, unknown>): void {
   for (const [prop, schema] of Object.entries(entry.inputSchema.properties)) {
-    const allowed = schema.enum;
-    if (!Array.isArray(allowed)) continue;
+    // A `const` is a one-value enum spelled differently; the registry preserves
+    // both (an alert's `view` is `const: "SPANS"`), so treat them alike.
+    const allowed = Array.isArray(schema.enum)
+      ? schema.enum
+      : schema.const !== undefined
+        ? [schema.const]
+        : undefined;
+    if (allowed === undefined) continue;
     const value = args[prop];
     if (value === undefined) continue;
     if (!allowed.includes(value)) {

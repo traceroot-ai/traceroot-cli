@@ -73,9 +73,10 @@ function isErrorBody(value: unknown): value is ErrorBody {
 
 /**
  * Classifies a non-2xx HTTP status into a CLI exit-code class so scripts can tell
- * re-auth (401/403) from give-up (404) from an unexpected server error. Anything
- * else (5xx, other 4xx) is treated as internal (1). Shared with the registry
- * executor so the exit-code contract has exactly one definition.
+ * re-auth (401/403) from give-up (404) from fix-your-input (400/422) from an
+ * unexpected server error. Anything else (5xx, other 4xx) is treated as
+ * internal (1). Shared with the registry executor so the exit-code contract has
+ * exactly one definition.
  */
 export function exitCodeForStatus(status: number): number {
   if (status === 401 || status === 403) {
@@ -83,6 +84,14 @@ export function exitCodeForStatus(status: number): number {
   }
   if (status === 404) {
     return ExitCode.notFound;
+  }
+  // The server rejected the request's body or params. Local validation can only
+  // be as strict as the published schema, so a field the schema leaves open (an
+  // alert's `measure`) is only ever checked here. That is a usage error, not an
+  // internal one: the remedy is to the input, and a caller — an agent above all
+  // — reading `internal` concludes the tool is broken instead of retrying.
+  if (status === 400 || status === 422) {
+    return ExitCode.usage;
   }
   return ExitCode.internal;
 }

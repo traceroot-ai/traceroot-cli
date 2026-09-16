@@ -161,6 +161,25 @@ describe("assertEnums", () => {
   it("accepts a valid enum value", () => {
     expect(() => assertEnums(createAlert, { aggregation: "p95" })).not.toThrow();
   });
+
+  // create_alert's `view` is published as `const: "SPANS"`, not an enum. Before
+  // this was honoured, `view: "spans"` reached the server and came back as a
+  // rejection — the one field on the write path a typo could get past locally.
+  it("treats a schema const as a one-value enum", () => {
+    let thrown: unknown;
+    try {
+      assertEnums(createAlert, { view: "spans" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).exitCode).toBe(ExitCode.usage);
+    expect((thrown as CliError).message).toBe("--view must be one of: SPANS");
+  });
+
+  it("accepts the const value", () => {
+    expect(() => assertEnums(createAlert, { view: "SPANS" })).not.toThrow();
+  });
 });
 
 describe("readBodyFile", () => {

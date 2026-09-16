@@ -162,7 +162,7 @@ resource — without parsing prose.
 | ---- | ----- | ----------- | ------- |
 | `0` | success | — | The command completed. |
 | `1` | internal | `internal` | Unexpected/internal error (the default when nothing else fits). |
-| `2` | usage | `usage` | Invalid arguments or options (bad flag value, unknown agent/skill, missing required input). |
+| `2` | usage | `usage` | Invalid arguments or options (bad flag value, unknown agent/skill, missing required input), or input the server rejected (HTTP 400/422). |
 | `3` | auth | `auth` | Authentication required or invalid: HTTP 401/403, or no local credentials. |
 | `4` | not_found | `not_found` | The requested resource does not exist (HTTP 404). |
 | `5` | network | `network` | Network failure or timeout — transient, so a retry may succeed. |

@@ -98,6 +98,11 @@ describe("HTTP status → exit-code class", () => {
     expect(await exitCodeOf(404)).toBe(ExitCode.notFound);
   });
 
+  it("maps 400 and 422 to the usage exit code: the server rejected the input", async () => {
+    expect(await exitCodeOf(400)).toBe(ExitCode.usage);
+    expect(await exitCodeOf(422)).toBe(ExitCode.usage);
+  });
+
   it("maps a 500 to the internal exit code", async () => {
     expect(await exitCodeOf(500)).toBe(ExitCode.internal);
   });

@@ -40,9 +40,11 @@ describe("executeTool", () => {
   });
 
   it.each([
+    [400, ExitCode.usage],
     [401, ExitCode.auth],
     [403, ExitCode.auth],
     [404, ExitCode.notFound],
+    [422, ExitCode.usage],
     [500, ExitCode.internal],
   ])("maps HTTP %i to exit code %i with the server detail", async (status, exitCode) => {
     const fake = createFakeFetch(() => errorResponse(status, "nope"));
@@ -251,7 +253,7 @@ describe("executeTool project scoping", () => {
     expect(fake.calls[0].url).not.toContain("p-1");
   });
 
-  it("appends a projects-list hint to the missing-project_id 400", async () => {
+  it("appends a projects-list hint to the missing-project_id 400, as a usage error", async () => {
     const fake = createFakeFetch(() =>
       errorResponse(400, "project_id query parameter is required for user credentials"),
     );
@@ -259,7 +261,9 @@ describe("executeTool project scoping", () => {
       (e) => e,
     );
     expect((err as CliError).message).toContain("traceroot projects list");
-    expect((err as CliError).exitCode).toBe(ExitCode.internal);
+    // A 400 is the server rejecting the request as sent — here, no project was
+    // supplied — so it is a usage error the hint tells the user how to fix.
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
   });
 });
 
