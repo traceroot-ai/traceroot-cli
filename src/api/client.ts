@@ -20,7 +20,6 @@ export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
 export type WorkspaceList = Ok200<paths["/api/v1/public/workspaces"]["get"]>;
-export type ProjectList = Ok200<paths["/api/v1/public/projects"]["get"]>;
 
 /**
  * How the client obtains the bearer for each request.
@@ -57,17 +56,10 @@ export interface ApiClientOptions {
   timeoutMs?: number;
 }
 
-/** Restrict `listProjects` to one workspace (sent as the `workspace_id` query). */
-export interface ListProjectsParams {
-  workspaceId?: string;
-}
-
 export interface ApiClient {
   whoami(): Promise<Whoami>;
   /** Account-scope discovery (user-credential only; a project API key gets 403). */
   listWorkspaces(): Promise<WorkspaceList>;
-  /** Account-scope discovery (user-credential only; a project API key gets 403). */
-  listProjects(params?: ListProjectsParams): Promise<ProjectList>;
 }
 
 /** Shape of a backend JSON error body. */
@@ -81,9 +73,10 @@ function isErrorBody(value: unknown): value is ErrorBody {
 
 /**
  * Classifies a non-2xx HTTP status into a CLI exit-code class so scripts can tell
- * re-auth (401/403) from give-up (404) from an unexpected server error. Anything
- * else (5xx, other 4xx) is treated as internal (1). Shared with the registry
- * executor so the exit-code contract has exactly one definition.
+ * re-auth (401/403) from give-up (404) from fix-your-input (400/422) from an
+ * unexpected server error. Anything else (5xx, other 4xx) is treated as
+ * internal (1). Shared with the registry executor so the exit-code contract has
+ * exactly one definition.
  */
 export function exitCodeForStatus(status: number): number {
   if (status === 401 || status === 403) {
@@ -91,6 +84,14 @@ export function exitCodeForStatus(status: number): number {
   }
   if (status === 404) {
     return ExitCode.notFound;
+  }
+  // The server rejected the request's body or params. Local validation can only
+  // be as strict as the published schema, so a field the schema leaves open (an
+  // alert's `measure`) is only ever checked here. That is a usage error, not an
+  // internal one: the remedy is to the input, and a caller — an agent above all
+  // — reading `internal` concludes the tool is broken instead of retrying.
+  if (status === 400 || status === 422) {
+    return ExitCode.usage;
   }
   return ExitCode.internal;
 }
@@ -136,18 +137,6 @@ export function normalizeBaseUrl(host: string): string {
     );
   }
   return base;
-}
-
-/** Serializes defined params into a `?a=b&c=d` query string (empty when none). */
-function toQuery(params: Record<string, string | number | boolean | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) {
-      search.set(key, String(value));
-    }
-  }
-  const query = search.toString();
-  return query ? `?${query}` : "";
 }
 
 /**
@@ -262,10 +251,6 @@ export function createApiClient(opts: ApiClientOptions): ApiClient {
     },
     listWorkspaces() {
       return request<WorkspaceList>("/api/v1/public/workspaces");
-    },
-    listProjects(params) {
-      const query = toQuery({ workspace_id: params?.workspaceId });
-      return request<ProjectList>(`/api/v1/public/projects${query}`);
     },
   };
 }

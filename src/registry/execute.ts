@@ -119,38 +119,43 @@ function bufferedFetch(fetchImpl: typeof fetch): typeof fetch {
 }
 
 /**
- * Scopes a dispatch to the resolved default project. The registry entries carry
- * no `project_id` param (it is optional on the backend), so when one is resolved
- * we clone the entry to declare `project_id` and set it in the args — the
- * dispatcher then routes it to the query string. A call that already carries a
- * `project_id` (a companion that set its own) is left untouched.
+ * True when a tool's declared tenancy makes it eligible for project_id
+ * injection: a read (no `policy`) or a project-tenancy write. An account- or
+ * workspace-scoped write (`create_workspace`, `create_project`) is not — the
+ * server would reject a project id neither op accepts. Shared with the
+ * factory's `assertRequiredArgs` so required-arg validation never demands a
+ * `--project-id` flag that this same injection is about to supply.
+ */
+export function acceptsProjectScope(entry: RegistryEntry): boolean {
+  return entry.policy === undefined || entry.policy.tenancy === "project";
+}
+
+/**
+ * Scopes a dispatch to the resolved default project. As of registry 0.2.0,
+ * every tool that genuinely accepts project scope declares `project_id` in
+ * its own input schema; a tool that doesn't (`list_workspaces`,
+ * `list_projects`) is account-scope and must not be given one — there is no
+ * per-tool `policy` on reads to gate on instead, so the schema declaration
+ * itself is the discriminator. A call that already carries a `project_id` (a
+ * companion that set its own) is left untouched.
  */
 function withProjectScope(
   entry: RegistryEntry,
   args: Record<string, unknown>,
   transport: Transport,
 ): { entry: RegistryEntry; args: Record<string, unknown> } {
+  if (!acceptsProjectScope(entry)) {
+    return { entry, args };
+  }
   if (transport.projectId === undefined) {
+    return { entry, args };
+  }
+  if (!("project_id" in entry.inputSchema.properties)) {
     return { entry, args };
   }
   // A value already in args (a companion that set its own) is kept, not clobbered.
   const scopedArgs = "project_id" in args ? args : { ...args, project_id: transport.projectId };
-  // Self-retiring: once the registry declares project_id itself, keep its
-  // (richer) schema untouched and only inject the arg.
-  if ("project_id" in entry.inputSchema.properties) {
-    return { entry, args: scopedArgs };
-  }
-  // Declare project_id on a clone so the dispatcher routes it to the query.
-  return {
-    entry: {
-      ...entry,
-      inputSchema: {
-        ...entry.inputSchema,
-        properties: { ...entry.inputSchema.properties, project_id: { type: "string" } },
-      },
-    },
-    args: scopedArgs,
-  };
+  return { entry, args: scopedArgs };
 }
 
 /**

@@ -52,7 +52,6 @@ describe("requireApiClient", () => {
     const client = requireApiClient(ctx);
     expect(typeof client.whoami).toBe("function");
     expect(typeof client.listWorkspaces).toBe("function");
-    expect(typeof client.listProjects).toBe("function");
   });
 
   it("does not perform network activity on construction", () => {

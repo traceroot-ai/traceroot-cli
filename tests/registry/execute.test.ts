@@ -1,7 +1,11 @@
 import { REGISTRY } from "@traceroot-ai/tools";
 import { describe, expect, it } from "vitest";
 import { CliError, ExitCode } from "../../src/output.js";
-import { executeTool, transportFromContext } from "../../src/registry/execute.js";
+import {
+  acceptsProjectScope,
+  executeTool,
+  transportFromContext,
+} from "../../src/registry/execute.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
 
 const listSessions = REGISTRY.find((entry) => entry.name === "list_sessions");
@@ -36,9 +40,11 @@ describe("executeTool", () => {
   });
 
   it.each([
+    [400, ExitCode.usage],
     [401, ExitCode.auth],
     [403, ExitCode.auth],
     [404, ExitCode.notFound],
+    [422, ExitCode.usage],
     [500, ExitCode.internal],
   ])("maps HTTP %i to exit code %i with the server detail", async (status, exitCode) => {
     const fake = createFakeFetch(() => errorResponse(status, "nope"));
@@ -247,7 +253,7 @@ describe("executeTool project scoping", () => {
     expect(fake.calls[0].url).not.toContain("p-1");
   });
 
-  it("appends a projects-list hint to the missing-project_id 400", async () => {
+  it("appends a projects-list hint to the missing-project_id 400, as a usage error", async () => {
     const fake = createFakeFetch(() =>
       errorResponse(400, "project_id query parameter is required for user credentials"),
     );
@@ -255,7 +261,9 @@ describe("executeTool project scoping", () => {
       (e) => e,
     );
     expect((err as CliError).message).toContain("traceroot projects list");
-    expect((err as CliError).exitCode).toBe(ExitCode.internal);
+    // A 400 is the server rejecting the request as sent — here, no project was
+    // supplied — so it is a usage error the hint tells the user how to fix.
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
   });
 });
 
@@ -282,5 +290,48 @@ describe("transportFromContext project scoping", () => {
 
   it("ignores the default project for an api key (already project-scoped)", () => {
     expect(transportFromContext(ctxWith("api-key", "p-1")).projectId).toBeUndefined();
+  });
+});
+
+describe("withProjectScope tenancy gating", () => {
+  function scoped(fetchImpl: typeof fetch, projectId: string) {
+    return {
+      base: "https://api.test",
+      auth: { kind: "api-key" as const, key: "sk" },
+      timeoutMs: 30_000,
+      projectId,
+      fetchImpl,
+    };
+  }
+  const createWorkspace = REGISTRY.find((e) => e.name === "create_workspace");
+  const createAlert = REGISTRY.find((e) => e.name === "create_alert");
+  if (createWorkspace === undefined || createAlert === undefined) {
+    throw new Error("registry fixture missing");
+  }
+
+  it("does not inject project_id into an account-tenancy write", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ id: "ws-1" }));
+    await executeTool(createWorkspace, { name: "w" }, scoped(fake.fetchImpl, "p-1"));
+    const body = JSON.parse(String(fake.calls[0].init.body));
+    expect(body.project_id).toBeUndefined();
+    expect(fake.calls[0].url).not.toContain("project_id");
+  });
+
+  it("still injects project_id into a project-tenancy write", async () => {
+    const fake = createFakeFetch(() => jsonResponse({ id: "alr-1" }));
+    await executeTool(createAlert, { name: "a" }, scoped(fake.fetchImpl, "p-1"));
+    const body = JSON.parse(String(fake.calls[0].init.body));
+    expect(body.project_id).toBe("p-1");
+  });
+
+  it("acceptsProjectScope: false for an account-tenancy write, true for a project-tenancy write and for a read", () => {
+    // Shared with the factory's assertRequiredArgs (write-path.test.ts), so a
+    // required project_id is only ever treated as "will be injected" on
+    // exactly the entries withProjectScope itself would inject into.
+    const listSessions = REGISTRY.find((e) => e.name === "list_sessions");
+    if (listSessions === undefined) throw new Error("registry fixture missing");
+    expect(acceptsProjectScope(createWorkspace)).toBe(false);
+    expect(acceptsProjectScope(createAlert)).toBe(true);
+    expect(acceptsProjectScope(listSessions)).toBe(true); // reads carry no policy
   });
 });

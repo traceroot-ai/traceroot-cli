@@ -1,10 +1,11 @@
+import { readFileSync } from "node:fs";
 import { type ParamSchema, REGISTRY, type RegistryEntry } from "@traceroot-ai/tools";
 import type { Command } from "commander";
 import { contextFromCommand } from "../commands/shared.js";
 import { CliError, ExitCode, type Writers, defaultWriters } from "../output.js";
 import { ENHANCERS } from "./enhancers/index.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./enhancers/types.js";
-import { executeTool, transportFromContext } from "./execute.js";
+import { acceptsProjectScope, executeTool, transportFromContext } from "./execute.js";
 import { onceOption, rejectExtras } from "./flags.js";
 
 export { rejectExtras } from "./flags.js";
@@ -102,6 +103,16 @@ function registerOne(
     addSchemaFlags(cmd, entry, new Set(positionals));
   }
 
+  // Write commands accept their whole body as one JSON document. Added by the
+  // factory (not addSchemaFlags) so it exists even when an enhancer owns flags.
+  if (entry.method !== "get") {
+    cmd.option(
+      "--from-file <path>",
+      "read body params from a JSON file ('-' reads stdin); individual flags override its fields",
+      onceOption("--from-file"),
+    );
+  }
+
   cmd.action(async (...actionArgs: unknown[]) => {
     const command = actionArgs[actionArgs.length - 1] as Command;
     const declared = command.registeredArguments.length;
@@ -120,19 +131,36 @@ function registerOne(
         ? enhancer.resolveArgs(input)
         : defaultResolveArgs(entry, input, positionals);
 
+    // Applied in the shared action path (not inside defaultResolveArgs) so
+    // --from-file works the same regardless of which resolver ran — an
+    // enhancer's resolveArgs has no reason to know about the flag. File
+    // first: whatever the resolver already put in resolved.args (flags,
+    // positionals, or an enhancer's own logic) overrides the file's fields.
+    const fromFileOpt = input.opts.fromFile;
+    const fromFile = typeof fromFileOpt === "string" ? readBodyFile(fromFileOpt) : undefined;
+
     const ctx = contextFromCommand(command);
     const transport = transportFromContext(ctx, deps);
     const target =
       resolved.tool === undefined ? entry : requireCompanion(entry.name, resolved.tool);
-    assertKnownArgs(target, resolved.args);
-    assertPathParamsPresent(target, resolved.args);
-    const payload = await executeTool(target, resolved.args, transport);
+    if (fromFile !== undefined) {
+      // A stray key here is a typo in the user's JSON, not the enhancer bug
+      // assertKnownArgs guards against — it must fail as a usage error (exit
+      // 2), never assertKnownArgs' internal error (exit 1).
+      assertKnownBodyFields(target, fromFile);
+    }
+    const args = fromFile === undefined ? resolved.args : { ...fromFile, ...resolved.args };
+    assertKnownArgs(target, args);
+    assertPathParamsPresent(target, args);
+    assertRequiredArgs(target, args, transport);
+    assertEnums(target, args);
+    const payload = await executeTool(target, args, transport);
 
     const writers = deps.writers ?? defaultWriters;
     const renderCtx: RenderContext = {
       json: ctx.json,
       writers,
-      args: resolved.args,
+      args,
       state: resolved.state,
       dispatchTool: (companionName, companionArgs) => {
         const companion = requireCompanion(entry.name, companionName);
@@ -154,7 +182,7 @@ function registerOne(
     if (enhancer?.render !== undefined) {
       await enhancer.render(payload, renderCtx);
     } else {
-      renderDefault(payload, { json: ctx.json, writers, args: resolved.args });
+      renderDefault(payload, { json: ctx.json, writers, args });
     }
   });
 }
@@ -280,6 +308,129 @@ export function assertPathParamsPresent(entry: RegistryEntry, args: Record<strin
     if (blank) {
       throw new CliError(`missing required argument '${kebab(name)}'`, ExitCode.usage);
     }
+  }
+}
+
+/**
+ * Enforces the tool's `inputSchema.required` before dispatch. The factory
+ * previously checked only path params, which was enough for reads; a write
+ * carries most of its contract in the body, and a missing field would
+ * otherwise surface as a server rejection instead of a usage error.
+ *
+ * `transport` is optional and, when given, lets a project-tenancy write's
+ * required `project_id` be satisfied by the injection `withProjectScope`
+ * (execute.ts) performs before dispatch — without it, a user with a
+ * configured default project would be told to pass a flag the CLI already
+ * knows the value of. `acceptsProjectScope` is the same predicate the
+ * injection itself is gated on, so the two can never disagree.
+ *
+ * Treats `null` the same as `undefined`: an explicit null in a --from-file
+ * document is exactly the kind of "missing" this validator exists to catch
+ * before it becomes a server rejection.
+ *
+ * A missing `project_id` under an api key gets an extra hint: `--project`
+ * only ever populates `transport.projectId` for a session credential
+ * (execute.ts's `transportFromContext`), so an api-key user who reaches for
+ * `--project` needs to be told to pass `--project-id` (or set `project_id` in
+ * `--from-file`) instead — the injection this validator otherwise defers to
+ * will never fire for them.
+ */
+export function assertRequiredArgs(
+  entry: RegistryEntry,
+  args: Record<string, unknown>,
+  transport?: { projectId?: string; auth?: { kind: string } },
+): void {
+  const missing = entry.inputSchema.required.filter((name) => {
+    const value = args[name];
+    if (value !== undefined && value !== null) return false;
+    if (name === "project_id" && transport?.projectId !== undefined && acceptsProjectScope(entry)) {
+      return false;
+    }
+    return true;
+  });
+  if (missing.length > 0) {
+    const hint =
+      missing.includes("project_id") && transport?.auth?.kind === "api-key"
+        ? " (an API key does not carry --project; pass --project-id or set project_id in --from-file)"
+        : "";
+    throw new CliError(
+      `missing required ${missing.length === 1 ? "field" : "fields"}: ${missing
+        .map((name) => `--${kebab(name)}`)
+        .join(", ")}${hint}`,
+      ExitCode.usage,
+    );
+  }
+}
+
+/**
+ * Enforces schema `enum` constraints on the merged args. `coerce` handles
+ * types, formats and numeric bounds for flag values but never enums, and a
+ * value supplied through `--from-file` bypasses `coerce` entirely — so this
+ * runs over the final args, whatever their source.
+ */
+export function assertEnums(entry: RegistryEntry, args: Record<string, unknown>): void {
+  for (const [prop, schema] of Object.entries(entry.inputSchema.properties)) {
+    // A `const` is a one-value enum spelled differently; the registry preserves
+    // both (an alert's `view` is `const: "SPANS"`), so treat them alike.
+    const allowed = Array.isArray(schema.enum)
+      ? schema.enum
+      : schema.const !== undefined
+        ? [schema.const]
+        : undefined;
+    if (allowed === undefined) continue;
+    const value = args[prop];
+    if (value === undefined) continue;
+    if (!allowed.includes(value)) {
+      throw new CliError(`--${kebab(prop)} must be one of: ${allowed.join(", ")}`, ExitCode.usage);
+    }
+  }
+}
+
+/**
+ * Reads a write command's body params from a JSON file, or from stdin when the
+ * path is `-`. Nested params (an alert's `renotify` object and `filters` array,
+ * a widget's `spec`) are impractical as shell-quoted flags, so the whole body
+ * travels as one document; individual flags still override single fields.
+ */
+export function readBodyFile(path: string): Record<string, unknown> {
+  let raw: string;
+  try {
+    raw = path === "-" ? readFileSync(0, "utf8") : readFileSync(path, "utf8");
+  } catch {
+    // Never interpolate the fs error: it adds errno noise without telling the
+    // user anything actionable beyond the path they typed.
+    throw new CliError(`--from-file could not read ${path}`, ExitCode.usage);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new CliError("--from-file must contain valid JSON", ExitCode.usage);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new CliError("--from-file must contain a JSON object of body params", ExitCode.usage);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * Validates that a --from-file document names only fields the target tool's
+ * schema knows about. Deliberately separate from `assertKnownArgs`: a stray
+ * key here is a typo in user-authored JSON — a usage error (exit 2) — not the
+ * enhancer bug `assertKnownArgs` guards against, which is an internal error
+ * (exit 1). Interpolates only the key names, never their values.
+ */
+function assertKnownBodyFields(entry: RegistryEntry, body: Record<string, unknown>): void {
+  const unknown = Object.keys(body).filter(
+    (key) => !Object.hasOwn(entry.inputSchema.properties, key),
+  );
+  if (unknown.length > 0) {
+    throw new CliError(
+      `--from-file: unknown ${unknown.length === 1 ? "field" : "fields"}: ${unknown
+        .map((name) => kebab(name))
+        .join(", ")}`,
+      ExitCode.usage,
+    );
   }
 }
 

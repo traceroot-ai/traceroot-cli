@@ -56,11 +56,28 @@ export const PLACEMENTS: Record<string, Placement> = {
     kind: "internal",
     note: "served by 'status', 'login', and 'doctor'; deliberately no standalone command",
   },
+  list_alerts: { kind: "command", path: ["alerts", "list"] },
+  get_alert: { kind: "command", path: ["alerts", "get"] },
+  create_alert: { kind: "command", path: ["alerts", "create"] },
+  list_dashboards: { kind: "command", path: ["dashboards", "list"] },
+  get_dashboard: { kind: "command", path: ["dashboards", "get"] },
+  create_dashboard: { kind: "command", path: ["dashboards", "create"] },
+  list_workspaces: { kind: "command", path: ["workspaces", "list"] },
+  list_projects: { kind: "command", path: ["projects", "list"] },
+  create_workspace: { kind: "command", path: ["workspaces", "create"] },
+  create_project: { kind: "command", path: ["projects", "create"] },
+  create_detector: { kind: "command", path: ["detectors", "create"] },
+  create_widget: { kind: "command", path: ["widgets", "create"] },
 };
 
 /** Group commands in `--help` order, with the description each group shows. */
 export const GROUPS: Record<string, string> = {
+  workspaces: "Discover your workspaces (user credentials)",
+  projects: "Discover your projects (user credentials)",
   traces: "Work with traces",
   detectors: "Work with detectors",
   findings: "Work with detector findings",
+  alerts: "Work with threshold alerts",
+  dashboards: "Work with dashboards",
+  widgets: "Work with dashboard widgets",
 };

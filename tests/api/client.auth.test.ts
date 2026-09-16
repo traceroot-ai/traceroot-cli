@@ -134,16 +134,4 @@ describe("createApiClient account-scope discovery", () => {
     await client.listWorkspaces();
     expect(calls[0]?.url).toBe("https://h/api/v1/public/workspaces");
   });
-
-  it("lists projects without a workspace filter", async () => {
-    const { client, calls } = clientWith(() => jsonResponse({ data: [] }));
-    await client.listProjects();
-    expect(calls[0]?.url).toBe("https://h/api/v1/public/projects");
-  });
-
-  it("lists projects filtered to one workspace", async () => {
-    const { client, calls } = clientWith(() => jsonResponse({ data: [] }));
-    await client.listProjects({ workspaceId: "ws 1" });
-    expect(calls[0]?.url).toBe("https://h/api/v1/public/projects?workspace_id=ws+1");
-  });
 });
