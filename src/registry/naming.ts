@@ -68,6 +68,19 @@ export const PLACEMENTS: Record<string, Placement> = {
   create_project: { kind: "command", path: ["projects", "create"] },
   create_detector: { kind: "command", path: ["detectors", "create"] },
   create_widget: { kind: "command", path: ["widgets", "create"] },
+  run_sql: { kind: "command", path: ["sql"] },
+  get_sql_schema: {
+    kind: "internal",
+    note: "no CLI surface yet: 'sql schema' needs a renderer for the table and column listing",
+  },
+  get_dashboard_data: {
+    kind: "internal",
+    note: "deliberately no CLI surface: a whole dashboard's data is read in the web app",
+  },
+  run_widget_query: {
+    kind: "internal",
+    note: "no CLI surface yet: a widget's own query belongs with the dashboards commands",
+  },
 };
 
 /** Group commands in `--help` order, with the description each group shows. */

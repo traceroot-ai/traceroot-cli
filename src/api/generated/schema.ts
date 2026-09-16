@@ -121,6 +121,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/dashboards/{dashboard_id}/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dashboard Data
+         * @description Answer one dashboard's query widgets, up to the per-request cap, for a window.
+         */
+        get: operations["get_dashboard_data"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/detectors": {
         parameters: {
             query?: never;
@@ -429,6 +449,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/sql": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Sql
+         * @description Run one read-only SQL query scoped to the caller's project.
+         *
+         *     Args:
+         *         auth (DualStampedAuth): Resolved credential context. Its ``project_id``
+         *             is the only project this query can ever see.
+         *         body (SqlRequest): The query, optional parameter values, and an optional
+         *             row cap that the service clamps down to the server ceiling.
+         *
+         *     Returns:
+         *         SqlResponse: Columns, rows, and whether more rows matched than were
+         *             returned.
+         *
+         *     Raises:
+         *         HTTPException: 400 when the query breaks the read-only contract or asks
+         *             for more than the server allows, 429 when no query slot is free,
+         *             500 when execution fails for a reason the caller cannot act on.
+         */
+        post: operations["run_sql"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/sql/schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Sql Schema
+         * @description Return the curated tables and columns available to public SQL.
+         *
+         *     Read from the same contract the validator and the rewriter derive from, so
+         *     what this advertises and what a query may reference cannot drift apart.
+         */
+        get: operations["get_sql_schema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/traces": {
         parameters: {
             query?: never;
@@ -648,6 +726,26 @@ export interface paths {
          *         CreateWidgetResponse: The created widget.
          */
         post: operations["create_widget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/widgets/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Widget Query
+         * @description Run a widget spec for a window and return its rows with the window answered.
+         */
+        post: operations["run_widget_query"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1047,13 +1145,19 @@ export interface components {
             output_schema?: unknown[] | null;
             /** Project Id */
             project_id: string;
-            /** Prompt */
-            prompt: string;
+            /**
+             * Prompt
+             * @description Detector instructions. Omit to adopt the canonical instructions of a standard template; required for any other template.
+             */
+            prompt?: string | null;
             /** Sample Rate */
             sample_rate?: number | null;
             /** Template */
             template: string;
-            /** Trigger Conditions */
+            /**
+             * Trigger Conditions
+             * @description Conditions gating WHICH completed traces the detector evaluates; omit or pass [] to evaluate every completed trace. Each condition is {field, op, value} (metadata also takes key): model_name/environment take =, !=; cost/total_tokens/duration_ms/errors take >, >=, <, <=, =; metadata takes =, contains. A condition is a deterministic pre-filter, not the flag decision - the prompt still judges every trace that passes.
+             */
             trigger_conditions?: unknown[] | null;
         };
         /**
@@ -1103,6 +1207,11 @@ export interface components {
         /**
          * CreateWidgetRequest
          * @description Body for creating a widget on a dashboard.
+         *
+         *     Unlike the other create bodies, ``spec`` is deep-validated here: it is a
+         *     structured contract the agent/CLI must compose (a wrong shape only
+         *     surfaces at render time otherwise), and the union below is what generated
+         *     tool schemas show the model.
          */
         CreateWidgetRequest: {
             /** Dashboard Id */
@@ -1113,10 +1222,121 @@ export interface components {
             } | null;
             /** Project Id */
             project_id: string;
-            /** Spec */
+            /**
+             * Spec
+             * @description The widget's content. For type "query": a chart spec (view/filters/metric/breakdown/display). For type "trace_feed": a trace-list feed spec (predicate filters + row limit).
+             */
             spec: {
-                [key: string]: unknown;
-            };
+                /**
+                 * Breakdown
+                 * @enum {string|null}
+                 */
+                breakdown?: "name" | "span_kind" | "model_name" | "environment" | null;
+                /**
+                 * WidgetDisplay
+                 * @description Controls how the query result is rendered on the dashboard.
+                 */
+                display: {
+                    /**
+                     * Type
+                     * @enum {string}
+                     */
+                    type: "line" | "area" | "bar" | "pie" | "number" | "table" | "histogram";
+                };
+                /** Filters */
+                filters?: {
+                    /**
+                     * Field
+                     * @enum {string}
+                     */
+                    field: "name" | "span_kind" | "status" | "model_name" | "environment" | "is_root" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "metadata";
+                    /** Key */
+                    key?: string;
+                    /**
+                     * Op
+                     * @enum {string}
+                     */
+                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    /** Value */
+                    value: ((string | number) | (number | string)) | string | number;
+                }[];
+                /**
+                 * WidgetMetric
+                 * @description The measure and aggregation function that define the widget's y-axis.
+                 */
+                metric: {
+                    /**
+                     * Agg
+                     * @enum {string}
+                     */
+                    agg: "count" | "sum" | "avg" | "min" | "max" | "p50" | "p75" | "p90" | "p95" | "p99" | "uniq";
+                    /**
+                     * Measure
+                     * @enum {string}
+                     */
+                    measure: "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "tokens_per_second" | "trace_id" | "count";
+                };
+                /**
+                 * View
+                 * @constant
+                 */
+                view: "spans";
+            } | {
+                /**
+                 * Breakdown
+                 * @enum {string|null}
+                 */
+                breakdown?: "name" | "user_id" | "session_id" | "environment" | null;
+                /**
+                 * WidgetDisplay
+                 * @description Controls how the query result is rendered on the dashboard.
+                 */
+                display: {
+                    /**
+                     * Type
+                     * @enum {string}
+                     */
+                    type: "line" | "area" | "bar" | "pie" | "number" | "table" | "histogram";
+                };
+                /** Filters */
+                filters?: {
+                    /**
+                     * Field
+                     * @enum {string}
+                     */
+                    field: "name" | "user_id" | "session_id" | "environment" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "error_count";
+                    /** Key */
+                    key?: string;
+                    /**
+                     * Op
+                     * @enum {string}
+                     */
+                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    /** Value */
+                    value: ((string | number) | (number | string)) | string | number;
+                }[];
+                /**
+                 * WidgetMetric
+                 * @description The measure and aggregation function that define the widget's y-axis.
+                 */
+                metric: {
+                    /**
+                     * Agg
+                     * @enum {string}
+                     */
+                    agg: "count" | "sum" | "avg" | "min" | "max" | "p50" | "p75" | "p90" | "p95" | "p99" | "uniq";
+                    /**
+                     * Measure
+                     * @enum {string}
+                     */
+                    measure: "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "count" | "error_count";
+                };
+                /**
+                 * View
+                 * @constant
+                 */
+                view: "traces";
+            } | components["schemas"]["TraceFeedSpec"];
             /** Title */
             title: string;
             /** Type */
@@ -1159,6 +1379,25 @@ export interface components {
             name: string;
             /** Role */
             role: string;
+        };
+        /**
+         * DashboardDataResponse
+         * @description A dashboard's query widgets, up to the per-request cap, answered for one window.
+         *
+         *     Widgets keep the dashboard's order. ``window`` is the window they were all
+         *     answered for — the one to name alongside any figure taken from here.
+         */
+        DashboardDataResponse: {
+            dashboard: components["schemas"]["DashboardSummary"];
+            /** Failed */
+            failed: number;
+            /** Queried */
+            queried: number;
+            /** Skipped */
+            skipped: number;
+            /** Widgets */
+            widgets: components["schemas"]["DashboardWidgetData"][];
+            window: components["schemas"]["QueryWindow"];
         };
         /**
          * DashboardDetail
@@ -1217,6 +1456,75 @@ export interface components {
             update_time: string;
             /** Widget Count */
             widget_count: number;
+        };
+        /**
+         * DashboardSummary
+         * @description The dashboard fields shared by the list and detail reads.
+         *
+         *     ``creator`` is the created-by user's display name (or email), resolved by
+         *     the internal route; it is None when the creating account was deleted.
+         */
+        DashboardSummary: {
+            /**
+             * Create Time
+             * Format: date-time
+             */
+            create_time: string;
+            /** Creator */
+            creator: string | null;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Update Time
+             * Format: date-time
+             */
+            update_time: string;
+        };
+        /**
+         * DashboardWidgetData
+         * @description One widget's answer within a dashboard data read.
+         *
+         *     ``status`` says what happened: ``ok`` carries the engine's columns/rows/
+         *     meta (a series carries every bucket of the window; every other display's
+         *     rows are capped, with ``truncated`` set when the cap bit); ``skipped``
+         *     is a feed widget (a trace list, not an aggregate — read those with
+         *     ``list_traces`` and the feed's filters); ``error`` carries a short reason
+         *     and no rows — a broken widget, or a query widget past the per-request cap
+         *     with a reason naming it — so neither fails the whole dashboard.
+         */
+        DashboardWidgetData: {
+            /** Columns */
+            columns?: string[] | null;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /** Meta */
+            meta?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rows */
+            rows?: unknown[][] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "skipped" | "error";
+            /** Title */
+            title: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            /** Type */
+            type: string;
         };
         /**
          * DashboardWidgetItem
@@ -1680,6 +1988,31 @@ export interface components {
             data: components["schemas"]["WorkspaceListItem"][];
         };
         /**
+         * QueryWindow
+         * @description The window a query was actually answered for.
+         *
+         *     ``range`` is the preset id the caller gave (or the default's, when they
+         *     gave nothing) and None for explicit bounds. ``clamped`` is True when the
+         *     plan's retention pulled ``start_time`` forward — the honest reason a
+         *     caller's window and the answered one differ.
+         */
+        QueryWindow: {
+            /** Clamped */
+            clamped: boolean;
+            /**
+             * End Time
+             * Format: date-time
+             */
+            end_time: string;
+            /** Range */
+            range: ("30m" | "1h" | "3h" | "6h" | "1d" | "7d" | "14d" | "30d" | "60d" | "90d") | null;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /**
          * RCAResult
          * @description Free-text root-cause analysis for a finding (Postgres ``detector_rcas``).
          */
@@ -1988,6 +2321,161 @@ export interface components {
             };
         };
         /**
+         * SqlColumn
+         * @description One column of a result, named and typed as ClickHouse reported it.
+         */
+        SqlColumn: {
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+        };
+        /**
+         * SqlRequest
+         * @description A public SQL query. The project is never part of this body.
+         *
+         *     ``extra="forbid"`` is the point rather than tidiness: scope is resolved from
+         *     the credential, so a body carrying ``project_id`` or a ``scope_*`` key is a
+         *     caller trying to choose a tenant. Forbidding unknown keys turns that into a
+         *     422 instead of a silently ignored field.
+         */
+        SqlRequest: {
+            /**
+             * Max Rows
+             * @description Rows to return, clamped down to the server ceiling
+             */
+            max_rows?: number | null;
+            /**
+             * Parameters
+             * @description Values for {name:Type} placeholders in the query
+             */
+            parameters?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Query
+             * @description A single read-only SELECT over the public schema
+             */
+            query: string;
+        };
+        /**
+         * SqlResponse
+         * @description A completed query, already trimmed to what the caller may receive.
+         */
+        SqlResponse: {
+            /** Columns */
+            columns: components["schemas"]["SqlColumn"][];
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /** Row Count */
+            row_count: number;
+            /** Rows */
+            rows: unknown[][];
+            /** Statistics */
+            statistics?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Truncated
+             * @description True when more rows matched than were returned
+             */
+            truncated: boolean;
+        };
+        /**
+         * SqlSchemaColumn
+         * @description A curated column a caller may select.
+         */
+        SqlSchemaColumn: {
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+        };
+        /**
+         * SqlSchemaResponse
+         * @description The curated analytical schema, which is all a caller can query.
+         */
+        SqlSchemaResponse: {
+            /** Tables */
+            tables: components["schemas"]["SqlSchemaTable"][];
+        };
+        /**
+         * SqlSchemaTable
+         * @description A logical table the gateway exposes.
+         */
+        SqlSchemaTable: {
+            /** Columns */
+            columns: components["schemas"]["SqlSchemaColumn"][];
+            /** Name */
+            name: string;
+        };
+        /**
+         * TraceFeedInPredicate
+         * @description Membership predicate: the field's value is one of the listed strings.
+         */
+        TraceFeedInPredicate: {
+            /** Field */
+            field: string;
+            /** Key */
+            key?: string;
+            /**
+             * Op
+             * @constant
+             */
+            op: "in";
+            /** Value */
+            value: string[];
+        };
+        /**
+         * TraceFeedNumericPredicate
+         * @description Numeric comparison predicate (equality or ordering) on a finite number.
+         */
+        TraceFeedNumericPredicate: {
+            /** Field */
+            field: string;
+            /** Key */
+            key?: string;
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "eq" | "gt" | "gte" | "lt" | "lte";
+            /** Value */
+            value: number;
+        };
+        /**
+         * TraceFeedSpec
+         * @description Spec for a ``trace_feed`` widget: a filtered live list of recent traces.
+         *
+         *     Mirrors the trace-list predicate wire format (canonical shape: what
+         *     ``isValidPredicate`` in frontend/ui/src/features/filters/predicate.ts
+         *     accepts and the dashboard seed produces). ``limit`` carries the trace-list
+         *     page-size bound; it defaults to 10 rows in the renderer when omitted.
+         */
+        TraceFeedSpec: {
+            /** Filters */
+            filters?: (components["schemas"]["TraceFeedInPredicate"] | components["schemas"]["TraceFeedNumericPredicate"] | components["schemas"]["TraceFeedTextPredicate"])[];
+            /** Limit */
+            limit?: number;
+        };
+        /**
+         * TraceFeedTextPredicate
+         * @description Text predicate: exact match or substring containment.
+         */
+        TraceFeedTextPredicate: {
+            /** Field */
+            field: string;
+            /** Key */
+            key?: string;
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "eq" | "contains";
+            /** Value */
+            value: string;
+        };
+        /**
          * UpsertResultRequest
          * @description Upsert one test-case result. Idempotent on (``run_id``, ``test_case_id``).
          *     ``trace_id`` may be null now and set on a later call (out-of-order arrival).
@@ -2074,6 +2562,108 @@ export interface components {
             workspace_id: string;
             /** Workspace Name */
             workspace_name: string | null;
+        };
+        /**
+         * WidgetDisplay
+         * @description Controls how the query result is rendered on the dashboard.
+         */
+        WidgetDisplay: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "line" | "area" | "bar" | "pie" | "number" | "table" | "histogram";
+        };
+        /**
+         * WidgetFilter
+         * @description A single filter predicate applied to a widget query.
+         */
+        WidgetFilter: {
+            /** Field */
+            field: string;
+            /** Key */
+            key?: string;
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+            /** Value */
+            value: ((string | number) | (number | string)) | string | number;
+        };
+        /**
+         * WidgetMetric
+         * @description The measure and aggregation function that define the widget's y-axis.
+         */
+        WidgetMetric: {
+            /**
+             * Agg
+             * @enum {string}
+             */
+            agg: "count" | "sum" | "avg" | "min" | "max" | "p50" | "p75" | "p90" | "p95" | "p99" | "uniq";
+            /** Measure */
+            measure: string;
+        };
+        /**
+         * WidgetQueryRequest
+         * @description Envelope that pairs a WidgetSpec with the time window to answer it for.
+         *
+         *     The window is either a ``range`` preset (the site picker's ids — how the
+         *     agent and the CLI describe one) or explicit ``start_time``/``end_time``
+         *     (how the dashboard page and the card previews do). Neither means the
+         *     site's default window; both, or one bound alone, is rejected. The rules
+         *     live in ``rest.services.date_presets.resolve_window`` so every query
+         *     surface applies the same ones.
+         */
+        WidgetQueryRequest: {
+            /** Bucket Seconds */
+            bucket_seconds?: number | null;
+            /** End Time */
+            end_time?: string | null;
+            /**
+             * Range
+             * @description A preset window ending now, by the site picker's id. Give this or explicit start_time/end_time; neither means the site's 24-hour default.
+             */
+            range?: ("30m" | "1h" | "3h" | "6h" | "1d" | "7d" | "14d" | "30d" | "60d" | "90d") | null;
+            spec: components["schemas"]["WidgetSpec"];
+            /** Start Time */
+            start_time?: string | null;
+        };
+        /**
+         * WidgetQueryResponse
+         * @description Query result returned to the frontend; meta carries display hints (e.g. granularity for time-series displays).
+         */
+        WidgetQueryResponse: {
+            /** Columns */
+            columns: string[];
+            /** Meta */
+            meta?: {
+                [key: string]: unknown;
+            };
+            /** Rows */
+            rows: unknown[][];
+            window: components["schemas"]["QueryWindow"];
+        };
+        /**
+         * WidgetSpec
+         * @description Full declarative specification of a single dashboard widget.
+         *
+         *     Mirrors the canonical zod ``WidgetSpecSchema``
+         *     (frontend/ui/src/features/dashboards/types.ts); the frontend
+         *     widget-spec-parity test guards the two against structural drift.
+         */
+        WidgetSpec: {
+            /** Breakdown */
+            breakdown?: string | null;
+            display: components["schemas"]["WidgetDisplay"];
+            /** Filters */
+            filters?: components["schemas"]["WidgetFilter"][];
+            metric: components["schemas"]["WidgetMetric"];
+            /**
+             * View
+             * @enum {string}
+             */
+            view: "spans" | "traces";
         };
         /**
          * WorkspaceListItem
@@ -2463,6 +3053,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardDetail"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Dashboard not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    get_dashboard_data: {
+        parameters: {
+            query?: {
+                /** @description A preset window ending now, by the site picker's id. Give this or explicit start_time/end_time; neither means the site's 24-hour default. */
+                range?: ("30m" | "1h" | "3h" | "6h" | "1d" | "7d" | "14d" | "30d" | "60d" | "90d") | null;
+                start_time?: string | null;
+                end_time?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                dashboard_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardDataResponse"];
                 };
             };
             /** @description Authentication failed */
@@ -3504,6 +4165,186 @@ export interface operations {
             };
         };
     };
+    run_sql: {
+        parameters: {
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SqlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlResponse"];
+                };
+            };
+            /** @description The query breaks the read-only contract, asked for more than the server allows, or the credential names no project */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The credential cannot access this project */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded, or too many queries are already running */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Query execution failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
+    get_sql_schema: {
+        parameters: {
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlSchemaResponse"];
+                };
+            };
+            /** @description The credential names no project */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The credential cannot access this project */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+        };
+    };
     list_traces: {
         parameters: {
             query?: {
@@ -4084,6 +4925,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    run_widget_query: {
+        parameters: {
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WidgetQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WidgetQueryResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        detail?: string;
+                    };
                 };
             };
         };
