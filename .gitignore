@@ -146,3 +146,7 @@ vite.config.ts.timestamp-*
 # Project-local credentials written by `traceroot login` (contains the API key).
 .traceroot/
 /node_modules
+
+# Agent planning artifacts (design docs, plans, per-plan ledgers) stay local.
+docs/superpowers/
+.superpowers/
