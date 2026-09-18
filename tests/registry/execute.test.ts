@@ -286,14 +286,14 @@ describe("executeTool project scoping", () => {
       expect((err as CliError).message).toContain("TRACEROOT_API_KEY is set");
       expect((err as CliError).message).toContain("--api-key");
     } finally {
-      if (prior === undefined) delete process.env.TRACEROOT_API_KEY;
+      if (prior === undefined) Reflect.deleteProperty(process.env, "TRACEROOT_API_KEY");
       else process.env.TRACEROOT_API_KEY = prior;
     }
   });
 
   it("stays quiet about the key when none is set", async () => {
     const prior = process.env.TRACEROOT_API_KEY;
-    delete process.env.TRACEROOT_API_KEY;
+    Reflect.deleteProperty(process.env, "TRACEROOT_API_KEY");
     try {
       const fake = createFakeFetch(() =>
         errorResponse(400, "project_id query parameter is required for user credentials"),
