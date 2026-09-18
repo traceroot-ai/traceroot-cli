@@ -292,7 +292,6 @@ describe("traceroot sql (through the registry factory)", () => {
 
   it.each([
     [["sql", "SELECT 1", "--csv", "--json"], "--json and --csv cannot be combined"],
-    [["sql"], "provide a query argument or --file <path>"],
     [["sql", "SELECT", "1"], "quote the whole query"],
     [["sql", "SELECT 1", "--max-rows", "0"], "--max-rows must be at least 1"],
   ])("refuses %j as a usage error without calling the API", async (argv, message) => {

@@ -205,6 +205,9 @@ export const sql: Enhancer = {
       )
       .addHelpText("after", EXAMPLES);
   },
+  // `traceroot sql` on its own is someone asking what the command does, not a
+  // query that forgot its text, so it gets the help every other command gives.
+  helpWhenBare: (input: ResolveInput) => input.extras.length === 0 && input.opts.file === undefined,
   resolveArgs(input: ResolveInput): Resolved {
     const csv = input.opts.csv === true;
     if (csv && input.json === true) {

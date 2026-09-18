@@ -136,6 +136,10 @@ function registerOne(
       extras: command.args.slice(declared),
       json: command.optsWithGlobals().json === true,
     };
+    // Commander's own path for a bare group, so the text, the stream (stderr)
+    // and the exit code are the same ones `traceroot traces` produces.
+    if (enhancer?.helpWhenBare?.(input) === true) command.help({ error: true });
+
     const resolved =
       enhancer?.resolveArgs !== undefined
         ? enhancer.resolveArgs(input)

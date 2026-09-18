@@ -63,5 +63,13 @@ export interface Enhancer {
    * consume the extras yourself (e.g. to produce a legacy-verbatim message).
    */
   resolveArgs?: (input: ResolveInput) => Resolved;
+  /**
+   * True when this invocation carries nothing to run, so the command should
+   * print its help the way a bare group does, instead of failing. A group with
+   * no subcommand already behaves that way because it has no action; a command
+   * that takes its input as an argument has an action, so without this it
+   * reaches `resolveArgs` with nothing and can only report an error.
+   */
+  helpWhenBare?: (input: ResolveInput) => boolean;
   render?: (payload: unknown, ctx: RenderContext) => void | Promise<void>;
 }
