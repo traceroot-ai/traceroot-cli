@@ -45,6 +45,9 @@ describe("executeTool", () => {
     [403, ExitCode.auth],
     [404, ExitCode.notFound],
     [422, ExitCode.usage],
+    // A rate limit succeeds if you wait, which is what `network` classifies. As
+    // `internal` it told a caller the tool was broken, so the retry never came.
+    [429, ExitCode.network],
     [500, ExitCode.internal],
   ])("maps HTTP %i to exit code %i with the server detail", async (status, exitCode) => {
     const fake = createFakeFetch(() => errorResponse(status, "nope"));

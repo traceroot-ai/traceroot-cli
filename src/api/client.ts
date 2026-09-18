@@ -95,6 +95,13 @@ export function exitCodeForStatus(status: number): number {
   if (status === 400 || status === 422) {
     return ExitCode.usage;
   }
+  // A rate limit is the one failure here that succeeds if you simply wait, which
+  // is what `network` means in this scheme: the class a caller retries. Left as
+  // `internal` it reads as a broken tool, so an agent gives up or retries at once
+  // and spends the next budget too.
+  if (status === 429) {
+    return ExitCode.network;
+  }
   return ExitCode.internal;
 }
 
