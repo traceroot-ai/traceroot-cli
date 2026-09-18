@@ -5,14 +5,12 @@ OpenAPI schema. `openapi.json` is the ONLY cross-repo artifact; nothing in the
 build graph imports the backend.
 
 - Backend source: `backend/rest/openapi/public.json`
-- Backend commit: `21d9fdb7` (branch `feat/sql-gateway-epic`, not yet on backend main)
-- sha256(openapi.json): `9689ce03e95d537f600fa4ee82f54b6cd660a73f21e168b89791d323c112be26`
-- Vendored on: 2026-09-16
+- Backend commit: `2f73589f` (branch `main`)
+- sha256(openapi.json): `3ec062174a320680ddb3e3b12f77cbdec12c6ea47f039804eb1adc64b159ab30`
+- Vendored on: 2026-09-18
 
-The snapshot comes from the integration branch that carries the public SQL
-operations, which is also where staging is deployed from, rather than from
-backend main. It is the same commit the vendored `@traceroot-ai/tools` build
-comes from (see `vendor/README.md`). Once that branch lands, refresh from main.
+The snapshot is backend main at the merge that brought in the public SQL
+operations. Its tool registry is the one `@traceroot-ai/tools` 0.3.0 carries.
 
 ## Refresh
 

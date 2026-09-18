@@ -2719,9 +2719,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2739,9 +2737,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -2862,9 +2858,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Alert not found */
@@ -2873,9 +2867,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2893,9 +2885,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -2927,9 +2917,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2947,9 +2935,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3061,9 +3047,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Dashboard not found */
@@ -3072,9 +3056,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3092,9 +3074,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3132,9 +3112,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Dashboard not found */
@@ -3143,9 +3121,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3163,9 +3139,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3203,9 +3177,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3223,9 +3195,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -3234,9 +3204,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3356,9 +3324,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3376,9 +3342,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -3387,9 +3351,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3423,9 +3385,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Finding not found */
@@ -3434,9 +3394,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3454,9 +3412,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -3465,9 +3421,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3501,9 +3455,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Finding not found */
@@ -3512,9 +3464,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3532,9 +3482,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -3543,9 +3491,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3579,9 +3525,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Detector not found */
@@ -3590,9 +3534,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3610,9 +3552,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -3621,9 +3561,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3665,9 +3603,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Not found */
@@ -3703,9 +3639,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3749,9 +3683,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Not found */
@@ -3787,9 +3719,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3833,9 +3763,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Not found */
@@ -3871,9 +3799,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -3905,9 +3831,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3925,9 +3849,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4045,9 +3967,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4065,9 +3985,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -4076,9 +3994,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4116,9 +4032,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Session not found */
@@ -4127,9 +4041,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4147,9 +4059,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -4158,9 +4068,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4259,9 +4167,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4338,9 +4244,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4388,9 +4292,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication failed */
@@ -4399,9 +4301,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4419,9 +4319,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -4430,9 +4328,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4465,9 +4361,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication failed */
@@ -4476,9 +4370,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Free plan limit exceeded */
@@ -4487,9 +4379,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Unsupported media type */
@@ -4498,9 +4388,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4518,9 +4406,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -4529,9 +4415,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4569,9 +4453,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication failed */
@@ -4580,9 +4462,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4600,9 +4480,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -4611,9 +4489,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4649,9 +4525,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication failed */
@@ -4660,9 +4534,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Trace not found */
@@ -4671,9 +4543,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4691,9 +4561,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -4702,9 +4570,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4740,9 +4606,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication failed */
@@ -4751,9 +4615,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Trace not found */
@@ -4762,9 +4624,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4782,9 +4642,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Authentication service unavailable */
@@ -4793,9 +4651,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4824,9 +4680,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4844,9 +4698,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4960,9 +4812,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4980,9 +4830,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -5011,9 +4859,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5031,9 +4877,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        detail?: string;
-                    };
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
