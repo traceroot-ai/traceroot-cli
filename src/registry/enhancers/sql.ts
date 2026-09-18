@@ -9,30 +9,6 @@ import { renderTable } from "../../render/table.js";
 import { onceOption } from "../flags.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
-const EXAMPLES = `
-Examples:
-  # spans in the last 24 hours
-  traceroot sql "SELECT count() AS spans FROM spans WHERE span_start_time >= now() - INTERVAL 1 DAY"
-
-  # p95 latency by model
-  traceroot sql "SELECT model_name, quantile(0.95)(duration_ms) AS p95_ms FROM spans WHERE model_name IS NOT NULL GROUP BY model_name ORDER BY p95_ms DESC"
-
-  # cost by model over the last week
-  traceroot sql "SELECT model_name, sum(cost) AS total_cost FROM spans WHERE span_start_time >= now() - INTERVAL 7 DAY GROUP BY model_name ORDER BY total_cost DESC"
-
-  # recent error spans, written to a CSV file
-  traceroot sql "SELECT span_id, name, status_message FROM spans WHERE status = 'ERROR' ORDER BY span_start_time DESC LIMIT 100" --csv --output errors.csv
-
-  # list the tables and columns a query may use
-  traceroot sql schema
-
-  # a bound parameter, and a query read from a file
-  traceroot sql "SELECT name, duration_ms FROM spans WHERE duration_ms > {min_ms:Int64} LIMIT 20" --param min_ms=5000
-  traceroot sql --file slow_spans.sql
-
-Output is a table by default, one JSON document with --json, or CSV with --csv.
---output writes any of them to a file instead of stdout.`;
-
 /** What the server accepts as a placeholder name. */
 const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -202,8 +178,7 @@ export const sql: Enhancer = {
         "--output <file>",
         "write the result to a file instead of stdout",
         onceOption("--output"),
-      )
-      .addHelpText("after", EXAMPLES);
+      );
   },
   // `traceroot sql` on its own is someone asking what the command does, not a
   // query that forgot its text, so it gets the help every other command gives.

@@ -173,7 +173,8 @@ describe("traceroot sql (no query)", () => {
     expect(sql.stdout).toBe("");
     expect(sql.stderr).toContain("Usage: traceroot sql [options] [query]");
     expect(sql.stderr).toContain("schema");
-    expect(sql.stderr).toContain("Examples:");
+    // No Examples section: no other command's help has one.
+    expect(sql.stderr).not.toContain("Examples:");
     expect(sql.status).toBe(group.status);
     expect(sql.stderr).not.toContain("provide a query argument");
   });
