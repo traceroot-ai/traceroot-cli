@@ -3,6 +3,7 @@ import type { SqlSchema } from "../../api/client.js";
 import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
+import { sanitize } from "./sql.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
 export interface RenderSqlSchemaOptions {
@@ -20,8 +21,10 @@ export function renderSqlSchema(schema: SqlSchema, opts: RenderSqlSchemaOptions)
     writeJson(schema, writers);
     return;
   }
+  // Sanitized like the query's own output: these names are written to a
+  // terminal, and nothing that reaches it is trusted to be free of escapes.
   const rows = schema.tables.flatMap((table) =>
-    table.columns.map((column) => [table.name, column.name, column.type]),
+    table.columns.map((column) => [table.name, column.name, column.type].map(sanitize)),
   );
   const rendered = renderTable(["TABLE", "COLUMN", "TYPE"], rows, {
     headerStyle: createStyler(writers.out).bold,

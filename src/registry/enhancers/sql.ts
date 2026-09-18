@@ -115,8 +115,8 @@ function escapeControl(ch: string): string {
   return `\\u${(ch.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`;
 }
 
-/** Text that came from the query or its data, made safe to write to a terminal. */
-function sanitize(text: string): string {
+/** Text that came over the wire, made safe to write to a terminal. */
+export function sanitize(text: string): string {
   return text.replace(CONTROL_CHARS, escapeControl);
 }
 

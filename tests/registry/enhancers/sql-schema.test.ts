@@ -60,6 +60,22 @@ describe("renderSqlSchema", () => {
     expect(lines).toHaveLength(6);
   });
 
+  it("escapes control characters in the names and types it prints", () => {
+    // The schema is the server's, but it still reaches a terminal, so it is
+    // sanitized on the same rule as the query's own output.
+    const out = new StringSink();
+    const schema: SqlSchema = {
+      tables: [{ name: "spans\u001b[2J", columns: [{ name: "a\u007fb", type: "String\u009b1m" }] }],
+    };
+    renderSqlSchema(schema, { json: false, writers: { out, err: new StringSink() } });
+    for (const cp of [0x1b, 0x7f, 0x9b]) {
+      expect(out.data).not.toContain(String.fromCodePoint(cp));
+    }
+    expect(out.data).toContain("spans\\u001b[2J");
+    expect(out.data).toContain("a\\u007fb");
+    expect(out.data).toContain("String\\u009b1m");
+  });
+
   it("emits the server's response unchanged with --json", () => {
     const out = new StringSink();
     renderSqlSchema(makeSchema(), { json: true, writers: { out, err: new StringSink() } });
