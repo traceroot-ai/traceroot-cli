@@ -172,7 +172,8 @@ describe("traceroot sql (no query)", () => {
     const group = runCli("traces");
     expect(sql.stdout).toBe("");
     expect(sql.stderr).toContain("Usage: traceroot sql [options] [query]");
-    expect(sql.stderr).toContain("schema");
+    // The subcommand line itself, not the word anywhere in the help text.
+    expect(sql.stderr).toMatch(/Commands:\s+schema\b/);
     // No Examples section: no other command's help has one.
     expect(sql.stderr).not.toContain("Examples:");
     // Both pinned: comparing only to `traces` would pass if both regressed to 0.

@@ -298,9 +298,13 @@ describe("executeTool project scoping", () => {
       const fake = createFakeFetch(() =>
         errorResponse(400, "project_id query parameter is required for user credentials"),
       );
-      const err = await executeTool(listSessions, {}, scopedTransport(fake.fetchImpl)).catch(
-        (e) => e,
-      );
+      // The same session transport as the positive case, so the unset key is
+      // the only difference between them and the one thing this pins.
+      const t = scopedTransport(fake.fetchImpl) as unknown as {
+        auth: { kind: string; getAccessToken?: () => Promise<string> };
+      };
+      t.auth = { kind: "token-provider", getAccessToken: async () => "jwt" };
+      const err = await executeTool(listSessions, {}, t as never).catch((e) => e);
       expect((err as CliError).message).not.toContain("TRACEROOT_API_KEY is set");
     } finally {
       if (prior !== undefined) process.env.TRACEROOT_API_KEY = prior;
