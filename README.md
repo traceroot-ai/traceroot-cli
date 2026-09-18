@@ -181,6 +181,9 @@ traceroot sql "SELECT span_id, name, status_message FROM spans WHERE status = 'E
 traceroot sql schema
 ```
 
+These output modes are for `traceroot sql`. `traceroot sql schema` prints a
+table, or JSON with `--json`, and refuses the query flags.
+
 | Output | How | Notes |
 | :-- | :-- | :-- |
 | Table | default | Column names as headers, `NULL` for nulls; the row count goes to stderr. |
