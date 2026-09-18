@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SqlResult, SqlSchema } from "../../../src/api/client.js";
 import { buildProgram } from "../../../src/cli.js";
 import { CliError, ExitCode } from "../../../src/output.js";
-import { SCHEMA_NOTE, renderSqlSchema } from "../../../src/registry/enhancers/sql-schema.js";
+import { renderSqlSchema } from "../../../src/registry/enhancers/sql-schema.js";
 import { GROUPS, PLACEMENTS } from "../../../src/registry/naming.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
 import { StringSink } from "../../helpers/stringSink.js";
@@ -48,23 +48,22 @@ function sqlCommand(program: Command): Command {
 }
 
 describe("renderSqlSchema", () => {
-  it("prints the preamble, then one row per column with its table and type", () => {
+  it("prints one row per column with its table and type, starting at the header", () => {
     const out = new StringSink();
     renderSqlSchema(makeSchema(), { json: false, writers: { out, err: new StringSink() } });
-    const [preamble, rest] = out.data.split("\n\n");
-    expect(preamble).toContain("Analytical schema");
-    expect(preamble).toContain("input and output payloads are not queryable");
-    const lines = rest.trimEnd().split("\n");
+    // No prose ahead of the table: stdout is data, so piping it to grep or awk
+    // gets rows and nothing else, as with every other command.
+    const lines = out.data.trimEnd().split("\n");
     expect(lines[0]).toMatch(/^TABLE\s+COLUMN\s+TYPE$/);
     expect(lines[1]).toMatch(/^spans\s+span_id\s+String$/);
     expect(lines[4]).toMatch(/^traces\s+trace_id\s+String$/);
     expect(lines).toHaveLength(6);
   });
 
-  it("emits the server's tables plus the note with --json", () => {
+  it("emits the server's response unchanged with --json", () => {
     const out = new StringSink();
     renderSqlSchema(makeSchema(), { json: true, writers: { out, err: new StringSink() } });
-    expect(JSON.parse(out.data)).toEqual({ ...makeSchema(), note: SCHEMA_NOTE });
+    expect(JSON.parse(out.data)).toEqual(makeSchema());
   });
 });
 
@@ -75,7 +74,7 @@ describe("traceroot sql schema", () => {
     expect(h.fake.calls).toHaveLength(1);
     expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/sql/schema");
     expect(h.fake.calls[0].init.method?.toUpperCase() ?? "GET").toBe("GET");
-    expect(h.out.data).toContain("Analytical schema");
+    expect(h.out.data).toMatch(/^TABLE\s+COLUMN\s+TYPE/);
   });
 
   it("still runs a query through `sql` itself now that it has a subcommand", async () => {

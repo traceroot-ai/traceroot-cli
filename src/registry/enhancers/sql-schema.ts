@@ -5,15 +5,6 @@ import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
-/** Shown above the table, so nobody goes looking for payload columns. */
-const PREAMBLE =
-  "Analytical schema: the tables and columns a query may reference.\n" +
-  "Span and trace input and output payloads are not queryable; exporting them may be offered separately later.";
-
-/** Carried in `--json`, where the preamble would otherwise be lost. */
-export const SCHEMA_NOTE =
-  "Analytical schema. Span and trace input and output payloads are not queryable.";
-
 export interface RenderSqlSchemaOptions {
   json: boolean;
   writers: Writers;
@@ -22,13 +13,13 @@ export interface RenderSqlSchemaOptions {
 /** Network-free output core for `sql schema`: the schema is already fetched. */
 export function renderSqlSchema(schema: SqlSchema, opts: RenderSqlSchemaOptions): void {
   const { writers } = opts;
+  // Data only, like every other command: the table on stdout starts at its
+  // header, and --json is the server's response unchanged. The schema itself
+  // shows the payload columns are absent, so there is nothing to explain first.
   if (opts.json) {
-    // Built as a plain object rather than typed as the response: `note` is the
-    // CLI's addition, not a field the server sends.
-    writeJson({ tables: schema.tables, note: SCHEMA_NOTE }, writers);
+    writeJson(schema, writers);
     return;
   }
-  writers.out.write(`${PREAMBLE}\n\n`);
   const rows = schema.tables.flatMap((table) =>
     table.columns.map((column) => [table.name, column.name, column.type]),
   );
