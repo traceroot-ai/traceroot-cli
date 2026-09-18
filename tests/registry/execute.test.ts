@@ -45,6 +45,9 @@ describe("executeTool", () => {
     [403, ExitCode.auth],
     [404, ExitCode.notFound],
     [422, ExitCode.usage],
+    // A rate limit succeeds if you wait, which is what `network` classifies. As
+    // `internal` it told a caller the tool was broken, so the retry never came.
+    [429, ExitCode.network],
     [500, ExitCode.internal],
   ])("maps HTTP %i to exit code %i with the server detail", async (status, exitCode) => {
     const fake = createFakeFetch(() => errorResponse(status, "nope"));
@@ -264,6 +267,44 @@ describe("executeTool project scoping", () => {
     // A 400 is the server rejecting the request as sent — here, no project was
     // supplied — so it is a usage error the hint tells the user how to fix.
     expect((err as CliError).exitCode).toBe(ExitCode.usage);
+  });
+
+  it("says so when a set TRACEROOT_API_KEY was outranked by a stored session", async () => {
+    // Without this, setting the key and getting an error about user credentials
+    // reads as a bug in the key rather than as the session winning.
+    const prior = process.env.TRACEROOT_API_KEY;
+    process.env.TRACEROOT_API_KEY = "tr-set-but-unused";
+    try {
+      const fake = createFakeFetch(() =>
+        errorResponse(400, "project_id query parameter is required for user credentials"),
+      );
+      const t = scopedTransport(fake.fetchImpl) as unknown as {
+        auth: { kind: string; getAccessToken?: () => Promise<string> };
+      };
+      t.auth = { kind: "token-provider", getAccessToken: async () => "jwt" };
+      const err = await executeTool(listSessions, {}, t as never).catch((e) => e);
+      expect((err as CliError).message).toContain("TRACEROOT_API_KEY is set");
+      expect((err as CliError).message).toContain("--api-key");
+    } finally {
+      if (prior === undefined) Reflect.deleteProperty(process.env, "TRACEROOT_API_KEY");
+      else process.env.TRACEROOT_API_KEY = prior;
+    }
+  });
+
+  it("stays quiet about the key when none is set", async () => {
+    const prior = process.env.TRACEROOT_API_KEY;
+    Reflect.deleteProperty(process.env, "TRACEROOT_API_KEY");
+    try {
+      const fake = createFakeFetch(() =>
+        errorResponse(400, "project_id query parameter is required for user credentials"),
+      );
+      const err = await executeTool(listSessions, {}, scopedTransport(fake.fetchImpl)).catch(
+        (e) => e,
+      );
+      expect((err as CliError).message).not.toContain("TRACEROOT_API_KEY is set");
+    } finally {
+      if (prior !== undefined) process.env.TRACEROOT_API_KEY = prior;
+    }
   });
 });
 

@@ -20,6 +20,8 @@ export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
 export type WorkspaceList = Ok200<paths["/api/v1/public/workspaces"]["get"]>;
+export type SqlResult = Ok200<paths["/api/v1/public/sql"]["post"]>;
+export type SqlSchema = Ok200<paths["/api/v1/public/sql/schema"]["get"]>;
 
 /**
  * How the client obtains the bearer for each request.
@@ -92,6 +94,13 @@ export function exitCodeForStatus(status: number): number {
   // — reading `internal` concludes the tool is broken instead of retrying.
   if (status === 400 || status === 422) {
     return ExitCode.usage;
+  }
+  // A rate limit is the one failure here that succeeds if you simply wait, which
+  // is what `network` means in this scheme: the class a caller retries. Left as
+  // `internal` it reads as a broken tool, so an agent gives up or retries at once
+  // and spends the next budget too.
+  if (status === 429) {
+    return ExitCode.network;
   }
   return ExitCode.internal;
 }

@@ -4,6 +4,8 @@ import { detectorsList } from "./detectors-list.js";
 import { findingsGet } from "./findings-get.js";
 import { findingsList } from "./findings-list.js";
 import { projectsList } from "./projects-list.js";
+import { sql } from "./sql.js";
+import { sqlSchema } from "./sql-schema.js";
 import { tracesExport } from "./traces-export.js";
 import { tracesGet } from "./traces-get.js";
 import { tracesList } from "./traces-list.js";
@@ -23,4 +25,6 @@ export const ENHANCERS: Partial<Record<string, Enhancer>> = {
   get_alert: alertsGet,
   list_workspaces: workspacesList,
   list_projects: projectsList,
+  run_sql: sql,
+  get_sql_schema: sqlSchema,
 };

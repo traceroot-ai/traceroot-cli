@@ -163,6 +163,35 @@ describe("--help placement (Global Options for subcommands)", () => {
   });
 });
 
+describe("traceroot sql (no query)", () => {
+  it("prints its help the way a bare command group does", () => {
+    // `sql` takes its query as an argument, so it has an action and used to
+    // reach it with nothing and fail. Every other command answers a bare call
+    // with help, and this one should too: same stream, same exit, same shape.
+    const sql = runCli("sql");
+    const group = runCli("traces");
+    expect(sql.stdout).toBe("");
+    expect(sql.stderr).toContain("Usage: traceroot sql [options] [query]");
+    expect(sql.stderr).toContain("schema");
+    // No Examples section: no other command's help has one.
+    expect(sql.stderr).not.toContain("Examples:");
+    // Both pinned: comparing only to `traces` would pass if both regressed to 0.
+    expect(sql.status).toBe(1);
+    expect(group.status).toBe(1);
+    expect(sql.stderr).not.toContain("provide a query argument");
+  });
+
+  it("still runs when a query is given, so help is only for the bare call", () => {
+    // Given a query the command must proceed to authentication, not print help.
+    // runCli carries no credentials, so reaching authentication means failing
+    // there, with the auth exit code rather than a usage or internal one.
+    const { stderr, status } = runCli("sql", "SELECT 1 FROM spans");
+    expect(stderr).not.toContain("Usage: traceroot sql");
+    expect(stderr).toContain("No credentials found");
+    expect(status).toBe(3);
+  });
+});
+
 describe("traceroot (no command)", () => {
   it("prints help to stderr and exits non-zero", () => {
     const { stdout, stderr, status } = runCli();
