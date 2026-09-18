@@ -19,7 +19,9 @@ describe("@traceroot-ai/tools package", () => {
         // The package guarantees a policy on every non-GET entry; the CLI
         // relies on policy.tenancy to decide project-scope injection.
         expect(entry.policy).toBeDefined();
-        expect(["none", "approval"]).toContain(entry.policy?.approvalClass);
+        // The package's own type declares all three; the CLI reads none of them
+        // today, so this pins the contract rather than any behaviour here.
+        expect(["none", "confirm", "approval"]).toContain(entry.policy?.approvalClass);
         expect(["account", "workspace", "project"]).toContain(entry.policy?.tenancy);
         expect(entry.bodyParams?.length ?? 0).toBeGreaterThan(0);
       }

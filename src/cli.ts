@@ -48,10 +48,11 @@ export function buildProgram(overrides: BuildOverrides = {}): Command {
       if (cmd.parent === null) {
         return []; // root has no "Global Options" section
       }
-      const globals: Option[] = [];
-      for (let ancestor: Command | null = cmd.parent; ancestor; ancestor = ancestor.parent) {
-        globals.push(...ancestor.options.filter(notHidden));
-      }
+      // Only the root's options are global. A command that is also a group
+      // (`sql`) has options of its own that its subcommands do not accept.
+      let root: Command = cmd;
+      while (root.parent !== null) root = root.parent;
+      const globals = root.options.filter(notHidden);
       globals.push(helpOption()); // subcommands: `--help` is a global flag
       return globals;
     },

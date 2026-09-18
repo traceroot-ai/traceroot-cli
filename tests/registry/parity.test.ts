@@ -24,9 +24,9 @@ function enabledToolNames(doc: OpenApiDoc): string[] {
 }
 
 describe("openapi.json / @traceroot-ai/tools parity", () => {
-  // A mismatch means the vendored dependency and the committed snapshot are out
-  // of step: bump/rebuild vendor/traceroot-ai-tools-*.tgz and/or refresh
-  // openapi.json (see OPENAPI.md), then rerun `npm run codegen`.
+  // A mismatch means the installed dependency and the committed snapshot are out
+  // of step: bump @traceroot-ai/tools and/or refresh openapi.json (see
+  // OPENAPI.md), then rerun `npm run codegen`.
   it("the snapshot's enabled x-tool names equal the installed registry's names", () => {
     const doc = JSON.parse(
       readFileSync(new URL("../../openapi.json", import.meta.url), "utf8"),
