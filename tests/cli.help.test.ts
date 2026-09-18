@@ -175,14 +175,20 @@ describe("traceroot sql (no query)", () => {
     expect(sql.stderr).toContain("schema");
     // No Examples section: no other command's help has one.
     expect(sql.stderr).not.toContain("Examples:");
-    expect(sql.status).toBe(group.status);
+    // Both pinned: comparing only to `traces` would pass if both regressed to 0.
+    expect(sql.status).toBe(1);
+    expect(group.status).toBe(1);
     expect(sql.stderr).not.toContain("provide a query argument");
   });
 
   it("still runs when a query is given, so help is only for the bare call", () => {
     // Given a query the command must proceed to authentication, not print help.
-    const { stderr } = runCli("sql", "SELECT 1 FROM spans");
+    // runCli carries no credentials, so reaching authentication means failing
+    // there, with the auth exit code rather than a usage or internal one.
+    const { stderr, status } = runCli("sql", "SELECT 1 FROM spans");
     expect(stderr).not.toContain("Usage: traceroot sql");
+    expect(stderr).toContain("No credentials found");
+    expect(status).toBe(3);
   });
 });
 
