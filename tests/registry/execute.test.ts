@@ -265,6 +265,44 @@ describe("executeTool project scoping", () => {
     // supplied — so it is a usage error the hint tells the user how to fix.
     expect((err as CliError).exitCode).toBe(ExitCode.usage);
   });
+
+  it("says so when a set TRACEROOT_API_KEY was outranked by a stored session", async () => {
+    // Without this, setting the key and getting an error about user credentials
+    // reads as a bug in the key rather than as the session winning.
+    const prior = process.env.TRACEROOT_API_KEY;
+    process.env.TRACEROOT_API_KEY = "tr-set-but-unused";
+    try {
+      const fake = createFakeFetch(() =>
+        errorResponse(400, "project_id query parameter is required for user credentials"),
+      );
+      const t = scopedTransport(fake.fetchImpl) as unknown as {
+        auth: { kind: string; getAccessToken?: () => Promise<string> };
+      };
+      t.auth = { kind: "token-provider", getAccessToken: async () => "jwt" };
+      const err = await executeTool(listSessions, {}, t as never).catch((e) => e);
+      expect((err as CliError).message).toContain("TRACEROOT_API_KEY is set");
+      expect((err as CliError).message).toContain("--api-key");
+    } finally {
+      if (prior === undefined) delete process.env.TRACEROOT_API_KEY;
+      else process.env.TRACEROOT_API_KEY = prior;
+    }
+  });
+
+  it("stays quiet about the key when none is set", async () => {
+    const prior = process.env.TRACEROOT_API_KEY;
+    delete process.env.TRACEROOT_API_KEY;
+    try {
+      const fake = createFakeFetch(() =>
+        errorResponse(400, "project_id query parameter is required for user credentials"),
+      );
+      const err = await executeTool(listSessions, {}, scopedTransport(fake.fetchImpl)).catch(
+        (e) => e,
+      );
+      expect((err as CliError).message).not.toContain("TRACEROOT_API_KEY is set");
+    } finally {
+      if (prior !== undefined) process.env.TRACEROOT_API_KEY = prior;
+    }
+  });
 });
 
 describe("transportFromContext project scoping", () => {

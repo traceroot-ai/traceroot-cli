@@ -214,6 +214,15 @@ function translate(err: unknown, transport: Transport, bearer: string, tool: str
     // names the backend op (`list_projects`); translate it into the CLI flags.
     if (message.includes("project_id query parameter is required")) {
       message = `${message}\nHint: run \`traceroot projects list\`, then pass --project <id> (or set TRACEROOT_PROJECT_ID).`;
+      // A stored session outranks TRACEROOT_API_KEY on purpose, so that a stray key
+      // in the environment cannot silently act as a different identity. The cost is
+      // that someone who sets the key deliberately, in CI or a script, gets this
+      // error about *user* credentials and nothing connects it to the key they set.
+      // Say it here rather than reorder the precedence: the key is project-scoped
+      // already, so if it had been used there would have been no error to explain.
+      if (transport.auth.kind === "token-provider" && process.env.TRACEROOT_API_KEY) {
+        message = `${message}\nNote: TRACEROOT_API_KEY is set but a stored session for this host took precedence. Pass --api-key to use the key, or run \`traceroot logout\` to drop the session.`;
+      }
     }
     // A query stopped by a server cap (time, memory, result size) is fixed by
     // asking for less, which the server's sentence does not say.
