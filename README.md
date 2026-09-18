@@ -136,9 +136,7 @@ where it goes. An API key is already scoped to one project and does not carry
 
 `traces`, `detectors`, `findings`, `alerts`, `dashboards`, `widgets`,
 `workspaces`, `projects`, and `sql` are generated from the tool registry shipped
-in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools)
-(vendored as a packed tarball until a release carries the SQL tools; see
-`vendor/README.md`):
+in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
 each entry's input schema drives its flags, and its response type drives the
 default rendering. Adding a new backend endpoint to the CLI is a registry bump
 plus one placement line in `src/registry/naming.ts` — no hand-written command
