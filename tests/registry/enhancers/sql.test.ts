@@ -223,6 +223,30 @@ describe("renderSqlResult", () => {
     expect(out).toContain("evil\\u001b[2Jname\\nnext");
   });
 
+  it("escapes DEL and C1 controls too, which JSON leaves literal", () => {
+    // U+009B is the 8-bit CSI; a terminal that honours C1 would act on it.
+    const result = makeResult({ rows: [["a\u007fb\u009bc\u0085d", 1]], row_count: 1 });
+    const { out } = render(result, {});
+    for (const cp of [0x7f, 0x9b, 0x85]) {
+      expect(out).not.toContain(String.fromCodePoint(cp));
+    }
+    expect(out).toContain("a\\u007fb\\u009bc\\u0085d");
+  });
+
+  it("escapes control characters in column headers, which come from the query's aliases", () => {
+    const result = makeResult({
+      columns: [
+        { name: "x\u001b[2Jy", type: "String" },
+        { name: "spans", type: "UInt64" },
+      ],
+      rows: [["v", 1]],
+      row_count: 1,
+    });
+    const { out } = render(result, {});
+    expect(out).not.toContain("\u001b");
+    expect(out.split("\n")[0]).toContain("x\\u001b[2Jy");
+  });
+
   it("renders CSV with --csv", () => {
     const { out } = render(makeResult(), { csv: true });
     expect(out).toBe("model_name,spans\ngpt-4o,12\n,3\n");

@@ -124,10 +124,26 @@ export function collectParam(
   return params;
 }
 
+/**
+ * One control character, written out so a terminal shows it rather than acts on
+ * it. JSON's own escape where it has one (`\n`, `\u001b`); `\uXXXX` otherwise,
+ * because JSON leaves DEL and the C1 range literal and a terminal can act on C1:
+ * U+009B is the 8-bit CSI, so passing it through would undo the whole escape.
+ */
+function escapeControl(ch: string): string {
+  const json = JSON.stringify(ch).slice(1, -1);
+  if (json !== ch) return json;
+  return `\\u${(ch.codePointAt(0) ?? 0).toString(16).padStart(4, "0")}`;
+}
+
+/** Text that came from the query or its data, made safe to write to a terminal. */
+function sanitize(text: string): string {
+  return text.replace(CONTROL_CHARS, escapeControl);
+}
+
 function tableCell(value: unknown): string {
   if (value === null || value === undefined) return "NULL";
-  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
-  return text.replace(CONTROL_CHARS, (ch) => JSON.stringify(ch).slice(1, -1));
+  return sanitize(typeof value === "object" ? JSON.stringify(value) : String(value));
 }
 
 export interface RenderSqlOptions {
@@ -151,7 +167,8 @@ export function renderSqlResult(result: SqlResult, opts: RenderSqlOptions): void
     const headerStyle =
       opts.output === undefined ? createStyler(writers.out).bold : (line: string) => line;
     const rows = result.rows.map((row) => names.map((_, col) => tableCell(row[col])));
-    text = `${renderTable(names, rows, { headerStyle })}\n`;
+    // Headers too: a column name is whatever alias the query gave it.
+    text = `${renderTable(names.map(sanitize), rows, { headerStyle })}\n`;
   }
 
   if (opts.output !== undefined) {
