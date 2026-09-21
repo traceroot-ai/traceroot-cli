@@ -19,6 +19,8 @@ interface Metric {
   unit?: string | null;
   /** How many cases carried this score or metric. */
   observed_count?: number | null;
+  /** numeric: a mean · boolean: the share true, as a 0–1 mean · categorical: no mean. */
+  value_type?: "numeric" | "boolean" | "categorical" | null;
 }
 
 interface Run {
@@ -119,7 +121,13 @@ function renderMetrics(run: Run, writers: Writers): void {
   const table = renderTable(
     ["METRIC", "VALUE", "UNIT", "CASES", ""],
     [
-      ...scores.map((m) => [m.name, metricValue(m), orDash(m.unit), orDash(m.observed_count), ""]),
+      ...scores.map((m) => [
+        m.name,
+        metricValue(m),
+        orDash(m.unit),
+        orDash(m.observed_count),
+        m.value_type === "boolean" ? "(share true)" : "",
+      ]),
       ...metrics.map((m) => [
         m.name,
         metricValue(m),
@@ -140,6 +148,7 @@ function renderMetrics(run: Run, writers: Writers): void {
  */
 export function metricValue(m: Metric): string {
   if (m.value !== null && m.value !== undefined) return num(m.value);
+  if (m.value_type === "categorical") return "categorical";
   return (m.observed_count ?? 0) > 0 ? "non-numeric" : "—";
 }
 

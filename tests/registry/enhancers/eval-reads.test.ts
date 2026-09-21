@@ -268,14 +268,19 @@ describe("evals runs get", () => {
         ...base,
         coverage: { mode: "full" },
         scores: [
-          { name: "accuracy", value: 0.9, observed_count: 25 },
-          { name: "verdict", value: null, observed_count: 25 },
-          { name: "judge", value: null, observed_count: 0 },
+          { name: "accuracy", value: 0.9, observed_count: 25, value_type: "numeric" },
+          { name: "verdict", value: null, observed_count: 25, value_type: "categorical" },
+          { name: "judge", value: null, observed_count: 0, value_type: "numeric" },
+          { name: "grounded", value: 0.8, observed_count: 25, value_type: "boolean" },
+          { name: "legacy", value: null, observed_count: 3 },
         ],
       },
       w,
     );
-    expect(out.data).toMatch(/verdict\s+non-numeric/);
+    expect(out.data).toMatch(/verdict\s+categorical/);
+    expect(out.data).toMatch(/grounded\s+0\.8\s+—\s+25\s+\(share true\)/);
+    // A server without value_type still never prints an observed score as absent.
+    expect(out.data).toMatch(/legacy\s+non-numeric/);
     expect(out.data).toMatch(/judge\s+—/);
     expect(out.data).toContain("CASES");
     expect(out.data).toMatch(/accuracy\s+0\.9\s+—\s+25/);
