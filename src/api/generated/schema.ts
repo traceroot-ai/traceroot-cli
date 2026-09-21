@@ -150,10 +150,12 @@ export interface paths {
         };
         /**
          * Read one dataset version and a page of its test cases
-         * @description Read an immutable snapshot: the version plus a PAGE of its cases.
+         * @description Read an immutable snapshot: the version plus its cases, whole or a page at a time.
          *
-         *     Paged because a version's case set is unbounded in practice — the publish path accepts
-         *     ~1000 changes and 8 MB. `input`/`expected` come back as native JSON values.
+         *     Paging is opt-in through `limit`, because the released SDKs pull a version with one
+         *     request and never follow `next_cursor`; a default page would silently truncate them.
+         *     A version's case set is unbounded in practice, so any other caller should page.
+         *     `input`/`expected` come back as native JSON values.
          */
         get: operations["get_dataset_version"];
         put?: never;
@@ -2377,12 +2379,24 @@ export interface components {
             direction: "higher_is_better" | "lower_is_better" | "none";
             /** Name */
             name: string;
-            /** Observed Count */
+            /**
+             * Observed Count
+             * @description How many results reported a usable value for this score or metric.
+             */
             observed_count: number;
             /** Unit */
             unit?: ("$" | "tok" | "ms" | "count") | null;
-            /** Value */
+            /**
+             * Value
+             * @description The run's own mean over observed_count results. Null when nothing was observed, and always for a categorical score or one that stored labels and numbers together.
+             */
             value?: number | null;
+            /**
+             * Value Type
+             * @description The scorer's declared kind, else the kind it stored. Every derived metric is numeric.
+             * @enum {string}
+             */
+            value_type: "numeric" | "boolean" | "categorical";
         };
         /**
          * ScoreInput
@@ -3461,10 +3475,12 @@ export interface operations {
     get_dataset_version: {
         parameters: {
             query?: {
-                /** @description Test cases per page */
-                limit?: number;
+                /** @description Test cases per page. Omit it, with no cursor, to receive the whole version in one response, as an SDK pulling the snapshot it will run does; pass it to page. */
+                limit?: number | null;
                 /** @description Opaque cursor from a previous page */
                 cursor?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path: {
@@ -3548,6 +3564,8 @@ export interface operations {
                 cursor?: string | null;
                 /** @description Case-insensitive substring of the name */
                 name?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -3622,7 +3640,10 @@ export interface operations {
     };
     get_dataset: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
             header?: never;
             path: {
                 dataset_id: string;
@@ -3703,6 +3724,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor from a previous page */
                 cursor?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
             };
             header?: never;
             path: {
@@ -4279,7 +4302,10 @@ export interface operations {
     };
     read_run: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
             header?: never;
             path: {
                 run_id: string;
@@ -4308,6 +4334,15 @@ export interface operations {
             };
             /** @description Authentication failed */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Outside the plan's retention window */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

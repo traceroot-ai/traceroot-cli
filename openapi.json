@@ -3751,6 +3751,7 @@
             "type": "string"
           },
           "observed_count": {
+            "description": "How many results reported a usable value for this score or metric.",
             "maximum": 9007199254740991.0,
             "minimum": 0.0,
             "title": "Observed Count",
@@ -3782,12 +3783,24 @@
                 "type": "null"
               }
             ],
+            "description": "The run's own mean over observed_count results. Null when nothing was observed, and always for a categorical score or one that stored labels and numbers together.",
             "title": "Value"
+          },
+          "value_type": {
+            "description": "The scorer's declared kind, else the kind it stored. Every derived metric is numeric.",
+            "enum": [
+              "numeric",
+              "boolean",
+              "categorical"
+            ],
+            "title": "Value Type",
+            "type": "string"
           }
         },
         "required": [
           "name",
           "direction",
+          "value_type",
           "observed_count"
         ],
         "title": "RunMetricItem",
@@ -6359,7 +6372,7 @@
     },
     "/api/v1/public/dataset-versions/{version_id}": {
       "get": {
-        "description": "Read an immutable snapshot: the version plus a PAGE of its cases.\n\nPaged because a version's case set is unbounded in practice \u2014 the publish path accepts\n~1000 changes and 8 MB. `input`/`expected` come back as native JSON values.",
+        "description": "Read an immutable snapshot: the version plus its cases, whole or a page at a time.\n\nPaging is opt-in through `limit`, because the released SDKs pull a version with one\nrequest and never follow `next_cursor`; a default page would silently truncate them.\nA version's case set is unbounded in practice, so any other caller should page.\n`input`/`expected` come back as native JSON values.",
         "operationId": "get_dataset_version",
         "parameters": [
           {
@@ -6372,17 +6385,23 @@
             }
           },
           {
-            "description": "Test cases per page",
+            "description": "Test cases per page. Omit it, with no cursor, to receive the whole version in one response, as an SDK pulling the snapshot it will run does; pass it to page.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
-              "default": 200,
-              "description": "Test cases per page",
-              "maximum": 1000,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Test cases per page. Omit it, with no cursor, to receive the whole version in one response, as an SDK pulling the snapshot it will run does; pass it to page.",
+              "title": "Limit"
             }
           },
           {
@@ -6403,6 +6422,24 @@
               ],
               "description": "Opaque cursor from a previous page",
               "title": "Cursor"
+            }
+          },
+          {
+            "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+              "title": "Project Id"
             }
           }
         ],
@@ -6488,7 +6525,7 @@
           "Offline Eval (Public)"
         ],
         "x-tool": {
-          "description": "Read one immutable dataset version and a page of its test cases (input, expected, metadata, and trace provenance where the case was captured from one). Results are paged: follow next_cursor until it is null.",
+          "description": "Read one immutable dataset version and its test cases (input, expected, metadata, and trace provenance where the case was captured from one). Always pass limit (for example 20) and follow next_cursor until it is null: without limit the whole version comes back in one response, which can be very large.",
           "enabled": true,
           "name": "get_dataset_version"
         }
@@ -6551,6 +6588,24 @@
               ],
               "description": "Case-insensitive substring of the name",
               "title": "Name"
+            }
+          },
+          {
+            "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+              "title": "Project Id"
             }
           }
         ],
@@ -6654,6 +6709,24 @@
             "schema": {
               "title": "Dataset Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+              "title": "Project Id"
             }
           }
         ],
@@ -6791,6 +6864,24 @@
               ],
               "description": "Opaque cursor from a previous page",
               "title": "Cursor"
+            }
+          },
+          {
+            "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+              "title": "Project Id"
             }
           }
         ],
@@ -7757,6 +7848,24 @@
               "title": "Run Id",
               "type": "string"
             }
+          },
+          {
+            "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project.",
+              "title": "Project Id"
+            }
           }
         ],
         "responses": {
@@ -7789,6 +7898,16 @@
               }
             },
             "description": "Authentication failed"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Outside the plan's retention window"
           },
           "404": {
             "content": {
