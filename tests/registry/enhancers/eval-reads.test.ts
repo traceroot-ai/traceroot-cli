@@ -311,6 +311,15 @@ describe("wiring", () => {
     );
   });
 
+  it("'datasets versions get' sends a bounded page even without --limit", async () => {
+    // Without a limit the server returns the whole version; the CLI reads one page.
+    const h = harness({ dataset_version_id: "dsv_1", items: [], next_cursor: null });
+    await h.run("datasets", "versions", "get", "dsv_1");
+    expect(h.fake.calls[0].url).toBe(
+      "https://api.test/api/v1/public/dataset-versions/dsv_1?limit=200",
+    );
+  });
+
   it("'evals runs get' sends the run id and nothing else", async () => {
     const h = harness({ evaluation_name: "e", status: "completed", coverage: { mode: "full" } });
     await h.run("evals", "runs", "get", "r_1");

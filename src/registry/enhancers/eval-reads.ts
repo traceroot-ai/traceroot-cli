@@ -18,12 +18,21 @@ export function limitBounds(tool: string): { serverDefault: number; max: number 
   };
 }
 
-/** The `--limit` flag, described with the bound the server actually enforces. */
-export function addLimitFlag(cmd: Command, tool: string, noun: string): Command {
+/**
+ * The `--limit` flag, described with the bound the server actually enforces.
+ * `cliDefault` is for a read whose server default is "everything" — the CLI
+ * always sends that default, so it is the one the help text names.
+ */
+export function addLimitFlag(
+  cmd: Command,
+  tool: string,
+  noun: string,
+  cliDefault?: number,
+): Command {
   const { serverDefault, max } = limitBounds(tool);
   return cmd.option(
     "--limit <n>",
-    `${noun} to return, 1-${max} (default ${serverDefault})`,
+    `${noun} to return, 1-${max} (default ${cliDefault ?? serverDefault})`,
     onceOption("--limit"),
   );
 }

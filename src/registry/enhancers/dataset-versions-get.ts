@@ -87,22 +87,29 @@ export function renderVersion(res: VersionResponse, state: PagedState, writers: 
   warnIfCapped(items.length, state.limit, "get_dataset_version", res.next_cursor, "cases", writers);
 }
 
+/**
+ * Cases per page when `--limit` is not given. Always sent: without a `limit`
+ * the server returns the WHOLE version (so SDK pulls are never silently cut),
+ * which in a terminal is thousands of table rows. The CLI reads one bounded
+ * page and says when there is more.
+ */
+export const DEFAULT_CASE_PAGE = 200;
+
 export const datasetVersionsGet: Enhancer = {
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "get_dataset_version", "test cases");
+    addLimitFlag(cmd, "get_dataset_version", "test cases", DEFAULT_CASE_PAGE);
   },
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
-    const limit = parseLimit(
-      input.opts.limit as string | undefined,
-      limitBounds("get_dataset_version").max,
-    );
+    const limit =
+      parseLimit(input.opts.limit as string | undefined, limitBounds("get_dataset_version").max) ??
+      DEFAULT_CASE_PAGE;
     return {
       args: {
         ...(input.positionals.version_id === undefined
           ? {}
           : { version_id: input.positionals.version_id }),
-        ...(limit === undefined ? {} : { limit }),
+        limit,
       },
       state: { limit } satisfies PagedState,
     };
