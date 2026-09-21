@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { onceOption, rejectExtras } from "../flags.js";
+import { rejectExtras } from "../flags.js";
 import { orDash } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
@@ -17,19 +17,6 @@ interface Metric {
   name: string;
   value?: number | null;
   unit?: string | null;
-  baseline_value?: number | null;
-  diff?: number | null;
-  paired_count?: number | null;
-  improvements?: number | null;
-  regressions?: number | null;
-}
-
-interface Comparison {
-  baseline_run_number?: number | null;
-  baseline_coverage: Coverage;
-  state: string;
-  trustworthy?: boolean | null;
-  reasons?: string[] | null;
 }
 
 interface Run {
@@ -43,10 +30,10 @@ interface Run {
   coverage: Coverage;
   scored_count?: number | null;
   task_error_count?: number | null;
+  scorer_error_count?: number | null;
   not_scored_count?: number | null;
   scores?: Metric[] | null;
   metrics?: Metric[] | null;
-  comparison?: Comparison | null;
   run_url?: string | null;
 }
 
@@ -57,12 +44,8 @@ function num(value: number | null | undefined): string {
   return value.toLocaleString("en-US", { maximumFractionDigits: digits });
 }
 
-function signed(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  const rendered = num(Math.abs(value));
-  if (value > 0) return `+${rendered}`;
-  if (value < 0) return `-${rendered}`;
-  return rendered;
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -99,19 +82,14 @@ export function renderRun(run: Run, writers: Writers): void {
   const finality = run.coverage.mode === "full" ? "" : "          NOT FINAL";
   w(`coverage   ${coverageLine(run.coverage)}${finality}`);
   w(
-    `results    ${run.scored_count ?? 0} scored · ${run.task_error_count ?? 0} task error${
-      (run.task_error_count ?? 0) === 1 ? "" : "s"
-    } · ${run.not_scored_count ?? 0} not scored`,
+    `results    ${run.scored_count ?? 0} scored · ${plural(run.task_error_count ?? 0, "task error")} · ${plural(
+      run.scorer_error_count ?? 0,
+      "scorer error",
+    )} · ${run.not_scored_count ?? 0} not scored`,
   );
   w("");
 
-  const comparison = run.comparison ?? null;
-  if (comparison === null) {
-    renderMetrics(run, writers);
-    logProgress("no baseline — pass --baseline <run-id> to compare", writers);
-  } else {
-    renderComparison(run, comparison, writers);
-  }
+  renderMetrics(run, writers);
 
   // Printed verbatim when present, never composed from an id and a host.
   if (run.run_url !== null && run.run_url !== undefined && run.run_url !== "") {
@@ -147,87 +125,19 @@ function renderMetrics(run: Run, writers: Writers): void {
   writers.out.write(`${table}\n`);
 }
 
-/**
- * The comparison, with its trust state ALWAYS attached.
- *
- * A diff without its trust state is the failure this exists to prevent: a subset
- * on either side makes the comparison exploratory, and the number still looks
- * like a verdict.
- */
-function renderComparison(run: Run, comparison: Comparison, writers: Writers): void {
-  const styler = createStyler(writers.out);
-  const w = (line: string) => writers.out.write(`${line}\n`);
-  // The run's own coverage is already on screen from the header block. Printing
-  // it again beside the baseline's read as two different facts and invited the
-  // reader to compare the wrong pair; only the baseline's is new here.
-  w(
-    `baseline   run #${orDash(comparison.baseline_run_number)} · ${coverageLine(comparison.baseline_coverage)}`,
-  );
-  const reasons = comparison.reasons ?? [];
-  const verdict =
-    comparison.trustworthy === true
-      ? comparison.state.toUpperCase()
-      : `${comparison.state.toUpperCase()} — not trustworthy${reasons.length > 0 ? `: ${reasons.join(", ")}` : ""}`;
-  w(`comparison ${verdict}`);
-  w("");
-
-  const all = [
-    ...(run.scores ?? []).map((m) => ({ m, derived: false })),
-    ...(run.metrics ?? []).map((m) => ({ m, derived: true })),
-  ];
-  if (all.length === 0) {
-    logProgress("no scores or metrics reported for this run", writers);
-    return;
-  }
-  const table = renderTable(
-    ["METRIC", "VALUE", "BASELINE", "DIFF", "PAIRED", "+/-", ""],
-    all.map(({ m, derived }) => {
-      // An absent metric still emits a row: absence is information, and a metric
-      // that disappeared between two runs is exactly what a reader needs to see.
-      const missing =
-        (m.value === null || m.value === undefined) &&
-        (m.baseline_value === null || m.baseline_value === undefined);
-      // The "mean per case" label survives into the comparison view. It is MORE
-      // load-bearing here, not less: a diff of +24 on a per-case mean and a diff
-      // of +24 on a run total are different claims, and the baseline column makes
-      // the number look like a verdict.
-      const notes = [derived ? "mean per case" : null, missing ? "not reported this run" : null]
-        .filter((n): n is string => n !== null)
-        .join(" · ");
-      return [
-        m.name,
-        num(m.value),
-        num(m.baseline_value),
-        signed(m.diff),
-        String(m.paired_count ?? 0),
-        `${m.improvements ?? 0}/${m.regressions ?? 0}`,
-        notes === "" ? "" : `(${notes})`,
-      ];
-    }),
-    { headerStyle: styler.bold },
-  );
-  writers.out.write(`${table}\n`);
-}
-
 export const evalRunsGet: Enhancer = {
   description:
-    "Read one evaluation run: its coverage, scores, derived metrics, and — with --baseline — " +
-    "a per-metric comparison carrying the trust state that says whether the diff is a verdict.",
-  flags(cmd: Command): void {
-    cmd.option(
-      "--baseline <run-id>",
-      "another run in this project to compare against",
-      onceOption("--baseline"),
-    );
-  },
+    "Read one evaluation run's summary: the dataset version it used, whether it is complete, " +
+    "partial or still running, how many cases it covered and how many errored or went " +
+    "unscored, its scores and per-case metrics, and its URL.",
+  // Deliberately no flags. Without this override the factory derives flags from
+  // the tool's input schema, and a contract that still carries `baseline` would
+  // put `--baseline` back. Comparison is a separate operation, not a read option.
+  flags(_cmd: Command): void {},
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
-    const baseline = input.opts.baseline as string | undefined;
     return {
-      args: {
-        ...(input.positionals.run_id === undefined ? {} : { run_id: input.positionals.run_id }),
-        ...(baseline === undefined ? {} : { baseline }),
-      },
+      args: input.positionals.run_id === undefined ? {} : { run_id: input.positionals.run_id },
     };
   },
   render(payload: unknown, ctx: RenderContext): void {

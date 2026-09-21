@@ -219,61 +219,29 @@ describe("evals runs get", () => {
     expect(out.data).toContain("1,205");
   });
 
-  it("offers the baseline flag rather than silently comparing nothing", () => {
-    const { w, err } = sinks();
-    renderRun({ ...base, coverage: { mode: "full" }, scores: [{ name: "accuracy", value: 1 }] }, w);
-    expect(err.data).toContain("--baseline");
-  });
-
-  it("never shows a diff without the trust state that qualifies it", () => {
-    const { w, out } = sinks();
-    renderRun(
-      {
-        ...base,
-        coverage: { mode: "first_n", selected_case_count: 25, dataset_case_count: 120 },
-        scores: [
-          {
-            name: "accuracy",
-            value: 0.84,
-            baseline_value: 0.8,
-            diff: 0.04,
-            paired_count: 25,
-            improvements: 6,
-            regressions: 2,
-          },
-        ],
-        comparison: {
-          baseline_run_number: 11,
-          baseline_coverage: { mode: "full", selected_case_count: 120, dataset_case_count: 120 },
-          state: "comparable",
-          trustworthy: false,
-          reasons: ["candidate covered a subset"],
-        },
-      },
-      w,
-    );
-    expect(out.data).toContain("COMPARABLE — not trustworthy");
-    expect(out.data).toContain("candidate covered a subset");
-    expect(out.data).toContain("+0.04");
-  });
-
-  it("emits a row for a metric that stopped being reported", () => {
+  it("counts every way a case can fail to score", () => {
     const { w, out } = sinks();
     renderRun(
       {
         ...base,
         coverage: { mode: "full" },
-        scores: [{ name: "accuracy", value: null, baseline_value: null }],
-        comparison: {
-          baseline_run_number: 11,
-          baseline_coverage: { mode: "full" },
-          state: "comparable",
-          trustworthy: true,
-        },
+        task_error_count: 2,
+        scorer_error_count: 1,
+        not_scored_count: 3,
+        scores: [{ name: "accuracy", value: 0.9 }],
       },
       w,
     );
-    expect(out.data).toContain("not reported this run");
+    expect(out.data).toContain("2 task errors");
+    expect(out.data).toContain("1 scorer error");
+    expect(out.data).toContain("3 not scored");
+    expect(out.data).not.toContain("NOT FINAL");
+  });
+
+  it("says nothing about comparing: v0.5 reads a run, it does not compare two", () => {
+    const { w, out, err } = sinks();
+    renderRun({ ...base, coverage: { mode: "full" }, scores: [{ name: "accuracy", value: 1 }] }, w);
+    expect(`${out.data}${err.data}`).not.toMatch(/baseline|compar/i);
   });
 });
 
@@ -298,6 +266,20 @@ describe("wiring", () => {
     expect(h.fake.calls[0].url).toBe(
       "https://api.test/api/v1/public/dataset-versions/dsv_1?limit=10",
     );
+  });
+
+  it("'evals runs get' sends the run id and nothing else", async () => {
+    const h = harness({ evaluation_name: "e", status: "completed", coverage: { mode: "full" } });
+    await h.run("evals", "runs", "get", "r_1");
+    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/evaluation-runs/r_1");
+  });
+
+  it("'evals runs get' has no --baseline: comparison is not part of the read", async () => {
+    const h = harness({ evaluation_name: "e", status: "completed", coverage: { mode: "full" } });
+    await expect(h.run("evals", "runs", "get", "r_1", "--baseline", "r_0")).rejects.toThrow(
+      /unknown option '--baseline'/,
+    );
+    expect(h.fake.calls).toHaveLength(0);
   });
 
   it("--json emits the response verbatim, with nothing derived added", async () => {
