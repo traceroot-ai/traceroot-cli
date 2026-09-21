@@ -3735,7 +3735,7 @@
         "type": "object"
       },
       "RunMetricItem": {
-        "description": "One score or one derived metric. Identical shape for both: they differ in\nPROVENANCE (a scorer reported it vs the platform derived it from the trace), not in\nstructure, and a client renders them the same way.\n\n``value``/``diff`` are null rather than 0 when nothing was observed \u2014 \"no data\" and\n\"measured zero\" are different facts and must stay distinguishable.",
+        "description": "One score or one derived metric. Identical shape for both: they differ in\nPROVENANCE (a scorer reported it vs the platform derived it from the trace), not in\nstructure, and a client renders them the same way.\n\n``value`` is the run's own mean over ``observed_count`` results, and null rather than\n0 when nothing was observed \u2014 \"no data\" and \"measured zero\" are different facts and\nmust stay distinguishable.",
         "properties": {
           "direction": {
             "enum": [
@@ -3749,6 +3749,12 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "observed_count": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Observed Count",
+            "type": "integer"
           },
           "unit": {
             "anyOf": [
@@ -3781,7 +3787,8 @@
         },
         "required": [
           "name",
-          "direction"
+          "direction",
+          "observed_count"
         ],
         "title": "RunMetricItem",
         "type": "object"
@@ -7739,7 +7746,7 @@
     },
     "/api/v1/public/evaluation-runs/{run_id}": {
       "get": {
-        "description": "Read a run's summary: identity, status, the dataset version it used, coverage, result counts, per-score and per-metric aggregates, and its URL. Summary only, so the response is bounded by scorer count rather than case count.",
+        "description": "Read a run's own summary: coverage, result counts, and per-score and per-metric\nmeans over the run's results.\n\nTyped rather than left to the catch-all so it appears in the published OpenAPI: an\nendpoint a CLI is expected to call must be in the contract the CLI generates from.\nSummary only, so the response is bounded by scorer count rather than case count.\n\nComparing two runs is not part of this read. It is a different question with its own\ntrust rules, and an optional parameter here would be too easily confused with the\nbaseline a run stores at registration.",
         "operationId": "read_run",
         "parameters": [
           {
@@ -7834,7 +7841,7 @@
           "Offline Eval (Public)"
         ],
         "x-tool": {
-          "description": "Read one evaluation run's summary: its status, the dataset version it used, dataset coverage (full run vs a first-N or sampled subset), result counts, per-scorer scores and per-case metrics (cost, tokens, LLM calls, duration) as means, and its URL.",
+          "description": "Read one evaluation run's summary: its status, dataset coverage (full run vs a first-N or sampled subset), result counts, and per-scorer scores and per-case metrics (cost, tokens, LLM calls, duration) as means, each with the number of results it was averaged over. A subset run's means describe only the cases it ran, not the dataset, and a run whose coverage is unknown cannot be read as covering the whole dataset.",
           "enabled": true,
           "name": "read_evaluation_run"
         }

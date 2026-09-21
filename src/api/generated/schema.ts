@@ -371,7 +371,16 @@ export interface paths {
         };
         /**
          * Read an evaluation run's summary
-         * @description Read a run's summary: identity, status, the dataset version it used, coverage, result counts, per-score and per-metric aggregates, and its URL. Summary only, so the response is bounded by scorer count rather than case count.
+         * @description Read a run's own summary: coverage, result counts, and per-score and per-metric
+         *     means over the run's results.
+         *
+         *     Typed rather than left to the catch-all so it appears in the published OpenAPI: an
+         *     endpoint a CLI is expected to call must be in the contract the CLI generates from.
+         *     Summary only, so the response is bounded by scorer count rather than case count.
+         *
+         *     Comparing two runs is not part of this read. It is a different question with its own
+         *     trust rules, and an optional parameter here would be too easily confused with the
+         *     baseline a run stores at registration.
          */
         get: operations["read_run"];
         put?: never;
@@ -2356,8 +2365,9 @@ export interface components {
          *     PROVENANCE (a scorer reported it vs the platform derived it from the trace), not in
          *     structure, and a client renders them the same way.
          *
-         *     ``value``/``diff`` are null rather than 0 when nothing was observed — "no data" and
-         *     "measured zero" are different facts and must stay distinguishable.
+         *     ``value`` is the run's own mean over ``observed_count`` results, and null rather than
+         *     0 when nothing was observed — "no data" and "measured zero" are different facts and
+         *     must stay distinguishable.
          */
         RunMetricItem: {
             /**
@@ -2367,6 +2377,8 @@ export interface components {
             direction: "higher_is_better" | "lower_is_better" | "none";
             /** Name */
             name: string;
+            /** Observed Count */
+            observed_count: number;
             /** Unit */
             unit?: ("$" | "tok" | "ms" | "count") | null;
             /** Value */
