@@ -65,6 +65,29 @@ describe("datasets list", () => {
     expect(err.data).toContain("--limit");
   });
 
+  it("trusts a null next_cursor over an exactly full page", () => {
+    // 50 is the server's default page size: a full page with no cursor is the
+    // last page, not a truncated one.
+    const { w, err } = sinks();
+    const datasets = Array.from({ length: 50 }, (_, i) => ({
+      dataset_id: `ds_${i}`,
+      name: `d${i}`,
+    }));
+    renderDatasetList({ datasets, next_cursor: null }, {}, w);
+    expect(err.data).toContain("50 datasets");
+    expect(err.data).not.toContain("there are more");
+  });
+
+  it("falls back to page size only when the server sends no cursor field", () => {
+    const { w, err } = sinks();
+    const datasets = Array.from({ length: 50 }, (_, i) => ({
+      dataset_id: `ds_${i}`,
+      name: `d${i}`,
+    }));
+    renderDatasetList({ datasets }, {}, w);
+    expect(err.data).toContain("there are more");
+  });
+
   it("stays quiet when the server reports no next page", () => {
     const { w, err } = sinks();
     renderDatasetList({ datasets: [{ dataset_id: "ds_1", name: "a" }], next_cursor: null }, {}, w);

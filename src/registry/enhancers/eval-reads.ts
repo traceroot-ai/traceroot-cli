@@ -70,10 +70,11 @@ export function countLine(count: number, noun: string, writers: Writers): void {
  * so a result set larger than one page has an unreachable tail — and the only
  * dishonest option is to print a full-looking table and say nothing.
  *
- * Triggered by evidence rather than arithmetic: a `next_cursor` is the server
- * saying there is more. The "page looks exactly full" fallback catches a server
- * that sends none, at the cost of an occasional false positive on an exactly
- * full last page, which is the safe direction to be wrong in.
+ * Triggered by evidence rather than arithmetic. When the response carries
+ * `next_cursor` at all, it is the answer: a string means more, `null` means this
+ * was the last page — even when that page happens to be exactly full. Only a
+ * response with no `next_cursor` field falls back to "the page came back full",
+ * where an occasional false positive is the safe direction to be wrong in.
  */
 export function warnIfCapped(
   received: number,
@@ -89,7 +90,9 @@ export function warnIfCapped(
   // look full and warn on every call, which trains people to ignore the warning.
   const pageSize = requested ?? serverDefault;
   const hasMore =
-    (typeof nextCursor === "string" && nextCursor !== "") || (received > 0 && received >= pageSize);
+    nextCursor === undefined
+      ? received > 0 && received >= pageSize
+      : typeof nextCursor === "string" && nextCursor !== "";
   if (!hasMore) return;
   const ceiling = requested === undefined ? "" : ` (--limit ${requested})`;
   logWarn(
