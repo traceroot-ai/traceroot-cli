@@ -261,16 +261,22 @@ describe("evals runs get", () => {
     expect(out.data).not.toContain("NOT FINAL");
   });
 
-  it("shows how many cases each score covered", () => {
+  it("tells a categorical score apart from one nothing reported", () => {
     const { w, out } = sinks();
     renderRun(
       {
         ...base,
         coverage: { mode: "full" },
-        scores: [{ name: "accuracy", value: 0.9, observed_count: 25 }],
+        scores: [
+          { name: "accuracy", value: 0.9, observed_count: 25 },
+          { name: "verdict", value: null, observed_count: 25 },
+          { name: "judge", value: null, observed_count: 0 },
+        ],
       },
       w,
     );
+    expect(out.data).toMatch(/verdict\s+non-numeric/);
+    expect(out.data).toMatch(/judge\s+—/);
     expect(out.data).toContain("CASES");
     expect(out.data).toMatch(/accuracy\s+0\.9\s+—\s+25/);
   });

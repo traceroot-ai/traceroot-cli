@@ -119,10 +119,10 @@ function renderMetrics(run: Run, writers: Writers): void {
   const table = renderTable(
     ["METRIC", "VALUE", "UNIT", "CASES", ""],
     [
-      ...scores.map((m) => [m.name, num(m.value), orDash(m.unit), orDash(m.observed_count), ""]),
+      ...scores.map((m) => [m.name, metricValue(m), orDash(m.unit), orDash(m.observed_count), ""]),
       ...metrics.map((m) => [
         m.name,
-        num(m.value),
+        metricValue(m),
         orDash(m.unit),
         orDash(m.observed_count),
         "(mean per case)",
@@ -131,6 +131,16 @@ function renderMetrics(run: Run, writers: Writers): void {
     { headerStyle: styler.bold },
   );
   writers.out.write(`${table}\n`);
+}
+
+/**
+ * A metric's value, keeping "nothing observed" and "observed but not a number"
+ * apart. A categorical score comes back as `value: null` with cases behind it;
+ * printing `—` there would claim no case carried it, when every one did.
+ */
+export function metricValue(m: Metric): string {
+  if (m.value !== null && m.value !== undefined) return num(m.value);
+  return (m.observed_count ?? 0) > 0 ? "non-numeric" : "—";
 }
 
 export const evalRunsGet: Enhancer = {
