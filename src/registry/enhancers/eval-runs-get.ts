@@ -17,6 +17,8 @@ interface Metric {
   name: string;
   value?: number | null;
   unit?: string | null;
+  /** How many cases carried this score or metric. */
+  observed_count?: number | null;
 }
 
 interface Run {
@@ -115,10 +117,16 @@ function renderMetrics(run: Run, writers: Writers): void {
   }
   const styler = createStyler(writers.out);
   const table = renderTable(
-    ["METRIC", "VALUE", "UNIT", ""],
+    ["METRIC", "VALUE", "UNIT", "CASES", ""],
     [
-      ...scores.map((m) => [m.name, num(m.value), orDash(m.unit), ""]),
-      ...metrics.map((m) => [m.name, num(m.value), orDash(m.unit), "(mean per case)"]),
+      ...scores.map((m) => [m.name, num(m.value), orDash(m.unit), orDash(m.observed_count), ""]),
+      ...metrics.map((m) => [
+        m.name,
+        num(m.value),
+        orDash(m.unit),
+        orDash(m.observed_count),
+        "(mean per case)",
+      ]),
     ],
     { headerStyle: styler.bold },
   );

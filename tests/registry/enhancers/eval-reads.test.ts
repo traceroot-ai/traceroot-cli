@@ -261,6 +261,20 @@ describe("evals runs get", () => {
     expect(out.data).not.toContain("NOT FINAL");
   });
 
+  it("shows how many cases each score covered", () => {
+    const { w, out } = sinks();
+    renderRun(
+      {
+        ...base,
+        coverage: { mode: "full" },
+        scores: [{ name: "accuracy", value: 0.9, observed_count: 25 }],
+      },
+      w,
+    );
+    expect(out.data).toContain("CASES");
+    expect(out.data).toMatch(/accuracy\s+0\.9\s+—\s+25/);
+  });
+
   it("says nothing about comparing: v0.5 reads a run, it does not compare two", () => {
     const { w, out, err } = sinks();
     renderRun({ ...base, coverage: { mode: "full" }, scores: [{ name: "accuracy", value: 1 }] }, w);
