@@ -25,16 +25,36 @@ type CommandPlacement = Extract<Placement, { kind: "command" }>;
 
 const registryByName = new Map(REGISTRY.map((entry) => [entry.name, entry]));
 
+/**
+ * The command group at `path`, creating each level that does not exist yet.
+ *
+ * `path` is the group's segments, and its description is looked up under the
+ * space-joined form — so `["datasets", "versions"]` reads its help text from
+ * `GROUPS["datasets versions"]`. Nesting exists because some resources are
+ * genuinely two deep (a dataset's versions, an evaluation's runs) and naming
+ * them flat would either collide or abbreviate into nonsense.
+ */
 export function ensureGroup(
   program: Command,
-  name: string,
+  path: string | string[],
   groups: Record<string, string> = GROUPS,
 ): Command {
-  const existing = program.commands.find((cmd) => cmd.name() === name);
-  if (existing !== undefined) return existing;
-  const description = groups[name];
-  if (description === undefined) throw new Error(`no group description for '${name}'`);
-  return program.command(name).description(description).helpCommand(false);
+  const segments = typeof path === "string" ? path.split(" ") : path;
+  let parent = program;
+  const walked: string[] = [];
+  for (const name of segments) {
+    walked.push(name);
+    const existing = parent.commands.find((cmd) => cmd.name() === name);
+    if (existing !== undefined) {
+      parent = existing;
+      continue;
+    }
+    const key = walked.join(" ");
+    const description = groups[key];
+    if (description === undefined) throw new Error(`no group description for '${key}'`);
+    parent = parent.command(name).description(description).helpCommand(false);
+  }
+  return parent;
 }
 
 export function registerRegistryCommands(program: Command, deps: RegistryDeps = {}): void {
@@ -67,7 +87,9 @@ function registerOne(
   deps: RegistryDeps,
 ): void {
   const parent =
-    placement.path.length === 2 ? ensureGroup(program, placement.path[0], deps.groups) : program;
+    placement.path.length > 1
+      ? ensureGroup(program, placement.path.slice(0, -1), deps.groups)
+      : program;
   const name = placement.path[placement.path.length - 1] as string;
   const enhancer: Enhancer | undefined = ENHANCERS[entry.name];
   const positionals = pathParams(entry);

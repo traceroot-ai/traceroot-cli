@@ -16,11 +16,15 @@ export function registerCommands(program: Command, deps: RegistryDeps = {}): voi
   registerLogin(program);
   registerLogout(program);
   registerStatus(program);
-  // Pre-create every command group (in GROUPS order) so `--help` lists groups
-  // in a fixed order, regardless of which register* below attaches subcommands
-  // to a group first.
+  // Pre-create every TOP-LEVEL command group (in GROUPS order) so `--help` lists
+  // groups in a fixed order, regardless of which register* below attaches
+  // subcommands to a group first. Nested groups are deliberately left to form on
+  // demand, in placement order, so a subgroup sits among its siblings rather
+  // than jumping ahead of the commands it belongs beside.
   const groups = deps.groups ?? GROUPS;
-  for (const group of Object.keys(groups)) ensureGroup(program, group, groups);
+  for (const group of Object.keys(groups)) {
+    if (!group.includes(" ")) ensureGroup(program, group, groups);
+  }
   registerRegistryCommands(program, deps);
   registerSkills(program);
   registerInstrument(program);

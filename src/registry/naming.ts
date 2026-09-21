@@ -9,10 +9,11 @@
 export type Placement =
   | {
       kind: "command";
-      /** [group, subcommand] or [top-level name]. Positional arguments are
-       * derived by the factory from the tool's path template ({placeholders}),
-       * so they are never declared here. */
-      path: [string, string] | [string];
+      /** [top-level name], [group, subcommand], or [group, subgroup, subcommand].
+       * Every segment but the last is a group and needs a GROUPS entry under its
+       * space-joined path. Positional arguments are derived by the factory from
+       * the tool's path template ({placeholders}), so they are never declared here. */
+      path: [string] | [string, string] | [string, string, string];
     }
   | {
       /** Dispatched by another command's enhancer; never gets its own command. */
@@ -80,7 +81,11 @@ export const PLACEMENTS: Record<string, Placement> = {
   },
 };
 
-/** Group commands in `--help` order, with the description each group shows. */
+/**
+ * Group commands in `--help` order, with the description each group shows.
+ * A nested group is keyed by its space-joined path ("datasets versions"), and
+ * must be listed after its parent so `--help` ordering follows declaration.
+ */
 export const GROUPS: Record<string, string> = {
   workspaces: "Discover your workspaces (user credentials)",
   projects: "Discover your projects (user credentials)",
