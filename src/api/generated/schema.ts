@@ -141,6 +141,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/dataset-versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one dataset version and a page of its test cases
+         * @description Read an immutable snapshot: the version plus a PAGE of its cases.
+         *
+         *     Paged because a version's case set is unbounded in practice — the publish path accepts
+         *     ~1000 changes and 8 MB. `input`/`expected` come back as native JSON values.
+         */
+        get: operations["get_dataset_version"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the project's evaluation datasets
+         * @description List datasets, newest first. `next_cursor` is null on the last page.
+         */
+        get: operations["list_datasets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one evaluation dataset
+         * @description Read one dataset. `current_dataset_version_id` is null until a version is published.
+         */
+        get: operations["get_dataset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/datasets/{dataset_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a dataset's published versions
+         * @description List versions newest-first, each with its case count and whether it is current.
+         */
+        get: operations["list_dataset_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/detectors": {
         parameters: {
             query?: never;
@@ -273,6 +356,26 @@ export interface paths {
          * @description Register/start a run. Idempotent on ``client_run_id`` within an evaluation.
          */
         post: operations["register_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/evaluation-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read an evaluation run's summary
+         * @description Read a run's summary: identity, status, the dataset version it used, coverage, result counts, per-score and per-metric aggregates, and its URL. Summary only, so the response is bounded by scorer count rather than case count.
+         */
+        get: operations["read_run"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1750,6 +1853,24 @@ export interface components {
             trace_id: string;
         };
         /**
+         * GetDatasetVersionResponse
+         * @description A version snapshot: the version's identity plus a PAGE of its cases.
+         */
+        GetDatasetVersionResponse: {
+            /** Dataset Id */
+            dataset_id: string;
+            /** Dataset Version Id */
+            dataset_version_id: string;
+            /** Items */
+            items: components["schemas"]["PublicTestCase"][];
+            /** Label */
+            label: string | null;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Version Number */
+            version_number: number;
+        };
+        /**
          * GitContext
          * @description git_context.json: repo/ref + per-span source locations.
          */
@@ -1789,6 +1910,20 @@ export interface components {
             file_key: string;
             /** Status */
             status: string;
+        };
+        /** ListDatasetVersionsResponse */
+        ListDatasetVersionsResponse: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Versions */
+            versions: components["schemas"]["PublicDatasetVersion"][];
+        };
+        /** ListDatasetsResponse */
+        ListDatasetsResponse: {
+            /** Datasets */
+            datasets: components["schemas"]["PublicDataset"][];
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /**
          * PaginationMeta
@@ -1836,6 +1971,52 @@ export interface components {
             data: components["schemas"]["DashboardListItem"][];
         };
         /**
+         * PublicDataset
+         * @description A dataset as the public API describes it.
+         *
+         *     Every field is REQUIRED and nullable rather than optional: the route always emits all
+         *     of them, and a default here would say the key may be absent, which is a different
+         *     contract from "present and null". The shape roster compares this to the Zod side
+         *     field-for-field, so the two cannot drift apart on that distinction.
+         *
+         *     ``dataset_id`` is the id a CLIENT addresses the dataset by — its own
+         *     ``client_dataset_id`` when it created the dataset, or the row id for one authored in
+         *     the UI. ``key`` is the pre-image of that id, so a pulled dataset recovers its key when
+         *     key and name differ.
+         *
+         *     No case count: no dataset read computes one, and deriving it would need an N+1 over
+         *     versions. It lives on a version, where it is one grouped aggregate.
+         */
+        PublicDataset: {
+            /** Current Dataset Version Id */
+            current_dataset_version_id: string | null;
+            /** Dataset Id */
+            dataset_id: string;
+            /** Description */
+            description: string | null;
+            /** Key */
+            key: string | null;
+            /** Name */
+            name: string;
+        };
+        /** PublicDatasetVersion */
+        PublicDatasetVersion: {
+            /** Case Count */
+            case_count: number;
+            /** Created At */
+            created_at: string;
+            /** Dataset Version Id */
+            dataset_version_id: string;
+            /** Is Current */
+            is_current: boolean;
+            /** Label */
+            label: string | null;
+            /** Note */
+            note: string | null;
+            /** Version Number */
+            version_number: number;
+        };
+        /**
          * PublicDetectorListResponse
          * @description Paginated list of the project's detectors for the public API.
          */
@@ -1864,6 +2045,27 @@ export interface components {
         PublicProjectListResponse: {
             /** Data */
             data: components["schemas"]["ProjectListItem"][];
+        };
+        /**
+         * PublicTestCase
+         * @description One test case in a version snapshot.
+         *
+         *     ``input``/``expected``/``metadata`` are NATIVE JSON values — an object stays an
+         *     object, a JSON-looking string stays a string — so they are ``Any``, not ``str``.
+         */
+        PublicTestCase: {
+            /** Expected */
+            expected: unknown;
+            /** Input */
+            input: unknown;
+            /** Metadata */
+            metadata: unknown;
+            /** Source Span Id */
+            source_span_id: string | null;
+            /** Source Trace Id */
+            source_trace_id: string | null;
+            /** Test Case Id */
+            test_case_id: string;
         };
         /**
          * PublicTraceDetailResponse
@@ -2023,6 +2225,65 @@ export interface components {
             status: string;
         };
         /**
+         * ReadRunResponse
+         * @description A run's SUMMARY — deliberately no per-case rows, so the payload is bounded by
+         *     scorer count rather than case count and needs no truncation flag.
+         */
+        ReadRunResponse: {
+            /** Candidate Version */
+            candidate_version: string;
+            /** Completed At */
+            completed_at?: string | null;
+            coverage: components["schemas"]["RunCoverageRead"];
+            /** Dataset Id */
+            dataset_id: string;
+            /** Dataset Version Id */
+            dataset_version_id: string;
+            /** Environment */
+            environment: string;
+            /** Errored Count */
+            errored_count: number;
+            /** Evaluation Id */
+            evaluation_id: string;
+            /** Evaluation Key */
+            evaluation_key?: string | null;
+            /** Evaluation Name */
+            evaluation_name: string;
+            /** Evaluation Run Id */
+            evaluation_run_id: string;
+            /** Failed Count */
+            failed_count: number;
+            /** Metrics */
+            metrics?: components["schemas"]["RunMetricItem"][];
+            /** Not Scored Count */
+            not_scored_count: number;
+            /** Passed Count */
+            passed_count: number;
+            /** Result Count */
+            result_count: number;
+            /** Run Number */
+            run_number: number;
+            /** Run Path */
+            run_path: string;
+            /** Run Url */
+            run_url: string;
+            /** Scored Count */
+            scored_count: number;
+            /** Scorer Error Count */
+            scorer_error_count: number;
+            /** Scores */
+            scores?: components["schemas"]["RunMetricItem"][];
+            /** Started At */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
+            /** Task Error Count */
+            task_error_count: number;
+        };
+        /**
          * RegisterRunRequest
          * @description Register/start a run. Idempotent on ``client_run_id`` within an evaluation.
          */
@@ -2069,6 +2330,47 @@ export interface components {
             run_path: string;
             /** Run Url */
             run_url: string;
+        };
+        /**
+         * RunCoverageRead
+         * @description A run's dataset coverage, read back. ``mode`` is ``unknown`` for a run that never
+         *     declared it — never promoted to ``full``, because full coverage that cannot be proven
+         *     must not be claimed.
+         */
+        RunCoverageRead: {
+            /** Dataset Case Count */
+            dataset_case_count?: number | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "full" | "first" | "sample" | "unknown";
+            /** Sample Seed */
+            sample_seed?: number | null;
+            /** Selected Case Count */
+            selected_case_count?: number | null;
+        };
+        /**
+         * RunMetricItem
+         * @description One score or one derived metric. Identical shape for both: they differ in
+         *     PROVENANCE (a scorer reported it vs the platform derived it from the trace), not in
+         *     structure, and a client renders them the same way.
+         *
+         *     ``value``/``diff`` are null rather than 0 when nothing was observed — "no data" and
+         *     "measured zero" are different facts and must stay distinguishable.
+         */
+        RunMetricItem: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "higher_is_better" | "lower_is_better" | "none";
+            /** Name */
+            name: string;
+            /** Unit */
+            unit?: ("$" | "tok" | "ms" | "count") | null;
+            /** Value */
+            value?: number | null;
         };
         /**
          * ScoreInput
@@ -3144,6 +3446,325 @@ export interface operations {
             };
         };
     };
+    get_dataset_version: {
+        parameters: {
+            query?: {
+                /** @description Test cases per page */
+                limit?: number;
+                /** @description Opaque cursor from a previous page */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetDatasetVersionResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Control plane unavailable for credential validation */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_datasets: {
+        parameters: {
+            query?: {
+                /** @description Datasets per page */
+                limit?: number;
+                /** @description Opaque cursor from a previous page */
+                cursor?: string | null;
+                /** @description Case-insensitive substring of the name */
+                name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListDatasetsResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Control plane unavailable for credential validation */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_dataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDataset"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Control plane unavailable for credential validation */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_dataset_versions: {
+        parameters: {
+            query?: {
+                /** @description Versions per page */
+                limit?: number;
+                /** @description Opaque cursor from a previous page */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListDatasetVersionsResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Control plane unavailable for credential validation */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_detectors: {
         parameters: {
             query?: {
@@ -3634,6 +4255,82 @@ export interface operations {
                 };
             };
             /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadRunResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Control plane unavailable for credential validation */
             503: {
                 headers: {
                     [name: string]: unknown;

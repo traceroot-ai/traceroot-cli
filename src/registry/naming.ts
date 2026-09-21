@@ -79,6 +79,11 @@ export const PLACEMENTS: Record<string, Placement> = {
     kind: "internal",
     note: "no CLI surface yet: a widget's own query belongs with the dashboards commands",
   },
+  list_datasets: { kind: "command", path: ["datasets", "list"] },
+  get_dataset: { kind: "command", path: ["datasets", "get"] },
+  list_dataset_versions: { kind: "command", path: ["datasets", "versions", "list"] },
+  get_dataset_version: { kind: "command", path: ["datasets", "versions", "get"] },
+  read_evaluation_run: { kind: "command", path: ["evals", "runs", "get"] },
 };
 
 /**
@@ -96,4 +101,8 @@ export const GROUPS: Record<string, string> = {
   dashboards: "Work with dashboards",
   widgets: "Work with dashboard widgets",
   sql: "Query your spans and traces with SQL",
+  datasets: "Work with evaluation datasets",
+  "datasets versions": "Work with a dataset's published versions",
+  evals: "Work with evaluations",
+  "evals runs": "Read recorded evaluation runs",
 };

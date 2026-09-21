@@ -96,6 +96,8 @@ describe("buildProgram", () => {
       "dashboards",
       "widgets",
       "sql",
+      "datasets",
+      "evals",
       "skills",
       "instrument",
       "doctor",
