@@ -96,16 +96,14 @@ function registerOne(
   // Own the stray-operand contract ourselves (defaultResolveArgs / an
   // enhancer's resolveArgs via rejectExtras): commander 13 defaults
   // excessArguments to reject, which would preempt our message.
-  // A top-level command can also be a group: `sql` runs a query and `sql schema`
-  // is its subcommand. The group already exists (registerCommands pre-creates
-  // every GROUPS entry), so reuse it rather than register a second `sql`. Any
-  // other name collision still throws, as commander does for duplicates.
+  // A command can also be a group, at any depth: `sql` runs a query and
+  // `sql schema` is its subcommand. When this path is a group, reuse the group
+  // (creating it if no deeper placement has yet) rather than register a second
+  // command under the same name. Any other name collision still throws, as
+  // commander does for duplicates.
   const groups = deps.groups ?? GROUPS;
-  const existingGroup =
-    placement.path.length === 1 && Object.hasOwn(groups, name)
-      ? program.commands.find((command) => command.name() === name)
-      : undefined;
-  const cmd = (existingGroup ?? parent.command(name))
+  const isGroup = Object.hasOwn(groups, placement.path.join(" "));
+  const cmd = (isGroup ? ensureGroup(program, placement.path, groups) : parent.command(name))
     .description(enhancer?.description ?? entry.description)
     .allowExcessArguments();
 
@@ -145,7 +143,7 @@ function registerOne(
 
   cmd.action(async (...actionArgs: unknown[]) => {
     const command = actionArgs[actionArgs.length - 1] as Command;
-    if (placement.path.length === 2) rejectGroupOptions(command);
+    if (placement.path.length > 1) rejectGroupOptions(command, placement.path.join(" "));
     const declared = command.registeredArguments.length;
     const values = command.processedArgs.slice(0, declared) as (string | undefined)[];
     const positionalRecord: Record<string, string | undefined> = {};
@@ -228,15 +226,20 @@ function registerOne(
  * also a command (`sql`), `sql schema --csv` would hand `--csv` to `sql` and run
  * the subcommand as if it were never given. Refuse it instead of dropping it.
  */
-function rejectGroupOptions(command: Command): void {
-  const group = command.parent;
-  if (group === null) return;
-  for (const option of group.options) {
-    if (group.getOptionValue(option.attributeName()) !== undefined) {
-      throw new CliError(
-        `${option.long ?? option.flags} is not an option of '${group.name()} ${command.name()}'`,
-        ExitCode.usage,
-      );
+/**
+ * An option given to any group between the program and this command was meant
+ * for another command, and silently dropping it would run this one without it.
+ * Walks every ancestor group, so a nested command is covered at each level.
+ */
+function rejectGroupOptions(command: Command, fullName: string): void {
+  for (let group = command.parent; group !== null && group.parent !== null; group = group.parent) {
+    for (const option of group.options) {
+      if (group.getOptionValue(option.attributeName()) !== undefined) {
+        throw new CliError(
+          `${option.long ?? option.flags} is not an option of '${fullName}'`,
+          ExitCode.usage,
+        );
+      }
     }
   }
 }

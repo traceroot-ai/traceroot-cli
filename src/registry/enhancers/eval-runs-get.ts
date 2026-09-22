@@ -1,47 +1,54 @@
 import type { Command } from "commander";
+import type { EvaluationRun } from "../../api/client.js";
 import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { rejectExtras } from "../flags.js";
-import { orDash } from "./eval-reads.js";
+import { type Wire, clean, orDash, plural } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
-interface Metric {
-  name: string;
-  value?: number | null;
-  unit?: string | null;
-  /** How many cases carried this score or metric. */
-  observed_count?: number | null;
-  /** numeric: a mean · boolean: the share true, as a 0–1 mean · categorical: no mean. */
-  value_type?: "numeric" | "boolean" | "categorical" | null;
-}
-
-interface Run {
-  evaluation_name: string;
-  run_number?: number | null;
-  status: string;
-  candidate_version?: string | null;
-  environment?: string | null;
-  dataset_id?: string | null;
-  dataset_version_id?: string | null;
-  scored_count?: number | null;
-  task_error_count?: number | null;
-  scorer_error_count?: number | null;
-  not_scored_count?: number | null;
-  scores?: Metric[] | null;
-  metrics?: Metric[] | null;
-  run_url?: string | null;
-}
+type Run = Wire<EvaluationRun>;
+type Metric = NonNullable<Run["scores"]>[number];
 
 function num(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
+  // Also catches -0, which would otherwise print as "-0".
+  if (value === 0) return "0";
   const magnitude = Math.abs(value);
-  const digits = magnitude >= 1000 ? 0 : magnitude >= 1 ? 2 : 4;
-  return value.toLocaleString("en-US", { maximumFractionDigits: digits });
+  // Below 1, keep significant digits rather than decimal places. A small mean,
+  // such as a per-case cost of $0.00004, must never round to a "0" that reads
+  // as a measured zero.
+  if (magnitude < 1) return value.toLocaleString("en-US", { maximumSignificantDigits: 3 });
+  return value.toLocaleString("en-US", { maximumFractionDigits: magnitude >= 1000 ? 0 : 2 });
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+/**
+ * `<n> <noun>`, or `— <noun>` when the count is absent. Never `0` for "not
+ * reported". A `countable` noun is pluralised by the shared rule ("1 task error",
+ * "2 task errors"); "scored" and "reported" read the same at any count.
+ */
+function count(n: number | null | undefined, noun: string, countable = false): string {
+  const word = (k: number) => (countable ? plural(k, noun) : noun);
+  return n === null || n === undefined ? `— ${word(2)}` : `${n} ${word(n)}`;
+}
+
+/**
+ * How the run's results came out. Passed and failed are shown only when a result
+ * carries one of those statuses. Released SDK versions still write them, but
+ * current ones report per-score results instead, and a pair of zeros would claim a
+ * verdict nobody gave.
+ */
+export function resultsLine(run: Run): string {
+  const parts = [count(run.result_count, "reported"), count(run.scored_count, "scored")];
+  if ((run.passed_count ?? 0) + (run.failed_count ?? 0) > 0) {
+    parts.push(count(run.passed_count, "passed"), count(run.failed_count, "failed"));
+  }
+  parts.push(
+    count(run.task_error_count, "task error", true),
+    count(run.scorer_error_count, "scorer error", true),
+    count(run.not_scored_count, "not scored"),
+  );
+  return parts.join(" · ");
 }
 
 /** Rendering core, network-free. */
@@ -49,17 +56,14 @@ export function renderRun(run: Run, writers: Writers): void {
   const styler = createStyler(writers.out);
   const w = (line: string) => writers.out.write(`${line}\n`);
 
-  w(`${styler.bold(run.evaluation_name)} · run #${orDash(run.run_number)} · ${run.status}`);
+  w(
+    `${styler.bold(orDash(run.evaluation_name))} · run #${orDash(run.run_number)} · ${orDash(run.status)}`,
+  );
   w(`candidate: ${orDash(run.candidate_version)}        environment: ${orDash(run.environment)}`);
   w(`dataset:   ${orDash(run.dataset_id)}  @ ${orDash(run.dataset_version_id)}`);
   w("");
 
-  w(
-    `results    ${run.scored_count ?? 0} scored · ${plural(run.task_error_count ?? 0, "task error")} · ${plural(
-      run.scorer_error_count ?? 0,
-      "scorer error",
-    )} · ${run.not_scored_count ?? 0} not scored`,
-  );
+  w(`results    ${resultsLine(run)}`);
   w("");
 
   renderMetrics(run, writers);
@@ -67,7 +71,7 @@ export function renderRun(run: Run, writers: Writers): void {
   // Printed verbatim when present, never composed from an id and a host.
   if (run.run_url !== null && run.run_url !== undefined && run.run_url !== "") {
     w("");
-    w(run.run_url);
+    w(clean(run.run_url));
   }
 }
 
@@ -91,14 +95,14 @@ function renderMetrics(run: Run, writers: Writers): void {
     ["METRIC", "VALUE", "UNIT", "CASES", ""],
     [
       ...scores.map((m) => [
-        m.name,
+        orDash(m.name),
         metricValue(m),
         orDash(m.unit),
         orDash(m.observed_count),
         m.value_type === "boolean" ? "(share true)" : "",
       ]),
       ...metrics.map((m) => [
-        m.name,
+        orDash(m.name),
         metricValue(m),
         orDash(m.unit),
         orDash(m.observed_count),

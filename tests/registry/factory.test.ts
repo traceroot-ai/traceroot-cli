@@ -360,3 +360,61 @@ describe("detectors get (zero-code path)", () => {
     expect(h.out.data).toContain("Name:         latency");
   });
 });
+
+describe("a nested group that is also a command", () => {
+  // `sessions runs` runs list_sessions and is also the group `sessions runs get`
+  // hangs off, like `sql` / `sql schema` one level deeper. Fixture tools only.
+  const groups = { ...GROUPS, sessions: "Work with sessions", "sessions runs": "Session runs" };
+  const group = { kind: "command", path: ["sessions", "runs"] } as const;
+  const leaf = { kind: "command", path: ["sessions", "runs", "get"] } as const;
+  // PLACEMENTS already has keys for these tools, and a spread keeps its key
+  // order, so they are removed first to control which one registers first.
+  const rest = Object.fromEntries(
+    Object.entries(PLACEMENTS).filter(
+      ([tool]) => tool !== "list_sessions" && tool !== "get_session",
+    ),
+  );
+
+  function nested(placements: Record<string, Placement>) {
+    const fake = createFakeFetch(() => jsonResponse({ data: [] }));
+    const program = buildProgram({
+      registry: {
+        fetchImpl: fake.fetchImpl,
+        writers: { out: new StringSink(), err: new StringSink() },
+        placements,
+        groups,
+      },
+    });
+    const run = (...argv: string[]) =>
+      program.parseAsync(["--api-key", "k", "--host", "https://api.test", ...argv], {
+        from: "user",
+      });
+    return { fake, run, program };
+  }
+
+  it("registers in either order, and each path dispatches its own tool", async () => {
+    for (const placements of [
+      { ...rest, list_sessions: group, get_session: leaf },
+      { ...rest, get_session: leaf, list_sessions: group },
+    ]) {
+      const h = nested(placements);
+      // One `runs`, not a second command shadowing the group.
+      const sessions = h.program.commands.find((c) => c.name() === "sessions");
+      expect(sessions?.commands.filter((c) => c.name() === "runs")).toHaveLength(1);
+      await h.run("sessions", "runs");
+      await h.run("sessions", "runs", "get", "s_1");
+      expect(h.fake.calls.map((c) => new URL(c.url).pathname)).toEqual([
+        "/api/v1/public/sessions",
+        "/api/v1/public/sessions/s_1",
+      ]);
+    }
+  });
+
+  it("rejects an option given to the middle group instead of dropping it", async () => {
+    const h = nested({ ...rest, list_sessions: group, get_session: leaf });
+    await expect(h.run("sessions", "runs", "--limit", "5", "get", "s_1")).rejects.toThrow(
+      /--limit is not an option of 'sessions runs get'/,
+    );
+    expect(h.fake.calls).toHaveLength(0);
+  });
+});

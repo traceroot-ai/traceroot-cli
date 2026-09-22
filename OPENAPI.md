@@ -5,12 +5,18 @@ OpenAPI schema. `openapi.json` is the ONLY cross-repo artifact; nothing in the
 build graph imports the backend.
 
 - Backend source: `backend/rest/openapi/public.json`
-- Backend commit: `2f73589f` (branch `main`)
-- sha256(openapi.json): `3ec062174a320680ddb3e3b12f77cbdec12c6ea47f039804eb1adc64b159ab30`
-- Vendored on: 2026-09-18
+- Backend commit: `2f73589f` (branch `main`), plus the five evaluation read paths
+  from `aa97a54fa` (branch `feat/eval-run-read-tool`)
+- sha256(openapi.json): `d8382a392e5d25e94cb17ea19bb8dba6d4b94f7105ea897df8d753bf6d3fbaf7`
+- Vendored on: 2026-09-21
 
 The snapshot is backend main at the merge that brought in the public SQL
-operations. Its tool registry is the one `@traceroot-ai/tools` 0.3.0 carries.
+operations. The five evaluation reads were merged into it, verbatim with every schema they
+reference, from the backend branch that adds them (traceroot-ai/traceroot#2262 and #2263):
+`/datasets`, `/datasets/{dataset_id}`, `/datasets/{dataset_id}/versions`,
+`/dataset-versions/{version_id}` and `/evaluation-runs/{run_id}`. The tool registry this
+matches is the one `@traceroot-ai/tools` 0.5.0 carries. Once that is published, refresh the
+whole file from backend main as below.
 
 ## Refresh
 

@@ -10,7 +10,8 @@ import {
 import { renderVersionList } from "../../../src/registry/enhancers/dataset-versions-list.js";
 import { renderDataset } from "../../../src/registry/enhancers/datasets-get.js";
 import { renderDatasetList } from "../../../src/registry/enhancers/datasets-list.js";
-import { renderRun } from "../../../src/registry/enhancers/eval-runs-get.js";
+import { limitBounds } from "../../../src/registry/enhancers/eval-reads.js";
+import { renderRun, resultsLine } from "../../../src/registry/enhancers/eval-runs-get.js";
 import { createFakeFetch, jsonResponse } from "../../helpers/fakeFetch.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
@@ -19,6 +20,19 @@ function sinks() {
   const err = new StringSink();
   return { w: { out, err }, out, err };
 }
+
+describe("limit bounds", () => {
+  it("come from the registry, with no default where the tool declares none", () => {
+    expect(limitBounds("list_datasets")).toEqual({ serverDefault: 50, max: 200 });
+    // Without a limit this read returns the whole version: no page size describes that.
+    expect(limitBounds("get_dataset_version")).toEqual({ serverDefault: undefined, max: 1000 });
+  });
+
+  it("throw for a tool with no limit instead of inventing numbers", () => {
+    expect(() => limitBounds("list_datsets")).toThrow(/declares no limit ceiling/);
+    expect(() => limitBounds("get_dataset")).toThrow(/declares no limit ceiling/);
+  });
+});
 
 describe("datasets list", () => {
   it("renders a table and says how many", () => {
@@ -63,6 +77,18 @@ describe("datasets list", () => {
     );
     expect(err.data).toContain("there are more");
     expect(err.data).toContain("--limit");
+  });
+
+  it("pluralises by the count, and gives no advice to raise a --limit already at its maximum", () => {
+    const { w, err } = sinks();
+    renderDatasetList(
+      { datasets: [{ dataset_id: "ds_1", name: "a" }], next_cursor: "more" },
+      { limit: 200 },
+      w,
+    );
+    expect(err.data).toContain("showing 1 dataset (--limit 200)");
+    expect(err.data).not.toContain("raise --limit");
+    expect(err.data).toContain("200 is the most a page holds");
   });
 
   it("trusts a null next_cursor over an exactly full page", () => {
@@ -137,8 +163,23 @@ describe("datasets versions list", () => {
     expect(out.data).toContain("*");
     expect(out.data).toContain("120");
     // An absent count renders as an em dash — "not reported" is not "zero cases".
-    expect(out.data).toContain("—");
-    expect(out.data).not.toMatch(/\s0\s+\d{4}-/);
+    // Checked cell by cell on that row, so a regression to 0 cannot hide behind
+    // an em dash printed elsewhere.
+    const row = out.data.split("\n").find((line) => line.startsWith("dsv_0"));
+    expect(row?.trim().split(/\s+/)).toEqual(["dsv_0", "2", "—", "—", "—"]);
+  });
+
+  it("shows when a version was created in local time, not the UTC date", () => {
+    // 23:30 UTC on 1 September is already 2 September in Tokyo.
+    const { w, out } = sinks();
+    renderVersionList(
+      { versions: [{ dataset_version_id: "dsv_1", created_at: "2026-09-01T23:30:00Z" }] },
+      {},
+      w,
+      "Asia/Tokyo",
+    );
+    expect(out.data).toContain("2026-09-02 08:30:00");
+    expect(out.data).not.toContain("2026-09-01");
   });
 
   it("says so when a dataset has published nothing", () => {
@@ -216,7 +257,7 @@ describe("evals runs get", () => {
         scores: [{ name: "accuracy", value: 0.84 }],
         metrics: [
           { name: "duration", value: 1204.5, unit: "ms" },
-          { name: "cost", value: 0.0123, unit: "usd" },
+          { name: "cost", value: 0.0123, unit: "$" },
         ],
       },
       w,
@@ -224,7 +265,53 @@ describe("evals runs get", () => {
     expect(out.data).toMatch(/duration\s+1,205\s+ms\s+—\s+\(mean per case\)/);
     // The run total and the per-case mean are different numbers; the label is
     // what stops the smaller one being read as the larger.
-    expect(out.data).toMatch(/cost\s+0\.0123\s+usd\s+—\s+\(mean per case\)/);
+    expect(out.data).toMatch(/cost\s+0\.0123\s+\$\s+—\s+\(mean per case\)/);
+  });
+
+  it("prints an absent count as an em dash, never 0", () => {
+    expect(resultsLine({ evaluation_name: "e", status: "running" })).toBe(
+      "— reported · — scored · — task errors · — scorer errors · — not scored",
+    );
+  });
+
+  it("shows passed and failed when results carry them, and leaves them out otherwise", () => {
+    const counts = { result_count: 25, scored_count: 25, task_error_count: 0 };
+    const legacy = resultsLine({
+      evaluation_name: "e",
+      status: "completed",
+      ...counts,
+      passed_count: 5,
+      failed_count: 20,
+    });
+    expect(legacy).toContain("25 reported");
+    expect(legacy).toContain("5 passed · 20 failed");
+    const current = resultsLine({
+      evaluation_name: "e",
+      status: "completed",
+      ...counts,
+      passed_count: 0,
+      failed_count: 0,
+    });
+    expect(current).not.toMatch(/passed|failed/);
+  });
+
+  it("never rounds a small mean to 0, and never prints -0", () => {
+    const { w, out } = sinks();
+    renderRun(
+      {
+        ...base,
+        metrics: [
+          { name: "cost", value: 0.00004, unit: "$" },
+          { name: "drift", value: -0.00001 },
+          { name: "idle", value: -0 },
+        ],
+      },
+      w,
+    );
+    expect(out.data).toMatch(/cost\s+0\.00004\s/);
+    expect(out.data).toMatch(/drift\s+-0\.00001\s/);
+    expect(out.data).toMatch(/idle\s+0\s/);
+    expect(out.data).not.toMatch(/\s-0\s/);
   });
 
   it("says nothing about coverage: the run read does not carry it", () => {
@@ -313,6 +400,37 @@ describe("wiring", () => {
     );
   });
 
+  it("'datasets versions get' help describes the page it reads, not a cursor it lacks", () => {
+    const program = buildProgram({
+      registry: {
+        fetchImpl: createFakeFetch(() => jsonResponse({})).fetchImpl,
+        writers: sinks().w,
+      },
+    });
+    const get = program.commands
+      .find((c) => c.name() === "datasets")
+      ?.commands.find((c) => c.name() === "versions")
+      ?.commands.find((c) => c.name() === "get");
+    expect(get?.description()).toContain("--limit");
+    expect(get?.description()).not.toMatch(/cursor/i);
+  });
+
+  it("no evaluation read takes --project-id: the project comes from the global --project", async () => {
+    for (const argv of [
+      ["datasets", "list"],
+      ["datasets", "get", "ds_1"],
+      ["datasets", "versions", "list", "ds_1"],
+      ["datasets", "versions", "get", "dsv_1"],
+      ["evals", "runs", "get", "r_1"],
+    ]) {
+      const h = harness({});
+      await expect(h.run(...argv, "--project-id", "p")).rejects.toThrow(
+        /unknown option '--project-id'/,
+      );
+      expect(h.fake.calls).toHaveLength(0);
+    }
+  });
+
   it("'evals runs get' sends the run id and nothing else", async () => {
     const h = harness({ evaluation_name: "e", status: "completed" });
     await h.run("evals", "runs", "get", "r_1");
@@ -327,6 +445,26 @@ describe("wiring", () => {
     expect(h.fake.calls).toHaveLength(0);
   });
 
+  it("--json says on stderr when a page is not the whole version, and keeps stdout verbatim", async () => {
+    const payload = {
+      dataset_version_id: "dsv_1",
+      items: Array.from({ length: 200 }, (_, i) => ({ test_case_id: `tc_${i}` })),
+      next_cursor: "more",
+    };
+    const h = harness(payload);
+    await h.run("datasets", "versions", "get", "dsv_1", "--json");
+    expect(JSON.parse(h.out.data)).toEqual(payload);
+    expect(h.err.data).toContain("there are more");
+  });
+
+  it("--json stays silent on stderr when the page is the whole result", async () => {
+    const payload = { datasets: [{ dataset_id: "ds_1", name: "a" }], next_cursor: null };
+    const h = harness(payload);
+    await h.run("datasets", "list", "--json");
+    expect(JSON.parse(h.out.data)).toEqual(payload);
+    expect(h.err.data).toBe("");
+  });
+
   it("--json emits the response verbatim, with nothing derived added", async () => {
     const payload = { dataset_id: "ds_1", name: "a", current_dataset_version_id: null };
     const h = harness(payload);
@@ -338,5 +476,39 @@ describe("wiring", () => {
     const h = harness({ datasets: [] });
     await expect(h.run("datasets", "list", "--limit", "5000")).rejects.toThrow(/at most 200/);
     expect(h.fake.calls).toHaveLength(0);
+  });
+});
+
+describe("server text with control characters", () => {
+  // A dataset name or a case captured from a trace can hold anything. ESC and OSC
+  // sequences sent raw would clear the screen or retitle the terminal.
+  const hostile = "\u001b[2J\u001b]0;pwned\u0007x";
+
+  it("escapes them in every read instead of sending them to the terminal", () => {
+    const { w, out } = sinks();
+    renderDatasetList(
+      { datasets: [{ dataset_id: "ds_1", name: hostile }], next_cursor: null },
+      {},
+      w,
+    );
+    renderDataset({ dataset_id: "ds_1", name: hostile, description: hostile }, w);
+    renderVersionList({ versions: [{ dataset_version_id: "dsv_1", label: hostile }] }, {}, w);
+    renderVersion(
+      { dataset_version_id: "dsv_1", items: [{ test_case_id: "tc_1", input: hostile }] },
+      {},
+      w,
+    );
+    renderRun(
+      {
+        evaluation_name: hostile,
+        status: "completed",
+        scores: [{ name: hostile, value: 1 }],
+        run_url: `https://app.test/run${hostile}`,
+      },
+      w,
+    );
+    expect(out.data).not.toContain("\u001b");
+    expect(out.data).not.toContain("\u0007");
+    expect(out.data).toContain("\\u001b[2J");
   });
 });

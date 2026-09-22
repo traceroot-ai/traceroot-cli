@@ -16,6 +16,13 @@ export type Whoami = Ok200<paths["/api/v1/public/whoami"]["get"]>;
 export type TraceList = Ok200<paths["/api/v1/public/traces"]["get"]>;
 export type TraceDetail = Ok200<paths["/api/v1/public/traces/{trace_id}"]["get"]>;
 export type TraceExport = Ok200<paths["/api/v1/public/traces/{trace_id}/export"]["get"]>;
+export type DatasetList = Ok200<paths["/api/v1/public/datasets"]["get"]>;
+export type Dataset = Ok200<paths["/api/v1/public/datasets/{dataset_id}"]["get"]>;
+export type DatasetVersionList = Ok200<
+  paths["/api/v1/public/datasets/{dataset_id}/versions"]["get"]
+>;
+export type DatasetVersion = Ok200<paths["/api/v1/public/dataset-versions/{version_id}"]["get"]>;
+export type EvaluationRun = Ok200<paths["/api/v1/public/evaluation-runs/{run_id}"]["get"]>;
 export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"]>;
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
