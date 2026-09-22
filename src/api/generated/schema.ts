@@ -373,7 +373,7 @@ export interface paths {
         };
         /**
          * Read an evaluation run's summary
-         * @description Read a run's own summary: coverage, result counts, and per-score and per-metric
+         * @description Read a run's own summary: status, result counts, and per-score and per-metric
          *     means over the run's results.
          *
          *     Typed rather than left to the catch-all so it appears in the published OpenAPI: an
@@ -2245,7 +2245,6 @@ export interface components {
             candidate_version: string;
             /** Completed At */
             completed_at?: string | null;
-            coverage: components["schemas"]["RunCoverageRead"];
             /** Dataset Id */
             dataset_id: string;
             /** Dataset Version Id */
@@ -2341,25 +2340,6 @@ export interface components {
             run_path: string;
             /** Run Url */
             run_url: string;
-        };
-        /**
-         * RunCoverageRead
-         * @description A run's dataset coverage, read back. ``mode`` is ``unknown`` for a run that never
-         *     declared it — never promoted to ``full``, because full coverage that cannot be proven
-         *     must not be claimed.
-         */
-        RunCoverageRead: {
-            /** Dataset Case Count */
-            dataset_case_count?: number | null;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "full" | "first" | "sample" | "unknown";
-            /** Sample Seed */
-            sample_seed?: number | null;
-            /** Selected Case Count */
-            selected_case_count?: number | null;
         };
         /**
          * RunMetricItem
@@ -3544,7 +3524,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Control plane unavailable for credential validation */
+            /** @description Authentication service unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3627,7 +3607,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Control plane unavailable for credential validation */
+            /** @description Authentication service unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3706,7 +3686,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Control plane unavailable for credential validation */
+            /** @description Authentication service unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3789,7 +3769,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Control plane unavailable for credential validation */
+            /** @description Authentication service unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4377,7 +4357,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Control plane unavailable for credential validation */
+            /** @description Authentication service unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;

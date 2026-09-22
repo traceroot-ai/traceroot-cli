@@ -3360,9 +3360,6 @@
             ],
             "title": "Completed At"
           },
-          "coverage": {
-            "$ref": "#/components/schemas/RunCoverageRead"
-          },
           "dataset_id": {
             "title": "Dataset Id",
             "type": "string"
@@ -3502,7 +3499,6 @@
           "dataset_version_id",
           "run_path",
           "run_url",
-          "coverage",
           "result_count",
           "scored_count",
           "task_error_count",
@@ -3673,65 +3669,6 @@
           "run_url"
         ],
         "title": "RegisterRunResponse",
-        "type": "object"
-      },
-      "RunCoverageRead": {
-        "description": "A run's dataset coverage, read back. ``mode`` is ``unknown`` for a run that never\ndeclared it \u2014 never promoted to ``full``, because full coverage that cannot be proven\nmust not be claimed.",
-        "properties": {
-          "dataset_case_count": {
-            "anyOf": [
-              {
-                "maximum": 9007199254740991.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Dataset Case Count"
-          },
-          "mode": {
-            "enum": [
-              "full",
-              "first",
-              "sample",
-              "unknown"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "sample_seed": {
-            "anyOf": [
-              {
-                "maximum": 9007199254740991.0,
-                "minimum": -9007199254740991.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sample Seed"
-          },
-          "selected_case_count": {
-            "anyOf": [
-              {
-                "maximum": 9007199254740991.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selected Case Count"
-          }
-        },
-        "required": [
-          "mode"
-        ],
-        "title": "RunCoverageRead",
         "type": "object"
       },
       "RunMetricItem": {
@@ -6512,7 +6449,7 @@
                 }
               }
             },
-            "description": "Control plane unavailable for credential validation"
+            "description": "Authentication service unavailable"
           }
         },
         "security": [
@@ -6678,7 +6615,7 @@
                 }
               }
             },
-            "description": "Control plane unavailable for credential validation"
+            "description": "Authentication service unavailable"
           }
         },
         "security": [
@@ -6799,7 +6736,7 @@
                 }
               }
             },
-            "description": "Control plane unavailable for credential validation"
+            "description": "Authentication service unavailable"
           }
         },
         "security": [
@@ -6954,7 +6891,7 @@
                 }
               }
             },
-            "description": "Control plane unavailable for credential validation"
+            "description": "Authentication service unavailable"
           }
         },
         "security": [
@@ -7837,7 +7774,7 @@
     },
     "/api/v1/public/evaluation-runs/{run_id}": {
       "get": {
-        "description": "Read a run's own summary: coverage, result counts, and per-score and per-metric\nmeans over the run's results.\n\nTyped rather than left to the catch-all so it appears in the published OpenAPI: an\nendpoint a CLI is expected to call must be in the contract the CLI generates from.\nSummary only, so the response is bounded by scorer count rather than case count.\n\nComparing two runs is not part of this read. It is a different question with its own\ntrust rules, and an optional parameter here would be too easily confused with the\nbaseline a run stores at registration.",
+        "description": "Read a run's own summary: status, result counts, and per-score and per-metric\nmeans over the run's results.\n\nTyped rather than left to the catch-all so it appears in the published OpenAPI: an\nendpoint a CLI is expected to call must be in the contract the CLI generates from.\nSummary only, so the response is bounded by scorer count rather than case count.\n\nComparing two runs is not part of this read. It is a different question with its own\ntrust rules, and an optional parameter here would be too easily confused with the\nbaseline a run stores at registration.",
         "operationId": "read_run",
         "parameters": [
           {
@@ -7947,7 +7884,7 @@
                 }
               }
             },
-            "description": "Control plane unavailable for credential validation"
+            "description": "Authentication service unavailable"
           }
         },
         "security": [
@@ -7960,7 +7897,7 @@
           "Offline Eval (Public)"
         ],
         "x-tool": {
-          "description": "Read one evaluation run's summary: its status, dataset coverage (full run vs a first-N or sampled subset), result counts, and per-scorer scores and per-case metrics (cost, tokens, LLM calls, duration) as means, each with the number of results it was averaged over. A subset run's means describe only the cases it ran, not the dataset, and a run whose coverage is unknown cannot be read as covering the whole dataset.",
+          "description": "Read one evaluation run's summary: its status, result counts, and per-scorer scores plus per-case cost and duration as means, each with the number of results it was averaged over.",
           "enabled": true,
           "name": "read_evaluation_run"
         }
