@@ -10,7 +10,7 @@ import {
 import { renderVersionList } from "../../../src/registry/enhancers/dataset-versions-list.js";
 import { renderDataset } from "../../../src/registry/enhancers/datasets-get.js";
 import { renderDatasetList } from "../../../src/registry/enhancers/datasets-list.js";
-import { coverageLine, renderRun } from "../../../src/registry/enhancers/eval-runs-get.js";
+import { renderRun } from "../../../src/registry/enhancers/eval-runs-get.js";
 import { createFakeFetch, jsonResponse } from "../../helpers/fakeFetch.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
@@ -208,38 +208,29 @@ describe("evals runs get", () => {
     not_scored_count: 0,
   };
 
-  it("never promotes an undeclared coverage to full", () => {
-    expect(coverageLine({ mode: "unknown" })).toContain("did not declare");
-    expect(coverageLine({ mode: "full", selected_case_count: 120, dataset_case_count: 120 })).toBe(
-      "full — 120 of 120 cases",
-    );
-    expect(
-      coverageLine({
-        mode: "sample",
-        selected_case_count: 25,
-        dataset_case_count: 120,
-        sample_seed: 7,
-      }),
-    ).toBe("sample — 25 of 120 cases (seed 7)");
-  });
-
-  it("marks a subset run NOT FINAL and labels derived metrics as per-case means", () => {
+  it("labels derived metrics as per-case means", () => {
     const { w, out } = sinks();
     renderRun(
       {
         ...base,
-        coverage: { mode: "first_n", selected_case_count: 25, dataset_case_count: 120 },
         scores: [{ name: "accuracy", value: 0.84 }],
-        metrics: [{ name: "tokens", value: 1204.5, unit: "tok" }],
-        comparison: null,
+        metrics: [
+          { name: "duration", value: 1204.5, unit: "ms" },
+          { name: "cost", value: 0.0123, unit: "usd" },
+        ],
       },
       w,
     );
-    expect(out.data).toContain("NOT FINAL");
-    expect(out.data).toContain("(mean per case)");
+    expect(out.data).toMatch(/duration\s+1,205\s+ms\s+—\s+\(mean per case\)/);
     // The run total and the per-case mean are different numbers; the label is
     // what stops the smaller one being read as the larger.
-    expect(out.data).toContain("1,205");
+    expect(out.data).toMatch(/cost\s+0\.0123\s+usd\s+—\s+\(mean per case\)/);
+  });
+
+  it("says nothing about coverage: the run read does not carry it", () => {
+    const { w, out } = sinks();
+    renderRun({ ...base, scores: [{ name: "accuracy", value: 0.9 }] }, w);
+    expect(out.data).not.toMatch(/coverage|NOT FINAL/);
   });
 
   it("counts every way a case can fail to score", () => {
@@ -247,7 +238,6 @@ describe("evals runs get", () => {
     renderRun(
       {
         ...base,
-        coverage: { mode: "full" },
         task_error_count: 2,
         scorer_error_count: 1,
         not_scored_count: 3,
@@ -258,7 +248,6 @@ describe("evals runs get", () => {
     expect(out.data).toContain("2 task errors");
     expect(out.data).toContain("1 scorer error");
     expect(out.data).toContain("3 not scored");
-    expect(out.data).not.toContain("NOT FINAL");
   });
 
   it("tells a categorical score apart from one nothing reported", () => {
@@ -266,7 +255,6 @@ describe("evals runs get", () => {
     renderRun(
       {
         ...base,
-        coverage: { mode: "full" },
         scores: [
           { name: "accuracy", value: 0.9, observed_count: 25, value_type: "numeric" },
           { name: "verdict", value: null, observed_count: 25, value_type: "categorical" },
@@ -288,7 +276,7 @@ describe("evals runs get", () => {
 
   it("says nothing about comparing: v0.5 reads a run, it does not compare two", () => {
     const { w, out, err } = sinks();
-    renderRun({ ...base, coverage: { mode: "full" }, scores: [{ name: "accuracy", value: 1 }] }, w);
+    renderRun({ ...base, scores: [{ name: "accuracy", value: 1 }] }, w);
     expect(`${out.data}${err.data}`).not.toMatch(/baseline|compar/i);
   });
 });
@@ -326,13 +314,13 @@ describe("wiring", () => {
   });
 
   it("'evals runs get' sends the run id and nothing else", async () => {
-    const h = harness({ evaluation_name: "e", status: "completed", coverage: { mode: "full" } });
+    const h = harness({ evaluation_name: "e", status: "completed" });
     await h.run("evals", "runs", "get", "r_1");
     expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/evaluation-runs/r_1");
   });
 
   it("'evals runs get' has no --baseline: comparison is not part of the read", async () => {
-    const h = harness({ evaluation_name: "e", status: "completed", coverage: { mode: "full" } });
+    const h = harness({ evaluation_name: "e", status: "completed" });
     await expect(h.run("evals", "runs", "get", "r_1", "--baseline", "r_0")).rejects.toThrow(
       /unknown option '--baseline'/,
     );

@@ -6,13 +6,6 @@ import { rejectExtras } from "../flags.js";
 import { orDash } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
-interface Coverage {
-  mode: string;
-  selected_case_count?: number | null;
-  dataset_case_count?: number | null;
-  sample_seed?: number | null;
-}
-
 interface Metric {
   name: string;
   value?: number | null;
@@ -31,7 +24,6 @@ interface Run {
   environment?: string | null;
   dataset_id?: string | null;
   dataset_version_id?: string | null;
-  coverage: Coverage;
   scored_count?: number | null;
   task_error_count?: number | null;
   scorer_error_count?: number | null;
@@ -52,25 +44,6 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/**
- * Coverage, in the run's own terms.
- *
- * `mode: "unknown"` is never promoted to "full": full coverage that cannot be
- * proven must not be claimed, and a run that never declared what it covered is a
- * different thing from one that measured everything.
- */
-export function coverageLine(c: Coverage): string {
-  const seed =
-    c.sample_seed === null || c.sample_seed === undefined ? "" : ` (seed ${c.sample_seed})`;
-  if (c.mode === "unknown") return "unknown — this run did not declare what it covered";
-  const selected = c.selected_case_count;
-  const total = c.dataset_case_count;
-  if (selected === null || selected === undefined || total === null || total === undefined) {
-    return `${c.mode}${seed}`;
-  }
-  return `${c.mode} — ${num(selected)} of ${num(total)} cases${seed}`;
-}
-
 /** Rendering core, network-free. */
 export function renderRun(run: Run, writers: Writers): void {
   const styler = createStyler(writers.out);
@@ -81,10 +54,6 @@ export function renderRun(run: Run, writers: Writers): void {
   w(`dataset:   ${orDash(run.dataset_id)}  @ ${orDash(run.dataset_version_id)}`);
   w("");
 
-  // A run that covered less than the dataset is not a final answer about the
-  // dataset, and the label says so rather than leaving it to be inferred.
-  const finality = run.coverage.mode === "full" ? "" : "          NOT FINAL";
-  w(`coverage   ${coverageLine(run.coverage)}${finality}`);
   w(
     `results    ${run.scored_count ?? 0} scored · ${plural(run.task_error_count ?? 0, "task error")} · ${plural(
       run.scorer_error_count ?? 0,
@@ -106,9 +75,9 @@ export function renderRun(run: Run, writers: Writers): void {
  * Scores and derived metrics, in one table.
  *
  * Derived metrics are labelled **mean per case** and never as totals. A run's
- * cost, tokens, calls and duration are averages over the observed population;
- * printing `1,204 tok` unlabelled invites it to be read as what the run spent,
- * which is a different number and usually a much larger one.
+ * cost and duration are averages over the observed population; printing a cost
+ * unlabelled invites it to be read as what the run spent, which is a different
+ * number and usually a much larger one.
  */
 function renderMetrics(run: Run, writers: Writers): void {
   const scores = run.scores ?? [];
@@ -155,8 +124,8 @@ export function metricValue(m: Metric): string {
 export const evalRunsGet: Enhancer = {
   description:
     "Read one evaluation run's summary: the dataset version it used, whether it is complete, " +
-    "partial or still running, how many cases it covered and how many errored or went " +
-    "unscored, its scores and per-case metrics, and its URL.",
+    "partial or still running, how many cases scored and how many errored or went unscored, " +
+    "its scores and per-case cost and duration, and its URL.",
   // Deliberately no flags. Without this override the factory derives flags from
   // the tool's input schema, and a contract that still carries `baseline` would
   // put `--baseline` back. Comparison is a separate operation, not a read option.
