@@ -6,9 +6,9 @@ build graph imports the backend.
 
 - Backend source: `backend/rest/openapi/public.json`
 - Backend commit: `2f73589f` (branch `main`), plus the five evaluation read paths
-  from `aa97a54fa` (branch `feat/eval-run-read-tool`)
-- sha256(openapi.json): `d8382a392e5d25e94cb17ea19bb8dba6d4b94f7105ea897df8d753bf6d3fbaf7`
-- Vendored on: 2026-09-21
+  from `6947437a3` (branch `feat/eval-run-read-tool`)
+- sha256(openapi.json): `bd8687287160aa5a090752c203415e04ccbebd539eb39631d4ca8957be579011`
+- Vendored on: 2026-09-22
 
 The snapshot is backend main at the merge that brought in the public SQL
 operations. The five evaluation reads were merged into it, verbatim with every schema they

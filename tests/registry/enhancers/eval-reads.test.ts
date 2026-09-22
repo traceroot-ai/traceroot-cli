@@ -45,20 +45,22 @@ describe("datasets list", () => {
             name: "support-triage",
             key: "support-triage",
             current_dataset_version_id: "dsv_01JG8Z",
+            updated_at: "2026-09-01T23:30:00Z",
           },
         ],
         next_cursor: null,
       },
       {},
       w,
+      "Asia/Tokyo",
     );
     expect(out.data).toContain("DATASET ID");
     expect(out.data).toContain("support-triage");
     expect(out.data).toContain("dsv_01JG8Z");
     expect(err.data).toContain("1 dataset");
-    // No UPDATED column: the delivered dataset read carries no `updated_at`, and a
-    // column of em dashes would imply the data exists and is missing.
-    expect(out.data).not.toContain("UPDATED");
+    // Last updated, in local time like every other timestamp the CLI prints.
+    expect(out.data).toContain("UPDATED");
+    expect(out.data).toContain("2026-09-02 08:30:00");
   });
 
   it("says (none) for a dataset with nothing published", () => {
@@ -128,6 +130,19 @@ describe("datasets get", () => {
     expect(out.data).toContain("current version");
     expect(out.data).toContain("(none)");
     expect(err.data).toContain("nothing to read yet");
+  });
+
+  it("shows when the dataset was last updated, and a dash when the server does not say", () => {
+    const { w, out } = sinks();
+    renderDataset(
+      { dataset_id: "ds_1", name: "a", updated_at: "2026-09-01T23:30:00Z" },
+      w,
+      "Asia/Tokyo",
+    );
+    expect(out.data).toMatch(/updated\s+2026-09-02 08:30:00/);
+    const bare = sinks();
+    renderDataset({ dataset_id: "ds_1", name: "a" }, bare.w);
+    expect(bare.out.data).toMatch(/updated\s+—/);
   });
 
   it("says nothing extra once a version exists", () => {
@@ -348,6 +363,8 @@ describe("evals runs get", () => {
           { name: "judge", value: null, observed_count: 0, value_type: "numeric" },
           { name: "grounded", value: 0.8, observed_count: 25, value_type: "boolean" },
           { name: "legacy", value: null, observed_count: 3 },
+          // Booleans stored beside plain numbers: observed, but no single mean.
+          { name: "hybrid", value: null, observed_count: 5, value_type: "numeric" },
         ],
       },
       w,
@@ -356,6 +373,7 @@ describe("evals runs get", () => {
     expect(out.data).toMatch(/grounded\s+0\.8\s+—\s+25\s+\(share true\)/);
     // A server without value_type still never prints an observed score as absent.
     expect(out.data).toMatch(/legacy\s+non-numeric/);
+    expect(out.data).toMatch(/hybrid\s+mixed\s+—\s+5/);
     expect(out.data).toMatch(/judge\s+—/);
     expect(out.data).toContain("CASES");
     expect(out.data).toMatch(/accuracy\s+0\.9\s+—\s+25/);

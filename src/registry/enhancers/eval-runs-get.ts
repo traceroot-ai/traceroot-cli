@@ -122,7 +122,11 @@ function renderMetrics(run: Run, writers: Writers): void {
 export function metricValue(m: Metric): string {
   if (m.value !== null && m.value !== undefined) return num(m.value);
   if (m.value_type === "categorical") return "categorical";
-  return (m.observed_count ?? 0) > 0 ? "non-numeric" : "—";
+  if ((m.observed_count ?? 0) === 0) return "—";
+  // Observed, yet no mean. For a numeric or boolean score the backend withholds one
+  // only when the values were not all one kind, such as booleans beside plain
+  // numbers. A server that sends no value_type gets the older, vaguer label.
+  return m.value_type === "numeric" || m.value_type === "boolean" ? "mixed" : "non-numeric";
 }
 
 export const evalRunsGet: Enhancer = {

@@ -14,6 +14,7 @@ import {
   orDash,
   orNone,
   warnIfCapped,
+  when,
 } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
@@ -24,19 +25,18 @@ export function renderDatasetList(
   res: DatasetListResponse,
   state: PagedState,
   writers: Writers,
+  timeZone?: string,
 ): void {
   const rows = res.datasets ?? [];
   if (rows.length === 0) {
     logProgress("no datasets", writers);
     return;
   }
-  // No UPDATED column and no case count: the delivered dataset read returns
-  // identity only. A column of em dashes would imply the data exists and is
-  // missing, rather than that it was never part of the contract. A case count
-  // lives on a version, where it is one grouped aggregate instead of an N+1.
+  // No case count: a count lives on a version, where it is one grouped aggregate
+  // instead of an N+1 across every dataset on the page.
   const styler = createStyler(writers.out);
   const table = renderTable(
-    ["DATASET ID", "NAME", "KEY", "CURRENT VERSION"],
+    ["DATASET ID", "NAME", "KEY", "CURRENT VERSION", "UPDATED"],
     rows.map((d) => [
       orDash(d.dataset_id),
       orDash(d.name),
@@ -44,6 +44,7 @@ export function renderDatasetList(
       // A dataset with nothing published is not an error and not a blank: it has
       // no current version yet, and `datasets versions get` has nothing to read.
       orNone(d.current_dataset_version_id),
+      when(d.updated_at, timeZone),
     ]),
     { headerStyle: styler.bold },
   );

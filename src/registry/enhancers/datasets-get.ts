@@ -1,13 +1,13 @@
 import type { Command } from "commander";
 import type { Dataset } from "../../api/client.js";
 import { type Writers, logProgress, writeJson } from "../../output.js";
-import { type Wire, orDash, orNone, renderFields } from "./eval-reads.js";
+import { type Wire, orDash, orNone, renderFields, when } from "./eval-reads.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
 type DatasetDetail = Wire<Dataset>;
 
 /** Rendering core, network-free. */
-export function renderDataset(ds: DatasetDetail, writers: Writers): void {
+export function renderDataset(ds: DatasetDetail, writers: Writers, timeZone?: string): void {
   renderFields(
     [
       ["dataset id", orDash(ds.dataset_id)],
@@ -15,6 +15,7 @@ export function renderDataset(ds: DatasetDetail, writers: Writers): void {
       ["key", orDash(ds.key)],
       ["description", orDash(ds.description)],
       ["current version", orNone(ds.current_dataset_version_id)],
+      ["updated", when(ds.updated_at, timeZone)],
     ],
     writers,
   );
