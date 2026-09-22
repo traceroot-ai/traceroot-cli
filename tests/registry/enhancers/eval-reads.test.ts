@@ -274,7 +274,7 @@ describe("evals runs get", () => {
     expect(out.data).toMatch(/accuracy\s+0\.9\s+—\s+25/);
   });
 
-  it("says nothing about comparing: v0.5 reads a run, it does not compare two", () => {
+  it("says nothing about comparing: evals runs get reads a run, it does not compare two", () => {
     const { w, out, err } = sinks();
     renderRun({ ...base, scores: [{ name: "accuracy", value: 1 }] }, w);
     expect(`${out.data}${err.data}`).not.toMatch(/baseline|compar/i);
