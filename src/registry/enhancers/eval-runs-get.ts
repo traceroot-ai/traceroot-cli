@@ -121,8 +121,11 @@ function renderMetrics(run: Run, writers: Writers): void {
  */
 export function metricValue(m: Metric): string {
   if (m.value !== null && m.value !== undefined) return num(m.value);
-  if (m.value_type === "categorical") return "categorical";
+  // Nothing observed comes first: on a run that has scored nothing yet, a scorer
+  // declared categorical must read as absent, like every other score, rather than
+  // as though a label had come back.
   if ((m.observed_count ?? 0) === 0) return "—";
+  if (m.value_type === "categorical") return "categorical";
   // Observed, yet no mean. For a numeric or boolean score the backend withholds one
   // only when the values were not all one kind, such as booleans beside plain
   // numbers. A server that sends no value_type gets the older, vaguer label.

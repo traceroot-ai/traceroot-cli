@@ -365,6 +365,8 @@ describe("evals runs get", () => {
           { name: "legacy", value: null, observed_count: 3 },
           // Booleans stored beside plain numbers: observed, but no single mean.
           { name: "hybrid", value: null, observed_count: 5, value_type: "numeric" },
+          // Declared categorical, but this run has not scored a case yet.
+          { name: "unrun", value: null, observed_count: 0, value_type: "categorical" },
         ],
       },
       w,
@@ -374,6 +376,7 @@ describe("evals runs get", () => {
     // A server without value_type still never prints an observed score as absent.
     expect(out.data).toMatch(/legacy\s+non-numeric/);
     expect(out.data).toMatch(/hybrid\s+mixed\s+—\s+5/);
+    expect(out.data).toMatch(/unrun\s+—\s+—\s+0/);
     expect(out.data).toMatch(/judge\s+—/);
     expect(out.data).toContain("CASES");
     expect(out.data).toMatch(/accuracy\s+0\.9\s+—\s+25/);
