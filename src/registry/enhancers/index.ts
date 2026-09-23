@@ -36,5 +36,5 @@ export const ENHANCERS: Partial<Record<string, Enhancer>> = {
   get_dataset: datasetsGet,
   list_dataset_versions: datasetVersionsList,
   get_dataset_version: datasetVersionsGet,
-  read_evaluation_run: evalRunsGet,
+  get_evaluation_run: evalRunsGet,
 };

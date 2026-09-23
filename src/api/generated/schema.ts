@@ -2280,9 +2280,9 @@ export interface components {
             /** Run Url */
             run_url: string;
             /** Scored Count */
-            scored_count: number;
+            scored_count: number | null;
             /** Scorer Error Count */
-            scorer_error_count: number;
+            scorer_error_count: number | null;
             /** Scores */
             scores?: components["schemas"]["RunMetricItem"][];
             /** Started At */
@@ -2293,7 +2293,7 @@ export interface components {
              */
             status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
             /** Task Error Count */
-            task_error_count: number;
+            task_error_count: number | null;
         };
         /**
          * RegisterRunRequest
