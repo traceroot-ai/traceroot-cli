@@ -21,6 +21,7 @@ traceroot traces get <trace-id> --project <id>    # inspect one
 traceroot traces export <trace-id> --project <id> # export its bundle to a directory
 traceroot detectors list --project <id>           # list your detectors (copy a detector id)
 traceroot findings list --since 24h --project <id> # list recent detector findings
+traceroot evals list --project <id>               # list your evaluations (copy an evaluation id)
 traceroot logout                      # revoke the session and clear the credential
 ```
 
@@ -118,6 +119,13 @@ need none of this.
 | `workspaces delete <id>` | Permanently delete a workspace and everything in it. Not reversible. `--name <current-name>` (typed as confirmation), `--reason <text>` |
 | `sql [query]` | Run one read-only SQL query over your project's spans and traces. Prints a table, CSV with `--csv`, or JSON with `--json`. `--file <path>`, `--param <name=value>`, `--max-rows <n>`, `--output <file>` |
 | `sql schema` | List the tables and columns a query may reference, with their types. |
+| `datasets list` | List the project's evaluation datasets, newest first, with each one's current published version. `--limit <n>`, `--name <substring>` |
+| `datasets get <id>` | Show one dataset: name, key, description, and the version its cases are read from. A dataset with nothing published says so. |
+| `datasets versions list <dataset-id>` | List a dataset's published versions, newest first, with each one's case count; `*` marks the current one. `--limit <n>` |
+| `datasets versions get <version-id>` | Show one immutable version and one page of its test cases (input, expected, and the trace a case was captured from) — 200 by default, up to 1000. `--limit <n>` |
+| `evals list` | List the project's evaluations, newest first: how many runs each has and how its latest one ended. The `EVALUATION ID` column is what `evals runs list --evaluation-id` takes. `--limit <n>`, `--name <substring>` |
+| `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--evaluation-id <id>`, `--status <status>` |
+| `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, and a link to open it. |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
