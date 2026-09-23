@@ -12,6 +12,8 @@ import { renderDataset } from "../../../src/registry/enhancers/datasets-get.js";
 import { renderDatasetList } from "../../../src/registry/enhancers/datasets-list.js";
 import { limitBounds } from "../../../src/registry/enhancers/eval-reads.js";
 import { renderRun, resultsLine } from "../../../src/registry/enhancers/eval-runs-get.js";
+import { renderRunList } from "../../../src/registry/enhancers/eval-runs-list.js";
+import { latestRun, renderEvaluationList } from "../../../src/registry/enhancers/evals-list.js";
 import { createFakeFetch, jsonResponse } from "../../helpers/fakeFetch.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
@@ -389,6 +391,110 @@ describe("evals runs get", () => {
   });
 });
 
+describe("evals list", () => {
+  it("shows how many runs each evaluation has and how the latest one ended", () => {
+    const { w, out, err } = sinks();
+    renderEvaluationList(
+      {
+        evaluations: [
+          {
+            evaluation_id: "ev_1",
+            name: "support-triage-quality",
+            dataset_id: "ds_1",
+            run_count: 12,
+            latest_run: {
+              evaluation_run_id: "run_9",
+              run_number: 12,
+              status: "completed",
+              started_at: "2026-09-01T23:30:00Z",
+            },
+          },
+        ],
+        next_cursor: null,
+      },
+      {},
+      w,
+      "Asia/Tokyo",
+    );
+    expect(out.data).toContain("EVALUATION ID");
+    expect(out.data).toMatch(
+      /support-triage-quality\s+ds_1\s+12\s+#12 completed\s+2026-09-02 08:30:00/,
+    );
+    expect(err.data).toContain("1 evaluation");
+  });
+
+  it("says (none) for an evaluation that has never run", () => {
+    expect(latestRun(null)).toBe("(none)");
+    expect(latestRun({ run_number: 3, status: "failed" })).toBe("#3 failed");
+    // A run the server reported without a number is not the same as no run at all.
+    expect(latestRun({ status: "running" })).toBe("#— running");
+  });
+
+  it("says so when the project has no evaluations", () => {
+    const { w, err } = sinks();
+    renderEvaluationList({ evaluations: [] }, {}, w);
+    expect(err.data).toContain("no evaluations");
+  });
+
+  it("warns when the page is not every evaluation", () => {
+    const { w, err } = sinks();
+    renderEvaluationList(
+      { evaluations: [{ evaluation_id: "ev_1", name: "a" }], next_cursor: "more" },
+      { limit: 1 },
+      w,
+    );
+    expect(err.data).toContain("showing 1 evaluation (--limit 1) and there are more");
+  });
+});
+
+describe("evals runs list", () => {
+  it("lists runs newest first with the id each is read by", () => {
+    const { w, out, err } = sinks();
+    renderRunList(
+      {
+        runs: [
+          {
+            evaluation_run_id: "run_9",
+            evaluation_name: "support-triage-quality",
+            run_number: 12,
+            status: "completed",
+            candidate_version: "git:9f2a1c",
+            started_at: "2026-09-01T23:30:00Z",
+          },
+          {
+            evaluation_run_id: "run_8",
+            evaluation_name: "support-triage-quality",
+            status: "running",
+          },
+        ],
+        next_cursor: null,
+      },
+      {},
+      w,
+      "Asia/Tokyo",
+    );
+    expect(out.data).toContain("RUN ID");
+    expect(out.data).toMatch(
+      /run_9\s+support-triage-quality\s+12\s+completed\s+git:9f2a1c\s+2026-09-02 08:30:00/,
+    );
+    // A run with no number or candidate yet reads as absent, never as 0 or blank.
+    expect(out.data).toMatch(/run_8\s+support-triage-quality\s+—\s+running\s+—\s+—/);
+    expect(err.data).toContain("2 runs");
+  });
+
+  it("carries no scores or costs: those are per-run aggregates", () => {
+    const { w, out } = sinks();
+    renderRunList({ runs: [{ evaluation_run_id: "run_9", status: "completed" }] }, {}, w);
+    expect(out.data).not.toMatch(/COST|SCORE|CASES|mean per case/i);
+  });
+
+  it("says so when nothing has run", () => {
+    const { w, err } = sinks();
+    renderRunList({ runs: [] }, {}, w);
+    expect(err.data).toContain("no evaluation runs");
+  });
+});
+
 describe("wiring", () => {
   function harness(payload: unknown) {
     const fake = createFakeFetch(() => jsonResponse(payload));
@@ -450,6 +556,31 @@ describe("wiring", () => {
       );
       expect(h.fake.calls).toHaveLength(0);
     }
+  });
+
+  it("'evals list' filters by name and sends the limit", async () => {
+    const h = harness({ evaluations: [], next_cursor: null });
+    await h.run("evals", "list", "--name", "triage", "--limit", "5");
+    expect(h.fake.calls[0].url).toBe(
+      "https://api.test/api/v1/public/evaluations?limit=5&name=triage",
+    );
+  });
+
+  it("'evals runs list' filters by evaluation and status", async () => {
+    const h = harness({ runs: [], next_cursor: null });
+    await h.run("evals", "runs", "list", "--evaluation-id", "ev_1", "--status", "completed");
+    const url = new URL(h.fake.calls[0].url);
+    expect(url.pathname).toBe("/api/v1/public/evaluation-runs");
+    expect(url.searchParams.get("evaluation_id")).toBe("ev_1");
+    expect(url.searchParams.get("status")).toBe("completed");
+  });
+
+  it("'evals runs list' rejects a status the contract does not define, before any request", async () => {
+    const h = harness({ runs: [] });
+    await expect(h.run("evals", "runs", "list", "--status", "finished")).rejects.toThrow(
+      /--status must be one of: .*completed/,
+    );
+    expect(h.fake.calls).toHaveLength(0);
   });
 
   it("'evals runs get' sends the run id and nothing else", async () => {

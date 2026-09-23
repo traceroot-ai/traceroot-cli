@@ -351,13 +351,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Register an evaluation run
-         * @description Register/start a run. Idempotent on ``client_run_id`` within an evaluation.
+         * List the project's evaluation runs
+         * @description List evaluation runs, newest first, optionally one evaluation's or one status's.
+         *
+         *     Identity and status only: a run's counts and per-scorer means come from `read_run`, so
+         *     listing stays one query however many runs a page holds. `next_cursor` is null on the
+         *     last page.
          */
-        post: operations["register_run"];
+        get: operations["list_evaluation_runs"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -427,6 +431,28 @@ export interface paths {
          * @description Upsert one test-case result (and its scores). Idempotent on (run, test case).
          */
         post: operations["upsert_result"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/evaluations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the project's evaluations
+         * @description List evaluations, newest first, each with its run count and latest run.
+         *
+         *     `next_cursor` is null on the last page.
+         */
+        get: operations["list_evaluations"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1775,6 +1801,23 @@ export interface components {
             detail: string;
         };
         /**
+         * EvaluationLatestRun
+         * @description An evaluation's most recent run, so a listing answers "where does this stand?".
+         */
+        EvaluationLatestRun: {
+            /** Evaluation Run Id */
+            evaluation_run_id: string;
+            /** Run Number */
+            run_number: number;
+            /** Started At */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
+        };
+        /**
          * ExportManifest
          * @description manifest.json: index of the bundle's parts.
          */
@@ -1936,6 +1979,20 @@ export interface components {
             /** Next Cursor */
             next_cursor: string | null;
         };
+        /** ListEvaluationRunsResponse */
+        ListEvaluationRunsResponse: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Runs */
+            runs: components["schemas"]["PublicEvaluationRun"][];
+        };
+        /** ListEvaluationsResponse */
+        ListEvaluationsResponse: {
+            /** Evaluations */
+            evaluations: components["schemas"]["PublicEvaluation"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
         /**
          * PaginationMeta
          * @description Pagination metadata for list responses.
@@ -2037,6 +2094,67 @@ export interface components {
             /** Data */
             data: components["schemas"]["DetectorItem"][];
             meta: components["schemas"]["PaginationMeta"];
+        };
+        /**
+         * PublicEvaluation
+         * @description One evaluation lineage: a stable purpose, re-run over time.
+         *
+         *     Identity and counts only. Scores belong to a run — a lineage has no single headline
+         *     score, and averaging across runs would invent one.
+         */
+        PublicEvaluation: {
+            /** Created At */
+            created_at: string;
+            /** Dataset Id */
+            dataset_id: string;
+            /** Evaluation Id */
+            evaluation_id: string;
+            /** Evaluation Key */
+            evaluation_key: string;
+            latest_run: components["schemas"]["EvaluationLatestRun"] | null;
+            /** Name */
+            name: string;
+            /** Run Count */
+            run_count: number;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * PublicEvaluationRun
+         * @description One run as the LISTING reports it: identity, where it ran, and how it ended.
+         *
+         *     No counts, means, cost or duration. Those are aggregates over a run's results, so a page
+         *     of runs would be a page of aggregate queries; the run read answers them one run at a
+         *     time.
+         */
+        PublicEvaluationRun: {
+            /** Candidate Version */
+            candidate_version: string;
+            /** Completed At */
+            completed_at: string | null;
+            /** Dataset Id */
+            dataset_id: string;
+            /** Dataset Version Id */
+            dataset_version_id: string;
+            /** Environment */
+            environment: string;
+            /** Evaluation Id */
+            evaluation_id: string;
+            /** Evaluation Key */
+            evaluation_key: string;
+            /** Evaluation Name */
+            evaluation_name: string;
+            /** Evaluation Run Id */
+            evaluation_run_id: string;
+            /** Run Number */
+            run_number: number;
+            /** Started At */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
         };
         /**
          * PublicFindingListResponse
@@ -4240,26 +4358,33 @@ export interface operations {
             };
         };
     };
-    register_run: {
+    list_evaluation_runs: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Runs per page */
+                limit?: number;
+                /** @description Opaque cursor from a previous page */
+                cursor?: string | null;
+                /** @description Only this evaluation's runs */
+                evaluation_id?: string | null;
+                /** @description Only runs in this status */
+                status?: ("running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled") | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegisterRunRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            201: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RegisterRunResponse"];
+                    "application/json": components["schemas"]["ListEvaluationRunsResponse"];
                 };
             };
             /** @description Invalid request */
@@ -4280,6 +4405,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description No access to this project */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Not found */
             404: {
                 headers: {
@@ -4289,8 +4423,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Request body too large */
-            413: {
+            /** @description Validation error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4298,8 +4432,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation error */
-            422: {
+            /** @description Rate limit exceeded */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4548,6 +4682,98 @@ export interface operations {
             };
             /** @description Validation error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_evaluations: {
+        parameters: {
+            query?: {
+                /** @description Evaluations per page */
+                limit?: number;
+                /** @description Opaque cursor from a previous page */
+                cursor?: string | null;
+                /** @description Case-insensitive substring of the name */
+                name?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListEvaluationsResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No access to this project */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

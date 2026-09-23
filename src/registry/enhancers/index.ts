@@ -6,6 +6,8 @@ import { datasetsGet } from "./datasets-get.js";
 import { datasetsList } from "./datasets-list.js";
 import { detectorsList } from "./detectors-list.js";
 import { evalRunsGet } from "./eval-runs-get.js";
+import { evalRunsList } from "./eval-runs-list.js";
+import { evalsList } from "./evals-list.js";
 import { findingsGet } from "./findings-get.js";
 import { findingsList } from "./findings-list.js";
 import { projectsList } from "./projects-list.js";
@@ -36,5 +38,7 @@ export const ENHANCERS: Partial<Record<string, Enhancer>> = {
   get_dataset: datasetsGet,
   list_dataset_versions: datasetVersionsList,
   get_dataset_version: datasetVersionsGet,
+  list_evaluations: evalsList,
+  list_evaluation_runs: evalRunsList,
   get_evaluation_run: evalRunsGet,
 };

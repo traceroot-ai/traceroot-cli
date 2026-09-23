@@ -6,15 +6,16 @@ build graph imports the backend.
 
 - Backend source: `backend/rest/openapi/public.json`
 - Backend commit: `2f73589f` (branch `main`), plus the five evaluation read paths
-  from `1b0637dd8` (branch `feat/eval-run-read-tool`)
-- sha256(openapi.json): `e8d1320c33a65a972150e6c091403e574e10eca1689166168b3918562c77da4a`
+  from `1472c50eb` (branch `feat/eval-listing-reads`)
+- sha256(openapi.json): `5f195bf9a2af1d07c0896b4f4d291db4fd4d6398b48a7a2a716f0864039878c1`
 - Vendored on: 2026-09-22
 
 The snapshot is backend main at the merge that brought in the public SQL
 operations. The five evaluation reads were merged into it, verbatim with every schema they
 reference, from the backend branch that adds them (traceroot-ai/traceroot#2262 and #2263):
 `/datasets`, `/datasets/{dataset_id}`, `/datasets/{dataset_id}/versions`,
-`/dataset-versions/{version_id}` and `/evaluation-runs/{run_id}`. The tool registry this
+`/dataset-versions/{version_id}`, `/evaluation-runs/{run_id}`, `/evaluations` and
+`/evaluation-runs`. The tool registry this
 matches is the one `@traceroot-ai/tools` 0.5.0 carries. Once that is published, refresh the
 whole file from backend main as below.
 

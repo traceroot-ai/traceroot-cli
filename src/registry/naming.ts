@@ -83,6 +83,8 @@ export const PLACEMENTS: Record<string, Placement> = {
   get_dataset: { kind: "command", path: ["datasets", "get"] },
   list_dataset_versions: { kind: "command", path: ["datasets", "versions", "list"] },
   get_dataset_version: { kind: "command", path: ["datasets", "versions", "get"] },
+  list_evaluations: { kind: "command", path: ["evals", "list"] },
+  list_evaluation_runs: { kind: "command", path: ["evals", "runs", "list"] },
   get_evaluation_run: { kind: "command", path: ["evals", "runs", "get"] },
 };
 

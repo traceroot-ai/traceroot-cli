@@ -23,6 +23,8 @@ export type DatasetVersionList = Ok200<
 >;
 export type DatasetVersion = Ok200<paths["/api/v1/public/dataset-versions/{version_id}"]["get"]>;
 export type EvaluationRun = Ok200<paths["/api/v1/public/evaluation-runs/{run_id}"]["get"]>;
+export type EvaluationList = Ok200<paths["/api/v1/public/evaluations"]["get"]>;
+export type EvaluationRunList = Ok200<paths["/api/v1/public/evaluation-runs"]["get"]>;
 export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"]>;
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
