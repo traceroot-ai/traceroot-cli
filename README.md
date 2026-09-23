@@ -223,6 +223,52 @@ were returned, table and CSV output warn on stderr and JSON sets `truncated`.
 query stopped by a server limit on time, memory, or result size fails with a
 hint to narrow it.
 
+### Evaluation reads
+
+Offline evaluations read from the terminal too: the datasets you run against,
+the versions of them you published, and the runs that scored them. Start at
+`evals list` — a run id used to be reachable only from the web app.
+
+```sh
+traceroot evals list                           # what exists, and how each one's latest run ended
+traceroot evals runs list --evaluation-id <id> # that evaluation's runs, newest first
+traceroot evals runs get <run-id>              # one run: counts, per-scorer means, cost and duration
+traceroot evals runs list --status failed --limit 5
+```
+
+Datasets read the same way, from the dataset down to the cases in one published
+version:
+
+```sh
+traceroot datasets list --name triage
+traceroot datasets versions list <dataset-id>            # every published version, `*` on the current one
+traceroot datasets versions get <version-id> --limit 50  # its cases: input, expected, source trace
+traceroot evals runs get <run-id> --json > run.json      # warnings go to stderr, so the file stays valid JSON
+```
+
+Four things these reads do deliberately:
+
+- **An absent value prints `—`, never `0`.** A run still going has no scored,
+  task-error or scorer-error count yet, and an em dash says so; `0` would claim a
+  measurement nobody made. `(none)` is the third case: a thing that exists and
+  has no value yet, like a dataset with no published version.
+- **Each read returns one page.** There is no cursor flag, so when more matched
+  than came back the command says so on stderr and names the ceiling. The lists
+  return 50 by default and take `--limit` up to 200; `datasets versions get`
+  reads 200 cases by default and takes `--limit` up to 1000. Past that ceiling is
+  not reachable from the CLI.
+- **`evals runs get` reports means, not totals.** A numeric score's value is its
+  mean over the results that carried it, a boolean score's is the share that came
+  back true, and a categorical score has no mean at all. Cost and duration are
+  labelled `(mean per case)`: a run's total cost is a different, larger number.
+- **A run row carries no scores, counts or cost.** Those are aggregates over one
+  run's results, so `evals runs list` stays identity and outcome, and
+  `evals runs get` does the arithmetic one run at a time.
+
+Dataset names, case inputs and run URLs are whatever an SDK or a captured trace
+stored, so they print with control characters escaped: nothing read back out of
+your own data can move the cursor or repaint the terminal.
+
 ### Exit codes
 
 Every command exits with a class-specific code so scripts can branch on the kind
