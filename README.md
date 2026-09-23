@@ -72,7 +72,7 @@ traceroot traces list
 ### Project scoping
 
 A browser login identifies *you*, not a project, so project-scoped reads
-(traces, detectors, findings) need a project id: `--project <id>` >
+(traces, detectors, findings, datasets, evals) need a project id: `--project <id>` >
 `TRACEROOT_PROJECT_ID` > `project_id` in the config file. Run
 `traceroot projects list` to find one. API keys are already project-scoped and
 need none of this.
@@ -158,10 +158,11 @@ where it goes. An API key is already scoped to one project and does not carry
 ### Generated commands
 
 `traces`, `detectors`, `findings`, `alerts`, `dashboards`, `widgets`,
-`workspaces`, `projects`, and `sql` are generated from the tool registry shipped
-in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
-each entry's input schema drives its flags, and its response type drives the
-default rendering. Adding a new backend endpoint to the CLI is a registry bump
+`workspaces`, `projects`, `sql`, `datasets`, and `evals` are generated from the
+tool registry shipped in
+[`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools): each
+entry's input schema drives its flags, and its response type drives the default
+rendering. Adding a new backend endpoint to the CLI is a registry bump
 plus one placement line in `src/registry/naming.ts` — no hand-written command
 handler needed. `login`, `logout`, `status`, `skills`, `instrument`, and
 `doctor` stay hand-written: they are auth flows or local tooling with no
