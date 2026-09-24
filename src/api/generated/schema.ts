@@ -57,10 +57,102 @@ export interface paths {
         get: operations["get_alert"];
         put?: never;
         post?: never;
+        /**
+         * Delete an alert
+         * @description Hard-delete an alert.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). An outstanding page is discarded, not resolved: the
+         *     response reports ``page_cleared`` when one was open.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         alert_id (str): The alert to delete.
+         *         project_id (str): The project the alert belongs to.
+         *         reason (str): Why it is being deleted; recorded on the audit row.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         DeleteAlertResponse: The removed alert and whether a page was cleared.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404 verbatim, or a 503
+         *             when its response is ambiguous.
+         */
+        delete: operations["delete_alert"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit an alert rule
+         * @description Edit an alert's rule in a project the authenticated user can write to.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). The patch is validated merged with the stored rule; an
+         *     edit to any evaluated field resets the evaluation state, clears an open
+         *     page, and re-arms a parked alert — the response reports the first two.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         alert_id (str): The alert to edit.
+         *         payload (UpdateAlertRequest): The project and the rule fields to change.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         UpdateAlertResponse: The updated alert, the changed fields, and the
+         *             state flags.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404 verbatim, or a 503
+         *             when its response is ambiguous.
+         */
+        patch: operations["update_alert"];
+        trace?: never;
+    };
+    "/api/v1/public/alerts/{alert_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Pause or resume an alert
+         * @description Pause or resume an alert without touching its rule.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). Pausing keeps the severity it stopped at; resuming is a
+         *     cold start (state reset, due now). Setting the status the alert already
+         *     has is a 200 with nothing changed.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         alert_id (str): The alert to pause or resume.
+         *         payload (AlertStatusRequest): The project and the target status.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         UpdateAlertResponse: The alert with its new status and the state flags.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        patch: operations["set_alert_status"];
         trace?: never;
     };
     "/api/v1/public/dashboards": {
@@ -115,10 +207,57 @@ export interface paths {
         get: operations["get_dashboard"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a dashboard
+         * @description Hard-delete a dashboard together with its widgets.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). A project's last dashboard cannot be deleted.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         dashboard_id (str): The dashboard to delete.
+         *         project_id (str): The project the dashboard belongs to.
+         *         reason (str): Why it is being deleted; recorded on the audit row.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         DeleteDashboardResponse: The removed dashboard and its widget count.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        delete: operations["delete_dashboard"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Edit a dashboard
+         * @description Edit a dashboard's name or description.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). A null ``description`` clears it.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         dashboard_id (str): The dashboard to edit.
+         *         payload (UpdateDashboardRequest): The project and the fields to change.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         UpdateDashboardResponse: The updated dashboard and the changed fields.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        patch: operations["update_dashboard"];
         trace?: never;
     };
     "/api/v1/public/dashboards/{dashboard_id}/data": {
@@ -338,10 +477,57 @@ export interface paths {
         get: operations["get_detector"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a detector
+         * @description Hard-delete a detector; its existing findings stay readable.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). Not idempotent: a second delete of the same id is a 404.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         detector_id (str): The detector to delete.
+         *         project_id (str): The project the detector belongs to.
+         *         reason (str): Why it is being deleted; recorded on the audit row.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         DeleteDetectorResponse: The removed detector.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404 verbatim, or a 503
+         *             when its response is ambiguous.
+         */
+        delete: operations["delete_detector"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Edit a detector
+         * @description Edit a detector in a project the authenticated user can write to.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). Only the sent fields change; ``template`` is immutable.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         detector_id (str): The detector to edit.
+         *         payload (UpdateDetectorRequest): The project and the fields to change.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         UpdateDetectorResponse: The updated detector and the changed fields.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        patch: operations["update_detector"];
         trace?: never;
     };
     "/api/v1/public/evaluation-runs": {
@@ -361,7 +547,11 @@ export interface paths {
          */
         get: operations["list_evaluation_runs"];
         put?: never;
-        post?: never;
+        /**
+         * Register an evaluation run
+         * @description Register/start a run. Idempotent on ``client_run_id`` within an evaluation.
+         */
+        post: operations["register_run"];
         delete?: never;
         options?: never;
         head?: never;
@@ -513,6 +703,69 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a project
+         * @description Soft-delete a project.
+         *
+         *     Requires ADMIN role in the project's workspace (the write service
+         *     decides). The project drops out of every list and read and its access
+         *     keys stop authenticating; its data stays for the retention window.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         project_id (str): The project to delete.
+         *         reason (str): Why it is being deleted; recorded on the audit row.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         DeleteProjectResponse: The removed project.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404 verbatim, or a 503
+         *             when its response is ambiguous.
+         */
+        delete: operations["delete_project"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit a project
+         * @description Edit a project's name or trace retention.
+         *
+         *     Requires ADMIN role in the project's workspace (the write service
+         *     decides). A null ``trace_ttl_days`` returns retention to the plan default.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         project_id (str): The project to edit.
+         *         payload (UpdateProjectRequest): The fields to change.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         UpdateProjectResponse: The updated project and the changed fields.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        patch: operations["update_project"];
         trace?: never;
     };
     "/api/v1/public/sessions": {
@@ -892,6 +1145,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/widgets/{widget_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Widget
+         * @description Get one saved widget's definition, with its dashboard, for the caller's project.
+         */
+        get: operations["get_widget"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a dashboard widget
+         * @description Hard-delete a widget and its entry in the dashboard's layout.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides).
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         widget_id (str): The widget to delete.
+         *         project_id (str): The project the widget's dashboard belongs to.
+         *         reason (str): Why it is being deleted; recorded on the audit row.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         DeleteWidgetResponse: The removed widget.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404 verbatim, or a 503
+         *             when its response is ambiguous.
+         */
+        delete: operations["delete_widget"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit a dashboard widget
+         * @description Edit a widget's title, spec, or display config.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). A sent ``spec`` replaces the whole spec and is checked
+         *     against the widget's stored type by the service; ``type`` is immutable.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         widget_id (str): The widget to edit.
+         *         payload (UpdateWidgetRequest): The project and the fields to change.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         UpdateWidgetResponse: The updated widget and the changed fields.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404 verbatim, or a 503
+         *             when its response is ambiguous.
+         */
+        patch: operations["update_widget"];
+        trace?: never;
+    };
+    "/api/v1/public/widgets/{widget_id}/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Widget Data
+         * @description Answer one saved widget for a window, with a status instead of an exception.
+         */
+        get: operations["get_widget_data"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/workspaces": {
         parameters: {
             query?: never;
@@ -941,6 +1282,75 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/workspaces/{workspace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a workspace
+         * @description Hard-delete a workspace and everything in it.
+         *
+         *     Requires ADMIN role in the workspace (the write service decides); a
+         *     workspace outside the caller's memberships is a 403, as on the update.
+         *     The cascade removes every project, its data references, access keys,
+         *     memberships and invites; the typed ``name`` must equal the workspace's
+         *     current name, and the caller's only workspace cannot be deleted.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         workspace_id (str): The workspace to delete.
+         *         name (str): The workspace's current name, as a typed confirmation.
+         *         reason (str): Why it is being deleted; recorded on the audit row.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         DeleteWorkspaceResponse: The removed workspace and the cascade counts.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        delete: operations["delete_workspace"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename a workspace
+         * @description Rename a workspace the authenticated user administers.
+         *
+         *     Requires ADMIN role in the workspace (the write service decides).
+         *     Workspace membership is the tenancy here, so a workspace outside the
+         *     caller's memberships is a 403 rather than a 404, as on the project
+         *     create; a name the caller already administers a workspace under is a
+         *     409.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         workspace_id (str): The workspace to edit.
+         *         payload (UpdateWorkspaceRequest): The fields to change.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         UpdateWorkspaceResponse: The updated workspace and the changed fields.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        patch: operations["update_workspace"];
         trace?: never;
     };
 }
@@ -1083,6 +1493,21 @@ export interface components {
              * @enum {string}
              */
             mode: "OFF" | "EVERY";
+        };
+        /**
+         * AlertStatusRequest
+         * @description Body for pausing or resuming an alert.
+         *
+         *     Only ACTIVE and PAUSED are settable: PARKED is the evaluator's verdict.
+         */
+        AlertStatusRequest: {
+            /** Project Id */
+            project_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ACTIVE" | "PAUSED";
         };
         /**
          * AlertSummary
@@ -1598,6 +2023,18 @@ export interface components {
             widget_count: number;
         };
         /**
+         * DashboardRow
+         * @description A dashboard as the write service returns it.
+         */
+        DashboardRow: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Project Id */
+            project_id: string;
+        };
+        /**
          * DashboardSummary
          * @description The dashboard fields shared by the list and detail reads.
          *
@@ -1684,6 +2121,95 @@ export interface components {
             title: string;
             /** Type */
             type: string;
+        };
+        /**
+         * DeleteAlertResponse
+         * @description A hard-deleted alert; ``page_cleared`` reports an open page it discarded.
+         */
+        DeleteAlertResponse: {
+            alert: components["schemas"]["DeletedResource"];
+            /** Deleted */
+            deleted: boolean;
+            /**
+             * Page Cleared
+             * @default false
+             */
+            page_cleared: boolean;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * DeleteDashboardResponse
+         * @description A hard-deleted dashboard and the count of widgets removed with it.
+         */
+        DeleteDashboardResponse: {
+            /** Cascaded */
+            cascaded?: {
+                [key: string]: number;
+            } | null;
+            dashboard: components["schemas"]["DeletedResource"];
+            /** Deleted */
+            deleted: boolean;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * DeleteDetectorResponse
+         * @description A hard-deleted detector (its findings stay readable).
+         */
+        DeleteDetectorResponse: {
+            /** Deleted */
+            deleted: boolean;
+            detector: components["schemas"]["DeletedResource"];
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * DeleteProjectResponse
+         * @description A soft-deleted project (its data stays for the retention window).
+         */
+        DeleteProjectResponse: {
+            /** Deleted */
+            deleted: boolean;
+            project: components["schemas"]["DeletedResource"];
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * DeleteWidgetResponse
+         * @description A hard-deleted widget (its layout entry is removed with it).
+         */
+        DeleteWidgetResponse: {
+            /** Deleted */
+            deleted: boolean;
+            /** Reason */
+            reason: string;
+            widget: components["schemas"]["DeletedResource"];
+        };
+        /**
+         * DeleteWorkspaceResponse
+         * @description A hard-deleted workspace and the counts of what cascaded with it.
+         */
+        DeleteWorkspaceResponse: {
+            /** Cascaded */
+            cascaded?: {
+                [key: string]: number;
+            } | null;
+            /** Deleted */
+            deleted: boolean;
+            /** Reason */
+            reason: string;
+            workspace: components["schemas"]["DeletedResource"];
+        };
+        /**
+         * DeletedResource
+         * @description What a delete removed: the row's id and name, for the receipt.
+         */
+        DeletedResource: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
         };
         /**
          * DetectorDetail
@@ -1775,6 +2301,22 @@ export interface components {
             summary: string;
             /** Template */
             template: string | null;
+        };
+        /**
+         * DetectorRow
+         * @description A detector as the write service returns it.
+         */
+        DetectorRow: {
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Project Id */
+            project_id: string;
+            /** Sample Rate */
+            sample_rate: number;
         };
         /**
          * EmittedMetric
@@ -2018,6 +2560,18 @@ export interface components {
             workspace_id: string;
             /** Workspace Name */
             workspace_name: string;
+        };
+        /**
+         * ProjectRow
+         * @description A project as the write service returns it.
+         */
+        ProjectRow: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Workspace Id */
+            workspace_id: string;
         };
         /**
          * PublicAlertListResponse
@@ -2348,6 +2902,10 @@ export interface components {
         /**
          * RCAResult
          * @description Free-text root-cause analysis for a finding (Postgres ``detector_rcas``).
+         *
+         *     The agent trace behind an RCA (``detector_rca_executions``) is internal and
+         *     deliberately not part of this contract: its trace id is not readable through
+         *     the public trace endpoints, so advertising it here would be misleading.
          */
         RCAResult: {
             /** Result */
@@ -2904,6 +3462,354 @@ export interface components {
             value: string;
         };
         /**
+         * UpdateAlertRequest
+         * @description Body for editing an alert rule (the ten rule fields, all optional).
+         *
+         *     The write service validates the patch merged with the stored rule; an
+         *     edit to any evaluated field resets the evaluation state (and clears an
+         *     open page), which the response reports. Status has its own route.
+         */
+        UpdateAlertRequest: {
+            /**
+             * Aggregation
+             * @enum {string}
+             */
+            aggregation?: "sum" | "avg" | "count" | "max" | "min" | "p50" | "p75" | "p90" | "p95" | "p99" | "uniq";
+            /**
+             * Filters
+             * @description Row predicates the measure is evaluated over
+             */
+            filters?: {
+                /** @description A span field, e.g. model_name or metadata */
+                field: string;
+                /** @description The map entry to compare; required for the metadata field */
+                key?: string;
+                /** @enum {string} */
+                op: "=" | "contains";
+                value: string | number;
+            }[];
+            /**
+             * Measure
+             * @description A measure of the view, e.g. latency, cost, count
+             */
+            measure?: string;
+            /** Name */
+            name?: string;
+            /**
+             * No Data Mode
+             * @description What a window that measured nothing means
+             * @enum {string}
+             */
+            no_data_mode?: "HOLD" | "ZERO" | "NOTIFY";
+            /** Project Id */
+            project_id: string;
+            /** Renotify */
+            renotify?: components["schemas"]["AlertRenotifyRequest"];
+            /** Threshold */
+            threshold?: number;
+            /**
+             * Threshold Operator
+             * @enum {string}
+             */
+            threshold_operator?: ">" | ">=" | "<" | "<=" | "=" | "!=";
+            /**
+             * View
+             * @constant
+             */
+            view?: "SPANS";
+            /**
+             * Window
+             * @enum {string}
+             */
+            window?: "1m" | "5m" | "10m" | "30m" | "1h" | "2h";
+        };
+        /**
+         * UpdateAlertResponse
+         * @description The updated alert with its full rule, plus what the edit did to its state.
+         */
+        UpdateAlertResponse: {
+            alert: components["schemas"]["AlertDetail"];
+            /** Changed */
+            changed: string[];
+            /**
+             * Page Cleared
+             * @description True when the alert was firing and the edit discarded that page
+             * @default false
+             */
+            page_cleared: boolean;
+            /**
+             * State Reset
+             * @description True when the edit voided the evaluation state and made the rule due now (any evaluated field changed, or the alert was resumed)
+             * @default false
+             */
+            state_reset: boolean;
+            /** Updated */
+            updated: boolean;
+        };
+        /**
+         * UpdateDashboardRequest
+         * @description Body for editing a dashboard's name or description (layout stays UI-only).
+         */
+        UpdateDashboardRequest: {
+            /**
+             * Description
+             * @description null clears the description
+             */
+            description?: string | null;
+            /** Name */
+            name?: string;
+            /** Project Id */
+            project_id: string;
+        };
+        /**
+         * UpdateDashboardResponse
+         * @description The updated dashboard.
+         */
+        UpdateDashboardResponse: {
+            /** Changed */
+            changed: string[];
+            dashboard: components["schemas"]["DashboardRow"];
+            /** Updated */
+            updated: boolean;
+        };
+        /**
+         * UpdateDetectorRequest
+         * @description Body for editing a detector; ``template`` is immutable and not accepted.
+         */
+        UpdateDetectorRequest: {
+            /** Detection Model */
+            detection_model?: string | null;
+            /** Detection Provider */
+            detection_provider?: string | null;
+            /** Detection Source */
+            detection_source?: ("system" | "byok") | null;
+            /** Enable Rca */
+            enable_rca?: boolean;
+            /**
+             * Enabled
+             * @description The pause switch. Detection is ingestion-triggered, so enabling starts nothing retroactively.
+             */
+            enabled?: boolean;
+            /** Name */
+            name?: string;
+            /**
+             * Output Schema
+             * @description Replaces the whole output schema array
+             */
+            output_schema?: unknown[];
+            /** Project Id */
+            project_id: string;
+            /**
+             * Prompt
+             * @description Detector instructions, stored verbatim. There is no reset to a template's default on update: send the canonical text to restore it.
+             */
+            prompt?: string;
+            /** Sample Rate */
+            sample_rate?: number;
+            /**
+             * Trigger Conditions
+             * @description Replaces the whole trigger array; [] removes the trigger so every completed trace is evaluated. Each condition is {field, op, value} (metadata also takes key): model_name/environment take =, !=; cost/total_tokens/duration_ms/errors take >, >=, <, <=, =; metadata takes =, contains.
+             */
+            trigger_conditions?: unknown[];
+        };
+        /**
+         * UpdateDetectorResponse
+         * @description The updated detector.
+         */
+        UpdateDetectorResponse: {
+            /** Changed */
+            changed: string[];
+            detector: components["schemas"]["DetectorRow"];
+            /** Updated */
+            updated: boolean;
+        };
+        /**
+         * UpdateProjectRequest
+         * @description Body for editing a project (requires ADMIN in its workspace).
+         */
+        UpdateProjectRequest: {
+            /** Name */
+            name?: string;
+            /**
+             * Trace Ttl Days
+             * @description Trace retention in days (1-365); null returns to the plan default
+             */
+            trace_ttl_days?: number | null;
+        };
+        /**
+         * UpdateProjectResponse
+         * @description The updated project.
+         */
+        UpdateProjectResponse: {
+            /** Changed */
+            changed: string[];
+            project: components["schemas"]["ProjectRow"];
+            /** Updated */
+            updated: boolean;
+        };
+        /**
+         * UpdateWidgetRequest
+         * @description Body for editing a widget; ``type`` and ``dashboard_id`` are immutable.
+         */
+        UpdateWidgetRequest: {
+            /**
+             * Display Config
+             * @description Replaces the whole display config; null resets it to {}
+             */
+            display_config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Project Id */
+            project_id: string;
+            /**
+             * Spec
+             * @description Replaces the whole spec, in the dialect of the widget's stored type. For type "query": a chart spec (view/filters/metric/breakdown/display). For type "trace_feed": a trace-list feed spec (predicate filters + row limit).
+             */
+            spec?: {
+                /**
+                 * Breakdown
+                 * @enum {string|null}
+                 */
+                breakdown?: "name" | "span_kind" | "model_name" | "environment" | null;
+                /**
+                 * WidgetDisplay
+                 * @description Controls how the query result is rendered on the dashboard.
+                 */
+                display: {
+                    /**
+                     * Type
+                     * @enum {string}
+                     */
+                    type: "line" | "area" | "bar" | "pie" | "number" | "table" | "histogram";
+                };
+                /** Filters */
+                filters?: {
+                    /**
+                     * Field
+                     * @enum {string}
+                     */
+                    field: "name" | "span_kind" | "status" | "model_name" | "environment" | "is_root" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "metadata";
+                    /** Key */
+                    key?: string;
+                    /**
+                     * Op
+                     * @enum {string}
+                     */
+                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    /** Value */
+                    value: ((string | number) | (number | string)) | string | number;
+                }[];
+                /**
+                 * WidgetMetric
+                 * @description The measure and aggregation function that define the widget's y-axis.
+                 */
+                metric: {
+                    /**
+                     * Agg
+                     * @enum {string}
+                     */
+                    agg: "count" | "sum" | "avg" | "min" | "max" | "p50" | "p75" | "p90" | "p95" | "p99" | "uniq";
+                    /**
+                     * Measure
+                     * @enum {string}
+                     */
+                    measure: "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "tokens_per_second" | "trace_id" | "count";
+                };
+                /**
+                 * View
+                 * @constant
+                 */
+                view: "spans";
+            } | {
+                /**
+                 * Breakdown
+                 * @enum {string|null}
+                 */
+                breakdown?: "name" | "user_id" | "session_id" | "environment" | null;
+                /**
+                 * WidgetDisplay
+                 * @description Controls how the query result is rendered on the dashboard.
+                 */
+                display: {
+                    /**
+                     * Type
+                     * @enum {string}
+                     */
+                    type: "line" | "area" | "bar" | "pie" | "number" | "table" | "histogram";
+                };
+                /** Filters */
+                filters?: {
+                    /**
+                     * Field
+                     * @enum {string}
+                     */
+                    field: "name" | "user_id" | "session_id" | "environment" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "error_count";
+                    /** Key */
+                    key?: string;
+                    /**
+                     * Op
+                     * @enum {string}
+                     */
+                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    /** Value */
+                    value: ((string | number) | (number | string)) | string | number;
+                }[];
+                /**
+                 * WidgetMetric
+                 * @description The measure and aggregation function that define the widget's y-axis.
+                 */
+                metric: {
+                    /**
+                     * Agg
+                     * @enum {string}
+                     */
+                    agg: "count" | "sum" | "avg" | "min" | "max" | "p50" | "p75" | "p90" | "p95" | "p99" | "uniq";
+                    /**
+                     * Measure
+                     * @enum {string}
+                     */
+                    measure: "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "count" | "error_count";
+                };
+                /**
+                 * View
+                 * @constant
+                 */
+                view: "traces";
+            } | components["schemas"]["TraceFeedSpec"];
+            /** Title */
+            title?: string;
+        };
+        /**
+         * UpdateWidgetResponse
+         * @description The updated widget.
+         */
+        UpdateWidgetResponse: {
+            /** Changed */
+            changed: string[];
+            /** Updated */
+            updated: boolean;
+            widget: components["schemas"]["WidgetRow"];
+        };
+        /**
+         * UpdateWorkspaceRequest
+         * @description Body for renaming a workspace the caller administers.
+         */
+        UpdateWorkspaceRequest: {
+            /** Name */
+            name?: string;
+        };
+        /**
+         * UpdateWorkspaceResponse
+         * @description The updated workspace.
+         */
+        UpdateWorkspaceResponse: {
+            /** Changed */
+            changed: string[];
+            /** Updated */
+            updated: boolean;
+            workspace: components["schemas"]["WorkspaceRow"];
+        };
+        /**
          * UpsertResultRequest
          * @description Upsert one test-case result. Idempotent on (``run_id``, ``test_case_id``).
          *     ``trace_id`` may be null now and set on a later call (out-of-order arrival).
@@ -2992,6 +3898,81 @@ export interface components {
             workspace_name: string | null;
         };
         /**
+         * WidgetDataResponse
+         * @description One saved widget answered for one window.
+         *
+         *     The per-widget answer of a dashboard data read, addressed by widget id:
+         *     ``status`` says what happened — ``ok`` carries the engine's columns/rows/
+         *     meta; ``skipped`` is a feed or legacy detector widget (a trace list, not
+         *     an aggregate — read those with ``list_traces`` and the feed's filters);
+         *     ``error`` carries a short reason and no rows when the stored spec no
+         *     longer validates or the engine rejects it — so a broken widget is still a
+         *     200 a script can branch on. One widget has no fan-out to protect, so the
+         *     rows follow ``run_widget_query``: a series comes back whole and every
+         *     other display returns what the engine returns. ``truncated`` is kept for
+         *     parity with the dashboard read and is always false here. ``window`` is
+         *     the window the rows were answered for — the one to name with any figure.
+         */
+        WidgetDataResponse: {
+            /** Columns */
+            columns?: string[] | null;
+            /** Error */
+            error?: string | null;
+            /** Meta */
+            meta?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rows */
+            rows?: unknown[][] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "skipped" | "error";
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            widget: components["schemas"]["WidgetRef"];
+            window: components["schemas"]["QueryWindow"];
+        };
+        /**
+         * WidgetDetail
+         * @description One saved widget, as stored, with the dashboard it belongs to.
+         *
+         *     ``spec`` is exactly what the create parsed (defaults filled, unknown keys
+         *     stripped), so what a caller reads is what the engine runs. ``dashboard_id``
+         *     and ``dashboard_name`` let a caller holding only a widget id climb to the
+         *     dashboard without a second read. Widgets record no creator.
+         */
+        WidgetDetail: {
+            /**
+             * Create Time
+             * Format: date-time
+             */
+            create_time: string;
+            /** Dashboard Id */
+            dashboard_id: string;
+            /** Dashboard Name */
+            dashboard_name: string;
+            /** Display Config */
+            display_config: unknown;
+            /** Id */
+            id: string;
+            /** Spec */
+            spec: unknown;
+            /** Title */
+            title: string;
+            /** Type */
+            type: string;
+            /**
+             * Update Time
+             * Format: date-time
+             */
+            update_time: string;
+        };
+        /**
          * WidgetDisplay
          * @description Controls how the query result is rendered on the dashboard.
          */
@@ -3073,6 +4054,34 @@ export interface components {
             window: components["schemas"]["QueryWindow"];
         };
         /**
+         * WidgetRef
+         * @description The identity of the widget a data read answered, with its dashboard.
+         */
+        WidgetRef: {
+            /** Dashboard Id */
+            dashboard_id: string;
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Type */
+            type: string;
+        };
+        /**
+         * WidgetRow
+         * @description A widget as the write service returns it.
+         */
+        WidgetRow: {
+            /** Dashboard Id */
+            dashboard_id: string;
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Type */
+            type: string;
+        };
+        /**
          * WidgetSpec
          * @description Full declarative specification of a single dashboard widget.
          *
@@ -3098,6 +4107,18 @@ export interface components {
          * @description A workspace the authenticated user belongs to, with their role in it.
          */
         WorkspaceListItem: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+        };
+        /**
+         * WorkspaceRow
+         * @description A workspace as the write service returns it: id, name, the caller's role.
+         */
+        WorkspaceRow: {
             /** Id */
             id: string;
             /** Name */
@@ -3318,6 +4339,256 @@ export interface operations {
             };
         };
     };
+    delete_alert: {
+        parameters: {
+            query: {
+                /** @description The project the resource belongs to */
+                project_id: string;
+                /** @description Why the resource is being deleted; recorded on the audit row */
+                reason: string;
+            };
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteAlertResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_alert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAlertRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateAlertResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_alert_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateAlertResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A parked alert cannot be paused; resume it to run it again */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_dashboards: {
         parameters: {
             query?: {
@@ -3497,6 +4768,185 @@ export interface operations {
                 };
             };
             /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_dashboard: {
+        parameters: {
+            query: {
+                /** @description The project the resource belongs to */
+                project_id: string;
+                /** @description Why the resource is being deleted; recorded on the audit row */
+                reason: string;
+            };
+            header?: never;
+            path: {
+                dashboard_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteDashboardResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Cannot delete a project's last dashboard */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_dashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDashboardRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateDashboardResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4358,6 +5808,176 @@ export interface operations {
             };
         };
     };
+    delete_detector: {
+        parameters: {
+            query: {
+                /** @description The project the resource belongs to */
+                project_id: string;
+                /** @description Why the resource is being deleted; recorded on the audit row */
+                reason: string;
+            };
+            header?: never;
+            path: {
+                detector_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteDetectorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_detector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                detector_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDetectorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateDetectorResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_evaluation_runs: {
         parameters: {
             query?: {
@@ -4434,6 +6054,84 @@ export interface operations {
             };
             /** @description Rate limit exceeded */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    register_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterRunResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4893,6 +6591,174 @@ export interface operations {
             };
             /** @description Not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_project: {
+        parameters: {
+            query: {
+                /** @description Why the resource is being deleted; recorded on the audit row */
+                reason: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteProjectResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateProjectResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already in use */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5823,6 +7689,293 @@ export interface operations {
             };
         };
     };
+    get_widget: {
+        parameters: {
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                widget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WidgetDetail"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Widget not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_widget: {
+        parameters: {
+            query: {
+                /** @description The project the resource belongs to */
+                project_id: string;
+                /** @description Why the resource is being deleted; recorded on the audit row */
+                reason: string;
+            };
+            header?: never;
+            path: {
+                widget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteWidgetResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_widget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                widget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWidgetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateWidgetResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_widget_data: {
+        parameters: {
+            query?: {
+                /** @description A preset window ending now, by the site picker's id. Give this or explicit start_time/end_time; neither means the site's 24-hour default. */
+                range?: ("30m" | "1h" | "3h" | "6h" | "1d" | "7d" | "14d" | "30d" | "60d" | "90d") | null;
+                start_time?: string | null;
+                end_time?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                widget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WidgetDataResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Widget not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_workspaces: {
         parameters: {
             query?: never;
@@ -5929,6 +8082,185 @@ export interface operations {
                 };
             };
             /** @description Name already used by a workspace the user no longer administers */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_workspace: {
+        parameters: {
+            query: {
+                /** @description The workspace's current name, typed as confirmation */
+                name: string;
+                /** @description Why the resource is being deleted; recorded on the audit row */
+                reason: string;
+            };
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteWorkspaceResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The typed name does not match, or this is the caller's only workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateWorkspaceResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already in use */
             409: {
                 headers: {
                     [name: string]: unknown;
