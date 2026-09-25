@@ -21,6 +21,7 @@ traceroot traces get <trace-id> --project <id>    # inspect one
 traceroot traces export <trace-id> --project <id> # export its bundle to a directory
 traceroot detectors list --project <id>           # list your detectors (copy a detector id)
 traceroot findings list --since 24h --project <id> # list recent detector findings
+traceroot evals list --project <id>               # list your evaluations (copy an evaluation id)
 traceroot logout                      # revoke the session and clear the credential
 ```
 
@@ -71,7 +72,7 @@ traceroot traces list
 ### Project scoping
 
 A browser login identifies *you*, not a project, so project-scoped reads
-(traces, detectors, findings) need a project id: `--project <id>` >
+(traces, detectors, findings, datasets, evals) need a project id: `--project <id>` >
 `TRACEROOT_PROJECT_ID` > `project_id` in the config file. Run
 `traceroot projects list` to find one. API keys are already project-scoped and
 need none of this.
@@ -118,6 +119,13 @@ need none of this.
 | `workspaces delete <id>` | Permanently delete a workspace and everything in it. Not reversible. `--name <current-name>` (typed as confirmation), `--reason <text>` |
 | `sql [query]` | Run one read-only SQL query over your project's spans and traces. Prints a table, CSV with `--csv`, or JSON with `--json`. `--file <path>`, `--param <name=value>`, `--max-rows <n>`, `--output <file>` |
 | `sql schema` | List the tables and columns a query may reference, with their types. |
+| `datasets list` | List the project's evaluation datasets, newest first, with each one's current published version. `--limit <n>`, `--name <substring>` |
+| `datasets get <id>` | Show one dataset: name, key, description, and the version its cases are read from. A dataset with nothing published says so. |
+| `datasets versions list <dataset-id>` | List a dataset's published versions, newest first, with each one's case count; `*` marks the current one. `--limit <n>` |
+| `datasets versions get <version-id>` | Show one immutable version and one page of its test cases (input, expected, and the trace a case was captured from) — 200 by default, up to 1000. `--limit <n>` |
+| `evals list` | List the project's evaluations, newest first: how many runs each has and how its latest one ended. The `EVALUATION ID` column is what `evals runs list --evaluation-id` takes. `--limit <n>`, `--name <substring>` |
+| `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--evaluation-id <id>`, `--status <status>` |
+| `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, and a link to open it. |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
@@ -150,10 +158,11 @@ where it goes. An API key is already scoped to one project and does not carry
 ### Generated commands
 
 `traces`, `detectors`, `findings`, `alerts`, `dashboards`, `widgets`,
-`workspaces`, `projects`, and `sql` are generated from the tool registry shipped
-in [`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools):
-each entry's input schema drives its flags, and its response type drives the
-default rendering. Adding a new backend endpoint to the CLI is a registry bump
+`workspaces`, `projects`, `sql`, `datasets`, and `evals` are generated from the
+tool registry shipped in
+[`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools): each
+entry's input schema drives its flags, and its response type drives the default
+rendering. Adding a new backend endpoint to the CLI is a registry bump
 plus one placement line in `src/registry/naming.ts` — no hand-written command
 handler needed. `login`, `logout`, `status`, `skills`, `instrument`, and
 `doctor` stay hand-written: they are auth flows or local tooling with no
@@ -213,6 +222,52 @@ were returned, table and CSV output warn on stderr and JSON sets `truncated`.
 `--max-rows <n>` asks for fewer rows, never more than the server allows. A
 query stopped by a server limit on time, memory, or result size fails with a
 hint to narrow it.
+
+### Evaluation reads
+
+Offline evaluations read from the terminal too: the datasets you run against,
+the versions of them you published, and the runs that scored them. Start at
+`evals list` — a run id used to be reachable only from the web app.
+
+```sh
+traceroot evals list                           # what exists, and how each one's latest run ended
+traceroot evals runs list --evaluation-id <id> # that evaluation's runs, newest first
+traceroot evals runs get <run-id>              # one run: counts, per-scorer means, cost and duration
+traceroot evals runs list --status failed --limit 5
+```
+
+Datasets read the same way, from the dataset down to the cases in one published
+version:
+
+```sh
+traceroot datasets list --name triage
+traceroot datasets versions list <dataset-id>            # every published version, `*` on the current one
+traceroot datasets versions get <version-id> --limit 50  # its cases: input, expected, source trace
+traceroot evals runs get <run-id> --json > run.json      # warnings go to stderr, so the file stays valid JSON
+```
+
+Four things these reads do deliberately:
+
+- **An absent value prints `—`, never `0`.** A run still going has no scored,
+  task-error or scorer-error count yet, and an em dash says so; `0` would claim a
+  measurement nobody made. `(none)` is the third case: a thing that exists and
+  has no value yet, like a dataset with no published version.
+- **Each read returns one page.** There is no cursor flag, so when more matched
+  than came back the command says so on stderr and names the ceiling. The lists
+  return 50 by default and take `--limit` up to 200; `datasets versions get`
+  reads 200 cases by default and takes `--limit` up to 1000. Past that ceiling is
+  not reachable from the CLI.
+- **`evals runs get` reports means, not totals.** A numeric score's value is its
+  mean over the results that carried it, a boolean score's is the share that came
+  back true, and a categorical score has no mean at all. Cost and duration are
+  labelled `(mean per case)`: a run's total cost is a different, larger number.
+- **A run row carries no scores, counts or cost.** Those are aggregates over one
+  run's results, so `evals runs list` stays identity and outcome, and
+  `evals runs get` does the arithmetic one run at a time.
+
+Dataset names, case inputs and run URLs are whatever an SDK or a captured trace
+stored, so they print with control characters escaped: nothing read back out of
+your own data can move the cursor or repaint the terminal.
 
 ### Exit codes
 
