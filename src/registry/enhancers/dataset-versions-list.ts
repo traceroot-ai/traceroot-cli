@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { DatasetVersionList } from "../../api/client.js";
-import { type Writers, logProgress, writeJson } from "../../output.js";
+import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { parseLimit } from "../../time/range.js";
@@ -12,6 +12,7 @@ import {
   countLine,
   limitBounds,
   orDash,
+  renderEmptyPage,
   warnIfCapped,
   when,
 } from "./eval-reads.js";
@@ -28,7 +29,14 @@ export function renderVersionList(
 ): void {
   const rows = res.versions ?? [];
   if (rows.length === 0) {
-    logProgress("no versions published for this dataset", writers);
+    renderEmptyPage(
+      "no versions published for this dataset",
+      state.limit,
+      "list_dataset_versions",
+      res.next_cursor,
+      "version",
+      writers,
+    );
     return;
   }
   const styler = createStyler(writers.out);
@@ -41,7 +49,10 @@ export function renderVersionList(
       // A real count or an em dash — never 0 for "not reported".
       orDash(v.case_count),
       when(v.created_at, timeZone),
-      v.is_current === true ? "*" : "",
+      // Blank is a statement — "this is not the current version" — so it is kept
+      // for a reported `false`. A version whose currency the server never said
+      // anything about reads as absent, like every other unreported cell.
+      v.is_current === true ? "*" : v.is_current === false ? "" : "—",
     ]),
     { headerStyle: styler.bold },
   );

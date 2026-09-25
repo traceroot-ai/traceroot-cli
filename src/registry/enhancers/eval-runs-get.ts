@@ -37,6 +37,12 @@ function count(n: number | null | undefined, noun: string, countable = false): s
  * carries one of those statuses. Released SDK versions still write them, but
  * current ones report per-score results instead, and a pair of zeros would claim a
  * verdict nobody gave.
+ *
+ * The last four come from two different places, which is why they are all here.
+ * The task and scorer error counts are what the SDK tallied and reported, so they
+ * are absent until the run completes; `errored` and `not scored` are counted from
+ * the stored results' own statuses. Leaving `errored` out would show a run whose
+ * cases blew up as a run that merely scored nothing.
  */
 export function resultsLine(run: Run): string {
   const parts = [count(run.result_count, "reported"), count(run.scored_count, "scored")];
@@ -46,6 +52,7 @@ export function resultsLine(run: Run): string {
   parts.push(
     count(run.task_error_count, "task error", true),
     count(run.scorer_error_count, "scorer error", true),
+    count(run.errored_count, "errored"),
     count(run.not_scored_count, "not scored"),
   );
   return parts.join(" · ");

@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { DatasetVersion } from "../../api/client.js";
-import { type Writers, logProgress, writeJson } from "../../output.js";
+import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { parseLimit } from "../../time/range.js";
@@ -13,6 +13,7 @@ import {
   countLine,
   limitBounds,
   orDash,
+  renderEmptyPage,
   renderFields,
   warnIfCapped,
 } from "./eval-reads.js";
@@ -52,7 +53,14 @@ export function renderVersion(res: VersionResponse, state: PagedState, writers: 
 
   const items = res.items ?? [];
   if (items.length === 0) {
-    logProgress("this version has no test cases", writers);
+    renderEmptyPage(
+      "this version has no test cases",
+      state.limit,
+      "get_dataset_version",
+      res.next_cursor,
+      "case",
+      writers,
+    );
     return;
   }
   // `input`, `expected` and `metadata` are arbitrary JSON, so they are clipped to

@@ -171,6 +171,14 @@ describe("datasets versions list", () => {
             created_at: "2026-09-01T10:00:00Z",
             is_current: true,
           },
+          {
+            dataset_version_id: "dsv_2",
+            version_number: 2,
+            label: "v2",
+            case_count: 118,
+            created_at: "2026-08-01T10:00:00Z",
+            is_current: false,
+          },
           { dataset_version_id: "dsv_0", version_number: 2, label: null, case_count: null },
         ],
       },
@@ -181,9 +189,14 @@ describe("datasets versions list", () => {
     expect(out.data).toContain("120");
     // An absent count renders as an em dash — "not reported" is not "zero cases".
     // Checked cell by cell on that row, so a regression to 0 cannot hide behind
-    // an em dash printed elsewhere.
+    // an em dash printed elsewhere. The last cell is CURRENT: this row says
+    // nothing about it, which is not the same as saying it is not current.
     const row = out.data.split("\n").find((line) => line.startsWith("dsv_0"));
-    expect(row?.trim().split(/\s+/)).toEqual(["dsv_0", "2", "—", "—", "—"]);
+    expect(row?.trim().split(/\s+/)).toEqual(["dsv_0", "2", "—", "—", "—", "—"]);
+    // A reported `false` keeps the blank cell: there, the server did say.
+    const reported = out.data.split("\n").find((line) => line.startsWith("dsv_2"));
+    expect(reported?.trim()).toMatch(/118/);
+    expect(reported?.trim().endsWith("—")).toBe(false);
   });
 
   it("shows when a version was created in local time, not the UTC date", () => {
@@ -287,8 +300,26 @@ describe("evals runs get", () => {
 
   it("prints an absent count as an em dash, never 0", () => {
     expect(resultsLine({ evaluation_name: "e", status: "running" })).toBe(
-      "— reported · — scored · — task errors · — scorer errors · — not scored",
+      "— reported · — scored · — task errors · — scorer errors · — errored · — not scored",
     );
+  });
+
+  it("counts the cases that errored, separately from the SDK's own error tallies", () => {
+    // errored_count is derived from the stored results' statuses, while the task
+    // and scorer tallies are what the SDK reported; a run can carry both, and the
+    // errored cases must not vanish into "not scored".
+    const line = resultsLine({
+      evaluation_name: "e",
+      status: "completed",
+      result_count: 10,
+      scored_count: 7,
+      task_error_count: 0,
+      scorer_error_count: 0,
+      errored_count: 3,
+      not_scored_count: 0,
+    });
+    expect(line).toContain("3 errored");
+    expect(line).toContain("0 not scored");
   });
 
   it("shows passed and failed when results carry them, and leaves them out otherwise", () => {
@@ -428,12 +459,23 @@ describe("evals list", () => {
     expect(latestRun({ run_number: 3, status: "failed" })).toBe("#3 failed");
     // A run the server reported without a number is not the same as no run at all.
     expect(latestRun({ status: "running" })).toBe("#— running");
+    // Nor is a server that said nothing about the lineage: null is the read
+    // stating there are no runs, undefined is the field never arriving.
+    expect(latestRun(undefined)).toBe("—");
   });
 
   it("says so when the project has no evaluations", () => {
     const { w, err } = sinks();
     renderEvaluationList({ evaluations: [] }, {}, w);
     expect(err.data).toContain("no evaluations");
+  });
+
+  it("does not call an empty page an empty project when a cursor says there is more", () => {
+    const { w, err } = sinks();
+    renderEvaluationList({ evaluations: [], next_cursor: "ev_9" }, { limit: 2 }, w);
+    expect(err.data).toContain("no evaluations on this page");
+    // The same response already warns in --json; the table must not stay silent.
+    expect(err.data).toContain("there are more");
   });
 
   it("warns when the page is not every evaluation", () => {
@@ -548,6 +590,8 @@ describe("wiring", () => {
       ["datasets", "get", "ds_1"],
       ["datasets", "versions", "list", "ds_1"],
       ["datasets", "versions", "get", "dsv_1"],
+      ["evals", "list"],
+      ["evals", "runs", "list"],
       ["evals", "runs", "get", "r_1"],
     ]) {
       const h = harness({});

@@ -1,7 +1,7 @@
 import { REGISTRY } from "@traceroot-ai/tools";
 import type { Command } from "commander";
 import type { EvaluationRunList } from "../../api/client.js";
-import { CliError, ExitCode, type Writers, logProgress, writeJson } from "../../output.js";
+import { CliError, ExitCode, type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { parseLimit } from "../../time/range.js";
@@ -13,6 +13,7 @@ import {
   countLine,
   limitBounds,
   orDash,
+  renderEmptyPage,
   warnIfCapped,
   when,
 } from "./eval-reads.js";
@@ -41,7 +42,14 @@ export function renderRunList(
 ): void {
   const rows = res.runs ?? [];
   if (rows.length === 0) {
-    logProgress("no evaluation runs", writers);
+    renderEmptyPage(
+      "no evaluation runs",
+      state.limit,
+      "list_evaluation_runs",
+      res.next_cursor,
+      "evaluation run",
+      writers,
+    );
     return;
   }
   const styler = createStyler(writers.out);

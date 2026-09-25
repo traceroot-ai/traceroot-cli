@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { EvaluationList } from "../../api/client.js";
-import { type Writers, logProgress, writeJson } from "../../output.js";
+import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { parseLimit } from "../../time/range.js";
@@ -12,6 +12,7 @@ import {
   countLine,
   limitBounds,
   orDash,
+  renderEmptyPage,
   warnIfCapped,
   when,
 } from "./eval-reads.js";
@@ -23,11 +24,14 @@ type Evaluation = NonNullable<EvaluationListResponse["evaluations"]>[number];
 /**
  * The run this evaluation last started, as one cell: `#12 completed`.
  *
- * `(none)` is for an evaluation that exists and has never run — a different
- * fact from a run whose number or status the server did not report.
+ * Three different facts, three different cells. `(none)` is an evaluation that
+ * exists and has never run, which the read states by sending `latest_run: null`.
+ * `—` is a server that said nothing about the lineage at all. And a run whose
+ * number or status is missing keeps the part it did report.
  */
 export function latestRun(run: Evaluation["latest_run"]): string {
-  if (run === null || run === undefined) return "(none)";
+  if (run === null) return "(none)";
+  if (run === undefined) return "—";
   return `#${orDash(run.run_number)} ${orDash(run.status)}`;
 }
 
@@ -40,7 +44,14 @@ export function renderEvaluationList(
 ): void {
   const rows = res.evaluations ?? [];
   if (rows.length === 0) {
-    logProgress("no evaluations", writers);
+    renderEmptyPage(
+      "no evaluations",
+      state.limit,
+      "list_evaluations",
+      res.next_cursor,
+      "evaluation",
+      writers,
+    );
     return;
   }
   const styler = createStyler(writers.out);

@@ -125,6 +125,29 @@ export function countLine(count: number, noun: string, writers: Writers): void {
 }
 
 /**
+ * What to say when a page came back empty.
+ *
+ * An empty PAGE and an empty RESULT are different facts, and only the response
+ * can tell them apart: a `next_cursor` means the server has more to give, so
+ * "no datasets" would be a claim about the project that the payload does not
+ * support. `--json` already warns on this response — it hands the body over and
+ * calls {@link warnIfCapped} unconditionally — so an early return here would
+ * make the two output modes disagree about the same bytes.
+ */
+export function renderEmptyPage(
+  message: string,
+  requested: number | undefined,
+  tool: string,
+  nextCursor: unknown,
+  noun: string,
+  writers: Writers,
+): void {
+  const hasMore = typeof nextCursor === "string" && nextCursor !== "";
+  logProgress(hasMore ? `no ${plural(2, noun)} on this page` : message, writers);
+  warnIfCapped(0, requested, tool, nextCursor, noun, writers);
+}
+
+/**
  * Says, out loud, when a page is all there is.
  *
  * These routes are cursor-paged and the CLI deliberately exposes no `--cursor`,

@@ -50,10 +50,12 @@ describe("tool placements", () => {
       const segments = key.split(" ");
       if (segments.length === 1) return;
       const parent = segments.slice(0, -1).join(" ");
-      expect(declared.indexOf(parent), `'${key}' precedes its parent '${parent}'`).toBeGreaterThan(
-        -1,
-      );
-      expect(declared.indexOf(parent)).toBeLessThan(index);
+      // Two different failures, so two different messages: -1 means the parent
+      // group was never declared at all, while an index above this one means it
+      // was declared too late for `--help` to nest under it.
+      const parentIndex = declared.indexOf(parent);
+      expect(parentIndex, `'${key}' has no declared parent '${parent}'`).toBeGreaterThan(-1);
+      expect(parentIndex, `'${key}' is declared before its parent '${parent}'`).toBeLessThan(index);
     });
   });
 });

@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { DatasetList } from "../../api/client.js";
-import { type Writers, logProgress, writeJson } from "../../output.js";
+import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { parseLimit } from "../../time/range.js";
@@ -13,6 +13,7 @@ import {
   limitBounds,
   orDash,
   orNone,
+  renderEmptyPage,
   warnIfCapped,
   when,
 } from "./eval-reads.js";
@@ -29,7 +30,14 @@ export function renderDatasetList(
 ): void {
   const rows = res.datasets ?? [];
   if (rows.length === 0) {
-    logProgress("no datasets", writers);
+    renderEmptyPage(
+      "no datasets",
+      state.limit,
+      "list_datasets",
+      res.next_cursor,
+      "dataset",
+      writers,
+    );
     return;
   }
   // No case count: a count lives on a version, where it is one grouped aggregate
