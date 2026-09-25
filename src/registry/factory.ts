@@ -25,16 +25,36 @@ type CommandPlacement = Extract<Placement, { kind: "command" }>;
 
 const registryByName = new Map(REGISTRY.map((entry) => [entry.name, entry]));
 
+/**
+ * The command group at `path`, creating each level that does not exist yet.
+ *
+ * `path` is the group's segments, and its description is looked up under the
+ * space-joined form — so `["datasets", "versions"]` reads its help text from
+ * `GROUPS["datasets versions"]`. Nesting exists because some resources are
+ * genuinely two deep (a dataset's versions, an evaluation's runs) and naming
+ * them flat would either collide or abbreviate into nonsense.
+ */
 export function ensureGroup(
   program: Command,
-  name: string,
+  path: string | string[],
   groups: Record<string, string> = GROUPS,
 ): Command {
-  const existing = program.commands.find((cmd) => cmd.name() === name);
-  if (existing !== undefined) return existing;
-  const description = groups[name];
-  if (description === undefined) throw new Error(`no group description for '${name}'`);
-  return program.command(name).description(description).helpCommand(false);
+  const segments = typeof path === "string" ? path.split(" ") : path;
+  let parent = program;
+  const walked: string[] = [];
+  for (const name of segments) {
+    walked.push(name);
+    const existing = parent.commands.find((cmd) => cmd.name() === name);
+    if (existing !== undefined) {
+      parent = existing;
+      continue;
+    }
+    const key = walked.join(" ");
+    const description = groups[key];
+    if (description === undefined) throw new Error(`no group description for '${key}'`);
+    parent = parent.command(name).description(description).helpCommand(false);
+  }
+  return parent;
 }
 
 export function registerRegistryCommands(program: Command, deps: RegistryDeps = {}): void {
@@ -67,23 +87,23 @@ function registerOne(
   deps: RegistryDeps,
 ): void {
   const parent =
-    placement.path.length === 2 ? ensureGroup(program, placement.path[0], deps.groups) : program;
+    placement.path.length > 1
+      ? ensureGroup(program, placement.path.slice(0, -1), deps.groups)
+      : program;
   const name = placement.path[placement.path.length - 1] as string;
   const enhancer: Enhancer | undefined = ENHANCERS[entry.name];
   const positionals = pathParams(entry);
   // Own the stray-operand contract ourselves (defaultResolveArgs / an
   // enhancer's resolveArgs via rejectExtras): commander 13 defaults
   // excessArguments to reject, which would preempt our message.
-  // A top-level command can also be a group: `sql` runs a query and `sql schema`
-  // is its subcommand. The group already exists (registerCommands pre-creates
-  // every GROUPS entry), so reuse it rather than register a second `sql`. Any
-  // other name collision still throws, as commander does for duplicates.
+  // A command can also be a group, at any depth: `sql` runs a query and
+  // `sql schema` is its subcommand. When this path is a group, reuse the group
+  // (creating it if no deeper placement has yet) rather than register a second
+  // command under the same name. Any other name collision still throws, as
+  // commander does for duplicates.
   const groups = deps.groups ?? GROUPS;
-  const existingGroup =
-    placement.path.length === 1 && Object.hasOwn(groups, name)
-      ? program.commands.find((command) => command.name() === name)
-      : undefined;
-  const cmd = (existingGroup ?? parent.command(name))
+  const isGroup = Object.hasOwn(groups, placement.path.join(" "));
+  const cmd = (isGroup ? ensureGroup(program, placement.path, groups) : parent.command(name))
     .description(enhancer?.description ?? entry.description)
     .allowExcessArguments();
 
@@ -123,7 +143,7 @@ function registerOne(
 
   cmd.action(async (...actionArgs: unknown[]) => {
     const command = actionArgs[actionArgs.length - 1] as Command;
-    if (placement.path.length === 2) rejectGroupOptions(command);
+    if (placement.path.length > 1) rejectGroupOptions(command, placement.path.join(" "));
     const declared = command.registeredArguments.length;
     const values = command.processedArgs.slice(0, declared) as (string | undefined)[];
     const positionalRecord: Record<string, string | undefined> = {};
@@ -206,15 +226,20 @@ function registerOne(
  * also a command (`sql`), `sql schema --csv` would hand `--csv` to `sql` and run
  * the subcommand as if it were never given. Refuse it instead of dropping it.
  */
-function rejectGroupOptions(command: Command): void {
-  const group = command.parent;
-  if (group === null) return;
-  for (const option of group.options) {
-    if (group.getOptionValue(option.attributeName()) !== undefined) {
-      throw new CliError(
-        `${option.long ?? option.flags} is not an option of '${group.name()} ${command.name()}'`,
-        ExitCode.usage,
-      );
+/**
+ * An option given to any group between the program and this command was meant
+ * for another command, and silently dropping it would run this one without it.
+ * Walks every ancestor group, so a nested command is covered at each level.
+ */
+function rejectGroupOptions(command: Command, fullName: string): void {
+  for (let group = command.parent; group !== null && group.parent !== null; group = group.parent) {
+    for (const option of group.options) {
+      if (group.getOptionValue(option.attributeName()) !== undefined) {
+        throw new CliError(
+          `${option.long ?? option.flags} is not an option of '${fullName}'`,
+          ExitCode.usage,
+        );
+      }
     }
   }
 }

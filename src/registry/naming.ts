@@ -9,10 +9,11 @@
 export type Placement =
   | {
       kind: "command";
-      /** [group, subcommand] or [top-level name]. Positional arguments are
-       * derived by the factory from the tool's path template ({placeholders}),
-       * so they are never declared here. */
-      path: [string, string] | [string];
+      /** [top-level name], [group, subcommand], or [group, subgroup, subcommand].
+       * Every segment but the last is a group and needs a GROUPS entry under its
+       * space-joined path. Positional arguments are derived by the factory from
+       * the tool's path template ({placeholders}), so they are never declared here. */
+      path: [string] | [string, string] | [string, string, string];
     }
   | {
       /** Dispatched by another command's enhancer; never gets its own command. */
@@ -59,15 +60,30 @@ export const PLACEMENTS: Record<string, Placement> = {
   list_alerts: { kind: "command", path: ["alerts", "list"] },
   get_alert: { kind: "command", path: ["alerts", "get"] },
   create_alert: { kind: "command", path: ["alerts", "create"] },
+  update_alert: { kind: "command", path: ["alerts", "update"] },
+  set_alert_status: { kind: "command", path: ["alerts", "status"] },
+  delete_alert: { kind: "command", path: ["alerts", "delete"] },
   list_dashboards: { kind: "command", path: ["dashboards", "list"] },
   get_dashboard: { kind: "command", path: ["dashboards", "get"] },
   create_dashboard: { kind: "command", path: ["dashboards", "create"] },
+  update_dashboard: { kind: "command", path: ["dashboards", "update"] },
+  delete_dashboard: { kind: "command", path: ["dashboards", "delete"] },
   list_workspaces: { kind: "command", path: ["workspaces", "list"] },
   list_projects: { kind: "command", path: ["projects", "list"] },
   create_workspace: { kind: "command", path: ["workspaces", "create"] },
+  update_workspace: { kind: "command", path: ["workspaces", "update"] },
+  delete_workspace: { kind: "command", path: ["workspaces", "delete"] },
   create_project: { kind: "command", path: ["projects", "create"] },
+  update_project: { kind: "command", path: ["projects", "update"] },
+  delete_project: { kind: "command", path: ["projects", "delete"] },
   create_detector: { kind: "command", path: ["detectors", "create"] },
+  update_detector: { kind: "command", path: ["detectors", "update"] },
+  delete_detector: { kind: "command", path: ["detectors", "delete"] },
+  get_widget: { kind: "command", path: ["widgets", "get"] },
+  get_widget_data: { kind: "command", path: ["widgets", "data"] },
   create_widget: { kind: "command", path: ["widgets", "create"] },
+  update_widget: { kind: "command", path: ["widgets", "update"] },
+  delete_widget: { kind: "command", path: ["widgets", "delete"] },
   run_sql: { kind: "command", path: ["sql"] },
   get_sql_schema: { kind: "command", path: ["sql", "schema"] },
   get_dashboard_data: {
@@ -78,9 +94,20 @@ export const PLACEMENTS: Record<string, Placement> = {
     kind: "internal",
     note: "no CLI surface yet: a widget's own query belongs with the dashboards commands",
   },
+  list_datasets: { kind: "command", path: ["datasets", "list"] },
+  get_dataset: { kind: "command", path: ["datasets", "get"] },
+  list_dataset_versions: { kind: "command", path: ["datasets", "versions", "list"] },
+  get_dataset_version: { kind: "command", path: ["datasets", "versions", "get"] },
+  list_evaluations: { kind: "command", path: ["evals", "list"] },
+  list_evaluation_runs: { kind: "command", path: ["evals", "runs", "list"] },
+  get_evaluation_run: { kind: "command", path: ["evals", "runs", "get"] },
 };
 
-/** Group commands in `--help` order, with the description each group shows. */
+/**
+ * Group commands in `--help` order, with the description each group shows.
+ * A nested group is keyed by its space-joined path ("datasets versions"), and
+ * must be listed after its parent so `--help` ordering follows declaration.
+ */
 export const GROUPS: Record<string, string> = {
   workspaces: "Discover your workspaces (user credentials)",
   projects: "Discover your projects (user credentials)",
@@ -91,4 +118,8 @@ export const GROUPS: Record<string, string> = {
   dashboards: "Work with dashboards",
   widgets: "Work with dashboard widgets",
   sql: "Query your spans and traces with SQL",
+  datasets: "Work with evaluation datasets",
+  "datasets versions": "Work with a dataset's published versions",
+  evals: "Work with evaluations",
+  "evals runs": "Read recorded evaluation runs",
 };

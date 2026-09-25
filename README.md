@@ -94,13 +94,28 @@ need none of this.
 | `alerts list` | List the project's threshold alerts with their status, severity and rule. `--limit <n>`, `--page <n>`, `--search <q>` |
 | `alerts get <id>` | Show one alert's full rule, filters, renotify and evaluation state. |
 | `alerts create` | Create a threshold alert. Takes the rule as JSON: `--from-file <path>` (or `-` for stdin), with flags overriding single fields. |
+| `alerts update <id>` | Edit an alert's rule. Fields left out are untouched; editing an evaluated field resets the alert's evaluation state. `--from-file <path>`, plus a flag per rule field |
+| `alerts status <id>` | Pause or resume an alert without touching its rule. `--status <ACTIVE\|PAUSED>` |
+| `alerts delete <id>` | Permanently delete an alert. `--reason <text>` (3–500 characters, recorded on the audit row) |
 | `dashboards list` | List the project's dashboards. |
 | `dashboards get <id>` | Show one dashboard. |
 | `dashboards create` | Create a dashboard. `--from-file <path>`, `--name`, `--description` |
+| `dashboards update <id>` | Rename a dashboard or change its description. `--from-file <path>`, `--name`, `--description` |
+| `dashboards delete <id>` | Permanently delete a dashboard and its widgets. `--reason <text>` |
+| `widgets get <id>` | Show one saved widget: its title, type and the query spec exactly as stored. |
+| `widgets data <id>` | Answer a saved widget for a window, without re-sending its spec. `--range <preset>`, `--start-time`/`--end-time` |
 | `widgets create` | Add a widget to a dashboard. `--from-file <path>`, `--dashboard-id`, `--title`, `--type`, `--spec` |
+| `widgets update <id>` | Edit a widget's title, spec or display config. A sent spec replaces the whole spec. `--from-file <path>`, `--title`, `--spec`, `--display-config` |
+| `widgets delete <id>` | Permanently delete one widget from its dashboard. `--reason <text>` |
 | `detectors create` | Create a detector. `--from-file <path>`, `--name`, `--template`, `--prompt` |
+| `detectors update <id>` | Edit a detector: prompt, enabled, sampling, RCA, output schema or trigger conditions. `--from-file <path>`, `--name`, `--prompt`, `--enabled`, `--sample-rate`, … |
+| `detectors delete <id>` | Permanently delete a detector; its findings stay readable. `--reason <text>` |
 | `projects create` | Create a project in a workspace. `--from-file <path>`, `--name`, `--workspace-id` |
+| `projects update <id>` | Rename a project or set its trace retention. Requires ADMIN. `--from-file <path>`, `--name`, `--trace-ttl-days` |
+| `projects delete <id>` | Delete a project; its API keys stop authenticating. Requires ADMIN. `--reason <text>` |
 | `workspaces create` | Create a workspace. `--from-file <path>`, `--name` |
+| `workspaces update <id>` | Rename a workspace you administer. `--from-file <path>`, `--name` |
+| `workspaces delete <id>` | Permanently delete a workspace and everything in it. Not reversible. `--name <current-name>` (typed as confirmation), `--reason <text>` |
 | `sql [query]` | Run one read-only SQL query over your project's spans and traces. Prints a table, CSV with `--csv`, or JSON with `--json`. `--file <path>`, `--param <name=value>`, `--max-rows <n>`, `--output <file>` |
 | `sql schema` | List the tables and columns a query may reference, with their types. |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |

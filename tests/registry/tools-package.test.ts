@@ -12,7 +12,7 @@ describe("@traceroot-ai/tools package", () => {
 
   it("every entry has an object input schema, and every write carries a policy", () => {
     for (const entry of REGISTRY) {
-      expect(["get", "post"]).toContain(entry.method);
+      expect(["get", "post", "patch", "delete"]).toContain(entry.method);
       expect(entry.inputSchema.type).toBe("object");
       expect(entry.inputSchema.additionalProperties).toBe(false);
       if (entry.method !== "get") {
@@ -23,7 +23,15 @@ describe("@traceroot-ai/tools package", () => {
         // today, so this pins the contract rather than any behaviour here.
         expect(["none", "confirm", "approval"]).toContain(entry.policy?.approvalClass);
         expect(["account", "workspace", "project"]).toContain(entry.policy?.tenancy);
+      }
+      // A DELETE carries nothing in its body: its parameters, including the
+      // confirmation ones the server insists on (a reason, and a workspace's
+      // name typed back), travel in the path and query. Anything else that
+      // changes state sends a body, which is what --from-file writes into.
+      if (entry.method === "post" || entry.method === "patch") {
         expect(entry.bodyParams?.length ?? 0).toBeGreaterThan(0);
+      } else if (entry.method === "delete") {
+        expect(entry.bodyParams).toBeUndefined();
       }
     }
   });
