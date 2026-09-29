@@ -109,3 +109,17 @@ describe("displaySkillPath", () => {
     expect(displaySkillPath(dir, target)).toBe("~/.codex/skills/x");
   });
 });
+
+describe("agent binaries", () => {
+  // `binary` is what lets setup report an agent as runnable: it is looked up on
+  // PATH, and its absence downgrades the agent rather than hiding it. An adapter
+  // that forgets the field silently loses that check.
+  it("names the binary to look for on PATH", () => {
+    expect(claudeAdapter.binary).toBe("claude");
+    expect(codexAdapter.binary).toBe("codex");
+  });
+
+  it("leaves the binary unset for the agent that has no CLI of its own", () => {
+    expect(genericAdapter.binary).toBeUndefined();
+  });
+});
