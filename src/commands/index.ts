@@ -5,6 +5,7 @@ import { registerDoctor } from "./doctor.js";
 import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
 import { registerLogout } from "./logout.js";
+import { registerSetup } from "./setup.js";
 import { registerSkills } from "./skills.js";
 import { registerStatus } from "./status.js";
 
@@ -14,6 +15,9 @@ import { registerStatus } from "./status.js";
  */
 export function registerCommands(program: Command, deps: RegistryDeps = {}): void {
   registerLogin(program);
+  // `setup` is the entry point a new user reaches first, so it is registered
+  // immediately after `login` and appears near the top of `--help`.
+  registerSetup(program);
   registerLogout(program);
   registerStatus(program);
   // Pre-create every TOP-LEVEL command group (in GROUPS order) so `--help` lists
