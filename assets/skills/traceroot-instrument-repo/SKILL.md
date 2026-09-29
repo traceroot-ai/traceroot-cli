@@ -31,16 +31,21 @@ Add TraceRoot tracing to an existing project. Tracing is **additive** — it nev
 
 ## Before writing code
 
-Turn the workflow below into a checklist (TodoWrite) and execute it in order. Don't skip steps.
+Work through the steps below in order. **Skip any step whose answer you were already given** — an
+automated caller may have established the runtime, the target service, or the credential before
+invoking this, and re-deriving those costs a round trip to reach the same answer.
 
 ## Workflow
 
-### 1. API key (non-blocking)
-TraceRoot reads `TRACEROOT_API_KEY` from the environment (or `.env`). If it is **not** set, do not stop: still add the instrumentation (it reads the key from the environment at runtime), and tell the user they must set `TRACEROOT_API_KEY` — found in the TraceRoot UI under project settings — before running the verification step. Never hardcode or print the key. Only stop early if you cannot determine which service/runtime to instrument (see step 3).
+### 1. API key (non-blocking — skip if you were told it is set)
+TraceRoot reads `TRACEROOT_API_KEY` from the environment (or `.env`). Do not grep or print it to
+confirm; if the SDK reports at runtime that it is missing, say so then. If it is **not** set, do not stop: still add the instrumentation (it reads the key from the environment at runtime), and tell the user they must set `TRACEROOT_API_KEY` — found in the TraceRoot UI under project settings — before running the verification step. Never hardcode or print the key. Only stop early if you cannot determine which service/runtime to instrument (see step 3).
 
 ### 2. Analyze (read-only — do not edit yet)
 - Detect the runtime (Python or TypeScript/Node.js). Read the dependency manifest (`pyproject.toml`/`requirements.txt` or `package.json`) and scan imports to see what is actually used.
-- Identify the LLM providers/frameworks in use (OpenAI, Anthropic, LangChain/LangGraph, and others). Coverage differs by runtime and changes over time — the canonical list is https://traceroot.ai/docs/integrations/overview. Match each library you find to its integration in the language reference; don't assume a library is unsupported without checking the docs.
+- Identify the LLM providers/frameworks in use (OpenAI, Anthropic, LangChain/LangGraph, and others). Coverage differs by runtime and changes over time, and the installed package is the current list —
+read the integration names from it rather than fetching a docs page. Match each library you find to
+its integration in the language reference; don't assume a library is unsupported without looking.
 - Check for **existing tracing/OpenTelemetry** (a `TracerProvider`, `opentelemetry` imports, another vendor's SDK) to avoid double-instrumentation.
 - Infer what user/session context is available:
 
