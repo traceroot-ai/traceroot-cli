@@ -10,6 +10,9 @@ import { type Writers, defaultWriters, writeJson } from "../output.js";
 import { statusSymbol } from "../render/status.js";
 import { createStyler } from "../render/style.js";
 import { type RepoDetection, detectRepo } from "../repo/detect.js";
+import { serviceArtifactDir } from "../setup/artifacts.js";
+import { readCheckpoint, setupRoot } from "../setup/checkpoint.js";
+import type { SetupCheckpoint } from "../setup/types.js";
 import { contextFromCommand } from "./shared.js";
 
 /** Ordered category → human heading. */
@@ -19,6 +22,7 @@ const CATEGORY_HEADINGS: ReadonlyArray<[DoctorCheck["category"], string]> = [
   ["agent_skills", "Agent skills"],
   ["repo", "Repo"],
   ["runtime_env", "Runtime env"],
+  ["setup", "Setup"],
 ];
 
 /** Dependencies for the testable core of `doctor`. */
@@ -32,6 +36,10 @@ export interface RunDoctorDeps {
   verifyCredentials?: (host: string, credential: ResolvedCredential) => Promise<boolean>;
   /** Injectable repo detection; defaults to scanning `cwd`. */
   detection?: RepoDetection;
+  /** The `setup` checkpoint; `undefined` means "read it from `cwd`". */
+  checkpoint?: SetupCheckpoint | null;
+  /** Force the Setup section even when no checkpoint exists (`setup doctor`). */
+  includeSetup?: boolean;
 }
 
 /**
@@ -56,6 +64,20 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
     credentialsValid = await deps.verifyCredentials(host, credential);
   }
 
+  // `undefined` means "read it"; an explicit `null` means "there is none",
+  // which keeps tests offline and free of filesystem surprises.
+  //
+  // Looks where setup would have written it — the service directory implied by
+  // where you are standing — and falls back to the repository root, both for
+  // checkpoints written before they moved and for a user running `doctor` from
+  // somewhere other than the directory they ran setup in. Diagnosing a run is
+  // exactly when being strict about the location would be least helpful.
+  const setupDir = setupRoot(cwd);
+  const checkpoint =
+    deps.checkpoint === undefined
+      ? (readCheckpoint(serviceArtifactDir({ root: setupDir, cwd })) ?? readCheckpoint(setupDir))
+      : deps.checkpoint;
+
   const report = buildDoctorReport({
     cwd,
     auth: ctx.auth,
@@ -63,6 +85,8 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
     configPath: deps.configPath,
     detection,
     env,
+    checkpoint,
+    includeSetup: deps.includeSetup,
   });
 
   if (ctx.json) {
