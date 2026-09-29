@@ -12,6 +12,16 @@ npm install -g traceroot-cli    # or install the `traceroot` command
 
 ## Quick start
 
+New to TraceRoot? One command takes a repository from a fresh account to a trace you
+can open — it signs you in, mints a project key, instruments your service with your
+coding agent, and waits for the first trace to arrive:
+
+```sh
+npx -y traceroot-cli@latest setup
+```
+
+Already instrumented, and here to read your data:
+
 ```sh
 traceroot login                       # sign in with your browser (device flow)
 traceroot status                      # confirm who you are
