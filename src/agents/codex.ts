@@ -23,6 +23,7 @@ function codexHome(): string {
  */
 export const codexAdapter: AgentAdapter = {
   id: "codex",
+  binary: "codex",
   displayName: "Codex",
   getSkillInstallPath(_cwd: string, skillName: string): string {
     return join(codexHome(), SKILLS_SUBDIR, skillName);
