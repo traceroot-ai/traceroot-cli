@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { homedir } from "node:os";
 import { claudeAdapter } from "../../src/agents/claude.js";
 import { codexAdapter } from "../../src/agents/codex.js";
 import { genericAdapter } from "../../src/agents/generic.js";
