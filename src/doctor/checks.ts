@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { ALL_AGENTS } from "../agents/index.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
+import type { SetupCheckpoint } from "../setup/types.js";
 import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
 
 /** Inputs for {@link buildDoctorReport}. All IO results are passed in pre-resolved. */
@@ -14,6 +15,14 @@ export interface DoctorInput {
   configPath: string;
   detection: RepoDetection;
   env: NodeJS.ProcessEnv;
+  /**
+   * The `setup` checkpoint, when one exists. Supplied by `setup doctor` and by
+   * a plain `doctor` run in a repository that has been set up. Absent means
+   * "setup has not run here", which is a neutral fact, not a failure.
+   */
+  checkpoint?: SetupCheckpoint | null;
+  /** Include the setup section even when no checkpoint exists (`setup doctor`). */
+  includeSetup?: boolean;
 }
 
 /**
@@ -278,6 +287,124 @@ function runtimeEnvChecks(input: DoctorInput): DoctorCheck[] {
   ];
 }
 
+/**
+ * Reports on a `setup` run: how far it got, and what is blocking completion.
+ *
+ * Driven entirely by the checkpoint, which is why the checkpoint exists — a
+ * setup that stopped at VERIFY_TRACE looks identical, from the outside, to one
+ * that never ran, and the difference is exactly what the user needs to be told.
+ *
+ * Only a *failed* setup is a hard failure here. A repository where setup has
+ * never run is a neutral warning: `doctor` is also useful to people who
+ * instrumented by hand.
+ */
+function setupChecks(input: DoctorInput): DoctorCheck[] {
+  const checkpoint = input.checkpoint;
+
+  if (checkpoint === undefined || checkpoint === null) {
+    return input.includeSetup === true
+      ? [
+          {
+            name: "setup_run",
+            category: "setup",
+            status: "warn",
+            message: "`traceroot setup` has not been run in this directory.",
+          },
+        ]
+      : [];
+  }
+
+  const checks: DoctorCheck[] = [];
+  const completed = new Set(checkpoint.completedStages);
+  const finished = completed.has("complete") && checkpoint.trace !== undefined;
+
+  checks.push({
+    name: "setup_completed",
+    category: "setup",
+    status: finished ? "pass" : "fail",
+    message: finished
+      ? `Setup completed on ${checkpoint.updatedAt}`
+      : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`traceroot setup --resume\`.`,
+  });
+
+  if (checkpoint.lastError !== undefined && !finished) {
+    checks.push({
+      name: "setup_last_error",
+      category: "setup",
+      status: "fail",
+      // The message was authored secret-free by SetupError; it is safe to echo.
+      message: `Last error (${checkpoint.lastError.code}): ${checkpoint.lastError.message.split("\n")[0]}`,
+    });
+  }
+
+  if (checkpoint.projectName !== undefined) {
+    checks.push({
+      name: "setup_project",
+      category: "setup",
+      status: "pass",
+      message: `Project: ${checkpoint.projectName}`,
+    });
+  }
+  if (checkpoint.projectKeyHint !== undefined) {
+    checks.push({
+      name: "setup_project_key",
+      category: "setup",
+      status: "pass",
+      // The hint is at most a prefix and four trailing characters.
+      message: `Project API key: ${checkpoint.projectKeyHint}`,
+    });
+  }
+  if (checkpoint.service !== undefined) {
+    checks.push({
+      name: "setup_service",
+      category: "setup",
+      status: "pass",
+      message: `Instrumented service: ${checkpoint.service.path} (${checkpoint.service.language}${
+        checkpoint.service.framework === null ? "" : `, ${checkpoint.service.framework}`
+      })`,
+    });
+  }
+  if (checkpoint.sdkVersion !== undefined) {
+    checks.push({
+      name: "setup_sdk_version",
+      category: "setup",
+      status: "pass",
+      message: `SDK version pinned: ${checkpoint.sdkVersion}`,
+    });
+  }
+
+  const application = checkpoint.application;
+  if (application !== undefined) {
+    checks.push({
+      name: "setup_application_verified",
+      category: "setup",
+      status: application.passed ? "pass" : application.skippedReason !== null ? "warn" : "fail",
+      message: application.passed
+        ? `Application passes \`${application.command}\` with and without TraceRoot credentials`
+        : (application.skippedReason ??
+          `Application check \`${application.command}\` did not pass`),
+    });
+  }
+
+  checks.push({
+    name: "setup_first_trace",
+    category: "setup",
+    status: checkpoint.trace === undefined ? "fail" : "pass",
+    message:
+      checkpoint.trace === undefined
+        ? "No first trace has been observed. Run the instrumented application, then `traceroot setup --resume`."
+        : `First trace: ${checkpoint.trace.traceUrl}`,
+  });
+
+  return checks;
+}
+
+/** The furthest stage a checkpoint recorded, for the "stopped at" message. */
+function lastStage(checkpoint: SetupCheckpoint): string {
+  const stages = checkpoint.completedStages;
+  return stages[stages.length - 1] ?? "precheck";
+}
+
 /** Tallies check statuses. */
 function summarize(checks: DoctorCheck[]): DoctorSummary {
   const summary: DoctorSummary = { pass: 0, warn: 0, fail: 0 };
@@ -300,6 +427,7 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
     ...agentSkillChecks(input),
     ...repoChecks(input),
     ...runtimeEnvChecks(input),
+    ...setupChecks(input),
   ];
   return { checks, summary: summarize(checks) };
 }
