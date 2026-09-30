@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Sink } from "../../src/output.js";
 import { startLineSpinner } from "../../src/setup/spinner.js";
+import { plain } from "./colour.js";
 
 const ESC = String.fromCharCode(27);
 
@@ -117,15 +118,15 @@ function screen() {
 describe("waiting for the browser", () => {
   it("spins from the moment it starts, without being told to", () => {
     const { out } = harness();
-    expect(out.data).toMatch(/[◒◐◓◑]/u);
-    expect(out.data).toContain("waiting for sign-in");
+    expect(plain(out.data)).toMatch(/[◒◐◓◑]/u);
+    expect(plain(out.data)).toContain("waiting for sign-in");
   });
 
   it("counts the wait once there is a number worth showing", () => {
     const { out, advance, tick } = harness();
     advance(12_000);
     tick();
-    expect(out.data).toContain("[12s]");
+    expect(plain(out.data)).toContain("[12s]");
   });
 
   it("leaves the counter at the terminal's own colour", () => {
@@ -139,8 +140,8 @@ describe("waiting for the browser", () => {
     const DIM_ON = `${ESC}[2m`;
     // The counter is written plain — no dim opens anywhere between the
     // message and the bracket, and none wraps the bracket itself.
-    expect(out.data).toContain(" [12s]");
-    expect(out.data).not.toContain(`${DIM_ON}[12s]`);
+    expect(plain(out.data)).toContain(" [12s]");
+    expect(plain(out.data)).not.toContain(`${DIM_ON}[12s]`);
   });
 
   it("counts down instead, when the wait has a deadline", () => {
@@ -150,17 +151,17 @@ describe("waiting for the browser", () => {
     const { out, advance, tick } = harness(true, undefined, 600_000);
     advance(2_000);
     tick();
-    expect(out.data).toContain("[9m 58s left]");
+    expect(plain(out.data)).toContain("[9m 58s left]");
   });
 
   it("drops the minutes once there are none", () => {
     const { out, advance, tick } = harness(true, undefined, 600_000);
     advance(555_000);
     tick();
-    expect(out.data).toContain("[45s left]");
+    expect(plain(out.data)).toContain("[45s left]");
     // "left" is load-bearing: an unlabelled bracket reads as elapsed, which
     // would be the opposite of what it means.
-    expect(out.data).not.toContain("[45s]");
+    expect(plain(out.data)).not.toContain("[45s]");
   });
 
   it("falls back to elapsed once the deadline is behind it", () => {
@@ -169,17 +170,17 @@ describe("waiting for the browser", () => {
     const { out, advance, tick } = harness(true, undefined, 600_000);
     advance(601_000);
     tick();
-    expect(out.data).toContain("[601s]");
+    expect(plain(out.data)).toContain("[601s]");
   });
 
   it("moves through clack's frames on its own", () => {
     const { out, tick } = harness();
-    const first = out.data;
+    const first = plain(out.data);
     tick();
     tick();
-    expect(out.data.length).toBeGreaterThan(first.length);
+    expect(plain(out.data).length).toBeGreaterThan(first.length);
     // More than one distinct frame has been drawn.
-    const drawn = new Set((out.data.match(/[◒◐◓◑]/gu) ?? []).values());
+    const drawn = new Set((plain(out.data).match(/[◒◐◓◑]/gu) ?? []).values());
     expect(drawn.size).toBeGreaterThan(1);
   });
 });
@@ -196,9 +197,9 @@ describe("not damaging what is already on screen", () => {
     spinner.stop("Browser sign-in complete.");
 
     // Cursor-up (`ESC[<n>A`) would reach lines this spinner does not own.
-    expect(out.data).not.toMatch(new RegExp(`${ESC}\\[\\d*A`, "u"));
+    expect(plain(out.data)).not.toMatch(new RegExp(`${ESC}\\[\\d*A`, "u"));
     // Only ever erase-this-line and return-to-column-0.
-    expect(out.data).toContain(`${ESC}[2K\r`);
+    expect(plain(out.data)).toContain(`${ESC}[2K\r`);
   });
 
   it("writes exactly one newline, at the end", () => {
@@ -210,17 +211,17 @@ describe("not damaging what is already on screen", () => {
     spinner.setMessage("approved");
     spinner.stop("Browser sign-in complete.");
 
-    expect(out.data.split("\n")).toHaveLength(2);
-    expect(out.data.endsWith("Browser sign-in complete.\n")).toBe(true);
+    expect(plain(out.data).split("\n")).toHaveLength(2);
+    expect(plain(out.data).endsWith("Browser sign-in complete.\n")).toBe(true);
   });
 
   it("changes the message in place rather than appending a line", () => {
     const { spinner, out } = harness();
-    const before = out.data;
+    const before = plain(out.data);
     spinner.setMessage("approved — finish the remaining steps in your browser");
 
-    expect(out.data.slice(before.length)).not.toContain("\n");
-    expect(out.data).toContain("approved — finish the remaining steps in your browser");
+    expect(plain(out.data).slice(before.length)).not.toContain("\n");
+    expect(plain(out.data)).toContain("approved — finish the remaining steps in your browser");
   });
 
   it("stops animating once it has settled", () => {
@@ -238,13 +239,13 @@ describe("a feed accumulating above it", () => {
     spinner.writeAbove("read: barebone.py");
 
     // Each committed line is preceded by an erase of the spinner it replaced.
-    const settled = out.data
+    const settled = plain(out.data)
       .split("\n")
       .filter((line) => line.includes("│  "))
       .map((line) => line.slice(line.indexOf("│")));
     expect(settled).toEqual(["│  run: ls -la /repo", "│  read: barebone.py"]);
     // Whatever is on the unterminated last line is the spinner, not a feed line.
-    expect(out.data.split("\n").at(-1)).toMatch(/[◒◐◓◑]/u);
+    expect(plain(out.data).split("\n").at(-1)).toMatch(/[◒◐◓◑]/u);
   });
 
   it("never reaches a line it does not own", () => {
@@ -255,9 +256,9 @@ describe("a feed accumulating above it", () => {
     }
     spinner.stop("Claude Code finished; changed 1 file(s).");
 
-    expect(out.data).not.toMatch(new RegExp(`${ESC}\\[\\d*A`, "u"));
-    expect(out.data).toContain("│  write: b.py");
-    expect(out.data.endsWith("Claude Code finished; changed 1 file(s).\n")).toBe(true);
+    expect(plain(out.data)).not.toMatch(new RegExp(`${ESC}\\[\\d*A`, "u"));
+    expect(plain(out.data)).toContain("│  write: b.py");
+    expect(plain(out.data).endsWith("Claude Code finished; changed 1 file(s).\n")).toBe(true);
   });
 
   it("goes on counting the wait while the feed grows", () => {
@@ -266,7 +267,7 @@ describe("a feed accumulating above it", () => {
     spinner.writeAbove("write: test.py");
     tick();
 
-    expect(out.data).toContain("[34s]");
+    expect(plain(out.data)).toContain("[34s]");
   });
 });
 
@@ -351,12 +352,12 @@ describe("taking the transcript away once the step is over", () => {
     spinner.writeAbove("run: ls -la");
     spinner.stopAndClear("◆  Claude Code finished.");
 
-    expect(out.data).not.toContain(ESC);
-    expect(out.data.split("\n").filter((line) => line !== "")).toEqual([
-      "│  waiting for sign-in",
-      "│  run: ls -la",
-      "◆  Claude Code finished.",
-    ]);
+    expect(plain(out.data)).not.toContain(ESC);
+    expect(
+      plain(out.data)
+        .split("\n")
+        .filter((line) => line !== ""),
+    ).toEqual(["│  waiting for sign-in", "│  run: ls -la", "◆  Claude Code finished."]);
   });
 });
 
@@ -367,15 +368,15 @@ describe("where there is no cursor to move", () => {
     spinner.setMessage("approved");
     spinner.stop("Browser sign-in complete.");
 
-    expect(out.data).not.toContain(ESC);
+    expect(plain(out.data)).not.toContain(ESC);
     expect(animating()).toBe(false);
     // Still on the rail: the wizard draws its frame into a pipe too, and a bare
     // line falls outside it there exactly as it would on a terminal.
-    expect(out.data.split("\n").filter((line) => line !== "")).toEqual([
-      "│  waiting for sign-in",
-      "│  approved",
-      "│  Browser sign-in complete.",
-    ]);
+    expect(
+      plain(out.data)
+        .split("\n")
+        .filter((line) => line !== ""),
+    ).toEqual(["│  waiting for sign-in", "│  approved", "│  Browser sign-in complete."]);
   });
 
   it("refuses to redraw under NO_COLOR and TERM=dumb", () => {
@@ -388,7 +389,7 @@ describe("where there is no cursor to move", () => {
         animate: () => () => undefined,
       });
       spinner.stop("done");
-      expect(out.data).not.toContain(ESC);
+      expect(plain(out.data)).not.toContain(ESC);
     }
   });
 });

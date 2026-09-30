@@ -15,6 +15,7 @@ import {
   wizardWarn,
 } from "../../src/setup/wizard.js";
 import { StringSink } from "../helpers/stringSink.js";
+import { plain } from "./colour.js";
 
 function target(json = false): { writers: Writers; json: boolean; err: StringSink } {
   const err = new StringSink();
@@ -30,7 +31,7 @@ describe("lines inside the frame", () => {
     // printed bare, so a sentence about the wizard fell outside its own frame.
     const t = target();
     wizardLine(t, "Signed in as a returning user — project my-llm-project. No browser needed.");
-    expect(t.err.data).toBe(
+    expect(plain(t.err.data)).toBe(
       "│  Signed in as a returning user — project my-llm-project. No browser needed.\n",
     );
   });
@@ -41,7 +42,7 @@ describe("lines inside the frame", () => {
       t,
       "\nWrote the task to .traceroot/prompts/setup-instrument.md.\nRun it, then resume.",
     );
-    expect(t.err.data.split("\n").slice(0, -1)).toEqual([
+    expect(plain(t.err.data).split("\n").slice(0, -1)).toEqual([
       "│",
       "│  Wrote the task to .traceroot/prompts/setup-instrument.md.",
       "│  Run it, then resume.",
@@ -51,13 +52,13 @@ describe("lines inside the frame", () => {
   it("gives a warning its own glyph and still keeps it on the rail", () => {
     const t = target();
     wizardWarn(t, "`claude` was not found on PATH");
-    expect(t.err.data).toBe("▲  warning: `claude` was not found on PATH\n");
+    expect(plain(t.err.data)).toBe("▲  warning: `claude` was not found on PATH\n");
   });
 
   it("dims progress without moving it off the rail", () => {
     const t = target();
     wizardProgress(t, "Wrote TRACEROOT_API_KEY to .env.traceroot (0600).");
-    expect(t.err.data).toBe("│  Wrote TRACEROOT_API_KEY to .env.traceroot (0600).\n");
+    expect(plain(t.err.data)).toBe("│  Wrote TRACEROOT_API_KEY to .env.traceroot (0600).\n");
   });
 
   it("leaves nothing loose between the opening and closing lines", () => {
@@ -68,26 +69,25 @@ describe("lines inside the frame", () => {
     wizardWarn(t, "no test or health command was detected");
     wizardOutro(t.writers, "TraceRoot setup complete.");
 
-    const framed = t.err.data.slice(0, t.err.data.indexOf("└"));
+    const framed = plain(t.err.data).slice(0, plain(t.err.data).indexOf("└"));
     for (const line of framed.split("\n").filter((l) => l !== "")) {
       expect(line).toMatch(IN_FRAME);
     }
-    expect(t.err.data).toContain(`┌  ${WIZARD_TITLE}`);
-    expect(t.err.data).toContain("└  TraceRoot setup complete.");
+    expect(plain(t.err.data)).toContain(`┌  ${WIZARD_TITLE}`);
+    expect(plain(t.err.data)).toContain("└  TraceRoot setup complete.");
   });
 });
 
 describe("colour", () => {
   it("never changes the characters, only how they are drawn", () => {
-    // Everything under `NO_COLOR`, a pipe or `TERM=dumb` — which is what these
-    // tests run as — must come out as the text itself. A helper that wrapped a
-    // URL in brackets or reflowed a sentence would break copy-paste for every
-    // user who has colour turned off, and silently invalidate every wording
+    // Strip the colour and what is left must be the text itself. A helper that
+    // wrapped a URL in brackets or reflowed a sentence would break copy-paste for
+    // every user who has colour turned off, and silently invalidate every wording
     // assertion in this suite.
-    expect(wizardLink("https://docs.traceroot.ai")).toBe("https://docs.traceroot.ai");
-    expect(wizardEnvVar("TRACEROOT_API_KEY")).toBe("TRACEROOT_API_KEY");
-    expect(wizardAside("supporting detail")).toBe("supporting detail");
-    expect(wizardEmphasis("TRACEROOT_API_KEY")).toBe("TRACEROOT_API_KEY");
+    expect(plain(wizardLink("https://docs.traceroot.ai"))).toBe("https://docs.traceroot.ai");
+    expect(plain(wizardEnvVar("TRACEROOT_API_KEY"))).toBe("TRACEROOT_API_KEY");
+    expect(plain(wizardAside("supporting detail"))).toBe("supporting detail");
+    expect(plain(wizardEmphasis("TRACEROOT_API_KEY"))).toBe("TRACEROOT_API_KEY");
   });
 
   it("continues the rail through an acknowledgement", () => {
@@ -95,9 +95,9 @@ describe("colour", () => {
     // line says "a new thing starts here", and these do the opposite — they
     // close the block above them. But three spaces stopped the frame's
     // vertical line for two rows, which reads as the block ending early.
-    expect(wizardAcknowledgement("I have added TRACEROOT_API_KEY to my production env.")).toBe(
-      "│  I have added TRACEROOT_API_KEY to my production env.  (Press Enter to continue)",
-    );
+    expect(
+      plain(wizardAcknowledgement("I have added TRACEROOT_API_KEY to my production env.")),
+    ).toBe("│  I have added TRACEROOT_API_KEY to my production env.  (Press Enter to continue)");
   });
 });
 
@@ -110,13 +110,13 @@ describe("clickable links", () => {
     // The text inside the wrapper is the URL, not a label. A terminal that
     // renders the link gives something to click; every other one, and every
     // mouse selection, still yields the URL itself.
-    expect(wizardLink(URL, true)).toBe(`${ESC}]8;;${URL}${BEL}${URL}${ESC}]8;;${BEL}`);
+    expect(plain(wizardLink(URL, true))).toBe(`${ESC}]8;;${URL}${BEL}${URL}${ESC}]8;;${BEL}`);
   });
 
   it("is the bare URL wherever the sequence would not be understood", () => {
     // An unsupported terminal does not ignore OSC 8 — it prints the bytes into
     // the scrollback, over the one line of the run a user has to copy.
-    expect(wizardLink(URL, false)).toBe(URL);
+    expect(plain(wizardLink(URL, false))).toBe(URL);
   });
 
   describe("and where they are attempted", () => {
@@ -161,7 +161,7 @@ describe("what is said after the frame closes", () => {
       closing: "You can now use TraceRoot in production.",
     });
 
-    const after = t.err.data.split("└  TraceRoot setup complete.\n")[1] ?? "";
+    const after = plain(t.err.data).split("└  TraceRoot setup complete.\n")[1] ?? "";
     expect(after.split("\n").filter((l) => l !== "")).toEqual([
       "You can now use TraceRoot in production.",
       "If you ran into anything during setup, please open an issue at https://github.com/traceroot-ai/traceroot-cli/issues/new",
@@ -177,8 +177,8 @@ describe("what is said after the frame closes", () => {
     const t = target();
     wizardOutro(t.writers, "TraceRoot setup complete.");
 
-    expect(t.err.data.endsWith("\n\n")).toBe(true);
-    expect(t.err.data.endsWith("\n\n\n")).toBe(false);
+    expect(plain(t.err.data).endsWith("\n\n")).toBe(true);
+    expect(plain(t.err.data).endsWith("\n\n\n")).toBe(false);
   });
 
   it("withholds the closing sentence from a run that did not earn it", () => {
@@ -187,10 +187,10 @@ describe("what is said after the frame closes", () => {
     const t = target();
     wizardOutro(t.writers, "Setup stopped at: instrument the application.");
 
-    expect(t.err.data).not.toContain("You can now use TraceRoot");
+    expect(plain(t.err.data)).not.toContain("You can now use TraceRoot");
     // Where to get help is worth more at the end of a failure than a success.
-    expect(t.err.data).toContain("please open an issue at");
-    expect(t.err.data).toContain("- Contact support:");
+    expect(plain(t.err.data)).toContain("please open an issue at");
+    expect(plain(t.err.data)).toContain("- Contact support:");
   });
 });
 
@@ -203,7 +203,7 @@ describe("where no frame was ever drawn", () => {
     wizardProgress(t, "Service: . (python)");
     wizardWarn(t, "no test command was detected");
 
-    expect(t.err.data).toBe(
+    expect(plain(t.err.data)).toBe(
       [
         "Signed in — workspace acme.",
         "Service: . (python)",
@@ -211,6 +211,6 @@ describe("where no frame was ever drawn", () => {
         "",
       ].join("\n"),
     );
-    expect(t.err.data).not.toContain("│");
+    expect(plain(t.err.data)).not.toContain("│");
   });
 });
