@@ -632,7 +632,7 @@ describe("finding a previous, unfinished run", () => {
     };
 
     const { writers } = makeWriters();
-    await runSetup({
+    const result = await runSetup({
       ctx: ctxWith(),
       cwd: dir,
       flags: defaultFlags({ agent: "claude" }),
@@ -649,6 +649,11 @@ describe("finding a previous, unfinished run", () => {
     // every stage ran again — re-polling for a trace it had already seen, minting a
     // second key, and pointing the agent at code it had already edited. Asserting
     // the question alone let all of that pass.
+    //
+    // The success assertion is what makes the poll count mean something: a run
+    // that failed at an earlier stage also polls zero times, so on its own
+    // `polls === 0` proves nothing about continuation.
+    expect(result.ok).toBe(true);
     expect(polls).toBe(0);
   });
 
