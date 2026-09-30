@@ -80,3 +80,64 @@ describe("polling for the first trace", () => {
     expect(result.found).toBe(false);
   });
 });
+
+describe("choosing which trace the run produced", () => {
+  const STARTED = new Date("2026-07-26T12:00:00.000Z");
+
+  /** A page as the backend returns it: newest first, timestamps without a zone. */
+  function page(rows: Array<{ id: string; at: string }>) {
+    return {
+      data: rows.map((r) => ({
+        trace_id: r.id,
+        trace_url: `https://app.example.test/trace/${r.id}`,
+        trace_start_time: r.at,
+      })),
+      meta: { limit: rows.length },
+    } as never;
+  }
+
+  it("takes the earliest eligible row, not the first one the page happens to list", async () => {
+    // The backend orders newest-first and has no ascending mode, so row zero is
+    // the most recent trace while both this poll and the browser call what they
+    // show "your first trace". Without the sort the two disagree.
+    const result = await pollForTrace({
+      client: {
+        listTraces: async () =>
+          page([
+            { id: "later", at: "2026-07-26T12:01:30.000000" },
+            { id: "earliest", at: "2026-07-26T12:00:30.000000" },
+          ]),
+      },
+      startedAt: STARTED,
+      timeoutMs: 5_000,
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+
+    expect(result.found).toBe(true);
+    expect(result.found && result.trace.traceId).toBe("earliest");
+  });
+
+  it("reads a zone-less timestamp as UTC, so a pre-existing trace stays excluded", async () => {
+    // The API returns `trace_start_time` without a zone. Parsing it as local time
+    // shifts every row by the machine's offset — which either claims a trace that
+    // predates the run or discards the one it just produced, depending on which
+    // side of UTC the developer is on.
+    const result = await pollForTrace({
+      client: {
+        listTraces: async () =>
+          page([
+            { id: "ours", at: "2026-07-26T12:00:30.000000" },
+            { id: "pre-existing", at: "2026-07-26T11:59:30.000000" },
+          ]),
+      },
+      startedAt: STARTED,
+      timeoutMs: 5_000,
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+
+    expect(result.found).toBe(true);
+    expect(result.found && result.trace.traceId).toBe("ours");
+  });
+});
