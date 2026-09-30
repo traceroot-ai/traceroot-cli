@@ -1,11 +1,21 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { detectStack } from "../../src/setup/stack.js";
+
+/** Every root this file makes, so none is left behind in the system tmpdir. */
+const roots: string[] = [];
+
+afterEach(() => {
+  while (roots.length > 0) {
+    rmSync(roots.pop() as string, { recursive: true, force: true });
+  }
+});
 
 function repo(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "traceroot-stack-"));
+  roots.push(root);
   for (const [path, body] of Object.entries(files)) {
     const full = join(root, path);
     mkdirSync(join(full, ".."), { recursive: true });
