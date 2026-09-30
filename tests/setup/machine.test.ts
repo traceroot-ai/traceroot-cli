@@ -13,6 +13,7 @@ import { makeSecret } from "../../src/setup/secret.js";
 import type { SetupContext, SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import type { StringSink } from "../helpers/stringSink.js";
+import { plain } from "./colour.js";
 import {
   type RecordedRun,
   authEmpty,
@@ -409,7 +410,7 @@ describe("authentication", () => {
     // narrating itself. What this command owns is that those lines land on the
     // rail rather than bare on stderr — the flow writes with `logInfo`, which
     // knows nothing about the frame drawn around it.
-    const rows = err.data.split("\n");
+    const rows = plain(err.data).split("\n");
     const head = rows.findIndex((row) => row.startsWith("◇  Continue in your browser"));
     expect(rows.slice(head, head + 3)).toEqual([
       // Deliberately short: a heading that wraps would make this assertion
@@ -423,7 +424,7 @@ describe("authentication", () => {
       "│  Sign in — or create a free account — and approve this terminal.",
     ]);
     // The flow's own lines, on the rail.
-    expect(err.data).toContain("│  Confirm this code in your browser: ABCD-1234");
+    expect(plain(err.data)).toContain("│  Confirm this code in your browser: ABCD-1234");
     // The wait says who it is waiting for. "waiting for sign-in" left a user
     // who had tabbed away with no idea whose move it was. (The old escalating
     // "approved…"/"still waiting…" copy is gone with it: `pollDeviceCode` is
@@ -1784,7 +1785,7 @@ describe("watching the agent work", () => {
     const { ctx, err } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
     await runSetupMachine(ctx, deps);
 
-    const shown = err.data.split("\n");
+    const shown = plain(err.data).split("\n");
     // Writing into a sink with no cursor, so the feed is a log: every line was
     // flushed as it arrived and none of them can be taken back. That is the
     // right answer here — a CI log is read after the fact — and it is why the
