@@ -124,9 +124,11 @@ export function installCommand(
         return `poetry add ${pep440}`;
       default:
         if (pythonInterpreter !== null) {
-          // Quoted: a repository path routinely contains spaces, and this one
-          // is pasted into a shell by an agent.
-          return `"${pythonInterpreter}" -m pip install ${pep440}`;
+          // Single-quoted, with any `'` closed and re-opened around an escaped
+          // one: a repository path routinely contains spaces, and this string is
+          // pasted into a shell by an agent, where `$`, a backtick or a `"` inside
+          // double quotes would be expanded rather than taken literally.
+          return `'${pythonInterpreter.replaceAll("'", "'\\''")}' -m pip install ${pep440}`;
         }
         // `python3 -m pip`, never bare `pip`. A Homebrew or pyenv Python
         // installs `pip3` and `pip3.14` and no `pip` at all, so the bare form

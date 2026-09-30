@@ -40,6 +40,13 @@ const ENV_FILE = ".env.traceroot";
 export interface ProductionNoticeInput {
   /** The instrumented service's language; null when the run never settled one. */
   language: StackLanguage | null;
+  /**
+   * Where the credential actually landed, relative to the repository root, or `.`
+   * for the root itself. The file follows the service, so a run that named one
+   * must name the directory here or the notice points at a path the user does not
+   * have.
+   */
+  envFileDir?: string;
 }
 
 /**
@@ -54,7 +61,8 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
   // sentence turns on, and colouring it the same as the variable made the line
   // read as one long token rather than an instruction with a subject.
   const key = wizardEnvVar(KEY_ENV);
-  const file = wizardEmphasis(`./${ENV_FILE}`);
+  const dir = input.envFileDir === undefined || input.envFileDir === "." ? "." : input.envFileDir;
+  const file = wizardEmphasis(dir === "." ? `./${ENV_FILE}` : `${dir}/${ENV_FILE}`);
 
   return [
     // One sentence, unwrapped, and nothing parenthetical inside it. This was
