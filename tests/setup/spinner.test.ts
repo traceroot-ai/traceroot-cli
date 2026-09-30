@@ -137,11 +137,10 @@ describe("waiting for the browser", () => {
     const { out, advance, tick } = harness();
     advance(12_000);
     tick();
-    const DIM_ON = `${ESC}[2m`;
-    // The counter is written plain — no dim opens anywhere between the
-    // message and the bracket, and none wraps the bracket itself.
-    expect(plain(out.data)).toContain(" [12s]");
-    expect(plain(out.data)).not.toContain(`${DIM_ON}[12s]`);
+    // That the counter is *not* dimmed is asserted where colour exists, in
+    // `wizard.colour.test.ts`: this sink is not a terminal, so nothing here is
+    // coloured and a "not dimmed" claim would hold for any renderer.
+    expect(out.data).toContain(" [12s]");
   });
 
   it("counts down instead, when the wait has a deadline", () => {
@@ -352,7 +351,7 @@ describe("taking the transcript away once the step is over", () => {
     spinner.writeAbove("run: ls -la");
     spinner.stopAndClear("◆  Claude Code finished.");
 
-    expect(plain(out.data)).not.toContain(ESC);
+    expect(out.data).not.toContain(ESC);
     expect(
       plain(out.data)
         .split("\n")
@@ -368,7 +367,7 @@ describe("where there is no cursor to move", () => {
     spinner.setMessage("approved");
     spinner.stop("Browser sign-in complete.");
 
-    expect(plain(out.data)).not.toContain(ESC);
+    expect(out.data).not.toContain(ESC);
     expect(animating()).toBe(false);
     // Still on the rail: the wizard draws its frame into a pipe too, and a bare
     // line falls outside it there exactly as it would on a terminal.
@@ -389,7 +388,49 @@ describe("where there is no cursor to move", () => {
         animate: () => () => undefined,
       });
       spinner.stop("done");
-      expect(plain(out.data)).not.toContain(ESC);
+      expect(out.data).not.toContain(ESC);
     }
+  });
+});
+
+describe("keeping one physical row per logical line", () => {
+  it("clips a feed line to the sink's width", () => {
+    // The redraw geometry counts lines and rewinds by that many rows, so a line
+    // the terminal wraps costs a row the rewind does not know about — after
+    // which every redraw eats one line of whatever sits above the spinner.
+    const out = sink(true) as unknown as {
+      data: string;
+      write: (c: string) => boolean;
+      columns: number;
+    };
+    out.columns = 40;
+    let clock = 0;
+    const ticks: Array<() => void> = [];
+    const spinner = startLineSpinner({
+      sink: out as never,
+      message: "waiting for sign-in",
+      env: { TERM: "xterm" } as NodeJS.ProcessEnv,
+      now: () => clock,
+      // A feed window is what makes the lines live: they are redrawn on every
+      // frame, so their row count has to match what the rewind assumes.
+      maxFeedLines: 3,
+      animate: (tick: () => void) => {
+        ticks.push(tick);
+        return () => undefined;
+      },
+    });
+    spinner.writeAbove(`run: ${"x".repeat(200)}`);
+    clock += 1000;
+    for (const fire of [...ticks]) {
+      fire();
+    }
+
+    // The full line never reaches the sink; what does is clipped and marked.
+    expect(out.data).not.toContain("x".repeat(200));
+    expect(out.data).toContain("…");
+    // Measured as the longest run of the filler rather than by splitting on
+    // newlines: consecutive frames share a line, because a draw ends without one.
+    const longest = Math.max(...(out.data.match(/x+/g) ?? [""]).map((run) => run.length));
+    expect(longest).toBeLessThanOrEqual(40 - 3);
   });
 });

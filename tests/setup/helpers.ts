@@ -1,4 +1,4 @@
-import type { ApiClient, ApiClientOptions } from "../../src/api/client.js";
+import { type ApiClient, type ApiClientOptions, DEFAULT_TIMEOUT_MS } from "../../src/api/client.js";
 import type { SetupApi } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import type { DeviceFlowDeps, DeviceFlowResult } from "../../src/auth/deviceFlow.js";
@@ -176,7 +176,10 @@ export function makeWriters(): { writers: Writers; out: StringSink; err: StringS
 }
 
 export function makeContext(json = false): Context {
-  return { auth: authWithKey(), json };
+  // `timeoutMs` is required by `Context`. It was missing and nothing caught it:
+  // `tsconfig.json` excludes `tests`, so a helper can drift from the interface
+  // it claims to build.
+  return { auth: authWithKey(), json, timeoutMs: DEFAULT_TIMEOUT_MS };
 }
 
 export function defaultFlags(overrides: Partial<SetupFlags> = {}): SetupFlags {
