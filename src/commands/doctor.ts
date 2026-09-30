@@ -38,6 +38,8 @@ export interface RunDoctorDeps {
   detection?: RepoDetection;
   /** The `setup` checkpoint; `undefined` means "read it from `cwd`". */
   checkpoint?: SetupCheckpoint | null;
+  /** `--service <path>`: whose setup run to diagnose, as `setup` resolves it. */
+  service?: string;
   /** Force the Setup section even when no checkpoint exists (`setup doctor`). */
   includeSetup?: boolean;
 }
@@ -75,7 +77,8 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
   const setupDir = setupRoot(cwd);
   const checkpoint =
     deps.checkpoint === undefined
-      ? (readCheckpoint(serviceArtifactDir({ root: setupDir, cwd })) ?? readCheckpoint(setupDir))
+      ? (readCheckpoint(serviceArtifactDir({ root: setupDir, cwd, service: deps.service })) ??
+        readCheckpoint(setupDir))
       : deps.checkpoint;
 
   const report = buildDoctorReport({
@@ -119,11 +122,13 @@ export function registerDoctor(program: Command): void {
   program
     .command("doctor")
     .description("Diagnose credentials, repo shape, and installed skills")
-    .action(async (_opts, command: Command) => {
+    .option("--service <path>", "path of the service whose setup run to diagnose")
+    .action(async (opts, command: Command) => {
       const ctx = contextFromCommand(command);
       const report = await runDoctor({
         ctx,
         cwd: process.cwd(),
+        service: opts.service as string | undefined,
         env: process.env,
         configPath: configPath(),
         writers: defaultWriters,

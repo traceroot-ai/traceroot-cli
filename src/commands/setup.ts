@@ -4,7 +4,7 @@ import { createTokenProvider } from "../auth/token.js";
 import { configPath } from "../config/manager.js";
 import type { Context } from "../context.js";
 import { type Writers, defaultWriters } from "../output.js";
-import { serviceArtifactDir } from "../setup/artifacts.js";
+import { relativeToRoot, serviceArtifactDir } from "../setup/artifacts.js";
 import {
   clearCheckpoint,
   newCheckpoint,
@@ -129,8 +129,20 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   // first `--resume` after upgrading would look like a fresh run and mint a
   // second API key. It reads the old location once; from then on the run writes
   // to the new one.
-  const foundAt = readCheckpoint(artifactDir) !== null ? artifactDir : root;
-  const found = readCheckpoint(artifactDir) ?? readCheckpoint(root);
+  const here = readCheckpoint(artifactDir);
+  // The root is a migration path, not a second search location. A checkpoint there
+  // may belong to a different service — `serviceArtifactDir` returns the root while
+  // stack detection can still have selected a subdirectory — and adopting it would
+  // let this run inherit that service's application verification and its trace, and
+  // report a success it never earned.
+  const atRoot = here === null ? readCheckpoint(root) : null;
+  const inherited =
+    atRoot !== null &&
+    (atRoot.service === undefined || atRoot.service.path === relativeToRoot(root, artifactDir))
+      ? atRoot
+      : null;
+  const foundAt = here !== null ? artifactDir : root;
+  const found = here ?? inherited;
 
   // A checkpoint is offered, not demanded by flag.
   //
@@ -144,6 +156,11 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   // caller has to state the intent. Asked and declined means starting fresh:
   // the answer is about this run, so it must not be sticky.
   let existing = found;
+  // Answering "Continue" *is* the resume intent. The machine only rehydrates a
+  // completed stage under `flags.resume`, so leaving the flag false here kept the
+  // checkpoint and still reran every stage — minting a second key and pointing the
+  // agent at code it had already edited.
+  let resume = flags.resume;
   if (found !== null && !flags.resume) {
     if (deps.canPrompt) {
       const stopped = found.completedStages.at(-1);
@@ -157,7 +174,9 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
           { value: "fresh", label: "Start over", hint: "discard the previous run and begin again" },
         ],
       });
-      if (answer !== "resume") {
+      if (answer === "resume") {
+        resume = true;
+      } else {
         existing = null;
         // Delete it now, not on the next successful stage write. A run
         // interrupted between here and the first stage completing would
@@ -190,7 +209,8 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
     artifactDir,
     json,
     canPrompt: deps.canPrompt,
-    flags,
+    // Copied rather than mutated, so the caller's object is untouched.
+    flags: resume === flags.resume ? flags : { ...flags, resume },
     writers,
     checkpoint,
     emit,
@@ -220,6 +240,9 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
     await acknowledgeProduction({
       writers,
       language: result.checkpoint.service?.language ?? null,
+      // The credential follows the service, so the notice has to name where it
+      // actually landed rather than always saying `./`.
+      envFileDir: relativeToRoot(root, artifactDir),
       prompt,
     });
   }
@@ -308,11 +331,16 @@ export function registerSetup(program: Command): void {
   setup
     .command("doctor")
     .description("Diagnose a setup that did not complete")
-    .action(async (_opts, command: Command) => {
+    // The same option `setup` takes: nothing outside the per-service checkpoint
+    // records which service a run chose, so without it a run under `--service`
+    // cannot be diagnosed from the repository root — the one case this exists for.
+    .option("--service <path>", "path of the service whose setup run to diagnose")
+    .action(async (opts, command: Command) => {
       const ctx = contextFromCommand(command);
       const report = await runDoctor({
         ctx,
         cwd: process.cwd(),
+        service: opts.service as string | undefined,
         env: process.env,
         configPath: configPath(),
         writers: defaultWriters,

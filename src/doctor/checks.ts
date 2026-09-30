@@ -317,11 +317,16 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   const completed = new Set(checkpoint.completedStages);
   const finished = completed.has("complete") && checkpoint.trace !== undefined;
+  // Neither of these is a failed setup, so neither may fail `doctor`: a
+  // cancellation exits 0 in `setup`, and a run that stopped short on purpose
+  // (`--no-instrument`) recorded no error at all.
+  const cancelled = checkpoint.lastError?.code === "CANCELLED";
+  const failed = checkpoint.lastError !== undefined && !cancelled;
 
   checks.push({
     name: "setup_completed",
     category: "setup",
-    status: finished ? "pass" : "fail",
+    status: finished ? "pass" : failed ? "fail" : "warn",
     message: finished
       ? `Setup completed on ${checkpoint.updatedAt}`
       : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`traceroot setup --resume\`.`,
@@ -331,7 +336,7 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
     checks.push({
       name: "setup_last_error",
       category: "setup",
-      status: "fail",
+      status: cancelled ? "warn" : "fail",
       // The message was authored secret-free by SetupError; it is safe to echo.
       message: `Last error (${checkpoint.lastError.code}): ${checkpoint.lastError.message.split("\n")[0]}`,
     });
@@ -389,7 +394,7 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
   checks.push({
     name: "setup_first_trace",
     category: "setup",
-    status: checkpoint.trace === undefined ? "fail" : "pass",
+    status: checkpoint.trace !== undefined ? "pass" : failed ? "fail" : "warn",
     message:
       checkpoint.trace === undefined
         ? "No first trace has been observed. Run the instrumented application, then `traceroot setup --resume`."
