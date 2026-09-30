@@ -1,4 +1,5 @@
 import type { TraceList } from "../api/client.js";
+import { ExitCode } from "../output.js";
 
 /**
  * Just enough of a client to poll for a trace.
@@ -145,7 +146,10 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
 
     try {
       const response = await input.client.listTraces({
-        limit: 20,
+        // The endpoint's documented maximum. One page, newest-first, with no
+        // ascending order and no cursor — so the page has to be wide enough to
+        // still contain the run's earliest trace.
+        limit: 200,
         startAfter: input.startedAt.toISOString(),
       });
       // Oldest first, not newest.
@@ -193,7 +197,14 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // An auth failure will not fix itself by waiting; anything else might.
-      if (/401|403|unauthor/i.test(message)) {
+      //
+      // The classified status is the reliable signal: the client throws the
+      // backend's own `detail` as the message ("Invalid API key",
+      // "Authentication failed"), so no regex over the text can be trusted to
+      // recognise one. Read structurally so this stays uncoupled from the
+      // generated client, with the text kept as a fallback.
+      const exitCode = (err as { exitCode?: unknown } | null | undefined)?.exitCode;
+      if (exitCode === ExitCode.auth || /401|403|unauthor|forbidden/i.test(message)) {
         return { found: false, waitedMs: now() - began, attempts, lastError: message };
       }
       lastError = message;

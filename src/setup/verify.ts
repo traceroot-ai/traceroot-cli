@@ -80,7 +80,14 @@ export async function verifyApplication(
     TRACEROOT_API_KEY: input.credential.reveal(),
     TRACEROOT_HOST_URL: input.host,
   };
-  const withoutEnv: NodeJS.ProcessEnv = { ...input.parentEnv };
+  // Same host as the configured run, so the two only differ by the credential.
+  // Without this the credential-free run inherits whatever `TRACEROOT_HOST_URL`
+  // the parent environment happens to carry, and the comparison stops being
+  // about the key at all.
+  const withoutEnv: NodeJS.ProcessEnv = {
+    ...input.parentEnv,
+    TRACEROOT_HOST_URL: input.host,
+  };
   // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
   delete withoutEnv.TRACEROOT_API_KEY;
 
