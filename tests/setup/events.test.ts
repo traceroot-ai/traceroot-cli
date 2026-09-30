@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Writers } from "../../src/output.js";
 import { type SetupEvent, jsonEmitter, stageLineEmitter } from "../../src/setup/events.js";
 import { StringSink } from "../helpers/stringSink.js";
+import { plain } from "./colour.js";
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -16,7 +17,9 @@ const settled = (stage: string, status = "ok"): SetupEvent =>
 
 /** Non-empty lines, so the blank rail rows between steps do not clutter assertions. */
 function lines(sink: StringSink): string[] {
-  return sink.data.split("\n").filter((line) => line.trim() !== "" && line.trim() !== "│");
+  return plain(sink.data)
+    .split("\n")
+    .filter((line) => line.trim() !== "" && line.trim() !== "│");
 }
 
 describe("the human stage renderer", () => {
@@ -142,7 +145,9 @@ describe("the human stage renderer", () => {
     }
     emit(settled("select_agent", "skipped"));
 
-    for (const line of err.data.split("\n").filter((l) => l !== "")) {
+    for (const line of plain(err.data)
+      .split("\n")
+      .filter((l) => l !== "")) {
       expect(line.startsWith("│") || line.startsWith("◇") || line.startsWith("▲")).toBe(true);
     }
   });
