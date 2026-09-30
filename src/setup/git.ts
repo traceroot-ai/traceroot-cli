@@ -33,17 +33,28 @@ export interface GitState {
   changedFiles: string[];
 }
 
-/** Parses `git status --porcelain` output into repo-relative paths. */
+/**
+ * Parses `git status --porcelain -z` output into repo-relative paths.
+ *
+ * NUL-delimited, because the newline form C-quotes any path with a non-ASCII byte
+ * or a `"` in it — reporting `"caf\303\251.ts"` for `café.ts` — and separates a
+ * rename's two paths with a literal ` -> ` that a filename is allowed to contain.
+ */
 export function parsePorcelain(output: string): string[] {
   const files: string[] = [];
-  for (const line of output.split("\n")) {
-    if (line.trim() === "") {
+  const records = output.split("\0");
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i] ?? "";
+    if (record === "") {
       continue;
     }
-    // "XY path" — and for renames, "XY old -> new"; the new path is what matters.
-    const path = line.slice(3).trim();
-    const arrow = path.indexOf(" -> ");
-    files.push(arrow === -1 ? path : path.slice(arrow + 4));
+    // "XY path", one record per entry; the new path is what matters.
+    files.push(record.slice(3));
+    // A rename or copy is two records: the new path, then the original.
+    const status = record.slice(0, 2);
+    if (status.includes("R") || status.includes("C")) {
+      i += 1;
+    }
   }
   return files.sort();
 }
@@ -63,7 +74,11 @@ export async function readGitState(input: ReadGitStateInput): Promise<GitState> 
 
   const result = await input.runProcess({
     program: "git",
-    args: ["status", "--porcelain"],
+    // `--no-optional-locks` so the probe cannot take `index.lock` to refresh the
+    // stat cache: this module reads and never writes, and a status that loses the
+    // lock race to a concurrent git command reports a clean worktree. `-z`
+    // because the newline form C-quotes any path with a non-ASCII byte.
+    args: ["--no-optional-locks", "status", "--porcelain", "-z"],
     cwd: root,
     env: input.env,
     stdio: "capture",

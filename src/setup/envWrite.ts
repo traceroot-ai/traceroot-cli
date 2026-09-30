@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -20,7 +28,11 @@ import { join } from "node:path";
  * named after this tool collides with nobody.
  */
 
-const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
+// `\r?$` because `.` does not match `\r`: without it a CRLF file matches no line
+// at all, so a rerun appends a second copy of the key instead of replacing the
+// first, and `removeEnvKeys` cannot remove the old one. `config/envFile.ts`
+// strips the same carriage return when reading.
+const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*?)\r?$/;
 
 /**
  * What a `.env.traceroot` says about itself, written once when setup creates it.
@@ -85,19 +97,25 @@ export function upsertEnvContent(
   }
 
   const written: string[] = [];
-  const seen = new Set<string>();
+  // Which keys the file already mentions at all, so the append pass below only
+  // adds the ones it does not. Distinct from "which were rewritten": a key
+  // already holding the right value is present but is not a write.
+  const present = new Set<string>();
 
+  // Every occurrence, not just the first: `config/envFile.ts` (and dotenv, and
+  // `node --env-file`) resolve a duplicate key to the LAST one, so rewriting only
+  // the first leaves the stale value in effect while reporting success.
   for (let i = 0; i < lines.length; i += 1) {
     const match = (lines[i] ?? "").match(LINE);
     const key = match?.[1];
-    if (key === undefined || seen.has(key)) {
+    if (key === undefined) {
       continue;
     }
     const desired = updates[key];
     if (desired === undefined) {
       continue;
     }
-    seen.add(key);
+    present.add(key);
     const currentRaw = (match?.[2] ?? "").trim();
     const current =
       currentRaw.length >= 2 &&
@@ -109,10 +127,12 @@ export function upsertEnvContent(
       continue; // already correct — not a write
     }
     lines[i] = `${key}=${quoteIfNeeded(desired)}`;
-    written.push(key);
+    if (!written.includes(key)) {
+      written.push(key);
+    }
   }
 
-  const missing = Object.entries(updates).filter(([key]) => !seen.has(key));
+  const missing = Object.entries(updates).filter(([key]) => !present.has(key));
   if (missing.length > 0) {
     if (lines.length > 0 && (lines[lines.length - 1] ?? "").trim() !== "") {
       lines.push("");
@@ -135,13 +155,34 @@ export function upsertEnvFile(path: string, updates: Record<string, string>): Up
   const existing = existed ? readFileSync(path, "utf8") : null;
   const { content, written } = upsertEnvContent(existing, updates);
 
+  // The mode is part of this function's contract, so it is enforced even when
+  // there is nothing to write: a file that already holds the right value can
+  // still be group- or world-readable, and it holds a live key. `lstatSync`
+  // because a symlink here should be left alone rather than have its target
+  // chmod-ed.
+  if (existed) {
+    try {
+      const stats = lstatSync(path);
+      if (stats.isFile() && (stats.mode & 0o177) !== 0) {
+        chmodSync(path, 0o600);
+      }
+    } catch {
+      // Best-effort: win32 and some filesystems do not support this.
+    }
+  }
+
   if (written.length === 0) {
     return { written: [], created: false };
   }
 
   const tmp = `${path}.${process.pid}.tmp`;
   try {
-    writeFileSync(tmp, content, { mode: 0o600 });
+    // Clear a temp file left behind by a crashed run with this pid, then create
+    // ours exclusively: `wx` never follows a symlink and never writes into a file
+    // that already exists, so a planted `<path>.<pid>.tmp` makes the write fail —
+    // and fall into the cleanup below — instead of redirecting the credential.
+    rmSync(tmp, { force: true });
+    writeFileSync(tmp, content, { mode: 0o600, flag: "wx" });
     try {
       chmodSync(tmp, 0o600);
     } catch {
@@ -203,20 +244,27 @@ export function removeEnvKeys(path: string, keys: readonly string[]): string[] {
  */
 function alreadyIgnored(patterns: readonly string[], entry: string): boolean {
   const basename = entry.slice(entry.lastIndexOf("/") + 1);
-  for (const pattern of patterns) {
-    if (pattern === "" || pattern.startsWith("#")) {
+  // Last match wins, as git itself does, and a leading `!` re-includes: returning
+  // on the first positive rule reported a file as ignored when a later `!` line
+  // put it back, which is the one error here that costs a leaked credential.
+  let ignored = false;
+  for (const raw of patterns) {
+    if (raw === "" || raw.startsWith("#")) {
       continue;
     }
-    // Exact, and the root-anchored spelling of the exact same path.
-    if (pattern === entry || pattern === `/${entry}`) {
-      return true;
-    }
-    // Unanchored: matches this basename at any depth, which includes ours.
-    if (!pattern.includes("/") && (pattern === basename || pattern === ".env*")) {
-      return true;
+    const negated = raw.startsWith("!");
+    const pattern = negated ? raw.slice(1) : raw;
+    const matches =
+      // Exact, and the root-anchored spelling of the exact same path.
+      pattern === entry ||
+      pattern === `/${entry}` ||
+      // Unanchored: matches this basename at any depth, which includes ours.
+      (!pattern.includes("/") && (pattern === basename || pattern === ".env*"));
+    if (matches) {
+      ignored = !negated;
     }
   }
-  return false;
+  return ignored;
 }
 
 /**

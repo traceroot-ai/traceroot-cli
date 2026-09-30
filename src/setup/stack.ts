@@ -57,11 +57,13 @@ const UNSUPPORTED_MANIFESTS: ReadonlyArray<[string, string]> = [
 ];
 
 /** Lockfile → package manager, matching `repo/detect.ts`'s priority order. */
-const LOCKFILE_MANAGERS: ReadonlyArray<[string, PackageManager]> = [
+const NODE_LOCKFILES: ReadonlyArray<[string, PackageManager]> = [
   ["pnpm-lock.yaml", "pnpm"],
   ["yarn.lock", "yarn"],
   ["bun.lockb", "bun"],
   ["package-lock.json", "npm"],
+];
+const PYTHON_LOCKFILES: ReadonlyArray<[string, PackageManager]> = [
   ["uv.lock", "uv"],
   ["poetry.lock", "poetry"],
 ];
@@ -134,7 +136,7 @@ function assertedService(
     language,
     framework: null,
     entryPoint: firstExisting(dir, entryPoints),
-    packageManager: detectPackageManager(dir, root),
+    packageManager: detectPackageManager(dir, root, language),
     testCommand: null,
     evidence: [`no dependency manifest in ${relPath}; language chosen by the user`],
     // Nothing here was detected. The agent identifies the real service.
@@ -149,7 +151,24 @@ function assertedService(
  * a dependency, proves only that somebody intended to. Matching the call is
  * what distinguishes a wired-up application from one that merely mentions us.
  */
-const INITIALIZE_CALL = /\btraceroot\s*\.\s*init(?:ialize)?\s*\(|\binitialize\s*\(\s*\)/i;
+/** `traceroot.init(...)` or `traceroot.initialize(...)`: unambiguous on its own. */
+const QUALIFIED_INITIALIZE = /\btraceroot\s*\.\s*init(?:ialize)?\s*\(/i;
+/**
+ * A bare `initialize()`, which is how the Python SDK is started after
+ * `from traceroot import initialize` — and also how a great many applications
+ * start their own database, logger or unrelated SDK. It only counts when the same
+ * file actually imports us.
+ */
+const BARE_INITIALIZE = /(?:^|[^\w.])initialize\s*\(\s*\)/m;
+const TRACEROOT_IMPORT =
+  /^\s*(?:from|import)\s+traceroot\b|require\(\s*["'][^"']*traceroot|from\s+["'][^"']*traceroot/im;
+
+function initializesTraceRoot(source: string): boolean {
+  return (
+    QUALIFIED_INITIALIZE.test(source) ||
+    (BARE_INITIALIZE.test(source) && TRACEROOT_IMPORT.test(source))
+  );
+}
 
 /** Substrings that mean a manifest already depends on a TraceRoot SDK. */
 const TRACEROOT_DEPS = ["@traceroot-ai/traceroot", "@traceroot-ai/mastra", "traceroot"];
@@ -177,11 +196,20 @@ function readPackageJson(dir: string): Record<string, unknown> | null {
   }
 }
 
-function detectPackageManager(dir: string, repoRoot: string): PackageManager | undefined {
+function detectPackageManager(
+  dir: string,
+  repoRoot: string,
+  language: StackLanguage,
+): PackageManager | undefined {
+  // Only this service's own ecosystem. A root `pnpm-lock.yaml` says nothing about
+  // how a Python service beneath it installs, and answering `pnpm` there costs
+  // the `uv add` the service actually needs — and hides `requirements.txt` behind
+  // a lockfile from the other half of the repository.
+  const lockfiles = language === "python" ? PYTHON_LOCKFILES : NODE_LOCKFILES;
   // A lockfile in the service directory wins; otherwise fall back to the repo
   // root, since monorepos usually keep a single lockfile at the top.
   for (const searchDir of dir === repoRoot ? [dir] : [dir, repoRoot]) {
-    for (const [lockfile, manager] of LOCKFILE_MANAGERS) {
+    for (const [lockfile, manager] of lockfiles) {
       if (existsSync(join(searchDir, lockfile))) {
         return manager;
       }
@@ -204,6 +232,25 @@ function firstExisting(dir: string, candidates: readonly string[]): string | nul
   for (const candidate of candidates) {
     if (existsSync(join(dir, candidate))) {
       return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Exact dependency-name match, for the Node table. The Python table is scanned
+ * against raw manifest TEXT, where a substring is the only option; a
+ * `package.json` gives parsed names, and a substring there makes `ai` match
+ * `chai`, `tailwindcss` and `openai`.
+ */
+function matchFrameworkByName(
+  names: readonly string[],
+  table: ReadonlyArray<[string, string]>,
+): string | null {
+  const present = new Set(names.map((name) => name.toLowerCase()));
+  for (const [needle, label] of table) {
+    if (present.has(needle)) {
+      return label;
     }
   }
   return null;
@@ -262,14 +309,13 @@ function nodeService(dir: string, repoRoot: string): DetectedService | null {
     ...((pkg.dependencies as Record<string, string>) ?? {}),
     ...((pkg.devDependencies as Record<string, string>) ?? {}),
   };
-  const depNames = Object.keys(deps).join(" ");
-  const framework = matchFramework(depNames, NODE_FRAMEWORKS);
+  const framework = matchFrameworkByName(Object.keys(deps), NODE_FRAMEWORKS);
   if (framework !== null) {
     evidence.push(`${framework} dependency`);
   }
 
   const scripts = (pkg.scripts as Record<string, string>) ?? {};
-  const manager = detectPackageManager(dir, repoRoot);
+  const manager = detectPackageManager(dir, repoRoot, isTypeScript ? "typescript" : "javascript");
   const runner = manager === "pnpm" || manager === "yarn" || manager === "bun" ? manager : "npm";
   const testCommand =
     typeof scripts.test === "string" && scripts.test.trim() !== ""
@@ -319,7 +365,7 @@ function pythonService(dir: string, repoRoot: string): DetectedService | null {
     evidence.push(`${framework} dependency`);
   }
 
-  const manager = detectPackageManager(dir, repoRoot);
+  const manager = detectPackageManager(dir, repoRoot, "python");
   // Prefer a real test runner over a bare import check: `pytest` is present in
   // the manifest of nearly every Python project that has tests at all.
   const hasPytest =
@@ -436,7 +482,7 @@ function detectExistingInstrumentation(
     const entry = service.entryPoint;
     if (entry !== null && !isBuildArtifact(entry)) {
       const source = readIfPresent(join(dir, entry));
-      if (source !== null && INITIALIZE_CALL.test(source)) {
+      if (source !== null && initializesTraceRoot(source)) {
         evidence.push(`traceroot initialized in ${service.path}/${entry}`);
         wired = true;
       }
@@ -453,11 +499,15 @@ function detectExistingInstrumentation(
 }
 
 /** Languages present in the repo that the CLI cannot instrument. */
-function detectUnsupported(root: string): string[] {
+function detectUnsupported(dirs: readonly string[]): string[] {
   const found = new Set<string>();
-  for (const [manifest, label] of UNSUPPORTED_MANIFESTS) {
-    if (existsSync(join(root, manifest))) {
-      found.add(label);
+  // The same directories the service scan uses: a repository whose only project
+  // is `services/api/go.mod` was reported as empty rather than as unsupported.
+  for (const dir of dirs) {
+    for (const [manifest, label] of UNSUPPORTED_MANIFESTS) {
+      if (existsSync(join(dir, manifest))) {
+        found.add(label);
+      }
     }
   }
   return [...found].sort();
@@ -502,7 +552,8 @@ export function detectStack(root: string, options: DetectStackOptions = {}): Det
   const services: DetectedService[] = [];
   const seen = new Set<string>();
 
-  for (const dir of candidateDirs(root)) {
+  const dirs = candidateDirs(root);
+  for (const dir of dirs) {
     for (const candidate of [nodeService(dir, root), pythonService(dir, root)]) {
       if (candidate === null || seen.has(`${candidate.path}:${candidate.language}`)) {
         continue;
@@ -512,7 +563,7 @@ export function detectStack(root: string, options: DetectStackOptions = {}): Det
     }
   }
 
-  const unsupportedLanguages = detectUnsupported(root);
+  const unsupportedLanguages = detectUnsupported(dirs);
 
   let candidates = services;
 

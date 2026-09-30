@@ -56,6 +56,21 @@ describe("what the notice says", () => {
     expect(notice).toContain("export TRACEROOT_API_KEY");
   });
 
+  it("names the directory the credential actually landed in", () => {
+    // The file follows the service, so a run that instrumented `apps/api` wrote
+    // the key there. Saying `./` sends the user to a path they do not have.
+    const notice = productionNotice({ language: "python", envFileDir: "apps/api" })
+      .map(plain)
+      .join("\n");
+    expect(notice).toContain("apps/api/.env.traceroot");
+    expect(notice).not.toContain("./.env.traceroot");
+  });
+
+  it("still says ./ for a service at the repository root", () => {
+    const notice = productionNotice({ language: "python", envFileDir: "." }).map(plain).join("\n");
+    expect(notice).toContain("./.env.traceroot");
+  });
+
   it("opens on the verb, with no heading in front of it", () => {
     // "Production Setup:" led this line until the colon was read for what it
     // was — a heading wearing a sentence's clothes, doing a job the block's own
