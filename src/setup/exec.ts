@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
+import { StringDecoder } from "node:string_decoder";
 import type { Secret } from "./secret.js";
 import { redact } from "./secret.js";
 
@@ -61,6 +62,7 @@ export const runProcess: RunProcess = (options) =>
     let settled = false;
     let timedOut = false;
     let chunks = "";
+    const decoders: StringDecoder[] = [];
 
     let child: ChildProcess;
     try {
@@ -86,6 +88,12 @@ export const runProcess: RunProcess = (options) =>
         return;
       }
       settled = true;
+      // Anything the decoders are still holding is a truncated character at the
+      // very end of the stream; flushing keeps it out of `output` rather than
+      // dropping bytes silently.
+      for (const decoder of decoders) {
+        chunks += decoder.end();
+      }
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
       resolve({
@@ -129,8 +137,18 @@ export const runProcess: RunProcess = (options) =>
     timer?.unref?.();
 
     if (capture) {
-      const absorb = (buf: Buffer) => {
-        const text = buf.toString("utf8");
+      // A decoder per stream, not `buf.toString("utf8")` per chunk: a multi-byte
+      // character can straddle a chunk boundary, and decoding each chunk
+      // independently replaces the split character with U+FFFD. That corrupts a
+      // non-ASCII path in `git status -z` output, so `changedFiles` reports a path
+      // the worktree does not have. Separate decoders because stdout and stderr
+      // arrive interleaved and share this callback — one decoder would splice the
+      // two streams' partial characters together.
+      const absorb = (decoder: StringDecoder) => (buf: Buffer) => {
+        const text = decoder.write(buf);
+        if (text === "") {
+          return;
+        }
         chunks += text;
         // Redacted per chunk as well as in `output`: a caller renders these
         // straight to the terminal, so an unscrubbed chunk is a visible leak.
@@ -138,8 +156,9 @@ export const runProcess: RunProcess = (options) =>
           options.onData(redact(text, options.secrets ?? []));
         }
       };
-      child.stdout?.on("data", absorb);
-      child.stderr?.on("data", absorb);
+      decoders.push(new StringDecoder("utf8"), new StringDecoder("utf8"));
+      child.stdout?.on("data", absorb(decoders[0] as StringDecoder));
+      child.stderr?.on("data", absorb(decoders[1] as StringDecoder));
     }
 
     if (options.stdin !== undefined) {

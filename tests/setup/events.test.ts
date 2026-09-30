@@ -186,3 +186,42 @@ describe("the machine contract", () => {
     expect(err.data).toBe("");
   });
 });
+
+describe("colour, decided by the sink", () => {
+  const ESC = String.fromCharCode(27);
+
+  /** Writers whose stderr claims to be a terminal. */
+  function ttyWriters(): { writers: Writers; err: StringSink } {
+    const err = new StringSink(true);
+    return { writers: { out: new StringSink(), err }, err };
+  }
+
+  it("dims the rail and paints the marker when the sink is a terminal", () => {
+    // Every other test here writes into a non-TTY sink, so the coloured branch
+    // was never executed: a regression that emitted the wrong codes, or none,
+    // would have passed the whole suite.
+    const { writers: w, err } = ttyWriters();
+    const emit = stageLineEmitter(w);
+    // A stage that settles without ever starting is what prints the dim rail and
+    // marker; no stage prints on `start`, since every one either announces itself
+    // or is deliberately silent.
+    emit(settled("authenticate", "skipped"));
+    // And a started stage that fails is the red one.
+    emit(start("verify_trace"));
+    emit(settled("verify_trace", "failed"));
+
+    expect(err.data).toContain(`${ESC}[2m`);
+    expect(err.data).toContain(`${ESC}[31m`);
+  });
+
+  it("writes the same characters plainly into a sink that is not a terminal", () => {
+    const { writers: w, err } = writers();
+    const emit = stageLineEmitter(w);
+    emit(settled("authenticate", "skipped"));
+    emit(start("verify_trace"));
+    emit(settled("verify_trace", "failed"));
+
+    expect(err.data).not.toContain(ESC);
+    expect(err.data).toContain("│");
+  });
+});

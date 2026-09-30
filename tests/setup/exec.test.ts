@@ -60,3 +60,24 @@ describe("cancelling a run", () => {
     expect(result.exitCode).toBe(128 + 15);
   }, 10000);
 });
+
+describe("decoding what the child writes", () => {
+  it("reassembles a character split across two chunks", async () => {
+    // `git status -z` paths come through this capture. Decoding each chunk with
+    // `buf.toString("utf8")` turned a straddling character into U+FFFD, so a
+    // non-ASCII path came back as one the worktree does not have.
+    const script = [
+      'const b = Buffer.from("café.ts", "utf8");',
+      // Byte 4 lands inside the two-byte `é`.
+      "process.stdout.write(b.subarray(0, 4));",
+      "setTimeout(() => process.stdout.write(b.subarray(4)), 50);",
+    ].join("");
+
+    const chunks: string[] = [];
+    const result = await runProcess(opts(script, { onData: (c: string) => chunks.push(c) }));
+
+    expect(result.output).toBe("café.ts");
+    expect(result.output).not.toContain("\ufffd");
+    expect(chunks.join("")).toBe("café.ts");
+  }, 10000);
+});
