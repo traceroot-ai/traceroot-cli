@@ -2349,22 +2349,34 @@ describe("a token configured in the environment rather than saved on disk", () =
     pythonRepo();
     initGit();
     const deps = makeDeps({
+      // Typed, not `as never`: the casts hid that this fixture's workspace rows
+      // used `workspace_id`/`workspace_name` while `WorkspaceSummary` is
+      // `{id, name, role}` — the shape the machine actually reads. `env` is a
+      // real `AuthSource`, so the credential needs no cast either.
       auth: {
         credential: { kind: "session", value: "env-session-token", source: "env" },
         hostUrl: { value: "https://api.example.test", source: "config" },
         authHost: { value: "https://api.example.test", source: "default" },
         projectId: { value: undefined, source: "none" },
-      } as never,
+      },
       storedCredential: null,
       client: fakeApiClient({ traces: [traceRow()] }),
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       setupApi: fakeSetupApi({
-        listWorkspaces: async () => [{ workspace_id: "w_1", workspace_name: "acme" }] as never,
-        listProjects: async () =>
-          [{ project_id: "p_1", project_name: "demo", workspace_id: "w_1" }] as never,
-        listApiKeys: async () => [] as never,
-        createProjectApiKey: async () =>
-          ({ key: "tr-minted-key-value", id: "k_1", hint: "tr-…alue" }) as never,
+        listWorkspaces: async () => [{ id: "w_1", name: "acme", role: "admin" }],
+        listProjects: async () => [
+          { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+        ],
+        listApiKeys: async () => [],
+        createProjectApiKey: async () => ({
+          id: "k_1",
+          name: "setup",
+          hint: "tr-…alue",
+          project_id: "p_1",
+          expires_at: null,
+          created_at: "2026-07-26T12:00:00.000Z",
+          key: "tr-minted-key-value",
+        }),
       }),
     });
     const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", method: "manual" } });

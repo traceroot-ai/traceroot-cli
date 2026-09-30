@@ -965,11 +965,9 @@ describe("reading a checkpoint that cannot be trusted", () => {
     // `startedAt` is the poll's lower bound in `verify_trace`, where an
     // unparseable value throws `Invalid time value` on every attempt.
     const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
-    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-
-    const root = mkdtempSync(join(tmpdir(), "tr-cp-"));
+    // The shared `dir`, which `afterEach` removes — a private `mkdtempSync` here
+    // leaked a directory into the system tmpdir on every run.
+    const root = dir;
     mkdirSync(join(root, ".traceroot"), { recursive: true });
     writeFileSync(
       join(root, ".traceroot", "setup.json"),
@@ -984,11 +982,9 @@ describe("reading a checkpoint that cannot be trusted", () => {
     // `{passed: true}` with `verify_application` already completed would satisfy
     // the stage on a resumed run without the verification ever having happened.
     const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
-    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-
-    const root = mkdtempSync(join(tmpdir(), "tr-cp-"));
+    // The shared `dir`, which `afterEach` removes — a private `mkdtempSync` here
+    // leaked a directory into the system tmpdir on every run.
+    const root = dir;
     mkdirSync(join(root, ".traceroot"), { recursive: true });
     writeFileSync(
       join(root, ".traceroot", "setup.json"),
