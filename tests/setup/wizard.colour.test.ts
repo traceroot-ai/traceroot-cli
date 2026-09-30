@@ -22,6 +22,7 @@ const BOLD_OFF = `${ESC}[22m`;
 const OFF = `${ESC}[39m`;
 const AQUA = `${ESC}[96m`;
 const GREY = `${ESC}[38;5;245m`;
+const DIM = `${ESC}[2m`;
 
 describe("hue, when the terminal can show it", () => {
   it("puts a settled value in green, and only the value", async () => {
@@ -119,5 +120,47 @@ describe("wrapping beside the rail", () => {
     const { wrapForRail } = await import("../../src/setup/wizard.js");
     const url = "https://ui.example.test/projects/abc/traces?traceId=deadbeef";
     expect(wrapForRail(url, 20)).toEqual([url]);
+  });
+});
+
+describe("the live line, where colour exists", () => {
+  it("dims the transcript above the spinner but leaves the counter alone", async () => {
+    // The contrast is the point: the transcript is a log of what already
+    // happened, the live line is the one thing still moving, and the counter is
+    // what tells a waiting user the run is not wedged. Asserted here because a
+    // non-terminal sink is not coloured at all, so in the rest of the suite a
+    // "not dimmed" claim would hold for any renderer.
+    const { startLineSpinner } = await import("../../src/setup/spinner.js");
+
+    let data = "";
+    const out = {
+      isTTY: true,
+      write(chunk: string) {
+        data += chunk;
+        return true;
+      },
+    };
+    let clock = 0;
+    const ticks: Array<() => void> = [];
+    const spinner = startLineSpinner({
+      sink: out as never,
+      message: "waiting for sign-in",
+      env: { TERM: "xterm" } as NodeJS.ProcessEnv,
+      now: () => clock,
+      animate: (tick: () => void) => {
+        ticks.push(tick);
+        return () => undefined;
+      },
+    });
+    spinner.writeAbove("run: ls");
+    clock += 12_000;
+    for (const fire of [...ticks]) {
+      fire();
+    }
+
+    expect(data).toContain(" [12s]");
+    expect(data).not.toContain(`${DIM}[12s]`);
+    expect(data).not.toContain(`${DIM} [12s]`);
+    expect(data).toContain(`${DIM}run: ls`);
   });
 });

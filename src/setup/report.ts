@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeFileSecure } from "../util/secureFile.js";
 import type { SetupContext } from "./types.js";
 
 /**
@@ -21,8 +21,14 @@ import type { SetupContext } from "./types.js";
 /** Where the report lives, relative to the repository root. */
 export const REPORT_PATH = join(".traceroot", "setup-report.md");
 
+/** A value in a table cell: an unescaped pipe splits the row, a newline ends the table. */
+function cell(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
 function line(label: string, value: string | null | undefined): string {
-  return `| ${label} | ${value === null || value === undefined || value === "" ? "—" : value} |`;
+  const text = value === null || value === undefined || value === "" ? "—" : cell(value);
+  return `| ${label} | ${text} |`;
 }
 
 /**
@@ -122,8 +128,11 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
 export function writeSetupReport(ctx: SetupContext, now: Date = new Date()): string | null {
   const target = join(ctx.root, REPORT_PATH);
   try {
-    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-    writeFileSync(target, renderSetupReport(ctx, now), "utf8");
+    // Creates `.traceroot/` 0700, writes a fresh temp file exclusively and
+    // renames it into place, so a symlink planted at the report's path is
+    // replaced rather than written through. Also makes the write atomic and
+    // leaves the file 0600, which is right for something in a 0700 directory.
+    writeFileSecure(target, renderSetupReport(ctx, now));
     return REPORT_PATH;
   } catch {
     return null;

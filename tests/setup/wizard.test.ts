@@ -10,6 +10,7 @@ import {
   wizardIntro,
   wizardLine,
   wizardLink,
+  wizardNote,
   wizardOutro,
   wizardProgress,
   wizardWarn,
@@ -212,5 +213,56 @@ describe("where no frame was ever drawn", () => {
       ].join("\n"),
     );
     expect(plain(t.err.data)).not.toContain("│");
+  });
+});
+
+describe("third-party text reaching the terminal", () => {
+  const ESC = String.fromCharCode(27);
+  const BEL = String.fromCharCode(7);
+
+  it("strips control characters out of a link before wrapping it", () => {
+    // The permalink comes from the backend. An ESC or a BEL inside it closes the
+    // OSC 8 sequence early or opens a new one, so the rest of the value is read
+    // by the terminal as control data rather than printed.
+    const hostile = `https://app.example.test/trace/1${BEL}${ESC}]8;;https://evil.test${BEL}`;
+    const linked = wizardLink(hostile, true);
+
+    // Exactly one OSC 8 pair survives: the injected `ESC]8;;` lost its escape,
+    // so what is left of it is inert text rather than a second sequence.
+    const markers = linked.split(`${ESC}]8;;`).length - 1;
+    expect(markers).toBe(2);
+    expect(linked.split(BEL).length - 1).toBe(2);
+    expect(plain(linked)).toContain("https://app.example.test/trace/1");
+  });
+
+  it("strips them from the muted link role too", () => {
+    const hostile = `https://docs.example.test${ESC}[2J`;
+    expect(plain(wizardAside(wizardLink(hostile, false)))).toBe("https://docs.example.test[2J");
+  });
+});
+
+describe("a terminal narrower than the frame", () => {
+  it("wraps to the real width rather than assuming eighty columns", () => {
+    // Reported zero or absent means "not a terminal", where 80 is the
+    // conventional guess. A genuinely narrow terminal was being ignored, so
+    // every note wrapped at 77 and walked past the right edge.
+    const stderr = process.stderr as unknown as { columns?: number };
+    const original = stderr.columns;
+    try {
+      // Below the old `> 20` guard, which is where the bug lived: a narrower
+      // terminal than that was discarded in favour of the 80-column guess.
+      stderr.columns = 16;
+      const t = target();
+      wizardNote(t.writers, ["one two three four five six seven eight nine ten eleven twelve"]);
+      const rows = plain(t.err.data)
+        .split("\n")
+        .filter((l) => l.trim() !== "");
+      expect(rows.length).toBeGreaterThan(1);
+      for (const row of rows) {
+        expect(row.length).toBeLessThanOrEqual(16);
+      }
+    } finally {
+      stderr.columns = original;
+    }
   });
 });

@@ -92,6 +92,11 @@ const OSC8_CLOSE = `${ESC}]8;;${BEL}`;
  * invisible in a diff and easy to delete by accident.
  */
 const SGR_PATTERN = `${ESC}\\[[0-9;]*m`;
+
+// C0 controls, DEL and C1 controls. Stripped from any URL that did not come out
+// of this file, for the reason given on `paintedLink`.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent.
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 const OSC8_PATTERN = `${ESC}\\]8;;[^${BEL}]*${BEL}`;
 /** One whole line wrapped in a single SGR pair, and nothing else. */
 const WHOLE_LINE_SGR = new RegExp(`^(${SGR_PATTERN})([^${ESC}]*)(${SGR_PATTERN})$`);
@@ -208,16 +213,21 @@ export function wizardMutedLink(url: string): string {
   // lost: every terminal in the allowlist also auto-detects a bare URL and
   // makes it clickable on its own. `wizardLink` keeps OSC 8, because there the
   // terminal's styling and ours agree.
-  return GREY_TEXT(url);
+  return GREY_TEXT(url.replace(CONTROL_CHARS, ""));
 }
 
 /** The OSC 8 wrapper, once, so the two link roles cannot drift apart. */
 function paintedLink(url: string, paint: (text: string) => string, hyperlinks: boolean): string {
-  const painted = paint(url);
+  // These URLs arrive from the backend, so they are third-party text: ESC, BEL
+  // and the C1 string terminator each close an OSC 8 sequence early or open a
+  // new one, which turns a permalink into terminal control data. Mirrors the
+  // same strip in `src/render/style.ts`.
+  const safe = url.replace(CONTROL_CHARS, "");
+  const painted = paint(safe);
   if (!hyperlinks) {
     return painted;
   }
-  return `${OSC8_OPEN}${url}${BEL}${painted}${OSC8_CLOSE}`;
+  return `${OSC8_OPEN}${safe}${BEL}${painted}${OSC8_CLOSE}`;
 }
 
 /**
@@ -358,6 +368,14 @@ export function settleAcknowledgement(writers: Writers, text: string): void {
   if (!canRedraw(writers.err, process.env)) {
     return;
   }
+  // `ESC[1A` reaches one row. A live line that wrapped occupies two or more, so
+  // redrawing would grey the tail and leave the head bright; leaving the
+  // answered line as it stands reads correctly instead.
+  const columns = (process.stderr as unknown as { columns?: number }).columns ?? 80;
+  // The prompt appends one space to the composed line.
+  if (visibleLength(wizardAcknowledgement(text)) + 1 > columns) {
+    return;
+  }
   writers.err.write(`${ESC}[1A${ESC}[2K${wizardAcknowledgementSettled(text)}\n`);
 }
 
@@ -437,7 +455,11 @@ function wrapWords(text: string, width: number): string[] {
 /** Columns available beside the rail, which costs a glyph and two spaces. */
 function railWidth(): number {
   const columns = (process.stderr as unknown as { columns?: number }).columns;
-  return (typeof columns === "number" && columns > 20 ? columns : 80) - 3;
+  // Zero or absent means "not a terminal, so no width to respect" — 80 is the
+  // conventional guess. A real narrow terminal is used as reported: wrapping at
+  // its width is ugly, wrapping at 77 walks the frame's own column.
+  const total = typeof columns === "number" && columns > 0 ? columns : 80;
+  return Math.max(1, total - 3);
 }
 
 export function wizardNote(

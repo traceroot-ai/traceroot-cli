@@ -121,14 +121,19 @@ export function startLineSpinner(input: LineSpinnerInput): LineSpinner {
   let message = input.message;
   let frame = 0;
 
-  const rail = color.dim(S_BAR);
+  const redraw = canRedraw(input.sink, env);
+  // Dimmed only where the sink is a terminal. picocolors decides from the
+  // process (`CI`, `FORCE_COLOR`, stdout's TTY), never from this sink, so the
+  // plain-log fallback below has to strip the colour itself to stay a plain log
+  // line rather than a line of escape codes in a file.
+  const rail = redraw ? color.dim(S_BAR) : S_BAR;
   // Magenta rather than cyan for the spinning glyph. Cyan is what clack uses
   // for an active prompt, so the two were the same colour and a spinner read
   // as a question waiting on the user. There is no orange in picocolors'
   // 16-colour set; magenta is the nearest thing that is unmistakably not a
   // prompt, not an error, and not the dim transcript.
 
-  if (!canRedraw(input.sink, env)) {
+  if (!redraw) {
     // A pipe, a CI log or a file. One plain line per change of state, no
     // escape codes and no animation — a log is read after the fact, where a
     // spinner has nothing to add and a `\r` is damage. The rail stays: the
@@ -183,6 +188,13 @@ export function startLineSpinner(input: LineSpinnerInput): LineSpinner {
     return seconds < 1 ? "" : `${seconds}s`;
   };
 
+  /** One row per line: the geometry below counts lines, so nothing may wrap. */
+  const clip = (text: string, reserved: number): string => {
+    const columns = (input.sink as unknown as { columns?: number }).columns ?? 80;
+    const room = Math.max(1, columns - reserved);
+    return text.length <= room ? text : `${text.slice(0, Math.max(1, room - 1))}…`;
+  };
+
   const draw = (): void => {
     const label = counter();
     // The counter is the terminal's default colour, like the message it follows.
@@ -203,13 +215,13 @@ export function startLineSpinner(input: LineSpinnerInput): LineSpinner {
     // spinner. Cursor-up only over rows this spinner drew, so nothing above is
     // ever at risk.
     const rewind = rewindToTop();
-    const body = feed.map((line) => `${rail}  ${color.dim(line)}\n`).join("");
+    const body = feed.map((line) => `${rail}  ${color.dim(clip(line, 3))}\n`).join("");
     // A rail line between the transcript and the spinner. Without it the live
     // line sits flush against the last thing the agent did and reads as one
     // more entry in the log rather than the status of the whole block.
     const gap = feed.length > 0 ? `${rail}\n` : "";
     input.sink.write(
-      `${rewind}${CLEAR_LINE}${CLEAR_BELOW}${body}${gap}${CLEAR_LINE}${color.magenta(glyph)}  ${message}${elapsed}`,
+      `${rewind}${CLEAR_LINE}${CLEAR_BELOW}${body}${gap}${CLEAR_LINE}${color.magenta(glyph)}  ${clip(`${message}${elapsed}`, 3)}`,
     );
     ownedRows = feed.length + (feed.length > 0 ? 2 : 1);
   };
