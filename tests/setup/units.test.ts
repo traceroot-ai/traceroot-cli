@@ -223,11 +223,12 @@ describe("splitCommand", () => {
 
 describe("git helpers", () => {
   it("parses porcelain output including renames", () => {
-    expect(parsePorcelain(" M src/app.ts\n?? new.txt\nR  old.ts -> new.ts\n")).toEqual([
-      "new.ts",
-      "new.txt",
-      "src/app.ts",
-    ]);
+    // `-z`: NUL-delimited, and a rename is two records (new path, then old)
+    // rather than one joined with a " -> " that a filename may itself contain.
+    const NUL = String.fromCharCode(0);
+    expect(
+      parsePorcelain(` M src/app.ts${NUL}?? new.txt${NUL}R  new.ts${NUL}old.ts${NUL}`),
+    ).toEqual(["new.ts", "new.txt", "src/app.ts"]);
   });
 
   it("reports only files that appeared after the baseline", () => {
@@ -487,6 +488,7 @@ describe("agent task", () => {
   it("scopes to one service and pins the version", () => {
     const task = buildSetupTask({
       service,
+      root: "/repo",
       sdk: TEST_SDK,
       skillPath: ".claude/skills/traceroot-instrument-repo",
       verifyCommand: "pytest",
@@ -507,6 +509,7 @@ describe("agent task", () => {
   it("tells a background agent to abort rather than guess", () => {
     const task = buildSetupTask({
       service,
+      root: "/repo",
       sdk: TEST_SDK,
       skillPath: "p",
       verifyCommand: null,
@@ -520,6 +523,7 @@ describe("agent task", () => {
   it("tells the agent to extend, not duplicate, an existing install", () => {
     const task = buildSetupTask({
       service,
+      root: "/repo",
       sdk: TEST_SDK,
       skillPath: "p",
       verifyCommand: null,
@@ -533,13 +537,14 @@ describe("agent task", () => {
   it("never embeds a credential", () => {
     const task = buildSetupTask({
       service,
+      root: "/repo",
       sdk: TEST_SDK,
       skillPath: "p",
       verifyCommand: null,
       interactive: true,
       existingInstrumentation: [],
     });
-    expect(task).not.toMatch(/tr-[A-Za-z0-9]{8,}/);
+    expect(task).not.toMatch(/tr[_-][A-Za-z0-9]{8,}/);
   });
 });
 
@@ -684,7 +689,7 @@ describe("setup report", () => {
     // place a key should be able to reach. Only the hint appears.
     const md = renderSetupReport(baseCtx(), new Date());
     expect(md).toContain("tr-a439-a3dc");
-    expect(md).not.toMatch(/tr-[a-z0-9]{8,}/i);
+    expect(md).not.toMatch(/tr[_-][a-z0-9]{8,}/i);
   });
 
   it("does not claim checks passed when they never ran", () => {
@@ -711,6 +716,7 @@ describe("waiting for a trace only when there is one to wait for", () => {
     // Instrumenting emits nothing; running does. Leaving this implicit is how
     // a run ends with working instrumentation and no trace.
     const task = buildSetupTask({
+      root: "/repo",
       service: {
         path: ".",
         language: "python",
@@ -761,23 +767,24 @@ describe("installing into the interpreter the service runs on", () => {
       "python",
       "/repo/.venv/bin/python",
     );
-    expect(command).toBe('"/repo/.venv/bin/python" -m pip install traceroot==0.1.11');
+    expect(command).toBe("'/repo/.venv/bin/python' -m pip install traceroot==0.1.11");
   });
 
-  it("quotes it, because a repository path routinely contains spaces", () => {
+  it("quotes it single, so a shell expands nothing inside the path", () => {
     const command = installCommand(
       { package: "traceroot", version: "0.1.11" } as never,
       { language: "python", packageManager: "pip" } as never,
       "python",
       "/My Repo/.venv/bin/python",
     );
-    expect(command).toContain('"/My Repo/.venv/bin/python"');
+    expect(command).toContain("'/My Repo/.venv/bin/python'");
   });
 });
 
 describe("everything the task settles so the agent does not have to", () => {
   const task = () =>
     buildSetupTask({
+      root: "/repo",
       service: {
         path: "svc",
         language: "python",
@@ -854,6 +861,7 @@ describe("everything the task settles so the agent does not have to", () => {
 describe("leaving nothing for the agent to look up", () => {
   const task = (language: "python" | "typescript" = "python") =>
     buildSetupTask({
+      root: "/repo",
       service: {
         path: "svc",
         language,
@@ -899,7 +907,9 @@ describe("leaving nothing for the agent to look up", () => {
 
   it("gives TypeScript its own shape rather than Python's", () => {
     const rendered = task("typescript");
-    expect(rendered).toContain("traceroot-sdk-ts");
+    // The package `sdkPackageFor` actually installs. The snippet named
+    // `traceroot-sdk-ts`, which the run never installs, so the paste failed.
+    expect(rendered).toContain("@traceroot-ai/traceroot");
     expect(rendered).not.toContain("load_dotenv");
   });
 });
@@ -907,6 +917,7 @@ describe("leaving nothing for the agent to look up", () => {
 describe("the task renders whole", () => {
   const render = () =>
     buildSetupTask({
+      root: "/repo",
       service: {
         path: "svc",
         language: "python",
@@ -946,5 +957,52 @@ describe("the task renders whole", () => {
     const task = render();
     expect(task).toContain("Its own output is the confirmation");
     expect(task).toContain("do not follow it with `pip show`");
+  });
+});
+
+describe("reading a checkpoint that cannot be trusted", () => {
+  it("refuses one whose start time does not parse", async () => {
+    // `startedAt` is the poll's lower bound in `verify_trace`, where an
+    // unparseable value throws `Invalid time value` on every attempt.
+    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const root = mkdtempSync(join(tmpdir(), "tr-cp-"));
+    mkdirSync(join(root, ".traceroot"), { recursive: true });
+    writeFileSync(
+      join(root, ".traceroot", "setup.json"),
+      JSON.stringify({ version: 1, startedAt: "not a date" }),
+      "utf8",
+    );
+
+    expect(readCheckpoint(root)).toBeNull();
+  });
+
+  it("drops a stage result whose shape is wrong rather than adopting it", async () => {
+    // `{passed: true}` with `verify_application` already completed would satisfy
+    // the stage on a resumed run without the verification ever having happened.
+    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const root = mkdtempSync(join(tmpdir(), "tr-cp-"));
+    mkdirSync(join(root, ".traceroot"), { recursive: true });
+    writeFileSync(
+      join(root, ".traceroot", "setup.json"),
+      JSON.stringify({
+        version: 1,
+        startedAt: "2026-07-26T12:00:00.000Z",
+        completedStages: ["verify_application"],
+        application: { passed: true },
+      }),
+      "utf8",
+    );
+
+    const checkpoint = readCheckpoint(root);
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint?.application).toBeUndefined();
   });
 });

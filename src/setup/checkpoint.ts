@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writeFileSecure } from "../util/secureFile.js";
 import { getVersion } from "../version.js";
+import { SETUP_EXIT_CODES, type SetupErrorCode } from "./errors.js";
 import { findGitRoot } from "./git.js";
 import { SETUP_STAGES, type SetupCheckpoint, type SetupStage } from "./types.js";
 
@@ -70,7 +72,15 @@ export function readCheckpoint(root: string): SetupCheckpoint | null {
     return null;
   }
   const obj = parsed as Record<string, unknown>;
-  if (obj.version !== 1 || typeof obj.startedAt !== "string") {
+  // `startedAt` has to parse, not merely be a string: it is handed to
+  // `verify_trace` as the poll's lower bound, where an unparseable value throws
+  // `Invalid time value` on every attempt. No age limit though — `--resume` is an
+  // explicit request, and an old checkpoint still describes the repository.
+  if (
+    obj.version !== 1 ||
+    typeof obj.startedAt !== "string" ||
+    Number.isNaN(Date.parse(obj.startedAt))
+  ) {
     return null;
   }
 
@@ -81,7 +91,10 @@ export function readCheckpoint(root: string): SetupCheckpoint | null {
   const checkpoint: SetupCheckpoint = {
     version: 1,
     startedAt: obj.startedAt,
-    updatedAt: typeof obj.updatedAt === "string" ? obj.updatedAt : obj.startedAt,
+    updatedAt:
+      typeof obj.updatedAt === "string" && !Number.isNaN(Date.parse(obj.updatedAt))
+        ? obj.updatedAt
+        : obj.startedAt,
     cliVersion: typeof obj.cliVersion === "string" ? obj.cliVersion : "unknown",
     completedStages,
   };
@@ -106,14 +119,82 @@ export function readCheckpoint(root: string): SetupCheckpoint | null {
   ] as const) {
     copyString(key);
   }
-  for (const key of ["service", "application", "trace", "lastError"] as const) {
-    const value = obj[key];
-    if (typeof value === "object" && value !== null) {
-      (checkpoint as unknown as Record<string, unknown>)[key] = value;
-    }
+  // Validated per shape rather than "is an object": adopting these unchecked let a
+  // corrupt or hand-edited file satisfy `verify_application`, or report a trace
+  // that was never seen, on a resumed run.
+  if (isService(obj.service)) {
+    checkpoint.service = obj.service;
+  }
+  if (isApplication(obj.application)) {
+    checkpoint.application = obj.application;
+  }
+  if (isTrace(obj.trace)) {
+    checkpoint.trace = obj.trace;
+  }
+  if (isLastError(obj.lastError)) {
+    checkpoint.lastError = obj.lastError;
   }
 
   return checkpoint;
+}
+
+/** The closed set of codes, taken from the table that defines their exit status. */
+function isSetupErrorCode(value: unknown): value is SetupErrorCode {
+  return typeof value === "string" && Object.hasOwn(SETUP_EXIT_CODES, value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRun(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.ran === "boolean" &&
+    (value.exitCode === null || typeof value.exitCode === "number") &&
+    typeof value.durationMs === "number"
+  );
+}
+
+function isApplication(value: unknown): value is NonNullable<SetupCheckpoint["application"]> {
+  return (
+    isRecord(value) &&
+    (value.command === null || typeof value.command === "string") &&
+    isRun(value.withCredentials) &&
+    isRun(value.withoutCredentials) &&
+    typeof value.passed === "boolean" &&
+    (value.skippedReason === null || typeof value.skippedReason === "string")
+  );
+}
+
+function isTrace(value: unknown): value is NonNullable<SetupCheckpoint["trace"]> {
+  return (
+    isRecord(value) &&
+    typeof value.traceId === "string" &&
+    typeof value.traceUrl === "string" &&
+    typeof value.observedAt === "string" &&
+    typeof value.waitedMs === "number"
+  );
+}
+
+function isService(value: unknown): value is NonNullable<SetupCheckpoint["service"]> {
+  return (
+    isRecord(value) &&
+    typeof value.path === "string" &&
+    (value.language === "python" ||
+      value.language === "typescript" ||
+      value.language === "javascript") &&
+    (value.framework === null || typeof value.framework === "string")
+  );
+}
+
+function isLastError(value: unknown): value is NonNullable<SetupCheckpoint["lastError"]> {
+  return (
+    isRecord(value) &&
+    isStage(value.stage) &&
+    isSetupErrorCode(value.code) &&
+    typeof value.message === "string"
+  );
 }
 
 /**
@@ -127,19 +208,16 @@ export function readCheckpoint(root: string): SetupCheckpoint | null {
  */
 export function writeCheckpoint(root: string, checkpoint: SetupCheckpoint): void {
   const target = checkpointPath(root);
-  const tmp = `${target}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     ensureGitignore(dirname(target));
     const payload = `${JSON.stringify({ ...checkpoint, updatedAt: new Date().toISOString() }, null, 2)}\n`;
-    writeFileSync(tmp, payload, { mode: 0o600 });
-    renameSync(tmp, target);
+    // The shared writer unlinks any stale or planted temp path and creates with
+    // `wx`, which never follows a symlink, then renames into place.
+    writeFileSecure(target, payload);
   } catch {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      // best-effort cleanup
-    }
+    // Best-effort by design: a checkpoint is an optimization for reruns, and
+    // failing the whole setup over a convenience file would be worse.
   }
 }
 

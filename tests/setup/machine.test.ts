@@ -1,7 +1,18 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+/** `git status --porcelain -z` record separator. */
+const NUL = String.fromCharCode(0);
 import { BackendUnavailableError, SetupApiError } from "../../src/api/setup.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
@@ -218,9 +229,9 @@ describe("choosing what to instrument", () => {
       auth: authWithKey(),
       client: fakeApiClient({ traces: [traceRow()] }),
       runProcess: fakeRunProcess({ gitStatus: ["", " M error.py"] }).run,
-      selectAnswer: "python",
+      answers: ["python"],
     });
-    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude", manual: true } });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude", method: "manual" } });
     await runSetupMachine(ctx, deps);
 
     expect(ctx.stack?.selected?.language).toBe("python");
@@ -243,7 +254,7 @@ describe("choosing what to instrument", () => {
       client: fakeApiClient({ traces: [traceRow()] }),
       runProcess: fakeRunProcess({ gitStatus: ["", " M svc/main.py"] }).run,
     });
-    const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", manual: true } });
+    const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", method: "manual" } });
     await runSetupMachine(ctx, deps);
 
     expect(ctx.stack?.selected?.path).toBe("svc");
@@ -264,7 +275,7 @@ describe("choosing what to instrument", () => {
       client: fakeApiClient({ traces: [traceRow()] }),
       runProcess: fakeRunProcess({ gitStatus: ["", " M svc-a/main.py"] }).run,
     });
-    const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", manual: true } });
+    const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", method: "manual" } });
     await runSetupMachine(ctx, deps);
 
     expect(ctx.stack?.selected?.language).toBe("python");
@@ -1527,7 +1538,11 @@ describe("how to instrument", () => {
   /** A PATH with a real, statable `claude` on it, so detection finds one. */
   function withClaudeInstalled(): NodeJS.ProcessEnv {
     mkdirSync(join(dir, "bin"), { recursive: true });
-    writeFileSync(join(dir, "bin", "claude"), "#!/bin/sh\n");
+    const binary = join(dir, "bin", "claude");
+    writeFileSync(binary, "#!/bin/sh\n");
+    // Executable, because that is what "installed" means: resolution checks the
+    // execute bit, so a plain file here is not an agent anyone could run.
+    chmodSync(binary, 0o755);
     return { PATH: join(dir, "bin") };
   }
 
@@ -1905,7 +1920,8 @@ describe("the uncommitted-changes gate", () => {
   function dirtyRepo(files: string[]) {
     pythonRepo();
     initGit();
-    return fakeRunProcess({ gitStatus: [files.map((f) => ` M ${f}`).join("\n")] });
+    // NUL-delimited, as `git status --porcelain -z` emits it.
+    return fakeRunProcess({ gitStatus: [files.map((f) => ` M ${f}`).join(NUL)] });
   }
 
   it("lists what is already changed, numbered, before asking", async () => {
@@ -2057,7 +2073,7 @@ describe("worktree safety", () => {
     const process = fakeRunProcess({
       // Dirty before setup starts, and the pre-existing edit is not attributed
       // to the agent afterwards.
-      gitStatus: [" M unrelated.py", " M unrelated.py\n M main.py"],
+      gitStatus: [" M unrelated.py", ` M unrelated.py${NUL} M main.py`],
     });
     const deps = makeDeps({
       auth: authWithKey(),
@@ -2097,7 +2113,7 @@ describe("where you run it is what it instruments", () => {
     const { ctx } = makeCtx({
       cwd: join(dir, "test1"),
       canPrompt: false,
-      flags: { agent: "claude", manual: true },
+      flags: { agent: "claude", method: "manual" },
     });
     await runSetupMachine(ctx, deps);
 
@@ -2118,7 +2134,7 @@ describe("where you run it is what it instruments", () => {
     const { ctx } = makeCtx({
       cwd: join(dir, "docs"),
       canPrompt: false,
-      flags: { agent: "claude", manual: true },
+      flags: { agent: "claude", method: "manual" },
     });
     await runSetupMachine(ctx, deps);
 
@@ -2321,5 +2337,41 @@ describe("the machine contract, whatever the human sees", () => {
       ).toBe(true);
     }
     expect(events.filter((e) => e.event === "result")).toHaveLength(1);
+  });
+});
+
+describe("a token configured in the environment rather than saved on disk", () => {
+  it("signs in with it instead of failing for want of a credential", async () => {
+    // `TRACEROOT_TOKEN` resolves to exactly the kind of credential a saved login
+    // produces. It was resolved, then ignored because only the disk store was
+    // consulted, so a non-interactive run failed NOT_AUTHENTICATED holding a
+    // usable token.
+    pythonRepo();
+    initGit();
+    const deps = makeDeps({
+      auth: {
+        credential: { kind: "session", value: "env-session-token", source: "env" },
+        hostUrl: { value: "https://api.example.test", source: "config" },
+        authHost: { value: "https://api.example.test", source: "default" },
+        projectId: { value: undefined, source: "none" },
+      } as never,
+      storedCredential: null,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      setupApi: fakeSetupApi({
+        listWorkspaces: async () => [{ workspace_id: "w_1", workspace_name: "acme" }] as never,
+        listProjects: async () =>
+          [{ project_id: "p_1", project_name: "demo", workspace_id: "w_1" }] as never,
+        listApiKeys: async () => [] as never,
+        createProjectApiKey: async () =>
+          ({ key: "tr-minted-key-value", id: "k_1", hint: "tr-…alue" }) as never,
+      }),
+    });
+    const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", method: "manual" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    // The point is that authentication did not stop the run.
+    expect(result.checkpoint.completedStages).toContain("authenticate");
   });
 });
