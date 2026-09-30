@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { acknowledgeProduction, productionNotice } from "../../src/setup/production.js";
+import { plain } from "./colour.js";
 import { makeWriters } from "./helpers.js";
 
 const text = (language: Parameters<typeof productionNotice>[0]["language"]) =>
-  productionNotice({ language }).join("\n");
+  productionNotice({ language }).map(plain).join("\n");
 
 describe("what the notice says", () => {
   it("names the variable and the file, and never the key at all", () => {
@@ -61,7 +62,7 @@ describe("what the notice says", () => {
     // marker already does, and pushing the verb far enough right that the line
     // wrapped mid-instruction on an ordinary window.
     for (const language of ["python", "typescript", null] as const) {
-      const notice = productionNotice({ language });
+      const notice = productionNotice({ language }).map(plain);
       expect(notice[0]).toContain("Add the TRACEROOT_API_KEY token");
       expect(notice[0]).toContain("./.env.traceroot");
       expect(notice[0]).toContain("to your production environment.");
@@ -87,12 +88,12 @@ describe("acknowledging it", () => {
       },
     }).then(() => {
       expect(asked).toHaveLength(1);
-      expect(asked[0]).toContain("│  I have added TRACEROOT_API_KEY to my production env.");
-      expect(asked[0]).not.toContain("●");
-      expect(asked[0]).toContain("(Press Enter to continue)");
+      expect(plain(asked[0])).toContain("│  I have added TRACEROOT_API_KEY to my production env.");
+      expect(plain(asked[0])).not.toContain("●");
+      expect(plain(asked[0])).toContain("(Press Enter to continue)");
       // A settled block, not a pending one: `◇` is what the transcript shows
       // once the acknowledgement under it has been given.
-      expect(err.data).toContain("◇  Add the TRACEROOT_API_KEY token");
+      expect(plain(err.data)).toContain("◇  Add the TRACEROOT_API_KEY token");
     });
   });
 
@@ -105,6 +106,6 @@ describe("acknowledging it", () => {
       language: "typescript",
       prompt: null,
     });
-    expect(err.data).toContain("Add the TRACEROOT_API_KEY token");
+    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY token");
   });
 });
