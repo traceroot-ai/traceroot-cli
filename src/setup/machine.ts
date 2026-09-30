@@ -474,8 +474,20 @@ const authenticate: StageDefinition = {
     // there is nothing to prove again. Tried before the browser handoff because
     // skipping it is the entire reason the credential is kept.
     const stored = deps.readCredential(host);
-    if (stored !== null) {
-      const signedIn = await userCredentialSignIn(ctx, deps, host, stored);
+    // A configured `TRACEROOT_TOKEN` is the same kind of credential as a saved
+    // login, so it drives the same sign-in: without this it was resolved, ignored,
+    // and the run failed NOT_AUTHENTICATED with a usable token in hand.
+    const resolved = deps.resolvedAuth.credential;
+    const entry: CredentialEntry | null =
+      stored ??
+      (resolved.kind === "session" && resolved.value !== undefined
+        ? { session_token: resolved.value, created_at: deps.now().toISOString() }
+        : null);
+    if (entry !== null) {
+      const signedIn = await userCredentialSignIn(ctx, deps, host, entry, {
+        announce: true,
+        persisted: stored !== null,
+      });
       if (signedIn) {
         return "ok";
       }
@@ -778,6 +790,12 @@ async function userCredentialSignIn(
      */
     announce: boolean;
     /**
+     * Whether the credential came off disk. A rejected environment token must not
+     * be "deleted" — there is nothing to delete — and calling it a saved sign-in
+     * that expired would be wrong.
+     */
+    persisted?: boolean;
+    /**
      * Set when the caller already established which workspace this is for.
      * Without it the server refuses to guess across several workspaces.
      */
@@ -802,8 +820,12 @@ async function userCredentialSignIn(
       // wasted round trip on every future run. The shared token provider raises
       // an auth-class error for a revoked or expired session, which is exactly
       // this case.
-      deps.deleteCredential(host);
-      wizardWarn(ctx, "the saved TraceRoot sign-in has expired; signing in again");
+      if (options.persisted !== false) {
+        deps.deleteCredential(host);
+        wizardWarn(ctx, "the saved TraceRoot sign-in has expired; signing in again");
+      } else {
+        wizardWarn(ctx, "the configured TraceRoot token was rejected; signing in again");
+      }
       return false;
     }
     if (err instanceof BackendUnavailableError) {
@@ -1796,6 +1818,7 @@ const instrument: StageDefinition = {
 
     const task = buildSetupTask({
       service,
+      root: ctx.root,
       sdk,
       // Relative to the agent's cwd, not the repository root.
       //

@@ -12,7 +12,12 @@ function stubFetch(replies: Array<{ status: number; body?: unknown }>): {
   const queue = [...replies];
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
     calls.push({ url: String(url), init });
-    const reply = queue.shift() ?? { status: 200, body: {} };
+    const reply = queue.shift();
+    if (reply === undefined) {
+      // A surplus request is the bug worth seeing. Fabricating a 200 here meant a
+      // client that made an extra call still passed, with the extra reply empty.
+      throw new Error(`unexpected request to ${String(url)}: the reply queue is empty`);
+    }
     return new Response(reply.body === undefined ? null : JSON.stringify(reply.body), {
       status: reply.status,
       headers: { "content-type": "application/json" },
@@ -319,5 +324,24 @@ describe("trace polling", () => {
     });
     expect(result.found).toBe(true);
     expect(calls).toBe(2);
+  });
+});
+
+describe("creating a project", () => {
+  it("maps the server's shape into the vocabulary every caller reads", async () => {
+    // The server answers `{id, name, workspace_id}`; the wizard reads
+    // `project_id`/`project_name` throughout. Returning the raw shape typed as
+    // `ProjectSummary` carried undefined identifiers into the key mint and the
+    // checkpoint on the brand-new-account path, which is the headline scenario.
+    const { fetchImpl } = stubFetch([
+      { status: 201, body: { id: "p_1", name: "demo", workspace_id: "w_1" } },
+    ]);
+    const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
+
+    const created = await api.createProject("demo", "w_1");
+
+    expect(created.project_id).toBe("p_1");
+    expect(created.project_name).toBe("demo");
+    expect(created.workspace_id).toBe("w_1");
   });
 });

@@ -267,11 +267,20 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
       }));
     },
     createProject(name, workspaceId) {
-      return request<ProjectSummary>({
+      // Translated into the wizard's vocabulary, exactly as `listProjects` does
+      // above: the server answers `{id, name, workspace_id}`, and every caller
+      // reads `project_id`/`project_name`. Returning the raw shape typed as
+      // `ProjectSummary` carried `undefined` identifiers into the key mint and the
+      // checkpoint on the brand-new-account path.
+      return request<{ id: string; name: string; workspace_id: string }>({
         method: "POST",
         path: "/api/v1/public/projects",
         body: workspaceId === undefined ? { name } : { name, workspace_id: workspaceId },
-      });
+      }).then((created) => ({
+        project_id: created.id,
+        project_name: created.name,
+        workspace_id: created.workspace_id,
+      }));
     },
     async listApiKeys(_projectId) {
       // Scoped server-side to the authenticating key's project, so the
