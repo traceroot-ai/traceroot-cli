@@ -1,12 +1,23 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ensureIgnored, upsertEnvContent, upsertEnvFile } from "../../src/setup/envWrite.js";
 
+/** Every root this file makes, so none is left behind in the system tmpdir. */
+const roots: string[] = [];
+
 function dir(): string {
-  return mkdtempSync(join(tmpdir(), "traceroot-env-"));
+  const root = mkdtempSync(join(tmpdir(), "traceroot-env-"));
+  roots.push(root);
+  return root;
 }
+
+afterEach(() => {
+  while (roots.length > 0) {
+    rmSync(roots.pop() as string, { recursive: true, force: true });
+  }
+});
 
 describe("rewriting a key that appears more than once", () => {
   it("replaces every occurrence, because the reader takes the last", () => {
@@ -51,7 +62,14 @@ describe("the file's permissions", () => {
     const result = upsertEnvFile(path, { TRACEROOT_API_KEY: "same" });
 
     expect(result.written).toEqual([]);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Hard-assert the mode on POSIX only, as the config and credential tests do:
+    // `chmodSync` is best-effort on win32 and `upsertEnvFile` swallows its errors,
+    // so the file's existence is all that can be claimed there.
+    if (process.platform !== "win32") {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } else {
+      expect(statSync(path).isFile()).toBe(true);
+    }
   });
 });
 
