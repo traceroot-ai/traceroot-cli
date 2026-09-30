@@ -554,6 +554,47 @@ describe("doctor reports setup state", () => {
     });
     expect(report.checks.filter((c) => c.category === "setup")).toEqual([]);
   });
+
+  function doctorFor(checkpoint: ReturnType<typeof newCheckpoint>) {
+    writeCheckpoint(dir, checkpoint);
+    return runDoctor({
+      ctx: { auth: auth(), json: false },
+      cwd: dir,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out: new StringSink(), err: new StringSink() },
+      detection: detection(),
+      includeSetup: true,
+    });
+  }
+
+  it("warns rather than fails for a cancelled run", async () => {
+    // `setup` exits 0 on a cancellation, so `doctor` exiting non-zero for the same
+    // run contradicts it — and the Setup section appears on a plain `doctor` too.
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push("precheck");
+    checkpoint.lastError = {
+      stage: "instrument",
+      code: "CANCELLED",
+      message: "Cancelled.",
+    };
+
+    const report = await doctorFor(checkpoint);
+    const setupChecks = report.checks.filter((c) => c.category === "setup");
+    expect(setupChecks.find((c) => c.name === "setup_completed")?.status).toBe("warn");
+    expect(setupChecks.find((c) => c.name === "setup_last_error")?.status).toBe("warn");
+  });
+
+  it("warns rather than fails for a run that stopped on purpose", async () => {
+    // `--no-instrument` records no error at all; it is a pause, not a failure.
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push("precheck", "authenticate");
+
+    const report = await doctorFor(checkpoint);
+    const setupChecks = report.checks.filter((c) => c.category === "setup");
+    expect(setupChecks.find((c) => c.name === "setup_completed")?.status).toBe("warn");
+    expect(setupChecks.find((c) => c.name === "setup_first_trace")?.status).toBe("warn");
+  });
 });
 
 describe("finding a previous, unfinished run", () => {
@@ -563,13 +604,26 @@ describe("finding a previous, unfinished run", () => {
     // on the user to know a flag exists at the one moment they are least
     // inclined to read help, which is a run that just failed.
     const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
-    checkpoint.completedStages.push("precheck", "authenticate");
+    // A finished trace verification, so continuing has something to rehydrate.
+    checkpoint.completedStages.push("precheck", "authenticate", "verify_trace");
+    checkpoint.trace = {
+      traceId: "t_1",
+      traceUrl: "https://app.example.test/trace/t_1",
+      observedAt: "2026-07-26T12:00:30.000Z",
+      waitedMs: 1000,
+    };
     writeCheckpoint(dir, checkpoint);
 
     const asked: string[] = [];
+    let polls = 0;
     const setupDeps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      client: fakeApiClient({
+        traces: () => {
+          polls += 1;
+          return [traceRow()];
+        },
+      }),
     });
     const inner = setupDeps.select;
     setupDeps.select = async (input) => {
@@ -577,11 +631,12 @@ describe("finding a previous, unfinished run", () => {
       return input.message.includes("Continue from there?") ? "resume" : inner(input);
     };
 
+    const { writers } = makeWriters();
     await runSetup({
       ctx: ctxWith(),
       cwd: dir,
       flags: defaultFlags({ agent: "claude" }),
-      writers: makeWriters().writers,
+      writers,
       canPrompt: true,
       setupDeps,
     });
@@ -589,6 +644,12 @@ describe("finding a previous, unfinished run", () => {
     expect(asked.some((q) => q.includes("Continue from there?"))).toBe(true);
     // The question names where it stopped, so the answer is informed.
     expect(asked.find((q) => q.includes("Continue from there?"))).toContain("stopped after");
+    // And continuing continued. The machine rehydrates a completed stage only
+    // under the resume flag, so without it the kept checkpoint bought nothing and
+    // every stage ran again — re-polling for a trace it had already seen, minting a
+    // second key, and pointing the agent at code it had already edited. Asserting
+    // the question alone let all of that pass.
+    expect(polls).toBe(0);
   });
 
   it("never resumes silently when there is nobody to ask", async () => {
@@ -610,5 +671,43 @@ describe("finding a previous, unfinished run", () => {
     });
 
     expect(err.data).toContain("pass --resume to continue it");
+  });
+});
+
+describe("a checkpoint at the repository root that belongs to another service", () => {
+  it("is not adopted by a run targeting a different service", async () => {
+    // The root lookup migrates checkpoints written there by an older version. A
+    // root checkpoint can legitimately describe a subdirectory, so without a
+    // service comparison a `--service web` run could inherit `api`'s completed
+    // stages — and with them its application verification and its trace.
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push("precheck", "authenticate", "verify_trace");
+    checkpoint.service = { path: "api", language: "python", framework: null };
+    writeCheckpoint(dir, checkpoint);
+    mkdirSync(join(dir, "web"), { recursive: true });
+    writeFileSync(join(dir, "web", "package.json"), JSON.stringify({ name: "web" }), "utf8");
+
+    const asked: string[] = [];
+    const setupDeps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+    });
+    const inner = setupDeps.select;
+    setupDeps.select = async (input) => {
+      asked.push(input.message);
+      return inner(input);
+    };
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude", service: "web" }),
+      writers: makeWriters().writers,
+      canPrompt: true,
+      setupDeps,
+    });
+
+    // Never offered, because there was nothing of this service's to resume.
+    expect(asked.some((q) => q.includes("Continue from there?"))).toBe(false);
   });
 });
