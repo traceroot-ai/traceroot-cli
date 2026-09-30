@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildInvocation } from "../../src/setup/launch.js";
+import { buildAgentEnv, buildInvocation, launchAgent } from "../../src/setup/launch.js";
+import { makeSecret } from "../../src/setup/secret.js";
+import { fakeRunProcess } from "./helpers.js";
 
 describe("reaching a skill that lives outside the working directory", () => {
   it("passes each readable directory as its own --add-dir", () => {
@@ -7,10 +9,11 @@ describe("reaching a skill that lives outside the working directory", () => {
       agentId: "claude",
       task: "t",
       interactive: false,
-      readableDirs: ["/repo"],
+      // Two, because with one the argv is identical whether the flag repeats or
+      // is emitted once with a list — which is the thing this asserts.
+      readableDirs: ["/repo", "/other"],
     });
-    expect(invocation.args).toContain("--add-dir");
-    expect(invocation.args[invocation.args.indexOf("--add-dir") + 1]).toBe("/repo");
+    expect(invocation.args.slice(0, 4)).toEqual(["--add-dir", "/repo", "--add-dir", "/other"]);
   });
 
   it("adds nothing when the agent already stands where it needs to read", () => {
@@ -77,4 +80,46 @@ describe("letting the agent run what it was told to run", () => {
     const { args } = buildInvocation({ agentId: "claude", task: "t", interactive: false });
     expect(args).not.toContain("--allowedTools");
   });
+});
+
+describe("where the credential is allowed to appear", () => {
+  const KEY = "tr-a-long-enough-credential";
+
+  it("puts it in the child's environment and leaves the parent's alone", () => {
+    // Not argv (visible in `ps`), not the task file (written to disk), and not
+    // the parent's own environment, which would leak into every later child in
+    // this process.
+    const parentEnv: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+    const env = buildAgentEnv({
+      parentEnv,
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+    });
+
+    expect(env.TRACEROOT_API_KEY).toBe(KEY);
+    expect(env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(parentEnv.TRACEROOT_API_KEY).toBeUndefined();
+  });
+
+  for (const interactive of [false, true]) {
+    it(`keeps it out of argv on the ${interactive ? "argv" : "stdin"}-prompt path`, async () => {
+      const { run, runs } = fakeRunProcess();
+      const invocation = buildInvocation({ agentId: "claude", task: "do it", interactive });
+      await launchAgent({
+        invocation,
+        task: "do it",
+        cwd: "/repo",
+        parentEnv: { PATH: "/usr/bin" },
+        credential: makeSecret(KEY),
+        host: "https://api.example.test",
+        runProcess: run,
+      });
+
+      const launched = runs[0];
+      expect(launched?.env.TRACEROOT_API_KEY).toBe(KEY);
+      expect(launched?.args.join(" ")).not.toContain(KEY);
+      expect(launched?.stdin ?? "").not.toContain(KEY);
+    });
+  }
 });

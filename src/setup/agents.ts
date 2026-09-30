@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { constants, accessSync, existsSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { ALL_AGENTS, requireAgent } from "../agents/index.js";
 import type { AgentAdapter } from "../agents/types.js";
@@ -35,6 +35,11 @@ export function resolveOnPath(
       const candidate = join(dir, `${binary}${suffix}`);
       try {
         if (statSync(candidate).isFile()) {
+          // Executable, not merely present: a non-executable file of the right
+          // name would otherwise be reported as runnable and auto-selected, and
+          // the failure surfaces much later as a spawn error. This is what
+          // `execvp` checks too.
+          accessSync(candidate, constants.X_OK);
           return candidate;
         }
       } catch {

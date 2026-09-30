@@ -28,7 +28,14 @@ export interface ActivityLine {
 const MAX_DETAIL = 96;
 
 function truncate(text: string): string {
-  const flat = text.replace(/\s+/gu, " ").trim();
+  // Third-party text rendered into a framed, spinner-driven region: `\s` does not
+  // match ESC, BEL or DEL, so an escape sequence here rewrites the wizard's own
+  // output — and the truncation below can cut one in half.
+  const flat = text
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent.
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
   return flat.length <= MAX_DETAIL ? flat : `${flat.slice(0, MAX_DETAIL - 3)}...`;
 }
 

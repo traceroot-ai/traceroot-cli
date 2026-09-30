@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { relativeToRoot, serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { ENV_FILE_HEADER, ensureIgnored, upsertEnvContent } from "../../src/setup/envWrite.js";
+import { SetupError } from "../../src/setup/errors.js";
 
 let root: string;
 
@@ -170,5 +171,21 @@ describe("what the credential file says about itself", () => {
     const { content, written } = upsertEnvContent(null, {});
     expect(written).toEqual([]);
     expect(content).not.toContain("TRACEROOT_API_KEY");
+  });
+});
+
+describe("a --service that points outside the repository", () => {
+  it("is refused before anything is written", () => {
+    // The credential and the checkpoint land in this directory, and the
+    // credential's `.gitignore` entry is written relative to the root — a `../`
+    // entry could never match the file it was meant to cover, so the run would
+    // report the key as ignored when it is not.
+    expect(() => serviceArtifactDir({ root, cwd: root, service: "../other" })).toThrow(SetupError);
+  });
+
+  it("still accepts an absolute path that lands inside", () => {
+    const inside = join(root, "api");
+    mkdirSync(inside, { recursive: true });
+    expect(serviceArtifactDir({ root, cwd: root, service: inside })).toBe(inside);
   });
 });

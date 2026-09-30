@@ -1,3 +1,4 @@
+import { relative, resolve } from "node:path";
 import type { ResolvedSdk } from "./sdk.js";
 import { installCommand } from "./sdk.js";
 import type { DetectedService } from "./types.js";
@@ -7,6 +8,8 @@ export const COMPLETION_FENCE = "json traceroot-setup-result";
 
 export interface BuildSetupTaskInput {
   service: DetectedService;
+  /** Repository root, so an absolute interpreter can be named from the service. */
+  root: string;
   sdk: ResolvedSdk;
   /** Display path of the installed skill, e.g. `.claude/skills/traceroot-instrument-repo`. */
   skillPath: string;
@@ -61,7 +64,7 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
   if (service.language !== "python") {
     return [
       "```typescript",
-      'import { initialize, observe } from "traceroot-sdk-ts";',
+      'import { initialize, observe } from "@traceroot-ai/traceroot";',
       "",
       "// Before importing the SDK you are instrumenting.",
       "initialize();",
@@ -99,15 +102,17 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
  * absolute path otherwise. A relative path that climbs out of the tree entirely
  * is harder to read than the absolute one it replaces, so it is not used.
  */
-function relativeInterpreter(interpreter: string, serviceDir: string): string {
-  const depth = serviceDir === "." ? 0 : serviceDir.split("/").filter((p) => p !== "").length;
-  const marker = "/.venv/";
-  const at = interpreter.lastIndexOf(marker);
-  if (at === -1) {
+function relativeInterpreter(interpreter: string, root: string, servicePath: string): string {
+  // Outside the repository: a relative path would climb out of the tree and be
+  // harder to read than the absolute one it replaces.
+  if (relative(root, interpreter).startsWith("..")) {
     return interpreter;
   }
-  const tail = interpreter.slice(at + 1);
-  return depth === 0 ? `./${tail}` : `${"../".repeat(depth)}${tail}`;
+  const serviceDir = servicePath === "." ? root : resolve(root, servicePath);
+  const rel = relative(serviceDir, interpreter);
+  // `./` unless it already climbs: a leading-dot directory like `.venv` is a
+  // relative path that still needs the prefix to read as one in a shell.
+  return rel.startsWith("..") ? rel : `./${rel}`;
 }
 
 export function buildSetupTask(input: BuildSetupTaskInput): string {
@@ -143,9 +148,15 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // `relative()` gives `../.venv/bin/python` from `<root>/svc`, which has no
   // quoting hazard at all. Absolute is kept only when the interpreter lives
   // outside the tree, where a relative path would be worse.
-  const serviceDir = service.path === "." ? "." : service.path;
-  const interpreter = python === null ? "python3" : relativeInterpreter(python, serviceDir);
-  const runLine = `${interpreter} ${service.entryPoint ?? "<entry point>"}`;
+  const entry = service.entryPoint ?? "<entry point>";
+  // Per language: a Node service was being told to run its entry point with a
+  // Python interpreter.
+  const runLine =
+    service.language === "python"
+      ? `${python === null ? "python3" : relativeInterpreter(python, input.root, service.path)} ${entry}`
+      : entry.endsWith(".ts")
+        ? `npx tsx ${entry}`
+        : `node ${entry}`;
 
   const serviceFacts = bullet([
     `path: \`${service.path}\``,
@@ -295,12 +306,13 @@ Run:
 ${installCommand(sdk, service, service.language, python)}
 \`\`\`
 ${
-  python !== null
+  service.language === "python" && python !== null
     ? `
 This is the interpreter this service runs on, found before you started. Use it for the install
 above **and** for every command that runs the application — \`"${python}" main.py\`, not \`python3
 main.py\`. A package installed into one interpreter is invisible to another.`
-    : `
+    : service.language === "python"
+      ? `
 No virtualenv was found for this service. If that command fails with
 \`externally-managed-environment\`, the system Python is marked read-only by the OS (PEP 668) and
 the fix is a virtualenv, not a flag to force past it:
@@ -310,6 +322,7 @@ python3 -m venv .venv && ./.venv/bin/python -m pip install ${sdk.package}==${sdk
 \`\`\`
 
 Then run the application with \`./.venv/bin/python\` throughout.`
+      : ""
 }
 
 ### 3. Initialize as early as possible

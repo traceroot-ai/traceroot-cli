@@ -43,9 +43,10 @@ confirm; if the SDK reports at runtime that it is missing, say so then. If it is
 
 ### 2. Analyze (read-only — do not edit yet)
 - Detect the runtime (Python or TypeScript/Node.js). Read the dependency manifest (`pyproject.toml`/`requirements.txt` or `package.json`) and scan imports to see what is actually used.
-- Identify the LLM providers/frameworks in use (OpenAI, Anthropic, LangChain/LangGraph, and others). Coverage differs by runtime and changes over time, and the installed package is the current list —
-read the integration names from it rather than fetching a docs page. Match each library you find to
-its integration in the language reference; don't assume a library is unsupported without looking.
+- Identify the LLM providers/frameworks in use (OpenAI, Anthropic, LangChain/LangGraph, and others).
+Coverage differs by runtime and changes over time. Use the language reference's list now; after the
+step-4 install, the installed package is the current list — read the integration names from it
+rather than fetching a docs page. Don't assume a library is unsupported without looking.
 - Check for **existing tracing/OpenTelemetry** (a `TracerProvider`, `opentelemetry` imports, another vendor's SDK) to avoid double-instrumentation.
 - Infer what user/session context is available:
 

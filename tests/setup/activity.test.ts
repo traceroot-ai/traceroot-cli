@@ -80,3 +80,20 @@ describe("surviving a stream we do not control", () => {
     ]);
   });
 });
+
+describe("text the agent chose, rendered into the frame", () => {
+  it("strips escape and bell bytes, which whitespace collapsing left through", () => {
+    // These lines go into a framed, spinner-driven region, so an escape sequence
+    // here rewrites the wizard's own output — and `\s` does not match ESC, BEL or
+    // DEL, so collapsing whitespace let all three through untouched.
+    const ESC = String.fromCharCode(27);
+    const BEL = String.fromCharCode(7);
+    const parse = createActivityParser();
+    const lines = parse(toolUse("Bash", { command: `ls${ESC}[2J${BEL} -la` }));
+
+    const rendered = lines.map((line) => line.detail).join(" ");
+    expect(rendered).not.toContain(ESC);
+    expect(rendered).not.toContain(BEL);
+    expect(rendered).toContain("ls");
+  });
+});
