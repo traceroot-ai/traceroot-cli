@@ -1,6 +1,6 @@
 import { S_BAR, S_STEP_ERROR, S_STEP_SUBMIT } from "@clack/prompts";
 import color from "picocolors";
-import { type Writers, writeJson } from "../output.js";
+import { type Writers, colorEnabled, writeJson } from "../output.js";
 import type { SetupErrorCode } from "./errors.js";
 import type { SetupStage, SetupStageStatus } from "./types.js";
 
@@ -143,7 +143,14 @@ const UNANNOUNCED: ReadonlySet<SetupStage> = new Set([
  * reports on settling: silence there would leave a step of the run invisible.
  */
 export function stageLineEmitter(writers: Writers): SetupEmitter {
-  const rail = color.dim(S_BAR);
+  // picocolors decides from stdout and from `CI`, never from the sink being
+  // written to; the CLI's contract is the sink's own `colorEnabled`, so a
+  // redirected stderr gets plain text like every other command's output.
+  const on = colorEnabled(writers.err);
+  const dim = (text: string): string => (on ? color.dim(text) : text);
+  const cyan = (text: string): string => (on ? color.cyan(text) : text);
+  const red = (text: string): string => (on ? color.red(text) : text);
+  const rail = dim(S_BAR);
   const started = new Set<SetupStage>();
 
   return (event) => {
@@ -155,7 +162,7 @@ export function stageLineEmitter(writers: Writers): SetupEmitter {
     if (event.status === "start") {
       started.add(event.stage);
       if (!SELF_ANNOUNCING.has(event.stage) && !UNANNOUNCED.has(event.stage)) {
-        writers.err.write(`${rail}\n${color.cyan(S_STEP_SUBMIT)}  ${label}\n`);
+        writers.err.write(`${rail}\n${cyan(S_STEP_SUBMIT)}  ${label}\n`);
       }
       return;
     }
@@ -170,9 +177,7 @@ export function stageLineEmitter(writers: Writers): SetupEmitter {
     if (!started.has(event.stage)) {
       // Satisfied before it ran — nothing followed it, so this line is the
       // whole of what there is to say about the step.
-      writers.err.write(
-        `${rail}\n${color.dim(S_STEP_SUBMIT)}  ${color.dim(`${label} — already done`)}\n`,
-      );
+      writers.err.write(`${rail}\n${dim(S_STEP_SUBMIT)}  ${dim(`${label} — already done`)}\n`);
       return;
     }
 
@@ -180,7 +185,7 @@ export function stageLineEmitter(writers: Writers): SetupEmitter {
     // now would be the restatement this renderer exists to remove — except on a
     // failure, where marking the point the run broke is worth one line.
     if (event.status === "failed") {
-      writers.err.write(`${color.red(S_STEP_ERROR)}  ${label}\n`);
+      writers.err.write(`${red(S_STEP_ERROR)}  ${label}\n`);
     }
   };
 }

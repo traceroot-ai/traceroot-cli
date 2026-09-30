@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Writers } from "../../src/output.js";
 import { type SetupEvent, jsonEmitter, stageLineEmitter } from "../../src/setup/events.js";
 import { StringSink } from "../helpers/stringSink.js";
-import { plain } from "./colour.js";
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -17,9 +16,7 @@ const settled = (stage: string, status = "ok"): SetupEvent =>
 
 /** Non-empty lines, so the blank rail rows between steps do not clutter assertions. */
 function lines(sink: StringSink): string[] {
-  return plain(sink.data)
-    .split("\n")
-    .filter((line) => line.trim() !== "" && line.trim() !== "│");
+  return sink.data.split("\n").filter((line) => line.trim() !== "" && line.trim() !== "│");
 }
 
 describe("the human stage renderer", () => {
@@ -139,15 +136,21 @@ describe("the human stage renderer", () => {
     const { writers: w, err } = writers();
     const emit = stageLineEmitter(w);
 
-    for (const stage of ["precheck", "authenticate", "complete"]) {
+    for (const stage of ["precheck", "complete"]) {
       emit(start(stage));
       emit(settled(stage));
     }
     emit(settled("select_agent", "skipped"));
+    // Two stages that actually print, so the invariant has something to hold
+    // over: a step satisfied before it ran, and a step that failed. Every stage
+    // this drove before was silent, so the loop body ran zero times.
+    emit(settled("authenticate", "skipped"));
+    emit(start("verify_trace"));
+    emit(settled("verify_trace", "failed"));
 
-    for (const line of plain(err.data)
-      .split("\n")
-      .filter((l) => l !== "")) {
+    const printed = err.data.split("\n").filter((l) => l !== "");
+    expect(printed).toHaveLength(3);
+    for (const line of printed) {
       expect(line.startsWith("│") || line.startsWith("◇") || line.startsWith("▲")).toBe(true);
     }
   });

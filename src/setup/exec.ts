@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import type { Secret } from "./secret.js";
 import { redact } from "./secret.js";
 
@@ -110,6 +111,13 @@ export const runProcess: RunProcess = (options) =>
       kill();
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted === true) {
+      // Already aborted before this child existed, so the listener above will
+      // never fire and nothing else would ever stop it. The run-wide signal is
+      // shared by every stage that shells out, so this is the ordinary case
+      // after a cancellation mid-run.
+      kill();
+    }
 
     const timer =
       options.timeoutMs === undefined
@@ -124,7 +132,11 @@ export const runProcess: RunProcess = (options) =>
       const absorb = (buf: Buffer) => {
         const text = buf.toString("utf8");
         chunks += text;
-        options.onData?.(text);
+        // Redacted per chunk as well as in `output`: a caller renders these
+        // straight to the terminal, so an unscrubbed chunk is a visible leak.
+        if (options.onData !== undefined) {
+          options.onData(redact(text, options.secrets ?? []));
+        }
       };
       child.stdout?.on("data", absorb);
       child.stderr?.on("data", absorb);
@@ -139,9 +151,16 @@ export const runProcess: RunProcess = (options) =>
 
     child.on("error", () => finish(127, true));
     child.on("close", (code, signalName) => {
+      if (code !== null) {
+        finish(code);
+        return;
+      }
       // A signalled exit has a null code; report the conventional 128+n so the
-      // caller can still distinguish "killed" from "exited cleanly".
-      finish(code ?? (signalName === null ? 1 : 130));
+      // caller can still distinguish "killed" from "exited cleanly", and which
+      // signal did it — the timeout and abort paths here send SIGTERM (143),
+      // not Ctrl+C (130).
+      const number = signalName === null ? undefined : osConstants.signals[signalName];
+      finish(number === undefined ? 1 : 128 + number);
     });
   });
 

@@ -1,7 +1,7 @@
 import type { AgentId } from "../agents/types.js";
 import type { Writers } from "../output.js";
 import type { PackageManager } from "../repo/detect.js";
-import type { SetupError } from "./errors.js";
+import type { SetupError, SetupErrorCode } from "./errors.js";
 import type { SetupEvent } from "./events.js";
 import type { Secret } from "./secret.js";
 
@@ -183,7 +183,7 @@ export interface SetupCheckpoint {
   sdkVersion?: string;
   application?: ApplicationVerification;
   trace?: TraceVerification;
-  lastError?: { stage: SetupStage; code: string; message: string };
+  lastError?: { stage: SetupStage; code: SetupErrorCode; message: string };
 }
 
 /**

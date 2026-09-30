@@ -46,13 +46,15 @@ export function secretHint(value: string): string {
 /** Wraps a plaintext credential. The value is held in a closure, not a field. */
 export function makeSecret(value: string): Secret {
   const hint = secretHint(value);
-  return {
+  // Frozen so the serialization guarantee above cannot be switched off from
+  // outside by reassigning `toJSON`. The value stays in the closure either way.
+  return Object.freeze({
     reveal: () => value,
     hint,
     toJSON(): never {
       throw new SecretSerializationError();
     },
-  };
+  });
 }
 
 /**
@@ -66,11 +68,12 @@ export function makeSecret(value: string): Secret {
  */
 export function redact(text: string, secrets: readonly Secret[]): string {
   let out = text;
-  for (const secret of secrets) {
-    const raw = secret.reveal();
-    if (raw.length < 8) {
-      continue;
-    }
+  // Longest first: a short secret contained in a longer one would otherwise
+  // consume the prefix and leave the longer credential's tail in the text.
+  for (const raw of secrets
+    .map((secret) => secret.reveal())
+    .filter((value) => value.length >= 8)
+    .sort((a, b) => b.length - a.length)) {
     out = out.split(raw).join("<redacted>");
   }
   return out;
