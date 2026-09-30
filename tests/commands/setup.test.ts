@@ -12,6 +12,7 @@ import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/
 import { SetupError } from "../../src/setup/errors.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
 import { StringSink } from "../helpers/stringSink.js";
+import { plain } from "../setup/colour.js";
 import {
   authWithKey,
   defaultFlags,
@@ -262,14 +263,14 @@ describe("runSetup", () => {
       }),
     });
 
-    expect(err.data).toContain(`┌  ${WIZARD_TITLE}`);
-    expect(err.data).toContain("└  TraceRoot setup complete.");
+    expect(plain(err.data)).toContain(`┌  ${WIZARD_TITLE}`);
+    expect(plain(err.data)).toContain("└  TraceRoot setup complete.");
     // Where to go next, on the way out — the moment it is most likely to be read.
-    expect(err.data).toContain("https://docs.traceroot.ai");
+    expect(plain(err.data)).toContain("https://docs.traceroot.ai");
     expect(err.data).toContain("https://github.com/traceroot-ai/traceroot-cli/issues");
     // Opened before anything the run prints, so the sign-in half is inside it.
-    expect(err.data.indexOf("┌")).toBe(0);
-    expect(err.data.indexOf("┌")).toBeLessThan(err.data.indexOf("└"));
+    expect(plain(err.data).indexOf("┌")).toBe(0);
+    expect(plain(err.data).indexOf("┌")).toBeLessThan(plain(err.data).indexOf("└"));
   });
 
   it("leaves no line of a whole run outside the frame, until the frame closes", async () => {
@@ -298,7 +299,7 @@ describe("runSetup", () => {
 
     // Every glyph that legitimately opens a line: the rail, the frame's
     // corners, a step marker, a note, a warning.
-    const framed = err.data.slice(0, err.data.indexOf("└"));
+    const framed = plain(err.data).slice(0, plain(err.data).indexOf("└"));
     for (const line of framed.split("\n").filter((l) => l !== "")) {
       expect(line).toMatch(/^[│┌└◇◆▲■]/u);
     }
@@ -343,7 +344,7 @@ describe("runSetup", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(err.data).toContain("└  Setup stopped at: work out what to instrument.");
+    expect(plain(err.data)).toContain("└  Setup stopped at: work out what to instrument.");
   });
 
   it("ends by saying the key does not travel, inside the frame", async () => {
@@ -364,11 +365,11 @@ describe("runSetup", () => {
       }),
     });
 
-    expect(err.data).toContain("Add the TRACEROOT_API_KEY token");
+    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY token");
     // The service was Python, so the local caveat has to be there too.
-    expect(err.data).toContain("os.environ");
+    expect(plain(err.data)).toContain("os.environ");
     // Between everything the run printed and the line that closes the frame.
-    expect(err.data.indexOf("Production Setup")).toBeLessThan(err.data.indexOf("└"));
+    expect(plain(err.data).indexOf("Production Setup")).toBeLessThan(plain(err.data).indexOf("└"));
   });
 
   it("says nothing about production for a run that never got a trace", async () => {
@@ -416,7 +417,7 @@ describe("runSetup", () => {
 
     // One per closing block, in the order a user acts on them: this machine
     // first, then everywhere else.
-    const acknowledged = asked.filter((q) => q.includes("(Press Enter to continue)"));
+    const acknowledged = asked.map(plain).filter((q) => q.includes("(Press Enter to continue)"));
     expect(acknowledged).toHaveLength(2);
     expect(acknowledged[0]).toContain("I've confirmed my application is sending traces.");
     expect(acknowledged[1]).toContain("I have added TRACEROOT_API_KEY to my production env.");
