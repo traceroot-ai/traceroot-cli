@@ -1,4 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path";
+import { SetupError } from "./errors.js";
 import { detectStack } from "./stack.js";
 
 /**
@@ -56,7 +57,21 @@ export function serviceArtifactDir(input: ServiceArtifactDirInput): string {
   const { root, cwd } = input;
 
   if (input.service !== undefined && input.service !== "") {
-    return isAbsolute(input.service) ? input.service : resolve(root, input.service);
+    const dir = isAbsolute(input.service) ? input.service : resolve(root, input.service);
+    const inside = relative(root, dir);
+    // The credential and the checkpoint land here, and the credential's
+    // `.gitignore` entry is written relative to the root — a `../` entry could
+    // never match the file it was meant to cover, so the run would report the key
+    // as ignored when it is not.
+    if (inside.startsWith("..") || isAbsolute(inside)) {
+      throw new SetupError({
+        stage: "detect_stack",
+        code: "UNSUPPORTED",
+        message: `--service ${input.service} is outside this repository.`,
+        remedy: "Name a directory inside the repository, relative to its root.",
+      });
+    }
+    return dir;
   }
 
   const here = relative(root, cwd);
@@ -74,6 +89,9 @@ export function serviceArtifactDir(input: ServiceArtifactDirInput): string {
  * a line of output. `.` when the artefacts live at the root.
  */
 export function relativeToRoot(root: string, dir: string): string {
-  const rel = relative(root, dir);
+  // `/` separators: this string becomes a `.gitignore` pattern and a pathspec,
+  // and a backslash in a gitignore pattern is an escape character rather than a
+  // separator — the rule would read as one literal filename and match nothing.
+  const rel = relative(root, dir).replaceAll("\\", "/");
   return rel === "" ? "." : rel;
 }
