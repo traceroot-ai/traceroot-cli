@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { acknowledgeTraces, tracesNotice } from "../../src/setup/ending.js";
+import { plain } from "./colour.js";
 import { makeWriters } from "./helpers.js";
 
 const TRACE_URL = "https://app.example.test/trace/t_1";
@@ -18,15 +19,17 @@ describe("what the block says", () => {
     // The block used to wrap itself at about seventy-five columns, which left
     // "to confirm that" and "is here:" stranded at the ends of lines and made
     // three sentences read as six fragments. A terminal knows its own width.
-    for (const line of tracesNotice({ traceUrl: TRACE_URL })) {
+    for (const line of tracesNotice({ traceUrl: TRACE_URL }).map(plain)) {
       const sentences = line.match(/\. /g) ?? [];
       expect(sentences.length).toBe(0);
     }
     // And no sentence is split across two entries: every non-empty line either
     // ends a sentence, ends in a colon, or is the URL itself.
-    const prose = tracesNotice({ traceUrl: TRACE_URL }).filter(
-      (line) => line !== "" && !line.includes(TRACE_URL) && !line.includes("docs.traceroot.ai"),
-    );
+    const prose = tracesNotice({ traceUrl: TRACE_URL })
+      .map(plain)
+      .filter(
+        (line) => line !== "" && !line.includes(TRACE_URL) && !line.includes("docs.traceroot.ai"),
+      );
     for (const line of prose) {
       expect(line.trimEnd().endsWith(".") || line.trimEnd().endsWith(":")).toBe(true);
     }
@@ -36,11 +39,11 @@ describe("what the block says", () => {
     // A self-hosted UI does not live where its API does. Anything reconstructed
     // here 404s at the exact moment the user first clicks something.
     const odd = "https://selfhosted.internal:8443/x/y/trace/abc?tenant=1";
-    expect(tracesNotice({ traceUrl: odd })).toContain(odd);
+    expect(tracesNotice({ traceUrl: odd }).map(plain)).toContain(odd);
   });
 
   it("puts the link on a line of its own, so it survives being copied", () => {
-    const lines = tracesNotice({ traceUrl: TRACE_URL });
+    const lines = tracesNotice({ traceUrl: TRACE_URL }).map(plain);
     expect(lines.filter((line) => line.includes(TRACE_URL))).toEqual([TRACE_URL]);
   });
 });
@@ -65,15 +68,15 @@ describe("acknowledging it", () => {
     // instruction grey on the right — the only row of the block waiting on
     // anybody, and it should look like it.
     expect(asked).toHaveLength(1);
-    expect(asked[0]).toContain("│  I've confirmed my application is sending traces.");
-    expect(asked[0]).not.toContain("●");
-    expect(asked[0]).toContain("(Press Enter to continue)");
+    expect(plain(asked[0])).toContain("│  I've confirmed my application is sending traces.");
+    expect(plain(asked[0])).not.toContain("●");
+    expect(plain(asked[0])).toContain("(Press Enter to continue)");
     // A settled block: `◇` is what the transcript shows once the
     // acknowledgement under it has been given.
-    expect(err.data).toContain(
+    expect(plain(err.data)).toContain(
       "◇  Run your application and exercise the code you just instrumented.",
     );
-    expect(err.data).toContain(`│  ${TRACE_URL}`);
+    expect(plain(err.data)).toContain(`│  ${TRACE_URL}`);
   });
 
   it("still prints the block when there is nobody to ask", async () => {
@@ -81,6 +84,6 @@ describe("acknowledging it", () => {
     // waiting on a keypress.
     const { writers, err } = makeWriters();
     await acknowledgeTraces({ writers, traceUrl: TRACE_URL, prompt: null });
-    expect(err.data).toContain(TRACE_URL);
+    expect(plain(err.data)).toContain(TRACE_URL);
   });
 });
