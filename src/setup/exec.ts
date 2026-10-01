@@ -89,10 +89,20 @@ export const runProcess: RunProcess = (options) =>
       }
       settled = true;
       // Anything the decoders are still holding is a truncated character at the
-      // very end of the stream; flushing keeps it out of `output` rather than
-      // dropping bytes silently.
+      // very end of the stream. Flushing keeps it out of `output` rather than
+      // dropping bytes silently, and it goes through `onData` as well so the
+      // streaming view a caller rendered matches the `output` it is handed: a
+      // process that ends mid-character would otherwise leave the two differing
+      // by exactly the flushed text.
       for (const decoder of decoders) {
-        chunks += decoder.end();
+        const tail = decoder.end();
+        if (tail === "") {
+          continue;
+        }
+        chunks += tail;
+        if (options.onData !== undefined) {
+          options.onData(redact(tail, options.secrets ?? []));
+        }
       }
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);

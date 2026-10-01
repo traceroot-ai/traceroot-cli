@@ -81,3 +81,23 @@ describe("decoding what the child writes", () => {
     expect(chunks.join("")).toBe("café.ts");
   }, 10000);
 });
+
+describe("a process that ends mid-character", () => {
+  it("hands the caller the same text it streamed", async () => {
+    // The decoder holds a truncated character until it is flushed. Flushing into
+    // `output` alone made the streamed view and the returned output differ by
+    // exactly that text, so a caller rendering progress showed one thing and the
+    // caller reading the result got another.
+    const script = [
+      'const b = Buffer.from("café", "utf8");',
+      // Stops inside the two-byte `é`, so the decoder is still holding a byte.
+      "process.stdout.write(b.subarray(0, 4));",
+    ].join("");
+
+    const chunks: string[] = [];
+    const result = await runProcess(opts(script, { onData: (c: string) => chunks.push(c) }));
+
+    expect(chunks.join("")).toBe(result.output);
+    expect(result.output.startsWith("caf")).toBe(true);
+  }, 10000);
+});
