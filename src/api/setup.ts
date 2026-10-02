@@ -1,4 +1,5 @@
 import { CliError } from "../output.js";
+import { normalizeBaseUrl } from "./client.js";
 import type { TraceList } from "./client.js";
 
 /**
@@ -156,7 +157,10 @@ function errorDetail(body: unknown): string | undefined {
 /** Creates the setup API client. No network activity happens on construction. */
 export function createSetupApi(opts: SetupApiOptions): SetupApi {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
-  const base = opts.host.replace(/\/+$/, "");
+  // The shared validator rather than a trailing-slash trim: it rejects a non-URL
+  // and a non-http(s) scheme up front with the usage exit code, so a mistyped
+  // `--host` fails before any request is built instead of as a fetch error.
+  const base = normalizeBaseUrl(opts.host);
 
   async function request<T>(options: RequestOptions): Promise<T> {
     const url = `${base}${options.path}`;
