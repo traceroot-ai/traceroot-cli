@@ -25,7 +25,7 @@ export interface RecordedRun {
 export interface FakeProcessOptions {
   /** Result per program name; anything unlisted exits 0 with no output. */
   results?: Record<string, Partial<RunProcessResult>>;
-  /** `git status --porcelain` output, keyed by call order (last value repeats). */
+  /** `git status --porcelain -z` output, keyed by call order (last value repeats). */
   gitStatus?: string[];
 }
 
@@ -48,7 +48,9 @@ export function fakeRunProcess(options: FakeProcessOptions = {}): {
       stdin: o.stdin,
     });
 
-    if (o.program === "git" && o.args[0] === "status") {
+    // `includes`, not `args[0]`: the probe passes `--no-optional-locks` before the
+    // subcommand so it cannot take `index.lock`.
+    if (o.program === "git" && o.args.includes("status")) {
       const statuses = options.gitStatus ?? [""];
       const value = statuses[Math.min(gitCalls, statuses.length - 1)] ?? "";
       gitCalls += 1;
@@ -185,8 +187,6 @@ export function makeContext(json = false): Context {
 
 export function defaultFlags(overrides: Partial<SetupFlags> = {}): SetupFlags {
   return {
-    skills: false,
-    mcp: false,
     browser: false,
     instrument: true,
     resume: false,
