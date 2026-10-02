@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { homedir } from "node:os";
 import { claudeAdapter } from "../../src/agents/claude.js";
 import { codexAdapter } from "../../src/agents/codex.js";
 import { genericAdapter } from "../../src/agents/generic.js";
@@ -107,5 +107,19 @@ describe("displaySkillPath", () => {
   it("abbreviates the home directory to ~ for global (out-of-project) paths", () => {
     const target = join(homedir(), ".codex", "skills", "x");
     expect(displaySkillPath(dir, target)).toBe("~/.codex/skills/x");
+  });
+});
+
+describe("agent binaries", () => {
+  // `binary` is what lets setup report an agent as runnable: it is looked up on
+  // PATH, and its absence downgrades the agent rather than hiding it. An adapter
+  // that forgets the field silently loses that check.
+  it("names the binary to look for on PATH", () => {
+    expect(claudeAdapter.binary).toBe("claude");
+    expect(codexAdapter.binary).toBe("codex");
+  });
+
+  it("leaves the binary unset for the agent that has no CLI of its own", () => {
+    expect(genericAdapter.binary).toBeUndefined();
   });
 });
