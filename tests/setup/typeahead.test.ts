@@ -1,6 +1,6 @@
-import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { selectFrom } from "../../src/setup/select.js";
+import { fakeInput, fakeOutput } from "./helpers.js";
 
 /**
  * The double-Enter that started a coding agent nobody had said yes to.
@@ -14,28 +14,6 @@ import { selectFrom } from "../../src/setup/select.js";
 
 /** Written out rather than embedded, so no control character reaches source. */
 const CR = String.fromCharCode(13);
-
-/** A stream clack will treat as a terminal it can read keystrokes from. */
-function fakeInput(): PassThrough & { isTTY: boolean; setRawMode: () => unknown } {
-  const stream = new PassThrough() as PassThrough & {
-    isTTY: boolean;
-    setRawMode: () => unknown;
-  };
-  stream.isTTY = true;
-  stream.setRawMode = () => stream;
-  return stream;
-}
-
-/** Somewhere for the prompt to draw that no test ever reads. */
-function fakeOutput(): PassThrough {
-  const stream = new PassThrough() as PassThrough & { isTTY: boolean; columns: number };
-  stream.isTTY = true;
-  stream.columns = 80;
-  stream.on("data", () => {
-    // drained so the stream never fills
-  });
-  return stream;
-}
 
 const method = {
   stage: "select_agent",

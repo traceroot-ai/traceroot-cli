@@ -137,9 +137,10 @@ describe("waiting for the browser", () => {
     const { out, advance, tick } = harness();
     advance(12_000);
     tick();
-    // That the counter is *not* dimmed is asserted where colour exists, in
-    // `wizard.colour.test.ts`: this sink is not a terminal, so nothing here is
-    // coloured and a "not dimmed" claim would hold for any renderer.
+    // Wording only. `harness()` gives a TTY sink, but picocolors is off across
+    // this suite, so nothing here is coloured either way — which is why the
+    // "counter is not dimmed" claim lives in `wizard.colour.test.ts`, where
+    // colour is forced on and the assertion can actually fail.
     expect(out.data).toContain(" [12s]");
   });
 
