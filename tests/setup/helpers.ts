@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import { type ApiClient, type ApiClientOptions, DEFAULT_TIMEOUT_MS } from "../../src/api/client.js";
 import type { SetupApi } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
@@ -294,4 +295,26 @@ export function traceRow(overrides: Record<string, unknown> = {}): Record<string
     trace_start_time: "2026-07-26T12:00:30.000000",
     ...overrides,
   };
+}
+
+/** A stream clack will treat as a terminal it can read keystrokes from. */
+export function fakeInput(): PassThrough & { isTTY: boolean; setRawMode: () => unknown } {
+  const stream = new PassThrough() as PassThrough & {
+    isTTY: boolean;
+    setRawMode: () => unknown;
+  };
+  stream.isTTY = true;
+  stream.setRawMode = () => stream;
+  return stream;
+}
+
+/** Somewhere for a prompt to draw that no test ever reads. */
+export function fakeOutput(): PassThrough {
+  const stream = new PassThrough() as PassThrough & { isTTY: boolean; columns: number };
+  stream.isTTY = true;
+  stream.columns = 80;
+  stream.on("data", () => {
+    // drained so the stream never fills
+  });
+  return stream;
 }

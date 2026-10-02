@@ -2,13 +2,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { REPORT_PATH, renderSetupReport, writeSetupReport } from "../../src/setup/report.js";
 import type { SetupContext } from "../../src/setup/types.js";
 
@@ -32,6 +33,15 @@ function ctx(overrides: Record<string, unknown> = {}): SetupContext {
 
 const NOW = new Date("2026-07-26T12:00:00.000Z");
 
+/** Every root this file makes, so none is left in the system tmpdir. */
+const roots: string[] = [];
+
+afterEach(() => {
+  while (roots.length > 0) {
+    rmSync(roots.pop() as string, { recursive: true, force: true });
+  }
+});
+
 describe("the report table", () => {
   it("keeps a value containing a pipe inside its own cell", () => {
     // Values here are detected, not authored: a framework string or a command
@@ -54,6 +64,7 @@ describe("writing the report", () => {
     // a run writes and the only file here written after an agent has been let
     // loose in the repository.
     const dir = mkdtempSync(join(tmpdir(), "traceroot-report-"));
+    roots.push(dir);
     const outside = join(dir, "outside.txt");
     writeFileSync(outside, "untouched", "utf8");
     const target = join(dir, REPORT_PATH);

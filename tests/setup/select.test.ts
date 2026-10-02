@@ -1,5 +1,5 @@
-import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { fakeInput, fakeOutput } from "./helpers.js";
 
 /**
  * What the wrapper actually asks clack for.
@@ -22,28 +22,6 @@ vi.mock("@clack/prompts", async (importOriginal) => {
     },
   };
 });
-
-/** A stream clack will treat as a terminal it can read keystrokes from. */
-function fakeInput(): PassThrough & { isTTY: boolean; setRawMode: () => unknown } {
-  const stream = new PassThrough() as PassThrough & {
-    isTTY: boolean;
-    setRawMode: () => unknown;
-  };
-  stream.isTTY = true;
-  stream.setRawMode = () => stream;
-  return stream;
-}
-
-/** Somewhere for the prompt to draw that no test ever reads. */
-function fakeOutput(): PassThrough {
-  const stream = new PassThrough() as PassThrough & { isTTY: boolean; columns: number };
-  stream.isTTY = true;
-  stream.columns = 80;
-  stream.on("data", () => {
-    // drained so the stream never fills
-  });
-  return stream;
-}
 
 describe("the interactive selector", () => {
   it("turns off clack's navigation caption", async () => {

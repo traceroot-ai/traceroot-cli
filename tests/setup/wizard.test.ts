@@ -10,6 +10,7 @@ import {
   wizardIntro,
   wizardLine,
   wizardLink,
+  wizardMutedLink,
   wizardNote,
   wizardOutro,
   wizardProgress,
@@ -237,7 +238,11 @@ describe("third-party text reaching the terminal", () => {
 
   it("strips them from the muted link role too", () => {
     const hostile = `https://docs.example.test${ESC}[2J`;
-    expect(plain(wizardAside(wizardLink(hostile, false)))).toBe("https://docs.example.test[2J");
+    // `wizardMutedLink` is the role the title names: it gives up the OSC 8
+    // wrapper to keep its colour, so it strips on its own path rather than
+    // through `paintedLink`. Going via `wizardLink` tested the wrapper twice and
+    // never reached that line.
+    expect(plain(wizardMutedLink(hostile))).toBe("https://docs.example.test[2J");
   });
 });
 
