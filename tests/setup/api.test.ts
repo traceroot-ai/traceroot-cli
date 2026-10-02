@@ -327,6 +327,33 @@ describe("trace polling", () => {
   });
 });
 
+describe("what credential the client sends", () => {
+  it("sends the project key as a bearer token on every authenticated read", async () => {
+    // Nothing asserted this: the client could have sent no credential, or the
+    // wrong one, and every other test in this file would still pass because the
+    // stub replies regardless of what it is handed.
+    const { fetchImpl, calls } = stubFetch([{ status: 200, body: { keys: [] } }]);
+    const api = createSetupApi({
+      host: "https://api.example.test",
+      apiKey: "tr-the-key",
+      fetchImpl,
+    });
+
+    await api.listApiKeys("p_1");
+
+    const headers = calls[0]?.init?.headers as Record<string, string> | undefined;
+    expect(headers?.authorization).toBe("Bearer tr-the-key");
+  });
+
+  it("refuses a host that is not an http(s) URL before any request is built", async () => {
+    // The shared validator's job: a mistyped `--host` should fail as a usage
+    // error, not as an opaque fetch rejection partway through a run.
+    const { fetchImpl, calls } = stubFetch([]);
+    expect(() => createSetupApi({ host: "notaurl", fetchImpl })).toThrow();
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("creating a project", () => {
   it("maps the server's shape into the vocabulary every caller reads", async () => {
     // The server answers `{id, name, workspace_id}`; the wizard reads
