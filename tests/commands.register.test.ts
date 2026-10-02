@@ -85,6 +85,9 @@ describe("buildProgram", () => {
     const program = buildProgram();
     expect(childNames(program)).toEqual([
       "login",
+      // `setup` is registered immediately after `login`: it is the entry point a
+      // new user reaches first, so it appears near the top of `--help`.
+      "setup",
       "logout",
       "status",
       "workspaces",
