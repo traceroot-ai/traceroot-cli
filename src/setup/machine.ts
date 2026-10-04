@@ -28,7 +28,7 @@ import {
 import { DEFAULT_HOST } from "../commands/constants.js";
 import { loadOptionalEnvFileFromDisk } from "../config/envFile.js";
 import { writeConfig as realWriteConfig } from "../config/manager.js";
-import { type ResolvedAuth, normalizeApiKey } from "../config/resolve.js";
+import { type AuthSource, type ResolvedAuth, normalizeApiKey } from "../config/resolve.js";
 import type { Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import { bundledSkillDir } from "../skills/bundled.js";
@@ -1340,12 +1340,45 @@ export function uniqueKeyName(base: string, existing: readonly string[]): string
 
 // ── CONFIGURE_REPOSITORY ────────────────────────────────────────────────────
 
+/**
+ * Whether the instrumented application will find this credential on its own.
+ *
+ * Only two sources mean yes. `env` is a variable already exported in the shell
+ * the user will start their application from, and `auto-env-file` is a `.env`
+ * beside it — the file an application's own dotenv loader reads. For those,
+ * writing a second copy adds nothing.
+ *
+ * Every other source is the CLI's and not the application's. `flag` lasts for
+ * one invocation. `env-file` is a file named for the CLI with `--env-file` and
+ * may sit anywhere, including outside the repository. `config` and
+ * `credentials-file` are the CLI's own stores under the user's home directory,
+ * which no SDK reads — so a `traceroot login` followed by `traceroot setup`
+ * lands here. And `none` is a key typed at setup's own prompt, which until this
+ * stage runs exists in no file the application could open.
+ */
+function applicationCanResolve(source: AuthSource): boolean {
+  return source === "env" || source === "auto-env-file";
+}
+
 const configureRepository: StageDefinition = {
   stage: "configure_repository",
-  isSatisfied: (ctx, _deps) =>
-    // Nothing to write when the credential already resolves from the user's own
-    // configuration or environment.
-    ctx.credential?.origin === "existing-config",
+  isSatisfied: (ctx, deps) =>
+    // Skip only when the application really will find the credential without
+    // this stage writing it.
+    //
+    // `origin === "existing-config"` is not that claim. The fast path in
+    // `acquire_project_key` stamps that origin on the user's own key whatever
+    // its provenance, so a key pasted at the prompt, passed as `--api-key`, or
+    // read from the CLI's config in the home directory all arrive here looking
+    // like a key already in the environment — and the stage that writes the
+    // only file the application can read is skipped for all three. `setup` then
+    // closes by telling the user to run an application that cannot
+    // authenticate.
+    //
+    // `resolvedAuth` never lost the distinction, so the guard asks it rather
+    // than re-deriving one from the origin. See {@link applicationCanResolve}.
+    ctx.credential?.origin === "existing-config" &&
+    applicationCanResolve(deps.resolvedAuth.credential.source),
   async run(ctx, deps) {
     const credential = requireCredential(ctx);
     const session = requireSession(ctx);

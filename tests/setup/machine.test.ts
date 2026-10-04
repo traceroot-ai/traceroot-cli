@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 /** `git status --porcelain -z` record separator. */
 const NUL = String.fromCharCode(0);
 import { BackendUnavailableError, SetupApiError } from "../../src/api/setup.js";
+import type { ResolvedAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
@@ -1143,6 +1144,104 @@ describe("project credential", () => {
     expect(uniqueKeyName("k", [])).toBe("k");
     expect(uniqueKeyName("k", ["k"])).toBe("k-2");
     expect(uniqueKeyName("k", ["k", "k-2"])).toBe("k-3");
+  });
+});
+
+describe("the credential the instrumented application will read", () => {
+  const KEY = "tr-user-key-value";
+
+  /** Resolved auth holding the same key, differing only in where it came from. */
+  function authFrom(source: ResolvedAuth["credential"]["source"]): ResolvedAuth {
+    return {
+      credential: { kind: "api-key", value: KEY, source },
+      hostUrl: { value: "https://api.example.test", source: "config" },
+      authHost: { value: "https://api.example.test", source: "default" },
+      projectId: { value: undefined, source: "none" },
+    };
+  }
+
+  function configuredKeyRun(auth: ResolvedAuth): SetupDeps {
+    return makeDeps({
+      auth,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+  }
+
+  /** The stage's settled status, ignoring the `start` event that precedes it. */
+  function statusOf(events: SetupEvent[], stage: string): string | undefined {
+    const settled = events.find(
+      (e) => e.event === "stage" && e.stage === stage && e.status !== "start",
+    );
+    return settled !== undefined && settled.event === "stage" ? settled.status : undefined;
+  }
+
+  // The application resolves `TRACEROOT_API_KEY` from its own environment, so
+  // the only question that decides this stage is whether it will find the key
+  // there without setup writing a file.
+  const skips: [source: ResolvedAuth["credential"]["source"], why: string][] = [
+    ["env", "already exported in the shell the application will start from"],
+    ["auto-env-file", "already in the `.env` beside the application"],
+  ];
+  for (const [source, why] of skips) {
+    it(`writes nothing for a key ${why}`, async () => {
+      pythonRepo();
+      initGit();
+      const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+      const result = await runSetupMachine(ctx, configuredKeyRun(authFrom(source)));
+
+      expect(result.error).toBeNull();
+      expect(statusOf(events, "configure_repository")).toBe("skipped");
+      expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+    });
+  }
+
+  // Each of these reached the stage looking like a key already in the
+  // environment, and each left the application with nothing to authenticate
+  // with. `config` is `traceroot login` followed by `traceroot setup`: the key
+  // is in the CLI's own store under the home directory, which no SDK reads.
+  const writes: [source: ResolvedAuth["credential"]["source"], what: string][] = [
+    ["config", "the CLI's own config file"],
+    ["flag", "--api-key, for this invocation only"],
+    ["env-file", "a file named for the CLI with --env-file"],
+  ];
+  for (const [source, what] of writes) {
+    it(`writes the credential for a key from ${what}`, async () => {
+      pythonRepo();
+      initGit();
+      const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+      const result = await runSetupMachine(ctx, configuredKeyRun(authFrom(source)));
+
+      expect(result.error).toBeNull();
+      expect(statusOf(events, "configure_repository")).toBe("ok");
+      expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+    });
+  }
+
+  it("writes the pasted key, and ignores the file it wrote", async () => {
+    // The run that found this: authenticated by paste, `configure_repository`
+    // recorded `skipped` and completed, and setup closed by telling the user to
+    // run an application whose `traceroot.initialize()` had no credential to
+    // find.
+    pythonRepo();
+    initGit();
+    const pasted = "tr-27332255-pasted-key";
+    const deps = makeDeps({
+      auth: authEmpty(),
+      hiddenAnswers: [pasted],
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx, events } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(statusOf(events, "configure_repository")).toBe("ok");
+    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(pasted);
+    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain(".env.traceroot");
   });
 });
 
