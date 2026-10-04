@@ -28,7 +28,7 @@ import {
 import { DEFAULT_HOST } from "../commands/constants.js";
 import { loadOptionalEnvFileFromDisk } from "../config/envFile.js";
 import { writeConfig as realWriteConfig } from "../config/manager.js";
-import { type AuthSource, type ResolvedAuth, normalizeApiKey } from "../config/resolve.js";
+import { type ResolvedAuth, normalizeApiKey } from "../config/resolve.js";
 import type { Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import { bundledSkillDir } from "../skills/bundled.js";
@@ -45,8 +45,10 @@ import { buildInvocation, launchAgent } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
 import { writeSetupReport } from "./report.js";
 import {
+  type ImportCheck,
   type ResolvedSdk,
   type SdkPackage,
+  importCheck,
   installCommand,
   resolveSdkVersion,
   sdkPackageFor,
@@ -1340,13 +1342,18 @@ export function uniqueKeyName(base: string, existing: readonly string[]): string
 
 // ── CONFIGURE_REPOSITORY ────────────────────────────────────────────────────
 
+/** Whether `candidate` is the same key once its env-assignment wrapper is off. */
+function holdsKey(candidate: string | undefined, key: string): boolean {
+  return candidate !== undefined && normalizeApiKey(candidate) === key;
+}
+
 /**
- * Whether the instrumented application will find this credential on its own.
+ * Whether the instrumented application will find *this* credential on its own.
  *
- * Only two sources mean yes. `env` is a variable already exported in the shell
- * the user will start their application from, and `auto-env-file` is a `.env`
- * beside it — the file an application's own dotenv loader reads. For those,
- * writing a second copy adds nothing.
+ * Only two sources can mean yes. `env` is a variable already exported in the
+ * shell the user will start their application from, and `auto-env-file` is a
+ * `.env` beside it — the file an application's own dotenv loader reads. For
+ * those, writing a second copy adds nothing.
  *
  * Every other source is the CLI's and not the application's. `flag` lasts for
  * one invocation. `env-file` is a file named for the CLI with `--env-file` and
@@ -1355,9 +1362,26 @@ export function uniqueKeyName(base: string, existing: readonly string[]): string
  * which no SDK reads — so a `traceroot login` followed by `traceroot setup`
  * lands here. And `none` is a key typed at setup's own prompt, which until this
  * stage runs exists in no file the application could open.
+ *
+ * The source alone is not taken as proof. It is a label computed in
+ * `resolveAuth`, and this is the stage whose skip leaves a user with no usable
+ * credential at all — the one place in the run that should check rather than
+ * infer. So the value is read back out of wherever the label says it lives and
+ * compared with the credential the run settled on. A label without the matching
+ * value behind it writes, which is the safe direction.
  */
-function applicationCanResolve(source: AuthSource): boolean {
-  return source === "env" || source === "auto-env-file";
+function applicationCanResolve(ctx: SetupContext, deps: SetupDeps, key: string): boolean {
+  switch (deps.resolvedAuth.credential.source) {
+    case "env":
+      return holdsKey(deps.env[KEY_ENV], key);
+    case "auto-env-file":
+      // The same file `resolveAuth` auto-discovered: the `.env` beside where the
+      // command was run, which is `ctx.cwd` rather than `ctx.root` — a service
+      // in a monorepo has its own, and the root's is not it.
+      return holdsKey(loadOptionalEnvFileFromDisk(join(ctx.cwd, ".env"))[KEY_ENV], key);
+    default:
+      return false;
+  }
 }
 
 const configureRepository: StageDefinition = {
@@ -1377,8 +1401,9 @@ const configureRepository: StageDefinition = {
     //
     // `resolvedAuth` never lost the distinction, so the guard asks it rather
     // than re-deriving one from the origin. See {@link applicationCanResolve}.
-    ctx.credential?.origin === "existing-config" &&
-    applicationCanResolve(deps.resolvedAuth.credential.source),
+    ctx.credential !== undefined &&
+    ctx.credential.origin === "existing-config" &&
+    applicationCanResolve(ctx, deps, ctx.credential.key.reveal()),
   async run(ctx, deps) {
     const credential = requireCredential(ctx);
     const session = requireSession(ctx);
@@ -1828,12 +1853,10 @@ const installAgentContext: StageDefinition = {
  * the pre-launch answer would fail a run that had in fact succeeded, in the one
  * case the check exists for.
  *
- * Returns null when there is nothing this can check. Only Python is covered:
- * resolving an npm package from the service directory means reproducing Node's
- * resolution across hoisting, workspaces and an exports map that may refuse a
- * CommonJS require of a working install — a check whose false failures would
- * cost more than the silence it replaces. A TypeScript service therefore still
- * reaches `verify_application` unverified.
+ * Which command to run is {@link importCheck}'s decision, because it is the
+ * same decision {@link installCommand} makes and the two must not disagree
+ * about where the package went. Null from it means there is nothing to check,
+ * and the stage passes — see that function for which cases those are and why.
  */
 async function checkSdkImportable(
   ctx: SetupContext,
@@ -1841,19 +1864,16 @@ async function checkSdkImportable(
   service: DetectedService,
   sdk: ResolvedSdk,
   cwd: string,
-): Promise<{ interpreter: string; module: string; importable: boolean } | null> {
-  if (service.language !== "python") {
-    return null;
-  }
+): Promise<{ check: ImportCheck; interpreter: string; importable: boolean } | null> {
   const interpreter =
     detectPythonEnvironment(ctx.root, service.path, deps.env).interpreter ?? "python3";
-  // A distribution name is not always an import name: PyPI allows a `-` where
-  // Python requires `_`, and `import a-b` is a syntax error rather than a
-  // missing module, which would fail every run instead of the broken ones.
-  const module = sdk.package.replaceAll("-", "_");
+  const check = importCheck(sdk, service, interpreter);
+  if (check === null) {
+    return null;
+  }
   const result = await deps.runProcess({
-    program: interpreter,
-    args: ["-c", `import ${module}`],
+    program: check.program,
+    args: check.args,
     cwd,
     env: deps.env,
     stdio: "capture",
@@ -1861,10 +1881,10 @@ async function checkSdkImportable(
     signal: ctx.signal,
   });
   return {
+    check,
     interpreter,
-    module,
     // A spawn failure is not an answer about the SDK — but it is not a working
-    // service either, since this is the interpreter the application runs on.
+    // service either, since this is how the application gets run.
     importable: !result.spawnFailed && result.exitCode === 0,
   };
 }
@@ -2150,7 +2170,7 @@ const instrument: StageDefinition = {
         throw new SetupError({
           stage: "instrument",
           code: "AGENT_FAILED",
-          message: `${adapter.displayName} finished, but \`import ${sdkCheck.module}\` fails under ${sdkCheck.interpreter} — the ${sdk.package} SDK was not installed, so the instrumented code cannot run.`,
+          message: `${adapter.displayName} finished, but \`import ${sdkCheck.check.module}\` fails under ${sdkCheck.check.display} — the ${sdk.package} SDK was not installed, so the instrumented code cannot run.`,
           remedy: [
             "Install it yourself, then rerun `traceroot setup --resume`:",
             `  ${install}`,
