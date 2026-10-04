@@ -150,3 +150,9 @@ vite.config.ts.timestamp-*
 # Agent planning artifacts (design docs, plans, per-plan ledgers) stay local.
 docs/superpowers/
 .superpowers/
+
+.env.local
+
+# The repo self-installs its own skill for local testing; the shipped copy
+# lives in assets/ and is the one `traceroot skills install` reads.
+.claude/skills/
