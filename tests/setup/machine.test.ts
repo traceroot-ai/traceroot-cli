@@ -1399,6 +1399,158 @@ describe("failure handling", () => {
   });
 });
 
+describe("proving the agent installed the SDK", () => {
+  /** A Python SDK, so the import name under test is the one production uses. */
+  const PYTHON_SDK = { package: "traceroot", version: "0.3.0", source: "registry" } as const;
+
+  /** The runs that asked an interpreter whether the SDK imports. */
+  function importChecks(runs: RecordedRun[]): RecordedRun[] {
+    return runs.filter((run) => run.args[0] === "-c" && run.args[1] === "import traceroot");
+  }
+
+  it("fails the stage when the SDK does not import, naming the package and the interpreter", async () => {
+    // The run that produced this: the agent issued the same failing install 868
+    // times, reported that it had finished, and setup advanced to wait for a
+    // trace from an application that could not import its SDK.
+    pythonRepo();
+    initGit();
+    const inner = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const runProcess: SetupDeps["runProcess"] = async (o) =>
+      o.args[0] === "-c"
+        ? {
+            exitCode: 1,
+            output: "ModuleNotFoundError",
+            durationMs: 1,
+            timedOut: false,
+            spawnFailed: false,
+          }
+        : inner.run(o);
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+      sdk: { ...PYTHON_SDK },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(result.error?.exitCode).toBe(5);
+    expect(result.error?.message).toContain("import traceroot");
+    expect(result.error?.message).toContain("python3");
+    expect(result.error?.message).toContain("traceroot SDK was not installed");
+    // The remedy is the command, pinned, not an instruction to go and read.
+    expect(result.error?.remedy).toContain("traceroot==0.3.0");
+    expect(result.error?.remedy).toContain("--resume");
+    // And it stops here rather than blaming the stage that comes next.
+    expect(result.checkpoint.completedStages).not.toContain("instrument");
+  });
+
+  it("does not blame PEP 668 for a project whose package manager owns its environment", async () => {
+    // `uv` installs into its own virtualenv, so `externally-managed-environment`
+    // is not what stopped it, and the footnote would send the reader after a
+    // cause that cannot apply.
+    pythonRepo();
+    writeFileSync(join(dir, "uv.lock"), "");
+    initGit();
+    const inner = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const runProcess: SetupDeps["runProcess"] = async (o) =>
+      o.args[0] === "-c"
+        ? {
+            exitCode: 1,
+            output: "ModuleNotFoundError",
+            durationMs: 1,
+            timedOut: false,
+            spawnFailed: false,
+          }
+        : inner.run(o);
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+      sdk: { ...PYTHON_SDK },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(result.error?.remedy).toContain("uv add traceroot==0.3.0");
+    expect(result.error?.remedy).not.toContain("externally-managed-environment");
+  });
+
+  it("completes the stage when the SDK imports", async () => {
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+      sdk: { ...PYTHON_SDK },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+    // Checked once, and in the service the agent was standing in.
+    const checks = importChecks(process.runs);
+    expect(checks).toHaveLength(1);
+    expect(checks[0]?.cwd).toBe(dir);
+  });
+
+  it("asks the virtualenv the agent created, not the one that was missing before it ran", async () => {
+    // The pre-launch answer is "no virtualenv" on exactly the repositories this
+    // check exists for, and creating one is what the task tells the agent to do.
+    // Reusing that answer would fail a run that had in fact succeeded.
+    pythonRepo();
+    initGit();
+    const venvPython = join(dir, ".venv", "bin", "python");
+    const inner = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const runProcess: SetupDeps["runProcess"] = async (o) => {
+      if (o.program === "claude") {
+        mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+        writeFileSync(venvPython, "");
+      }
+      return inner.run(o);
+    };
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+      sdk: { ...PYTHON_SDK },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(importChecks(inner.runs).map((run) => run.program)).toEqual([venvPython]);
+  });
+
+  it("leaves a TypeScript service unchecked rather than guessing at node resolution", async () => {
+    // An honest gap, pinned so the code and its comment cannot drift apart.
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { next: "^14" } }));
+    writeFileSync(join(dir, "index.ts"), "export {};\n");
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M index.ts"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(process.runs.filter((run) => run.args[0] === "-c")).toEqual([]);
+  });
+});
+
 describe("resume and rerun", () => {
   it("resumes an interrupted run from the checkpoint", async () => {
     pythonRepo();

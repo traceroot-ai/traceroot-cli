@@ -44,7 +44,13 @@ import { changedSince, readGitState } from "./git.js";
 import { buildInvocation, launchAgent } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
 import { writeSetupReport } from "./report.js";
-import { type ResolvedSdk, type SdkPackage, resolveSdkVersion, sdkPackageFor } from "./sdk.js";
+import {
+  type ResolvedSdk,
+  type SdkPackage,
+  installCommand,
+  resolveSdkVersion,
+  sdkPackageFor,
+} from "./sdk.js";
 import { type Secret, makeSecret } from "./secret.js";
 import { type SelectFn, interactiveSelect } from "./select.js";
 import { startLineSpinner } from "./spinner.js";
@@ -54,6 +60,7 @@ import { pollForTrace } from "./trace.js";
 import { discardTypeAhead } from "./tty.js";
 import type {
   DetectedAgent,
+  DetectedService,
   DetectedStack,
   InstrumentMethod,
   ProjectCredential,
@@ -1769,6 +1776,66 @@ const installAgentContext: StageDefinition = {
 
 // ── INSTRUMENT ──────────────────────────────────────────────────────────────
 
+/**
+ * Proves the SDK is importable, rather than taking the agent's word for it.
+ *
+ * An agent can run for a minute, report that it finished, and have installed
+ * nothing — an install command that cannot succeed on this interpreter is
+ * retried rather than abandoned, and the transcript still ends in a completion
+ * notice. Nothing downstream notices: the next stage runs the application,
+ * which fails on `import traceroot`, and reports the only thing it can see,
+ * that no trace arrived. The true cause is one stage back and never named.
+ *
+ * So the one command that distinguishes the two is run here. It does not fix
+ * the install or retry it; it turns a silent failure into a named one.
+ *
+ * The interpreter is resolved again rather than reused from before the launch.
+ * A service with no virtualenv resolves to none, and creating one is exactly
+ * what the agent is told to do when the install needs it — so checking against
+ * the pre-launch answer would fail a run that had in fact succeeded, in the one
+ * case the check exists for.
+ *
+ * Returns null when there is nothing this can check. Only Python is covered:
+ * resolving an npm package from the service directory means reproducing Node's
+ * resolution across hoisting, workspaces and an exports map that may refuse a
+ * CommonJS require of a working install — a check whose false failures would
+ * cost more than the silence it replaces. A TypeScript service therefore still
+ * reaches `verify_application` unverified.
+ */
+async function checkSdkImportable(
+  ctx: SetupContext,
+  deps: SetupDeps,
+  service: DetectedService,
+  sdk: ResolvedSdk,
+  cwd: string,
+): Promise<{ interpreter: string; module: string; importable: boolean } | null> {
+  if (service.language !== "python") {
+    return null;
+  }
+  const interpreter =
+    detectPythonEnvironment(ctx.root, service.path, deps.env).interpreter ?? "python3";
+  // A distribution name is not always an import name: PyPI allows a `-` where
+  // Python requires `_`, and `import a-b` is a syntax error rather than a
+  // missing module, which would fail every run instead of the broken ones.
+  const module = sdk.package.replaceAll("-", "_");
+  const result = await deps.runProcess({
+    program: interpreter,
+    args: ["-c", `import ${module}`],
+    cwd,
+    env: deps.env,
+    stdio: "capture",
+    timeoutMs: 60_000,
+    signal: ctx.signal,
+  });
+  return {
+    interpreter,
+    module,
+    // A spawn failure is not an answer about the SDK — but it is not a working
+    // service either, since this is the interpreter the application runs on.
+    importable: !result.spawnFailed && result.exitCode === 0,
+  };
+}
+
 const instrument: StageDefinition = {
   stage: "instrument",
   isSatisfied: (ctx) => ctx.instrumentation !== undefined,
@@ -2041,6 +2108,31 @@ const instrument: StageDefinition = {
           message: `${adapter.displayName} exited with status ${result.exitCode}. ${changed}`,
           remedy:
             "Nothing was reverted — your changes are intact. Fix the issue and rerun `traceroot setup --resume`.",
+        });
+      }
+
+      const sdkCheck = await checkSdkImportable(ctx, deps, service, sdk, agentCwd);
+      if (sdkCheck !== null && !sdkCheck.importable) {
+        const install = installCommand(sdk, service, service.language, sdkCheck.interpreter);
+        throw new SetupError({
+          stage: "instrument",
+          code: "AGENT_FAILED",
+          message: `${adapter.displayName} finished, but \`import ${sdkCheck.module}\` fails under ${sdkCheck.interpreter} — the ${sdk.package} SDK was not installed, so the instrumented code cannot run.`,
+          remedy: [
+            "Install it yourself, then rerun `traceroot setup --resume`:",
+            `  ${install}`,
+            // Only for the `pip` form. `uv` and `poetry` manage their own
+            // environment, so PEP 668 cannot be what stopped them and saying so
+            // sends the reader after the wrong cause.
+            ...(install.includes("-m pip install")
+              ? [
+                  "",
+                  "If that reports `externally-managed-environment`, the interpreter is a",
+                  "system one and needs a virtualenv first:",
+                  "  python3 -m venv .venv && ./.venv/bin/python -m pip install …",
+                ]
+              : []),
+          ].join("\n"),
         });
       }
 
