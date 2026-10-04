@@ -1160,9 +1160,10 @@ describe("the credential the instrumented application will read", () => {
     };
   }
 
-  function configuredKeyRun(auth: ResolvedAuth): SetupDeps {
+  function configuredKeyRun(auth: ResolvedAuth, env?: NodeJS.ProcessEnv): SetupDeps {
     return makeDeps({
       auth,
+      env,
       client: fakeApiClient({ traces: [traceRow()] }),
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
@@ -1177,25 +1178,99 @@ describe("the credential the instrumented application will read", () => {
   }
 
   // The application resolves `TRACEROOT_API_KEY` from its own environment, so
-  // the only question that decides this stage is whether it will find the key
-  // there without setup writing a file.
-  const skips: [source: ResolvedAuth["credential"]["source"], why: string][] = [
-    ["env", "already exported in the shell the application will start from"],
-    ["auto-env-file", "already in the `.env` beside the application"],
-  ];
-  for (const [source, why] of skips) {
-    it(`writes nothing for a key ${why}`, async () => {
-      pythonRepo();
-      initGit();
-      const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+  // the only question that decides this stage is whether it will find this key
+  // there without setup writing a file. Each of these establishes the source for
+  // real, because a skip asserted over an empty source asserts nothing.
+  it("writes nothing for a key already exported in the environment", async () => {
+    pythonRepo();
+    initGit();
+    const env = { PATH: "/usr/bin", TRACEROOT_API_KEY: KEY };
+    const deps = configuredKeyRun(authFrom("env"), env);
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
 
-      const result = await runSetupMachine(ctx, configuredKeyRun(authFrom(source)));
+    const result = await runSetupMachine(ctx, deps);
 
-      expect(result.error).toBeNull();
-      expect(statusOf(events, "configure_repository")).toBe("skipped");
-      expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
-    });
-  }
+    expect(result.error).toBeNull();
+    // The premise, stated rather than assumed: this is the environment setup
+    // inherited and the user's shell will hand to their application.
+    expect(deps.env.TRACEROOT_API_KEY).toBe(KEY);
+    expect(statusOf(events, "configure_repository")).toBe("skipped");
+    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+  });
+
+  it("writes nothing for a key already in the `.env` beside the application", async () => {
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), `TRACEROOT_API_KEY=${KEY}\n`);
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, configuredKeyRun(authFrom("auto-env-file")));
+
+    expect(result.error).toBeNull();
+    // The file an application's own dotenv loader reads really does hold it.
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain(KEY);
+    expect(statusOf(events, "configure_repository")).toBe("skipped");
+    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+  });
+
+  it("writes nothing for a key exported in its env-assignment form", async () => {
+    // `resolveAuth` normalises the wrapper off, so the credential is bare while
+    // the variable is not. Comparing them raw would write a second copy of a key
+    // the application already has.
+    pythonRepo();
+    initGit();
+    const env = { PATH: "/usr/bin", TRACEROOT_API_KEY: `TRACEROOT_API_KEY="${KEY}"` };
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, configuredKeyRun(authFrom("env"), env));
+
+    expect(result.error).toBeNull();
+    expect(statusOf(events, "configure_repository")).toBe("skipped");
+    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+  });
+
+  // The converse: the source says the application can resolve the credential
+  // and it cannot. Only a lie in the fixture can produce this within one
+  // invocation, but the stage that leaves a user with no credential is the wrong
+  // place to trust a label computed somewhere else.
+  it("writes anyway when the environment does not actually hold the key", async () => {
+    pythonRepo();
+    initGit();
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, configuredKeyRun(authFrom("env")));
+
+    expect(result.error).toBeNull();
+    expect(statusOf(events, "configure_repository")).toBe("ok");
+    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+  });
+
+  it("writes anyway when there is no `.env` to have resolved from", async () => {
+    pythonRepo();
+    initGit();
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, configuredKeyRun(authFrom("auto-env-file")));
+
+    expect(result.error).toBeNull();
+    expect(statusOf(events, "configure_repository")).toBe("ok");
+    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+  });
+
+  it("writes anyway when the `.env` holds a different key", async () => {
+    // A stale `.env` is not this credential, and the application loading it
+    // would authenticate as something else or not at all.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), "TRACEROOT_API_KEY=tr-some-other-key\n");
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, configuredKeyRun(authFrom("auto-env-file")));
+
+    expect(result.error).toBeNull();
+    expect(statusOf(events, "configure_repository")).toBe("ok");
+    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+  });
 
   // Each of these reached the stage looking like a key already in the
   // environment, and each left the application with nothing to authenticate
@@ -1502,9 +1577,17 @@ describe("proving the agent installed the SDK", () => {
   /** A Python SDK, so the import name under test is the one production uses. */
   const PYTHON_SDK = { package: "traceroot", version: "0.3.0", source: "registry" } as const;
 
-  /** The runs that asked an interpreter whether the SDK imports. */
+  /**
+   * The runs that asked whether the SDK imports. Matched on the tail of argv,
+   * not the head: a Poetry probe is `poetry run python -c <code>`.
+   */
   function importChecks(runs: RecordedRun[]): RecordedRun[] {
-    return runs.filter((run) => run.args[0] === "-c" && run.args[1] === "import traceroot");
+    return runs.filter((run) => run.args.at(-2) === "-c" && run.args.at(-1) === "import traceroot");
+  }
+
+  /** Describes a probe the way the code under test chose to run it. */
+  function probeOf(runs: RecordedRun[]): string[] {
+    return importChecks(runs).map((run) => [run.program, ...run.args.slice(0, -1)].join(" "));
   }
 
   it("fails the stage when the SDK does not import, naming the package and the interpreter", async () => {
@@ -1630,6 +1713,99 @@ describe("proving the agent installed the SDK", () => {
     expect(importChecks(inner.runs).map((run) => run.program)).toEqual([venvPython]);
   });
 
+  it("asks Poetry for its own environment instead of probing the system python", async () => {
+    // `poetry add` installs into Poetry's environment, which for a project with
+    // no in-project virtualenv lives under Poetry's cache — somewhere no amount
+    // of looking beside the service will find. Probing `python3` there rejects a
+    // perfectly successful install, which is worse than not checking at all.
+    pythonRepo();
+    writeFileSync(join(dir, "poetry.lock"), "");
+    initGit();
+    const inner = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const runProcess: SetupDeps["runProcess"] = async (o) =>
+      // The system interpreter does not have the package. Only a probe that
+      // goes through Poetry can see the install that succeeded.
+      o.program === "python3"
+        ? {
+            exitCode: 1,
+            output: "ModuleNotFoundError",
+            durationMs: 1,
+            timedOut: false,
+            spawnFailed: false,
+          }
+        : inner.run(o);
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+      sdk: { ...PYTHON_SDK },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(probeOf(inner.runs)).toEqual(["poetry run python -c"]);
+  });
+
+  it("still fails a Poetry service whose environment lacks the SDK, and says how it asked", async () => {
+    pythonRepo();
+    writeFileSync(join(dir, "poetry.lock"), "");
+    initGit();
+    const inner = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const runProcess: SetupDeps["runProcess"] = async (o) =>
+      o.program === "poetry" && o.args.includes("-c")
+        ? {
+            exitCode: 1,
+            output: "ModuleNotFoundError",
+            durationMs: 1,
+            timedOut: false,
+            spawnFailed: false,
+          }
+        : inner.run(o);
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+      sdk: { ...PYTHON_SDK },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(result.error?.message).toContain("poetry run python");
+    // And the remedy is Poetry's install, not pip's — so no PEP 668 footnote.
+    expect(result.error?.remedy).toContain("poetry add traceroot==0.3.0");
+    expect(result.error?.remedy).not.toContain("externally-managed-environment");
+  });
+
+  it("uses the virtualenv uv puts in the project rather than `uv run`", async () => {
+    // `uv add` creates `.venv` in the project directory, which is exactly where
+    // the interpreter search looks. `uv run` would also work, and is wrong here:
+    // it syncs the environment before running, so it would install the package
+    // it is supposed to be checking for and could never report a failure.
+    pythonRepo();
+    writeFileSync(join(dir, "uv.lock"), "");
+    initGit();
+    const venvPython = join(dir, ".venv", "bin", "python");
+    mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+    writeFileSync(venvPython, "");
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+      sdk: { ...PYTHON_SDK },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(probeOf(process.runs)).toEqual([`${venvPython} -c`]);
+  });
+
   it("leaves a TypeScript service unchecked rather than guessing at node resolution", async () => {
     // An honest gap, pinned so the code and its comment cannot drift apart.
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { next: "^14" } }));
@@ -1646,7 +1822,7 @@ describe("proving the agent installed the SDK", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error).toBeNull();
-    expect(process.runs.filter((run) => run.args[0] === "-c")).toEqual([]);
+    expect(importChecks(process.runs)).toEqual([]);
   });
 });
 
