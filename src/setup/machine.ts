@@ -28,7 +28,7 @@ import {
 import { DEFAULT_HOST } from "../commands/constants.js";
 import { loadOptionalEnvFileFromDisk } from "../config/envFile.js";
 import { writeConfig as realWriteConfig } from "../config/manager.js";
-import type { ResolvedAuth } from "../config/resolve.js";
+import { type ResolvedAuth, normalizeApiKey } from "../config/resolve.js";
 import type { Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import { bundledSkillDir } from "../skills/bundled.js";
@@ -521,7 +521,14 @@ const authenticate: StageDefinition = {
       ],
       { settled: true },
     );
-    const pasted = (await deps.promptHidden("TraceRoot API key: ")).trim();
+    // Normalised, not merely trimmed. The interface hands the user
+    // `TRACEROOT_API_KEY="tr-…"` to copy, and this is the one prompt whose whole
+    // purpose is taking that paste — so the wrapper the flags, environment and
+    // config all tolerate has to be tolerated here too, or the server answers
+    // `Invalid API key` for a key that is perfectly valid. Before the empty
+    // check, so pasting a bare `TRACEROOT_API_KEY=` is caught here rather than
+    // sent.
+    const pasted = normalizeApiKey(await deps.promptHidden("TraceRoot API key: "));
     if (pasted === "") {
       throw new SetupError({
         stage: "authenticate",

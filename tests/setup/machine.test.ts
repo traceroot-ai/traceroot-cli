@@ -936,6 +936,84 @@ describe("authentication", () => {
   });
 });
 
+describe("the pasted key", () => {
+  /**
+   * Runs the paste path and records every key the run put somewhere: the one
+   * handed to the API client, and the one saved to config. Both must be the
+   * bare key, whatever wrapper the user pasted.
+   */
+  function pastePath(pasted: string): {
+    deps: SetupDeps;
+    sentToClient: string[];
+    savedToConfig: string[];
+  } {
+    const sentToClient: string[] = [];
+    const savedToConfig: string[] = [];
+    const base = makeDeps({
+      auth: authEmpty(),
+      hiddenAnswers: [pasted],
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      onWriteConfig: (config) => savedToConfig.push(config.api_key),
+    });
+    const deps: SetupDeps = {
+      ...base,
+      createClient: (options) => {
+        if (options.auth.kind === "api-key") {
+          sentToClient.push(options.auth.key);
+        }
+        return base.createClient(options);
+      },
+    };
+    return { deps, sentToClient, savedToConfig };
+  }
+
+  // The string the interface hands the user to copy is the assignment form, and
+  // the prompt whose whole purpose is taking that paste was the one place in the
+  // CLI that did not tolerate it: the wrapper reached the server, which answered
+  // `Invalid API key` for a key that authenticates perfectly when sent bare.
+  const KEY = "tr-27332255-pasted-key";
+  const wrappers: [label: string, pasted: string][] = [
+    ["bare", KEY],
+    ["the assignment form", `TRACEROOT_API_KEY=${KEY}`],
+    ["double-quoted", `TRACEROOT_API_KEY="${KEY}"`],
+    ["single-quoted", `TRACEROOT_API_KEY='${KEY}'`],
+    ["export-prefixed", `export TRACEROOT_API_KEY="${KEY}"`],
+    ["surrounded by whitespace", `  ${KEY}  `],
+  ];
+
+  for (const [label, pasted] of wrappers) {
+    it(`sends the bare key when it is pasted ${label}`, async () => {
+      pythonRepo();
+      const { deps, sentToClient, savedToConfig } = pastePath(pasted);
+      const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(result.error).toBeNull();
+      // Every client the run built, not just the first: the wrapper must not
+      // survive into the config either, or the next command reads it back.
+      expect(sentToClient).not.toHaveLength(0);
+      expect(new Set(sentToClient)).toEqual(new Set([KEY]));
+      expect(savedToConfig).toEqual([KEY]);
+    });
+  }
+
+  it("treats a paste that is nothing but the variable name as empty", async () => {
+    // Normalising before the empty check is what keeps this a local error
+    // rather than a `401` from the server.
+    pythonRepo();
+    const { deps, sentToClient } = pastePath("TRACEROOT_API_KEY=");
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("NOT_AUTHENTICATED");
+    expect(result.error?.message).toContain("No API key was entered.");
+    expect(sentToClient).toEqual([]);
+  });
+});
+
 describe("project credential", () => {
   it("reuses a valid key already in .env.traceroot rather than minting another", async () => {
     pythonRepo();
