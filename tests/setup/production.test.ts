@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_HOST } from "../../src/commands/constants.js";
+import { applicationEnvKeys } from "../../src/setup/envWrite.js";
 import { acknowledgeProduction, productionNotice } from "../../src/setup/production.js";
 import { plain } from "./colour.js";
 import { makeWriters } from "./helpers.js";
@@ -86,6 +88,59 @@ describe("what the notice says", () => {
   });
 });
 
+describe("which variables it tells you to carry", () => {
+  const STAGING = "https://staging.traceroot.ai";
+  const notice = (host?: string) =>
+    productionNotice({ language: "python", host }).map(plain).join("\n");
+
+  it("names every variable the file holds, not just the key", () => {
+    // The bug this closes. `configure_repository` writes `TRACEROOT_HOST_URL`
+    // alongside the key for any host but the default; the notice named the key
+    // and nothing else. A staging or self-hosted user who did exactly what it
+    // said carried the credential and left the host behind, and the SDK
+    // defaults a missing host to the hosted product in silence — so the traces
+    // went to an instance the key is not for, nothing crashed, nothing warned,
+    // and the symptom was that tracing appeared not to work.
+    const text = notice(STAGING);
+    expect(text).toContain(
+      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local",
+    );
+    // The caveat about this machine carries the identical gap, and bites first.
+    expect(text).toContain("export TRACEROOT_API_KEY and TRACEROOT_HOST_URL in your shell");
+  });
+
+  it("says outright that carrying only the key misroutes the traces", () => {
+    // The clause that would have saved the user who found this. It is the one
+    // failure in the run with no symptom at all, so it is worth a sentence.
+    expect(notice(STAGING)).toContain(
+      "Exporting only TRACEROOT_API_KEY leaves the SDK on its default host",
+    );
+  });
+
+  it("is unchanged for the hosted product, which is almost every run", () => {
+    // One variable, the singular noun, and no clause about a default host the
+    // run is already on.
+    for (const host of [undefined, DEFAULT_HOST]) {
+      const text = notice(host);
+      expect(text).toContain("Add the TRACEROOT_API_KEY token from your local");
+      expect(text).not.toContain("TRACEROOT_HOST_URL");
+      expect(text).not.toContain("default host");
+    }
+  });
+
+  it("names exactly the set the credential file is written from", () => {
+    // The structural half, and the reason this stays correct rather than
+    // happening to be correct. The notice and `configure_repository` both ask
+    // `applicationEnvKeys`, so a third variable added there is named here
+    // without a change to this file — and comparing against a literal list
+    // would be the thing that stopped being true.
+    for (const host of [undefined, DEFAULT_HOST, STAGING, "http://localhost:8000"]) {
+      const mentioned = new Set(notice(host).match(/TRACEROOT_[A-Z_]+/g) ?? []);
+      expect([...mentioned].sort()).toEqual([...applicationEnvKeys(host)].sort());
+    }
+  });
+});
+
 describe("acknowledging it", () => {
   it("waits for a human, and ignores whatever they type", () => {
     // An acknowledgement, not a question: there is no wrong answer and nothing
@@ -122,5 +177,29 @@ describe("acknowledging it", () => {
       prompt: null,
     });
     expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY token");
+  });
+
+  it("says back every variable the instruction asked for", async () => {
+    // The acknowledgement is the user reporting what they did. Off the default
+    // host the instruction names two variables, so a line that claims only the
+    // key is someone confirming a thing they have half done.
+    const { writers, err } = makeWriters();
+    const asked: string[] = [];
+    await acknowledgeProduction({
+      writers,
+      language: "python",
+      host: "https://staging.traceroot.ai",
+      prompt: async (question) => {
+        asked.push(question);
+        return "";
+      },
+    });
+    expect(plain(asked[0])).toContain(
+      "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
+    );
+    // And the notice above it asked for both, which is what makes the line
+    // above an acknowledgement rather than a smaller claim. Asserted on a
+    // fragment because the block is wrapped to the terminal's width.
+    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
   });
 });

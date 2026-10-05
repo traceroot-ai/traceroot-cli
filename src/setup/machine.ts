@@ -43,7 +43,7 @@ import { createActivityParser } from "./activity.js";
 import { detectAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
-import { ensureIgnored, upsertEnvFile } from "./envWrite.js";
+import { HOST_ENV, KEY_ENV, applicationEnvKeys, ensureIgnored, upsertEnvFile } from "./envWrite.js";
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, readGitState } from "./git.js";
@@ -93,9 +93,6 @@ import {
   wizardWarn,
 } from "./wizard.js";
 
-/** The environment variable an instrumented application reads its key from. */
-const KEY_ENV = "TRACEROOT_API_KEY";
-const HOST_ENV = "TRACEROOT_HOST_URL";
 /**
  * Credentials are written here — never to `.env`, which is often committed.
  *
@@ -1429,8 +1426,14 @@ const configureRepository: StageDefinition = {
       }
     }
 
+    // Which variables go in, asked of the one function that decides — the same
+    // one the closing notice asks when it tells the user which to carry. The
+    // host rule lived here alone, and the notice named the key and nothing
+    // else, which is how a non-default host came to be written down and never
+    // mentioned again.
+    const keys = applicationEnvKeys(session.host);
     const updates: Record<string, string> = { [KEY_ENV]: credential.key.reveal() };
-    if (session.host !== DEFAULT_HOST) {
+    if (keys.includes(HOST_ENV)) {
       updates[HOST_ENV] = session.host;
     }
     const result = upsertEnvFile(envPath, updates);

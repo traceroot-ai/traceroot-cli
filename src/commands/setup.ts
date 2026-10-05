@@ -243,6 +243,12 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       // The credential follows the service, so the notice has to name where it
       // actually landed rather than always saying `./`.
       envFileDir: relativeToRoot(root, artifactDir),
+      // The host, because it decides how many variables the user has to carry.
+      // Off the default host the credential file holds `TRACEROOT_HOST_URL` as
+      // well, and the notice used to name only the key — so a user who followed
+      // it exactly pointed their SDK at the hosted product while holding a
+      // credential for somewhere else.
+      host: result.checkpoint.host,
       prompt,
     });
   }
