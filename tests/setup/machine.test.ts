@@ -1198,6 +1198,30 @@ describe("the credential the instrumented application will read", () => {
     expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
   });
 
+  it("names no credential file to the agent when it never wrote one", async () => {
+    // The converse of the load the task now carries. This stage is satisfied
+    // before it runs when the application can already resolve the key, so there
+    // is no `.env.traceroot` on disk — and telling the entry point to load one
+    // would trade a credential the app already has for an exception on startup.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authFrom("env"),
+      env: { PATH: "/usr/bin", TRACEROOT_API_KEY: KEY },
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(statusOf(events, "configure_repository")).toBe("skipped");
+    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+    const task = process.runs.find((run) => run.program === "claude")?.stdin ?? "";
+    expect(task).not.toContain(".env.traceroot");
+  });
+
   it("writes nothing for a key already in the `.env` beside the application", async () => {
     pythonRepo();
     initGit();
@@ -2787,6 +2811,46 @@ describe("where a run leaves its files", () => {
     expect(existsSync(join(dir, ".env.traceroot"))).toBe(true);
     expect(existsSync(join(dir, ".traceroot", "setup.json"))).toBe(true);
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain(".env.traceroot");
+  });
+
+  it("tells the agent to load the credential file, on a repository with no env file of its own", async () => {
+    // The whole point of the file, and the case it never used to reach.
+    // `pythonRepo()` writes a manifest and an entry point and nothing else —
+    // no `.env`, no `.env.local` — which is what a project `traceroot setup` is
+    // run on actually looks like. The task's dotenv block was gated on the
+    // app's own env files, so on exactly this repository it was omitted, and
+    // the run finished having written a credential to disk that nothing would
+    // ever read.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    const task = process.runs.find((run) => run.program === "claude")?.stdin ?? "";
+    expect(task).toContain('load_dotenv("./.env.traceroot")');
+    expect(task).toContain("Add `python-dotenv` to the dependency manifest");
+  });
+
+  it("names the credential file from where the agent stands, not from the root", async () => {
+    // The artefacts follow the service, but the service is chosen after the
+    // credential is written — a run started at the root writes it at the root
+    // and may still instrument `test1/`, where the agent stands. A path
+    // rendered from the root resolves to nothing from there, and the agent is
+    // told to load it on the first line of the entry point.
+    pythonRepo();
+    initGit();
+    subService();
+    const process = fakeRunProcess({ gitStatus: ["", " M test1/main.py"] });
+    const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo", service: "test1" } });
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    const launch = process.runs.find((run) => run.program === "claude");
+    const named = /load_dotenv\("([^"]*\.env\.traceroot)"\)/.exec(launch?.stdin ?? "")?.[1];
+    expect(named).toBeDefined();
+    // Resolved from where the agent stands, it has to land on the file the run
+    // actually wrote.
+    expect(resolve(launch?.cwd ?? "", named ?? "")).toBe(join(dir, "test1", ".env.traceroot"));
   });
 });
 

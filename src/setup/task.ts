@@ -27,6 +27,14 @@ export interface BuildSetupTaskInput {
   pythonInterpreter?: string | null;
   /** Env files near the service, named so the agent does not go hunting. */
   envFiles?: readonly string[];
+  /**
+   * The dotenv file this run wrote the project credential into, relative to the
+   * agent's working directory. Null when no credential file was written — a
+   * tracked `.env.traceroot` is refused, and a key that already resolved from
+   * the user's own config is never written to one at all. Naming a file that is
+   * not there would replace a missing credential with an exception.
+   */
+  credentialEnvFile?: string | null;
 }
 
 function bullet(lines: string[]): string {
@@ -60,7 +68,11 @@ function bullet(lines: string[]): string {
  * a real entry point, pick the right integration, and decide what to wrap. What
  * it no longer has to do is discover what the package exports.
  */
-function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
+function initSnippet(
+  service: DetectedService,
+  envFiles: readonly string[],
+  credentialEnvFile: string | null,
+): string {
   if (service.language !== "python") {
     return [
       "```typescript",
@@ -71,15 +83,29 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
       "```",
     ].join("\n");
   }
-  const dotenv =
-    envFiles.length > 0
-      ? [
-          "from dotenv import load_dotenv",
-          "",
-          `load_dotenv("${envFiles[0]}")   # the app's own credentials`,
-          "",
-        ]
-      : [];
+  // The credential file first, then the app's own. Both are loads the agent
+  // would otherwise have to invent, and the order is the order they matter in:
+  // the SDK reads its key at `initialize()`, the application reads its own
+  // keys later.
+  //
+  // The credential file is the line that closes the loop. Before it, setup
+  // wrote `.env.traceroot` and nothing on the machine ever read it — the key
+  // reached the application through this run's child environment and vanished
+  // with it, so the first time the user started their own app it sent nothing.
+  const calls = [
+    credentialEnvFile === null
+      ? null
+      : { call: `load_dotenv("${credentialEnvFile}")`, note: "the TraceRoot key setup wrote" },
+    envFiles.length === 0
+      ? null
+      : { call: `load_dotenv("${envFiles[0]}")`, note: "the app's own credentials" },
+  ].filter((entry) => entry !== null);
+  // Comments aligned across the calls. Two paths of different lengths put the
+  // two notes at different columns, which reads as two unrelated lines rather
+  // than as one block with a note against each entry.
+  const width = Math.max(0, ...calls.map(({ call }) => call.length));
+  const loads = calls.map(({ call, note }) => `${call.padEnd(width)}   # ${note}`);
+  const dotenv = loads.length > 0 ? ["from dotenv import load_dotenv", "", ...loads, ""] : [];
   return [
     "```python",
     ...dotenv,
@@ -93,6 +119,47 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     "",
     "and, for a short-lived script only, `traceroot.flush()` before exit.",
   ].join("\n");
+}
+
+/**
+ * Why the credential load above is neither optional nor redundant.
+ *
+ * It has to be said outright, because every other thing this task says about
+ * the key points the other way: `TRACEROOT_API_KEY` is already in the agent's
+ * environment, and the hard rules tell it not to confirm, print or grep for it.
+ * An agent reading that reasonably concludes a `load_dotenv` of a credential
+ * file is dead code and drops it — and dropping it is exactly the failure. The
+ * key is in the agent's environment because `traceroot setup` put it there for
+ * the duration of this run; the user's own next run does not get it.
+ *
+ * Per language because the mechanism is not the same one. Python's loader runs
+ * where it is written, so the line in the snippet is the whole answer and the
+ * only cost is a dependency the task then tells the agent to declare. ES module
+ * imports are hoisted, so the equivalent line in a TypeScript entry point runs
+ * *after* the imports it was meant to precede — there the file has to be loaded
+ * before the process starts, which is a change to how the app is launched
+ * rather than a line of code.
+ */
+function credentialEnvFileNote(service: DetectedService, credentialEnvFile: string | null): string {
+  if (credentialEnvFile === null) {
+    return "";
+  }
+  if (service.language === "python") {
+    return `
+Loading \`${credentialEnvFile}\` is not redundant. \`TRACEROOT_API_KEY\` is in **your** environment
+because \`traceroot setup\` put it there for this run; nothing loads that file afterwards, so
+without that line the application stops sending traces the moment this run ends.
+Add \`python-dotenv\` to the dependency manifest, since you are importing it.
+`;
+  }
+  return `
+\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` to \`${credentialEnvFile}\`. It is in **your**
+environment because setup put it there for this run; nothing loads that file afterwards, so the
+application stops sending traces the moment this run ends. Load it **before the process starts** —
+\`--env-file=${credentialEnvFile}\` on the start script is the smallest change — and not from
+inside the entry point: ES module imports are hoisted, so a \`dotenv\` call written above them
+still runs after they have been evaluated.
+`;
 }
 
 /**
@@ -119,6 +186,7 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   const { service, sdk, skillPath, verifyCommand, interactive } = input;
   const python = input.pythonInterpreter ?? null;
   const envFiles = input.envFiles ?? [];
+  const credentialEnvFile = input.credentialEnvFile ?? null;
 
   const runMode = interactive
     ? "You are running interactively. If something is genuinely ambiguous, ask the user."
@@ -331,8 +399,8 @@ Initialize TraceRoot before the LLM/agent libraries are imported, in the entry p
 service at \`${service.path}\`. Auto-instrumentation that runs after those imports will silently
 capture nothing.
 
-${initSnippet(service, envFiles)}
-
+${initSnippet(service, envFiles, credentialEnvFile)}
+${credentialEnvFileNote(service, credentialEnvFile)}
 That is the whole API you need: \`initialize\`, \`observe\`, \`using_attributes\`, \`flush\`.
 
 \`Integration\` members, verified against \`${sdk.package}==${sdk.version}\`:

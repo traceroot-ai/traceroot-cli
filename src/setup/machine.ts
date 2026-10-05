@@ -1466,6 +1466,30 @@ const configureRepository: StageDefinition = {
 /** Env keys this run wrote, so a failure can roll them back. */
 const wroteEnvKeys = new WeakMap<SetupContext, string[]>();
 
+/**
+ * The credential file, named relative to a directory, or null when there is
+ * none on disk.
+ *
+ * Asked of the filesystem rather than of what this run did, because both
+ * answers have to be right and only one of them is about this run.
+ * `configure_repository` writes nothing when the file already holds the right
+ * value, writes nothing when the file is tracked by git, and does not run at
+ * all when the key already resolves from the user's own config — and in two of
+ * those three the file is there and should be loaded. Pointing an entry point
+ * at a file that is absent, meanwhile, trades a missing credential for an
+ * exception on startup, so the check is the file itself.
+ */
+function credentialEnvFile(ctx: SetupContext, from: string): string | null {
+  const path = join(ctx.artifactDir, ENV_FILE);
+  if (!existsSync(path)) {
+    return null;
+  }
+  // Forward slashes: this becomes a path inside a Python string literal in the
+  // task, where a Windows separator would read as an escape.
+  const rel = relative(from, path).replaceAll("\\", "/");
+  return rel.startsWith("..") ? rel : `./${rel}`;
+}
+
 // ── DETECT_STACK ────────────────────────────────────────────────────────────
 
 const detectStackStage: StageDefinition = {
@@ -1963,6 +1987,21 @@ const instrument: StageDefinition = {
       // happens before the first edit.
       pythonInterpreter,
       envFiles: detectEnvFiles(ctx.root, service.path),
+      // The credential file this run wrote, so the entry point loads it.
+      //
+      // `detectEnvFiles` cannot supply this and should not be widened to: it
+      // answers "which files hold the application's own secrets", which is a
+      // different question with a different answer in the task, and the file
+      // setup wrote is not one of them. It also only ever finds files that
+      // existed before setup ran, which `.env.traceroot` on a fresh project by
+      // definition did not.
+      //
+      // Named relative to where the agent stands, like every other path in the
+      // task. The artefacts follow the service but the service is chosen later
+      // — a run started at the root of a monorepo writes the credential at the
+      // root and instruments `api/`, so this is `../.env.traceroot` as often as
+      // it is `./.env.traceroot`, and it is computed rather than assumed.
+      credentialEnvFile: credentialEnvFile(ctx, agentCwd),
     });
 
     if (method === "manual") {

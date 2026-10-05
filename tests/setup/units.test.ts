@@ -914,6 +914,97 @@ describe("leaving nothing for the agent to look up", () => {
   });
 });
 
+describe("getting the credential setup wrote into the application", () => {
+  const task = (input: {
+    language?: "python" | "typescript";
+    envFiles?: string[];
+    credentialEnvFile?: string | null;
+  }) =>
+    buildSetupTask({
+      root: "/repo",
+      service: {
+        path: "svc",
+        language: input.language ?? "python",
+        framework: null,
+        entryPoint: "main.py",
+        packageManager: "pip",
+        evidence: ["requirements.txt"],
+      } as never,
+      sdk: { package: "traceroot", version: "0.1.11" } as never,
+      skillPath: "/root/.claude/skills/x/SKILL.md",
+      verifyCommand: null,
+      interactive: false,
+      existingInstrumentation: [],
+      pythonInterpreter: "/repo/.venv/bin/python",
+      envFiles: input.envFiles ?? [],
+      credentialEnvFile: input.credentialEnvFile ?? null,
+    });
+
+  it("loads it on a fresh project, which has no env file of its own", () => {
+    // The case `setup` exists for, and the case the dotenv block never used to
+    // reach: a project with no `.env` and no `.env.local`, where the only env
+    // file on disk is the one this run just wrote. Gated on the app's own
+    // files, the block was omitted exactly here — so the run ended having put
+    // a credential on disk that nothing would ever read.
+    const rendered = task({ credentialEnvFile: "./.env.traceroot" });
+    expect(rendered).toContain("from dotenv import load_dotenv");
+    expect(rendered).toContain('load_dotenv("./.env.traceroot")');
+  });
+
+  it("tells the agent to declare the dependency it is being asked to import", () => {
+    // The follow-through used to live only in the section about the app's own
+    // env files, so a fresh project got neither the load nor this.
+    expect(task({ credentialEnvFile: "./.env.traceroot" })).toContain(
+      "Add `python-dotenv` to the dependency manifest",
+    );
+  });
+
+  it("says why the load is not dead code, because everything else says it is", () => {
+    // The hard rules tell the agent `TRACEROOT_API_KEY` is already in its
+    // environment and not to confirm, print or grep for it. An agent holding
+    // that and no explanation drops the load as redundant — and dropping it is
+    // the whole failure, because the key is in *its* environment only for the
+    // length of this run.
+    const rendered = task({ credentialEnvFile: "./.env.traceroot" });
+    expect(rendered).toContain("is not redundant");
+    expect(rendered).toContain("put it there for this run");
+  });
+
+  it("loads the credential before the app's own file, and aligns the pair", () => {
+    const rendered = task({ envFiles: ["../.env"], credentialEnvFile: "../.env.traceroot" });
+    // The snippet in step 3 only. Step 6 shows the same call again, for the
+    // app's own files, and it is a different block with a different point.
+    const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
+    const lines = snippet.split("\n").filter((line) => line.startsWith("load_dotenv("));
+    expect(lines).toEqual([
+      'load_dotenv("../.env.traceroot")   # the TraceRoot key setup wrote',
+      'load_dotenv("../.env")             # the app\'s own credentials',
+    ]);
+  });
+
+  it("names no file when the run did not write one", () => {
+    // A tracked `.env.traceroot` is refused and a key that already resolved
+    // from the user's own config is never written to one, so the file is
+    // genuinely absent. Naming it anyway would trade a missing credential for
+    // an exception on the first line of the entry point.
+    const rendered = task({ envFiles: ["../.env"], credentialEnvFile: null });
+    expect(rendered).not.toContain(".env.traceroot");
+    // The app's own file is a separate question and still answered.
+    expect(rendered).toContain('load_dotenv("../.env")');
+  });
+
+  it("does not hand TypeScript a load that would run after the imports", () => {
+    // ES module imports are hoisted, so a `dotenv` call written above them is
+    // evaluated after them — the SDK would initialize with no key and the line
+    // would look correct. The file has to be loaded before the process starts.
+    const rendered = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
+    expect(rendered).not.toContain("load_dotenv");
+    expect(rendered).toContain("--env-file=./.env.traceroot");
+    expect(rendered).toContain("before the process starts");
+    expect(rendered).toContain("imports are hoisted");
+  });
+});
+
 describe("the task renders whole", () => {
   const render = () =>
     buildSetupTask({
