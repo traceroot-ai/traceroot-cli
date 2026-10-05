@@ -365,7 +365,15 @@ describe("runSetup", () => {
       }),
     });
 
-    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY token");
+    // Both variables, because this fixture authenticates against a host that
+    // is not the hosted product — so `configure_repository` wrote
+    // `TRACEROOT_HOST_URL` into the file as well as the key. The notice named
+    // the key alone until this fixture's own host was taken seriously: a
+    // staging or self-hosted user who carried only what they were told to
+    // carry pointed the SDK at the hosted product, which is not where their
+    // credential works, and nothing anywhere said so.
+    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
+    expect(plain(err.data)).toContain("Exporting only TRACEROOT_API_KEY leaves the SDK");
     // The service was Python, so the local caveat has to be there too.
     expect(plain(err.data)).toContain("os.environ");
     // Between everything the run printed and the line that closes the frame.
@@ -420,7 +428,11 @@ describe("runSetup", () => {
     const acknowledged = asked.map(plain).filter((q) => q.includes("(Press Enter to continue)"));
     expect(acknowledged).toHaveLength(2);
     expect(acknowledged[0]).toContain("I've confirmed my application is sending traces.");
-    expect(acknowledged[1]).toContain("I have added TRACEROOT_API_KEY to my production env.");
+    // Every variable, not just the key. A line that claims less than the
+    // instruction asked for is how someone confirms a thing they half did.
+    expect(acknowledged[1]).toContain(
+      "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
+    );
     // Each one says how to answer it, once, on the right.
     for (const line of acknowledged) {
       expect(line).toContain("(Press Enter to continue)");

@@ -240,9 +240,23 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
     await acknowledgeProduction({
       writers,
       language: result.checkpoint.service?.language ?? null,
-      // The credential follows the service, so the notice has to name where it
-      // actually landed rather than always saying `./`.
-      envFileDir: relativeToRoot(root, artifactDir),
+      // The credential file as the run actually chose it, not a directory
+      // joined to a constant name. It follows the service, so the notice has to
+      // name where it landed rather than always saying `./`; and the *name* is
+      // now whichever of the project's own env files was picked, which is
+      // `.env.local` as readily as `.env`. Undefined when nothing was written —
+      // a tracked file is refused, and a key the application already resolves is
+      // never written to one — where the notice falls back to `./.env`.
+      credentialEnvFile:
+        ctx.credentialEnvFile === undefined
+          ? undefined
+          : relativeToRoot(root, ctx.credentialEnvFile),
+      // The host, because it decides how many variables the user has to carry.
+      // Off the default host the credential file holds `TRACEROOT_HOST_URL` as
+      // well, and the notice used to name only the key — so a user who followed
+      // it exactly pointed their SDK at the hosted product while holding a
+      // credential for somewhere else.
+      host: result.checkpoint.host,
       prompt,
     });
   }
