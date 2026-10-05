@@ -43,6 +43,13 @@ export interface BuildSetupTaskInput {
    * it from — which is the one thing this field exists to prevent.
    */
   credentialFiles: readonly string[];
+   * The dotenv file this run wrote the project credential into, relative to the
+   * agent's working directory. Null when no credential file was written — a
+   * tracked `.env.traceroot` is refused, and a key that already resolved from
+   * the user's own config is never written to one at all. Naming a file that is
+   * not there would replace a missing credential with an exception.
+   */
+  credentialEnvFile?: string | null;
 }
 
 function bullet(lines: string[]): string {
@@ -153,7 +160,11 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
  * Three extra lines put the pair inside the `__main__` guard, where it runs when
  * the application does.
  */
-function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
+function initSnippet(
+  service: DetectedService,
+  envFiles: readonly string[],
+  credentialEnvFile: string | null,
+): string {
   if (service.language !== "python") {
     return [
       "```typescript",
@@ -165,13 +176,39 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     ].join("\n");
   }
   const [envFile] = envFiles;
-  const dotenvImports =
-    envFile === undefined ? [] : ["from pathlib import Path", "from dotenv import load_dotenv", ""];
-  // Indented, because it belongs to the guard below rather than to the module.
-  const credentialLoad =
+  // The credential file first, then the app's own. Both are loads the agent
+  // would otherwise have to invent, and the order is the order they matter in:
+  // the SDK reads its key at `initialize()`, the application reads its own
+  // keys later.
+  //
+  // The credential file is the line that closes the loop. Before it, setup
+  // wrote `.env.traceroot` and nothing on the machine ever read it — the key
+  // reached the application through this run's child environment and vanished
+  // with it, so the first time the user started their own app it sent nothing.
+  const calls = [
+    credentialEnvFile === null
+      ? null
+      : { call: `load_dotenv("${credentialEnvFile}")`, note: "the TraceRoot key setup wrote" },
     envFile === undefined
-      ? []
-      : [`    ${loadDotenvCall(envFile, service.entryPoint)}   # the app's own credentials`];
+      ? null
+      : {
+          call: loadDotenvCall(envFile, service.entryPoint ?? null),
+          note: "the app's own credentials",
+        },
+  ].filter((entry) => entry !== null);
+  // Comments aligned across the calls. Two paths of different lengths put the
+  // two notes at different columns, which reads as two unrelated lines rather
+  // than as one block with a note against each entry.
+  const width = Math.max(0, ...calls.map(({ call }) => call.length));
+  const loads = calls.map(({ call, note }) => `${call.padEnd(width)}   # ${note}`);
+  // `pathlib` only where a load actually uses it: the credential file is still
+  // named as a plain string, so a credential-only block would otherwise carry an
+  // import nothing in it needs.
+  const imports =
+    envFile === undefined
+      ? ["from dotenv import load_dotenv"]
+      : ["from pathlib import Path", "from dotenv import load_dotenv"];
+  const dotenv = loads.length > 0 ? [...imports, "", ...loads, ""] : [];
   return [
     "```python",
     ...dotenvImports,
@@ -198,6 +235,47 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
  * what the agent is allowed to execute, cannot come to disagree.
  */
 const FALLBACK_INTERPRETER = "./.venv/bin/python";
+
+/**
+ * Why the credential load above is neither optional nor redundant.
+ *
+ * It has to be said outright, because every other thing this task says about
+ * the key points the other way: `TRACEROOT_API_KEY` is already in the agent's
+ * environment, and the hard rules tell it not to confirm, print or grep for it.
+ * An agent reading that reasonably concludes a `load_dotenv` of a credential
+ * file is dead code and drops it — and dropping it is exactly the failure. The
+ * key is in the agent's environment because `traceroot setup` put it there for
+ * the duration of this run; the user's own next run does not get it.
+ *
+ * Per language because the mechanism is not the same one. Python's loader runs
+ * where it is written, so the line in the snippet is the whole answer and the
+ * only cost is a dependency the task then tells the agent to declare. ES module
+ * imports are hoisted, so the equivalent line in a TypeScript entry point runs
+ * *after* the imports it was meant to precede — there the file has to be loaded
+ * before the process starts, which is a change to how the app is launched
+ * rather than a line of code.
+ */
+function credentialEnvFileNote(service: DetectedService, credentialEnvFile: string | null): string {
+  if (credentialEnvFile === null) {
+    return "";
+  }
+  if (service.language === "python") {
+    return `
+Loading \`${credentialEnvFile}\` is not redundant. \`TRACEROOT_API_KEY\` is in **your** environment
+because \`traceroot setup\` put it there for this run; nothing loads that file afterwards, so
+without that line the application stops sending traces the moment this run ends.
+Add \`python-dotenv\` to the dependency manifest, since you are importing it.
+`;
+  }
+  return `
+\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` to \`${credentialEnvFile}\`. It is in **your**
+environment because setup put it there for this run; nothing loads that file afterwards, so the
+application stops sending traces the moment this run ends. Load it **before the process starts** —
+\`--env-file=${credentialEnvFile}\` on the start script is the smallest change — and not from
+inside the entry point: ES module imports are hoisted, so a \`dotenv\` call written above them
+still runs after they have been evaluated.
+`;
+}
 
 /**
  * The shortest unambiguous way to name an interpreter from the service directory.
@@ -255,6 +333,7 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // Held separately so it is narrowed where the instruction is built: the
   // section exists only because there is a file to name.
   const envFile = envFiles[0] ?? null;
+  const credentialEnvFile = input.credentialEnvFile ?? null;
 
   // Where the agent's own credential is, which is no longer always "in your
   // environment". `buildAgentEnv` withholds the variable whenever a file the
@@ -526,6 +605,8 @@ you named would never be applied. Auto-instrumentation patches the provider libr
 which works whether or not that library has already been imported — so leave its imports where
 they are.
 
+${initSnippet(service, envFiles, credentialEnvFile)}
+${credentialEnvFileNote(service, credentialEnvFile)}
 ${initSnippet(service, envFiles)}
 
 Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
