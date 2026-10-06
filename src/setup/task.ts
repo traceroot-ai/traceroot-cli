@@ -155,10 +155,11 @@ Add \`python-dotenv\` to the dependency manifest, since you are importing it.
   return `
 \`traceroot setup\` wrote \`TRACEROOT_API_KEY\` to \`${credentialEnvFile}\`. It is in **your**
 environment because setup put it there for this run; nothing loads that file afterwards, so the
-application stops sending traces the moment this run ends. Load it **before the process starts** —
-\`--env-file=${credentialEnvFile}\` on the start script is the smallest change — and not from
-inside the entry point: ES module imports are hoisted, so a \`dotenv\` call written above them
-still runs after they have been evaluated.
+application stops sending traces the moment this run ends. Load it **before the process starts**:
+on Node 20.6 or newer, \`--env-file=${credentialEnvFile}\` on the start script is the smallest
+change; on older runtimes, which do not have that flag, preload \`dotenv\` from outside the entry
+point. Not from inside the entry point: ES module imports are hoisted, so a \`dotenv\` call
+written above them still runs after they have been evaluated.
 `;
 }
 
