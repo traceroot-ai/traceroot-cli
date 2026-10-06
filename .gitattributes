@@ -2,3 +2,7 @@
 # identical to the backend artifact (see OPENAPI.md) on every checkout.
 openapi.json -text
 src/api/generated/schema.ts text eol=lf
+
+# Vendored skill tree: preserve exact bytes so each file's sha256 stays
+# identical to the one assets/skills/source.json records on every checkout.
+assets/skills/** -text

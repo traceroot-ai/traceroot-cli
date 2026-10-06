@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "traceroot-instrument-repo",
+      "description": "Add TraceRoot tracing to an existing Python or TypeScript/Node.js app.",
+      "bestFor": [
+        "production apps",
+        "agents",
+        "tools",
+        "LLM calls",
+        "retrieval",
+        "external APIs"
+      ],
+      "bundledWithCli": true
+    },
+    {
+      "name": "traceroot-quickstart",
+      "description": "Minimal runnable demo that produces one TraceRoot trace.",
+      "bestFor": [
+        "verifying API keys",
+        "seeing TraceRoot quickly"
+      ],
+      "bundledWithCli": true
+    }
+  ]
+}

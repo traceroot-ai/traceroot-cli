@@ -64,6 +64,15 @@ jobs:
       - name: Test
         run: npm test
 
+      # assets/skills/ is committed, so it is in this checkout — but whether it
+      # reaches the archive is decided by `files` in package.json, and .npmrc
+      # sets `ignore-scripts=true`, which suppresses this package's own
+      # lifecycle hooks: neither `prepack` nor `prepublishOnly` can vet the
+      # result. A publish missing those files would succeed and ship a CLI with
+      # no skills to install. Pack for real and read the archive instead.
+      - name: Tarball carries the bundled skills
+        run: npm run pack:check
+
       # No token: npm verifies the OIDC claim that this run came from this
       # repo and workflow. Configure the trusted publisher on npmjs.com first,
       # or this step fails with an auth error.
