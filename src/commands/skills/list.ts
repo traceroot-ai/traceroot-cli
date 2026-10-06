@@ -5,7 +5,7 @@ import { ALL_AGENTS, displaySkillPath } from "../../agents/index.js";
 import { type Writers, defaultWriters, writeJson } from "../../output.js";
 import { statusSymbol } from "../../render/status.js";
 import { createStyler } from "../../render/style.js";
-import { BUILTIN_SKILLS } from "../../skills/registry.js";
+import { builtinSkills } from "../../skills/registry.js";
 
 /** Dependencies for the testable core of `skills list`. */
 export interface RunSkillsListDeps {
@@ -45,7 +45,7 @@ function evaluateAgents(cwd: string, skillName: string): AgentStatus[] {
 export function runSkillsList(deps: RunSkillsListDeps): void {
   const { cwd, json, writers } = deps;
 
-  const rows = BUILTIN_SKILLS.map((skill) => {
+  const rows = builtinSkills().map((skill) => {
     const agents = evaluateAgents(cwd, skill.name);
     return { skill, agents, installed: agents.some((a) => a.installed) };
   });
