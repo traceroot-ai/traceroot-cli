@@ -37,6 +37,7 @@ Run the CLI from your local build with `node ./bin/traceroot.mjs --help`, or `np
 | `npm test` | Run the test suite with Vitest. Use `npm run test:watch` for watch mode. |
 | `npm run codegen` | Regenerate API types from `openapi.json`. Use `npm run codegen:check` to verify they are in sync. |
 | `npm run skills:refresh -- <clone> [ref]` | Re-vendor `assets/skills/` from a local [`traceroot-skills`](https://github.com/traceroot-ai/traceroot-skills) clone and rewrite `assets/skills/source.json`. Needs no network. |
+| `npm run skills:check` | Verify `assets/skills/` still matches `assets/skills/source.json`, file set and SHA-256 both. Runs on every pull request. |
 | `npm run pack:check` | Pack the tarball and assert it carries `assets/skills/`. Runs in the publish workflow, because `.npmrc` stops `prepack` from vetting it. |
 
 These commands mirror CI exactly. To run them automatically before each commit, install the hooks: `pipx install pre-commit && pre-commit install`.
