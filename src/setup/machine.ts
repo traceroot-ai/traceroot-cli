@@ -1276,7 +1276,7 @@ async function reuseExistingKey(
   if (!existsSync(envPath)) {
     return null;
   }
-  const candidate = loadOptionalEnvFileFromDisk(envPath)[KEY_ENV];
+  const candidate = envFileKey(envPath);
   if (candidate === undefined || candidate.trim() === "") {
     return null;
   }
@@ -1378,7 +1378,7 @@ function applicationCanResolve(ctx: SetupContext, deps: SetupDeps, key: string):
       // The same file `resolveAuth` auto-discovered: the `.env` beside where the
       // command was run, which is `ctx.cwd` rather than `ctx.root` — a service
       // in a monorepo has its own, and the root's is not it.
-      return holdsKey(loadOptionalEnvFileFromDisk(join(ctx.cwd, ".env"))[KEY_ENV], key);
+      return holdsKey(envFileKey(join(ctx.cwd, ".env")), key);
     default:
       return false;
   }
@@ -1479,6 +1479,24 @@ const wroteEnvKeys = new WeakMap<SetupContext, string[]>();
  * at a file that is absent, meanwhile, trades a missing credential for an
  * exception on startup, so the check is the file itself.
  */
+/**
+ * The key an env file holds, or undefined when the file cannot be read at all.
+ *
+ * `loadOptionalEnvFileFromDisk` swallows a missing file and rethrows
+ * everything else — `EACCES`, a directory carrying that name, a parse failure.
+ * Both callers ask a yes-or-no question about a file they otherwise ignore, and
+ * for neither is an exception a useful answer: one would fail the stage that
+ * acquires a key, the other the stage that builds the agent's task, in both
+ * cases over a file whose only consequence was whether it could be used.
+ */
+function envFileKey(path: string): string | undefined {
+  try {
+    return loadOptionalEnvFileFromDisk(path)[KEY_ENV];
+  } catch {
+    return undefined;
+  }
+}
+
 function credentialEnvFile(ctx: SetupContext, from: string): string | null {
   const path = join(ctx.artifactDir, ENV_FILE);
   // Existing is not enough: `configure_repository` also writes nothing when git
@@ -1490,7 +1508,7 @@ function credentialEnvFile(ctx: SetupContext, from: string): string | null {
   if (
     !existsSync(path) ||
     ctx.credential === undefined ||
-    !holdsKey(loadOptionalEnvFileFromDisk(path)[KEY_ENV], ctx.credential.key.reveal())
+    !holdsKey(envFileKey(path), ctx.credential.key.reveal())
   ) {
     return null;
   }
