@@ -36,10 +36,13 @@ Run the CLI from your local build with `node ./bin/traceroot.mjs --help`, or `np
 | `npm run format` | Format the codebase with Biome. Use `npm run format:check` to check without writing. |
 | `npm test` | Run the test suite with Vitest. Use `npm run test:watch` for watch mode. |
 | `npm run codegen` | Regenerate API types from `openapi.json`. Use `npm run codegen:check` to verify they are in sync. |
+| `npm run skills:refresh -- <clone> [ref]` | Re-vendor `assets/skills/` from a local [`traceroot-skills`](https://github.com/traceroot-ai/traceroot-skills) clone and rewrite `assets/skills/source.json`. Needs no network. |
 
 These commands mirror CI exactly. To run them automatically before each commit, install the hooks: `pipx install pre-commit && pre-commit install`.
 
 > `src/api/generated/` is generated from `openapi.json` — never edit it by hand. Update `openapi.json` and run `npm run codegen`.
+
+> `assets/skills/` is a vendored copy of the skill tree in [`traceroot-ai/traceroot-skills`](https://github.com/traceroot-ai/traceroot-skills) — never edit it by hand. A bundled skill's content and its `skills list` prose are both authored there; land the change in that repository, then re-vendor the copy with `npm run skills:refresh -- <clone>` and commit the result. `assets/skills/source.json` records the commit the copy came from and a SHA-256 for every file beside it.
 
 ## Workflow
 

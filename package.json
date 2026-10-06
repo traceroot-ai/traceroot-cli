@@ -34,6 +34,7 @@
     "build": "tsc -p tsconfig.json",
     "codegen": "openapi-typescript openapi.json -o src/api/generated/schema.ts",
     "codegen:check": "node scripts/codegen-check.mjs",
+    "skills:refresh": "node scripts/refresh-skills.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome lint .",
     "format": "biome format --write .",
