@@ -26,6 +26,13 @@ jobs:
         # the codegen:check script exists.
         run: npm run codegen:check --if-present
 
+      # Not conditional, unlike the step above: the script and this step land
+      # together, and a skipped provenance check is indistinguishable from a
+      # passing one. It needs nothing but the committed tree — no build, no
+      # network — so there is no checkout in which it cannot run.
+      - name: Vendored skills provenance check
+        run: npm run skills:check
+
       - name: Typecheck
         run: npm run typecheck
 
