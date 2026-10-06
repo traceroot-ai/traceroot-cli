@@ -2,9 +2,9 @@ import { CliError, ExitCode, type Writers, logInfo } from "../output.js";
 import { type Prompt, dim, isInteractive, readLine } from "../prompt.js";
 import { createStyler } from "../render/style.js";
 import {
-  BUILTIN_SKILLS,
   type BuiltinSkill,
   builtinSkillNames,
+  builtinSkills,
   requireBuiltinSkill,
 } from "./registry.js";
 
@@ -31,8 +31,9 @@ export interface ResolveSkillInput {
  */
 function availableSkillsList(writers: Writers): string {
   const styler = createStyler(writers.err);
-  const width = Math.max(...BUILTIN_SKILLS.map((s) => s.name.length));
-  const rows = BUILTIN_SKILLS.map(
+  const skills = builtinSkills();
+  const width = Math.max(...skills.map((s) => s.name.length));
+  const rows = skills.map(
     (s) => `  ${styler.bold(s.name)}${" ".repeat(width + 2 - s.name.length)}${s.description}`,
   );
   return ["Available skills:", ...rows].join("\n");
