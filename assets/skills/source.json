@@ -1,0 +1,15 @@
+{
+  "repository": "traceroot-ai/traceroot-skills",
+  "commit": "d8effa4c2d7b2adf612b3903502fd0d657cdef82",
+  "generator": "npm run skills:refresh -- <path-to-traceroot-skills-clone>",
+  "files": {
+    "manifest.json": "6121f2489ddf85a6f3d156bdc6e8ffd6b692a1080dc0ed0c0116ef0e840a5350",
+    "traceroot-instrument-repo/SKILL.md": "d3e10ef57d6af5c27fad3bea096a75be68e49dd4083236ddb7b3c2099f458319",
+    "traceroot-instrument-repo/references/python-instrument.md": "291448ab57ba41abb7772a0619063f7112d56cd49be7b6a86b150a5331fa7f04",
+    "traceroot-instrument-repo/references/troubleshooting.md": "49181c481e827ea81468df75399f3750f854fc3ec68b36931e5fb739231e4420",
+    "traceroot-instrument-repo/references/ts-instrument.md": "30aedfbaea6fa7fe8ab51685ee57cd94fc8a3f640cebe36671c7e7b90a3fd801",
+    "traceroot-quickstart/SKILL.md": "ea04b28dada38ec8bc08a785e35b706c0e868f6585dee8a0863a60289b5febcc",
+    "traceroot-quickstart/references/python-quickstart.md": "89bfec0ba070ec30c4c1e7ff84f80810eed1d902fdfaa50e5d3e967b947bf7bd",
+    "traceroot-quickstart/references/ts-quickstart.md": "160932a735b363d80410e32cb7e1568e73fc01271fd02ce0eb07c2532cd8ad7a"
+  }
+}
