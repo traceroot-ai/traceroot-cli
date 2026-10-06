@@ -138,7 +138,13 @@ function localCaveat(language: StackLanguage | null, keys: readonly string[]): s
   // Every variable the file holds, not just the key. "Export the key" is the
   // instruction that misroutes a non-default host, and it misroutes it here on
   // the user's own machine exactly as it does on deploy.
-  const exports = nameList(keys);
+  //
+  // Space-separated rather than through `nameList`: this list is pasted into a
+  // shell, and `export A and B` exports a variable named `and` while leaving
+  // both of TraceRoot's unset — the precise failure the sentence exists to
+  // prevent. `export A B` is what a shell accepts. `nameList` stays for the
+  // prose elsewhere in this file, where "A and B" is what a reader wants.
+  const exports = keys.join(" ");
   if (language === "python") {
     return `Locally too: the SDK reads os.environ and nothing loads ${ENV_FILE} at runtime — export ${exports} in your shell, or load the file with python-dotenv.`;
   }

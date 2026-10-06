@@ -106,7 +106,12 @@ describe("which variables it tells you to carry", () => {
       "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local",
     );
     // The caveat about this machine carries the identical gap, and bites first.
-    expect(text).toContain("export TRACEROOT_API_KEY and TRACEROOT_HOST_URL in your shell");
+    // Space-separated, because this half of the sentence is a command: `export
+    // A and B` exports a variable named `and` and leaves both of TraceRoot's
+    // unset, which is the very misrouting the notice is warning about. The
+    // prose above it keeps "and" because a reader is not pasting that.
+    expect(text).toContain("export TRACEROOT_API_KEY TRACEROOT_HOST_URL in your shell");
+    expect(text).not.toContain("export TRACEROOT_API_KEY and");
   });
 
   it("says outright that carrying only the key misroutes the traces", () => {
