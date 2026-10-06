@@ -158,7 +158,14 @@ export function importCheck(
   // Python requires `_`, and `import a-b` is a syntax error rather than a
   // missing module, which would fail every run instead of the broken ones.
   const module = sdk.package.replaceAll("-", "_");
-  const code = `import ${module}`;
+  // `import X` alone is not evidence the SDK is installed. `python -c` puts the
+  // working directory first on `sys.path`, so a service-local `X.py` or `X/`
+  // satisfies the import and the probe passes with no SDK present — and a
+  // repository being instrumented for TraceRoot is exactly where a directory of
+  // that name is plausible. Distribution metadata cannot be shadowed that way:
+  // it exists only for something a package manager actually installed. Asking
+  // for both keeps the import in the signal and settles installation with it.
+  const code = `import ${module}, importlib.metadata as m; m.version("${sdk.package}")`;
   if (service.packageManager === "poetry") {
     return {
       program: "poetry",

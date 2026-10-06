@@ -1481,7 +1481,17 @@ const wroteEnvKeys = new WeakMap<SetupContext, string[]>();
  */
 function credentialEnvFile(ctx: SetupContext, from: string): string | null {
   const path = join(ctx.artifactDir, ENV_FILE);
-  if (!existsSync(path)) {
+  // Existing is not enough: `configure_repository` also writes nothing when git
+  // tracks the file, and then what is on disk is whatever was committed — a
+  // different project's key, or a placeholder. Advertising it there hands the
+  // agent a path that loads the wrong credential, which fails later and further
+  // away than not naming it at all. The file earns its mention by holding the
+  // credential this run selected.
+  if (
+    !existsSync(path) ||
+    ctx.credential === undefined ||
+    !holdsKey(loadOptionalEnvFileFromDisk(path)[KEY_ENV], ctx.credential.key.reveal())
+  ) {
     return null;
   }
   // Forward slashes: this becomes a path inside a Python string literal in the

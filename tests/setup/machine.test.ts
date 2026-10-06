@@ -1218,8 +1218,11 @@ describe("the credential the instrumented application will read", () => {
 
     expect(statusOf(events, "configure_repository")).toBe("skipped");
     expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
-    const task = process.runs.find((run) => run.program === "claude")?.stdin ?? "";
-    expect(task).not.toContain(".env.traceroot");
+    // The assertion below is a negative one, so it passes for free if the run
+    // never got as far as launching an agent. Pin the launch down first.
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    expect(launch?.stdin ?? "").not.toContain(".env.traceroot");
   });
 
   it("writes nothing for a key already in the `.env` beside the application", async () => {
@@ -1605,8 +1608,10 @@ describe("proving the agent installed the SDK", () => {
    * The runs that asked whether the SDK imports. Matched on the tail of argv,
    * not the head: a Poetry probe is `poetry run python -c <code>`.
    */
+  const PROBE_CODE = 'import traceroot, importlib.metadata as m; m.version("traceroot")';
+
   function importChecks(runs: RecordedRun[]): RecordedRun[] {
-    return runs.filter((run) => run.args.at(-2) === "-c" && run.args.at(-1) === "import traceroot");
+    return runs.filter((run) => run.args.at(-2) === "-c" && run.args.at(-1) === PROBE_CODE);
   }
 
   /** Describes a probe the way the code under test chose to run it. */
@@ -2830,6 +2835,34 @@ describe("where a run leaves its files", () => {
     const task = process.runs.find((run) => run.program === "claude")?.stdin ?? "";
     expect(task).toContain('load_dotenv("./.env.traceroot")');
     expect(task).toContain("Add `python-dotenv` to the dependency manifest");
+  });
+
+  it("does not name a credential file git refused to let it write", async () => {
+    // `configure_repository` degrades rather than failing when git tracks the
+    // file, because writing a live key into a tracked file is one `git commit
+    // -a` away from a public repository. What is left on disk is then whatever
+    // was committed — here a placeholder — so naming it in the task sends the
+    // agent to load a file that does not hold this run's credential. The run
+    // still works: the key reaches the child through its environment.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env.traceroot"), "# committed by mistake\n");
+    const process = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      // `git status` is answered above this, and `ls-files` is the only other
+      // git call setup makes — so this reports the file as tracked.
+      results: { git: { output: ".env.traceroot\n" } },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    // Untouched is the proof the write was refused: the stage overwrites this
+    // file whenever it is allowed to.
+    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toBe("# committed by mistake\n");
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    expect(launch?.stdin ?? "").not.toContain(".env.traceroot");
   });
 
   it("names the credential file from where the agent stands, not from the root", async () => {
