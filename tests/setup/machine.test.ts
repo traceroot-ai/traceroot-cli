@@ -2865,6 +2865,29 @@ describe("where a run leaves its files", () => {
     expect(launch?.stdin ?? "").not.toContain(".env.traceroot");
   });
 
+  it("survives a credential file it cannot read, rather than failing the stage", async () => {
+    // Checking that the file holds this run's key means reading it, and the
+    // reader swallows only a missing file — `EACCES`, a directory of that name
+    // and a parse failure all come back out. This is called while the agent's
+    // task is being built, so a throw there fails instrumentation and rolls it
+    // back, over a file whose only consequence was whether a path got named.
+    pythonRepo();
+    initGit();
+    mkdirSync(join(dir, ".env.traceroot"));
+    const process = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      results: { git: { output: ".env.traceroot\n" } },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+
+    const result = await runSetupMachine(ctx, mintingDeps(process.run));
+
+    expect(result.error).toBeNull();
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    expect(launch?.stdin ?? "").not.toContain(".env.traceroot");
+  });
+
   it("names the credential file from where the agent stands, not from the root", async () => {
     // The artefacts follow the service, but the service is chosen after the
     // credential is written — a run started at the root writes it at the root
