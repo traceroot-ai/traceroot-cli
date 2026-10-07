@@ -1,7 +1,8 @@
 # TraceRoot CLI
 
-Read your [TraceRoot](https://traceroot.ai) traces from the terminal: list,
-inspect, and export traces from the TraceRoot public API.
+An agent-native CLI for [TraceRoot](https://traceroot.ai). Inspect traces, review
+detector findings and eval results, and manage detectors, dashboards, and alerts
+from your terminal or coding agent.
 
 ## Install
 
