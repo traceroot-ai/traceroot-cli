@@ -291,6 +291,36 @@ function describesAnApplication(pkg: Record<string, unknown>, hasEntryPoint: boo
   return Object.keys(deps).length > 0 || Object.keys(scripts).length > 0 || hasEntryPoint;
 }
 
+/**
+ * Whether a `test` script is the placeholder `npm init` writes rather than a
+ * real check.
+ *
+ * `npm init` (and `pnpm init`) generate:
+ *
+ * ```json
+ * "test": "echo \"Error: no test specified\" && exit 1"
+ * ```
+ *
+ * That is a non-empty string, so a presence check accepted it — and setup then
+ * ran, as its verification, a command whose entire purpose is to exit non-zero.
+ * The report blamed the instrumentation for breaking a suite that never
+ * existed, *after* the coding agent had already edited the repository. Projects
+ * that ran `npm init` and never wrote a test are exactly the population an
+ * onboarding wizard meets.
+ *
+ * Matched by the two properties that make it a placeholder — it announces that
+ * no test is specified, and it exits non-zero — rather than by equality against
+ * the generated string, which any requoting or reflowing defeats. Both are
+ * required, so a real script cannot be swallowed: `vitest run`,
+ * `jest --coverage` and `npm run test:unit && npm run test:e2e` contain the word
+ * "test" but not the phrase, and `jest || exit 1` exits non-zero but announces
+ * nothing. Only a script that says there is no test to run matches.
+ */
+function isPlaceholderTestScript(script: string): boolean {
+  const normalized = script.toLowerCase().replace(/\s+/g, " ");
+  return normalized.includes("no test specified") && normalized.includes("exit 1");
+}
+
 /** Builds the Node/TypeScript candidate rooted at `dir`, or `null` if there is none. */
 function nodeService(dir: string, repoRoot: string): DetectedService | null {
   const pkg = readPackageJson(dir);
@@ -317,10 +347,22 @@ function nodeService(dir: string, repoRoot: string): DetectedService | null {
   const scripts = (pkg.scripts as Record<string, string>) ?? {};
   const manager = detectPackageManager(dir, repoRoot, isTypeScript ? "typescript" : "javascript");
   const runner = manager === "pnpm" || manager === "yarn" || manager === "bun" ? manager : "npm";
+  // A declared script is only a verification command when it would actually
+  // check something: an empty string is npm running nothing and exiting 0, a
+  // vacuous pass that reads as proof.
+  const declared = (name: string): string | null => {
+    const value = scripts[name];
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  };
+  const declaredTest = declared("test");
   const testCommand =
-    typeof scripts.test === "string" && scripts.test.trim() !== ""
+    declaredTest !== null && !isPlaceholderTestScript(declaredTest)
       ? `${runner} test`
-      : typeof scripts.typecheck === "string"
+      : declared("typecheck") !== null
         ? `${runner} run typecheck`
         : null;
 

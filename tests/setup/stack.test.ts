@@ -110,3 +110,65 @@ describe("a repository the CLI cannot instrument", () => {
     expect(detectStack(root).unsupportedLanguages).toContain("Go");
   });
 });
+
+describe("choosing a Node service's verification command", () => {
+  /** Verbatim what `npm init` writes into a fresh package.json. */
+  const NPM_INIT_PLACEHOLDER = 'echo "Error: no test specified" && exit 1';
+
+  function nodeRepo(scripts: Record<string, string>): string {
+    return repo({
+      "package.json": JSON.stringify({ name: "app", main: "index.js", scripts }),
+      "index.js": "console.log(1)",
+    });
+  }
+
+  it("rejects the placeholder test script npm init writes", () => {
+    // It is a non-empty string, so a presence check took it for the project's
+    // own check — and verification then ran a command built to exit 1, reporting
+    // "npm test failed after instrumentation" for a suite that never existed,
+    // after the agent had already edited the repository.
+    expect(detectStack(nodeRepo({ test: NPM_INIT_PLACEHOLDER })).selected?.testCommand).toBeNull();
+  });
+
+  it("rejects the placeholder however it was requoted or reflowed", () => {
+    // Matching the generated string by equality is defeated by a stray space or
+    // a change of quotes, which is why the match is on what makes it a
+    // placeholder rather than on the string itself.
+    const root = nodeRepo({ test: "echo  'Error:  No test specified'   &&  exit  1" });
+
+    expect(detectStack(root).selected?.testCommand).toBeNull();
+  });
+
+  it("detects a real test script", () => {
+    expect(detectStack(nodeRepo({ test: "vitest run" })).selected?.testCommand).toBe("npm test");
+  });
+
+  it("detects a real test script that itself exits non-zero", () => {
+    // Half of the placeholder's signature. Exiting non-zero is what any failing
+    // suite does; only saying there is no test to run makes a script a
+    // placeholder, so both halves are required.
+    const root = nodeRepo({ test: "jest --coverage || exit 1" });
+
+    expect(detectStack(root).selected?.testCommand).toBe("npm test");
+  });
+
+  it("detects a real test script that is mostly the word test", () => {
+    const root = nodeRepo({ test: "npm run test:unit && npm run test:e2e" });
+
+    expect(detectStack(root).selected?.testCommand).toBe("npm test");
+  });
+
+  it("falls back to typecheck when the test script is the placeholder", () => {
+    const root = nodeRepo({ test: NPM_INIT_PLACEHOLDER, typecheck: "tsc --noEmit" });
+
+    expect(detectStack(root).selected?.testCommand).toBe("npm run typecheck");
+  });
+
+  it("ignores a script declared as an empty string", () => {
+    // `npm run typecheck` with an empty script runs nothing and exits 0 — a
+    // vacuous pass that would be reported as the application verifying.
+    const root = nodeRepo({ test: NPM_INIT_PLACEHOLDER, typecheck: "   " });
+
+    expect(detectStack(root).selected?.testCommand).toBeNull();
+  });
+});
