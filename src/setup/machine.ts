@@ -1311,7 +1311,16 @@ async function reuseExistingKey(
   };
 }
 
-/** Appends a numeric suffix until the name is unused, as `bt` does for its keys. */
+/**
+ * Appends a numeric suffix until the name is unused.
+ *
+ * The base name is the repository's directory name, which is not unique: two
+ * checkouts of the same repo, or a second run after a key was already minted,
+ * both arrive here asking for a name that is taken. Suffixing keeps the name
+ * recognisable — the point of naming a key after its repository is that someone
+ * auditing the dashboard can tell where it came from — where a random or
+ * timestamped one would not.
+ */
 export function uniqueKeyName(base: string, existing: readonly string[]): string {
   if (!existing.includes(base)) {
     return base;
