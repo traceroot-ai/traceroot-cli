@@ -7,6 +7,7 @@ import { type Writers, defaultWriters } from "../output.js";
 import { relativeToRoot, serviceArtifactDir } from "../setup/artifacts.js";
 import {
   clearCheckpoint,
+  hasCompleted,
   newCheckpoint,
   readCheckpoint,
   setupRoot,
@@ -16,7 +17,8 @@ import { acknowledgeTraces } from "../setup/ending.js";
 import { STAGE_LABELS, type SetupEmitter, jsonEmitter, stageLineEmitter } from "../setup/events.js";
 import { type SetupDeps, defaultSetupDeps, runSetupMachine } from "../setup/machine.js";
 import { acknowledgeProduction } from "../setup/production.js";
-import type { SetupContext, SetupFlags, SetupResult } from "../setup/types.js";
+import type { SelectInput } from "../setup/select.js";
+import type { SetupCheckpoint, SetupContext, SetupFlags, SetupResult } from "../setup/types.js";
 import { wizardIntro, wizardLine, wizardOutro, wizardProgress } from "../setup/wizard.js";
 import { runDoctor } from "./doctor.js";
 import { contextFromCommand } from "./shared.js";
@@ -81,6 +83,53 @@ export function closingLine(result: SetupResult): string {
  */
 export function closingSentence(result: SetupResult): string | null {
   return result.ok && result.trace !== null ? "You can now use TraceRoot in production." : null;
+}
+
+/**
+ * The question a run asks when it finds a previous run's checkpoint.
+ *
+ * Two different situations, and they cannot share a sentence. A checkpoint that
+ * stops part-way is unfinished work to continue; a checkpoint holding all twelve
+ * stages is a run that *succeeded*, and the terminal stage's label is "Finish" —
+ * so the single wording told a user who had just watched setup complete that "a
+ * previous setup for this service did not finish. It stopped after finish.
+ * Continue from there?", which reads as the tool being broken.
+ *
+ * The finished case keeps the previous run by default. Starting over mints a
+ * second API key and points a coding agent at code it has already edited, so it
+ * is offered rather than taken on an unread keypress.
+ */
+export function resumeQuestion(found: SetupCheckpoint): SelectInput {
+  if (hasCompleted(found, "complete")) {
+    return {
+      stage: "precheck",
+      message:
+        "A previous setup for this service already finished. Leave it as it is, or run setup again from the beginning?",
+      options: [
+        {
+          value: "resume",
+          label: "Leave it as it is",
+          hint: "report what the finished run set up",
+        },
+        {
+          value: "fresh",
+          label: "Run setup again",
+          hint: "discard the previous run and start from the beginning",
+        },
+      ],
+    };
+  }
+  const stopped = found.completedStages.at(-1);
+  const where =
+    stopped === undefined ? "" : ` It stopped after ${STAGE_LABELS[stopped].toLowerCase()}.`;
+  return {
+    stage: "precheck",
+    message: `A previous setup for this service did not finish.${where} Continue from there?`,
+    options: [
+      { value: "resume", label: "Continue", hint: "pick up where it stopped" },
+      { value: "fresh", label: "Start over", hint: "discard the previous run and begin again" },
+    ],
+  };
 }
 
 /** Dependencies for the testable core of `setup`. */
@@ -149,8 +198,8 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   // Gating it behind a flag would mean a user who does not know the flag exists
   // silently starts over, minting a second API key and re-doing work they have
   // already sat through — and the moment they are least inclined to read help
-  // is a run that just failed. So a run that finds unfinished work says so and
-  // asks.
+  // is a run that just failed. So a run that finds a previous run's checkpoint
+  // says what it found and asks — see {@link resumeQuestion}.
   //
   // The flag survives for `--no-input`, where there is nobody to ask and the
   // caller has to state the intent. Asked and declined means starting fresh:
@@ -163,17 +212,7 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   let resume = flags.resume;
   if (found !== null && !flags.resume) {
     if (deps.canPrompt) {
-      const stopped = found.completedStages.at(-1);
-      const where =
-        stopped === undefined ? "" : ` It stopped after ${STAGE_LABELS[stopped].toLowerCase()}.`;
-      const answer = await deps.setupDeps.select({
-        stage: "precheck",
-        message: `A previous setup for this service did not finish.${where} Continue from there?`,
-        options: [
-          { value: "resume", label: "Continue", hint: "pick up where it stopped" },
-          { value: "fresh", label: "Start over", hint: "discard the previous run and begin again" },
-        ],
-      });
+      const answer = await deps.setupDeps.select(resumeQuestion(found));
       if (answer === "resume") {
         resume = true;
       } else {

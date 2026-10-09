@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
 import { runDoctor } from "../../src/commands/doctor.js";
-import { canPrompt, closingLine, runSetup } from "../../src/commands/setup.js";
+import { canPrompt, closingLine, resumeQuestion, runSetup } from "../../src/commands/setup.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { SetupError } from "../../src/setup/errors.js";
+import { SETUP_STAGES } from "../../src/setup/types.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
 import { StringSink } from "../helpers/stringSink.js";
 import { plain } from "../setup/colour.js";
@@ -688,6 +689,79 @@ describe("finding a previous, unfinished run", () => {
     });
 
     expect(err.data).toContain("pass --resume to continue it");
+  });
+});
+
+describe("the question asked about a previous run", () => {
+  const unfinished = (): ReturnType<typeof newCheckpoint> => {
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push("precheck", "authenticate");
+    return checkpoint;
+  };
+
+  const finished = (): ReturnType<typeof newCheckpoint> => {
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push(...SETUP_STAGES);
+    checkpoint.trace = {
+      traceId: "t_1",
+      traceUrl: "https://app.example.test/trace/t_1",
+      observedAt: "2026-07-26T12:00:30.000Z",
+      waitedMs: 1000,
+    };
+    return checkpoint;
+  };
+
+  it("offers to continue a run that stopped part-way, naming where", () => {
+    const question = resumeQuestion(unfinished());
+    expect(question.message).toBe(
+      "A previous setup for this service did not finish. It stopped after sign in to traceroot. Continue from there?",
+    );
+    expect(question.options.map((o) => o.label)).toEqual(["Continue", "Start over"]);
+  });
+
+  it("never tells a user who finished that the run did not finish", () => {
+    // The terminal stage's label is "Finish", so one wording for both cases told
+    // a user who had just watched setup succeed that "a previous setup for this
+    // service did not finish. It stopped after finish." — which is why the CLI
+    // looked broken. A finished run says so, and the offer is to run it again
+    // rather than to continue something that is over.
+    const question = resumeQuestion(finished());
+    expect(question.message).toBe(
+      "A previous setup for this service already finished. Leave it as it is, or run setup again from the beginning?",
+    );
+    expect(question.message).not.toContain("did not finish");
+    expect(question.message).not.toContain("stopped after");
+    expect(question.options.map((o) => o.label)).toEqual(["Leave it as it is", "Run setup again"]);
+    // Keeping the finished run is the default: starting over mints a second API
+    // key and re-runs an agent over code it has already edited.
+    expect(question.options[0].value).toBe("resume");
+  });
+
+  it("asks the finished question for real, on a checkpoint a completed run wrote", async () => {
+    writeCheckpoint(dir, finished());
+
+    const asked: string[] = [];
+    const setupDeps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+    });
+    const inner = setupDeps.select;
+    setupDeps.select = async (input) => {
+      asked.push(input.message);
+      return input.message.includes("already finished") ? "resume" : inner(input);
+    };
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers: makeWriters().writers,
+      canPrompt: true,
+      setupDeps,
+    });
+
+    expect(asked.some((q) => q.includes("already finished"))).toBe(true);
+    expect(asked.some((q) => q.includes("did not finish"))).toBe(false);
   });
 });
 
