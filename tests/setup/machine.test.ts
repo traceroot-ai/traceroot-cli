@@ -19,7 +19,7 @@ import type { ResolvedAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
-import type { SetupEvent } from "../../src/setup/events.js";
+import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
 import { defaultSetupDeps, runSetupMachine, uniqueKeyName } from "../../src/setup/machine.js";
 import { makeSecret } from "../../src/setup/secret.js";
@@ -2433,6 +2433,76 @@ describe("JSON mode", () => {
     if (hint !== undefined) {
       expect(secret).not.toContain(hint);
     }
+  });
+
+  /**
+   * Drives a run through the real `--json` emitter rather than the recording
+   * one, because the thing under test is what lands on stdout. A spy on `emit`
+   * sees typed events whatever anyone prints.
+   */
+  function jsonRun(): { ctx: SetupContext; events: SetupEvent[]; out: StringSink } {
+    const { ctx, events, out } = makeCtx({ json: true, flags: { agent: "claude" } });
+    const emitJson = jsonEmitter(ctx.writers);
+    ctx.emit = (event) => {
+      events.push(event);
+      emitJson(event);
+    };
+    return { ctx, events, out };
+  }
+
+  /** The run with the most to say: outside version control, no `claude` on PATH. */
+  function talkativeRun(): SetupDeps {
+    pythonRepo();
+    return makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: [""] }).run,
+    });
+  }
+
+  it("keeps stdout to one JSON document per line", async () => {
+    const deps = talkativeRun();
+    const { ctx, out } = jsonRun();
+
+    await runSetupMachine(ctx, deps);
+
+    // The whole point of the mode: a caller consumes it a line at a time. One
+    // line of prose anywhere in it and the consumer is done, so this asserts
+    // the stream rather than any single message within it.
+    const lines = out.data.split("\n").filter((line) => line !== "");
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(() => JSON.parse(line) as unknown).not.toThrow();
+    }
+  });
+
+  it("reports the repository state as data rather than only as a warning", async () => {
+    const deps = talkativeRun();
+    const { ctx, events, out } = jsonRun();
+
+    await runSetupMachine(ctx, deps);
+
+    // An agent is about to edit this directory and there is nothing to revert
+    // to. Said in prose on stderr, that is unreadable to the only kind of
+    // caller `--json` exists for.
+    const precheck = events.find(
+      (e) => e.event === "stage" && e.stage === "precheck" && "data" in e,
+    );
+    expect(precheck).toMatchObject({ data: { in_git_repo: false } });
+    expect(out.data).toContain('"in_git_repo":false');
+  });
+
+  it("reports a repository under version control the same way", async () => {
+    const deps = talkativeRun();
+    initGit();
+    const { ctx, events } = jsonRun();
+
+    await runSetupMachine(ctx, deps);
+
+    const precheck = events.find(
+      (e) => e.event === "stage" && e.stage === "precheck" && "data" in e,
+    );
+    expect(precheck).toMatchObject({ data: { in_git_repo: true } });
   });
 
   it("emits a failure result carrying the stage and code", async () => {

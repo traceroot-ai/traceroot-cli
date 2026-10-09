@@ -2659,6 +2659,13 @@ async function rollback(ctx: SetupContext, deps: SetupDeps): Promise<void> {
 /** Non-secret per-stage payload for the JSON event stream. */
 function stageData(ctx: SetupContext, stage: SetupStage): Record<string, unknown> | undefined {
   switch (stage) {
+    // The only thing precheck decides, and the one a `--json` caller has to be
+    // able to act on. "No version control to fall back on" is said in prose on
+    // stderr, which is where diagnostics go and where an automated caller is
+    // not reading; a run that is about to point an agent at an unversioned
+    // directory should be refusable without parsing English out of a log.
+    case "precheck":
+      return { in_git_repo: ctx.inGitRepo };
     case "authenticate":
       return ctx.session === undefined
         ? undefined
