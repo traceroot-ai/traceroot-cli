@@ -3,7 +3,7 @@ import { createApiClient } from "../api/client.js";
 import { createTokenProvider } from "../auth/token.js";
 import { configPath } from "../config/manager.js";
 import type { Context } from "../context.js";
-import { type Writers, defaultWriters } from "../output.js";
+import { CliError, ExitCode, type Writers, defaultWriters } from "../output.js";
 import { relativeToRoot, serviceArtifactDir } from "../setup/artifacts.js";
 import {
   clearCheckpoint,
@@ -25,6 +25,45 @@ import { contextFromCommand } from "./shared.js";
 
 /** Default bound on VERIFY_TRACE, in seconds. */
 const DEFAULT_TRACE_TIMEOUT_SEC = 120;
+
+/**
+ * Ceiling on `--trace-timeout`, in seconds (~24.8 days).
+ *
+ * The value becomes a millisecond budget the trace poll compares elapsed time
+ * against, and that loop's own sleep is capped — so an absurd value raises no
+ * error, it just means a wait that never ends. Bounded at the global
+ * `--timeout`'s ceiling (Node's timer range) expressed in seconds, so the CLI
+ * has one answer to "how long may a duration be".
+ */
+const MAX_TRACE_TIMEOUT_SEC = 2_147_483;
+
+/**
+ * Resolves `--trace-timeout`, in seconds.
+ *
+ * A value that is not a positive whole number of seconds is a usage error, not a
+ * different run. Falling back to the default meant `--trace-timeout 6O` (a
+ * letter O) waited two minutes rather than the six seconds the caller asked
+ * for, and then reported a timeout — the flag appearing to be ignored, with
+ * nothing said about why. The global `--timeout` already throws here, with the
+ * same digits-only rule, so the two flags cannot be learned separately.
+ */
+export function resolveTraceTimeoutSec(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_TRACE_TIMEOUT_SEC;
+  }
+  // Digits only, like `--timeout` and `--limit`: a bare `Number()` would accept
+  // hex (`0x10`), scientific (`1e2`) and decimal forms, each of which means
+  // something other than what it looks like.
+  const trimmed = raw.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : Number.NaN;
+  if (!(parsed > 0 && parsed <= MAX_TRACE_TIMEOUT_SEC)) {
+    throw new CliError(
+      `invalid trace timeout: ${raw} (expected a positive integer of seconds, at most ${MAX_TRACE_TIMEOUT_SEC})`,
+      ExitCode.usage,
+    );
+  }
+  return parsed;
+}
 
 /**
  * Whether the CLI may ask the user anything.
@@ -324,12 +363,7 @@ export function registerSetup(program: Command): void {
       // cannot share stdout, and a machine consumer has nobody to ask.
       const noInput = opts.input === false || json;
 
-      const timeoutRaw = opts.traceTimeout as string | undefined;
-      const parsedTimeout = timeoutRaw === undefined ? Number.NaN : Number.parseInt(timeoutRaw, 10);
-      const traceTimeoutSec =
-        Number.isFinite(parsedTimeout) && parsedTimeout > 0
-          ? parsedTimeout
-          : DEFAULT_TRACE_TIMEOUT_SEC;
+      const traceTimeoutSec = resolveTraceTimeoutSec(opts.traceTimeout as string | undefined);
 
       const flags: SetupFlags = {
         agent: opts.agent as string | undefined,
