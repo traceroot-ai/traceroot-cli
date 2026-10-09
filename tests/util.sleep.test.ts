@@ -21,6 +21,17 @@ describe("sleep", () => {
     expect(Date.now() - began).toBeLessThan(1_000);
   });
 
+  it("does not wait at all when the signal has already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const began = Date.now();
+    // Registering an `abort` listener after the abort has dispatched hears
+    // nothing, so the delay is what decides — 10s, not a few ms, so a wait that
+    // merely finished quickly cannot pass this.
+    await sleep(10_000, controller.signal);
+    expect(Date.now() - began).toBeLessThan(1_000);
+  });
+
   it("leaves no listener behind once the timer has fired", async () => {
     const controller = new AbortController();
     // A poll loop sleeps against one signal for the whole run. One abandoned
