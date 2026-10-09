@@ -8,6 +8,7 @@ import { runDoctor } from "../../src/commands/doctor.js";
 import {
   canPrompt,
   closingLine,
+  rejectConflictingMethodFlags,
   resolveServiceOption,
   resolveTraceTimeoutSec,
   resumeQuestion,
@@ -699,6 +700,40 @@ describe("finding a previous, unfinished run", () => {
     });
 
     expect(err.data).toContain("pass --resume to continue it");
+  });
+});
+
+describe("--manual with --no-instrument", () => {
+  it("is a usage error naming both flags", () => {
+    // `chooseInstrumentation` tests the method before the flag, so the pair
+    // quietly printed manual instructions and dropped `--no-instrument` without
+    // a word. Neither flag is obviously the one the caller meant, so neither is
+    // allowed to win silently.
+    let thrown: unknown;
+    try {
+      rejectConflictingMethodFlags({ manual: true, instrument: false });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(isCliError(thrown)).toBe(true);
+    expect((thrown as { exitCode: number }).exitCode).toBe(ExitCode.usage);
+    expect((thrown as Error).message).toContain("--manual");
+    expect((thrown as Error).message).toContain("--no-instrument");
+  });
+
+  it("leaves either flag on its own alone", () => {
+    // `instrument` defaults to true, so only an explicit `--no-instrument`
+    // conflicts.
+    expect(() => rejectConflictingMethodFlags({ manual: true, instrument: true })).not.toThrow();
+    expect(() => rejectConflictingMethodFlags({ instrument: false })).not.toThrow();
+    expect(() => rejectConflictingMethodFlags({})).not.toThrow();
+  });
+
+  it("stops the real command before it reads anything from disk", async () => {
+    // Rejected from the argv alone: no config, no repository, no network.
+    await expect(
+      buildProgram().parseAsync(["node", "traceroot", "setup", "--manual", "--no-instrument"]),
+    ).rejects.toThrow(/--manual cannot be combined with --no-instrument/);
   });
 });
 
