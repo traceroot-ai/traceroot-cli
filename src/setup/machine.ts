@@ -38,6 +38,7 @@ import type { Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import { bundledSkillDir } from "../skills/bundled.js";
 import { installBundledSkill } from "../skills/install.js";
+import { sleep } from "../util/sleep.js";
 import { createActivityParser } from "./activity.js";
 import { detectAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
@@ -211,18 +212,7 @@ export function defaultSetupDeps(resolvedAuth: ResolvedAuth): SetupDeps {
     },
     resolveSdk: (pkg) => resolveSdkVersion(pkg),
     writeConfig: realWriteConfig,
-    sleep: (ms, signal) =>
-      new Promise((resolve) => {
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
-      }),
+    sleep,
     select: interactiveSelect,
     makeTempDir: () => mkdtempSync(join(tmpdir(), "traceroot-setup-")),
     readCredential: (host) => readCredential(host),

@@ -1,5 +1,6 @@
 import type { TraceList } from "../api/client.js";
 import { ExitCode } from "../output.js";
+import { sleep } from "../util/sleep.js";
 
 /**
  * Just enough of a client to poll for a trace.
@@ -30,7 +31,7 @@ export interface PollForTraceInput {
   startedAt: Date;
   timeoutMs: number;
   signal?: AbortSignal;
-  /** Injected in tests; defaults to a real timer. */
+  /** Injected in tests; defaults to the shared timer in `util/sleep`. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
   /** Progress callback, so the caller can render an elapsed-time line. */
@@ -40,20 +41,6 @@ export interface PollForTraceInput {
 export type PollForTraceResult =
   | { found: true; trace: TraceVerification }
   | { found: false; waitedMs: number; attempts: number; lastError: string | null };
-
-function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
 
 function rowOf(value: unknown): { traceId: string; traceUrl: string; startTime: string } | null {
   if (typeof value !== "object" || value === null) {
@@ -129,7 +116,7 @@ function parseStartTime(value: string): number {
  * self-hosted deployments and would silently drift from the frontend's routing.
  */
 export async function pollForTrace(input: PollForTraceInput): Promise<PollForTraceResult> {
-  const sleep = input.sleep ?? defaultSleep;
+  const wait = input.sleep ?? sleep;
   const now = input.now ?? (() => Date.now());
   const began = now();
   const startedAtMs = input.startedAt.getTime();
@@ -218,6 +205,6 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
     const scheduled =
       POLL_SCHEDULE_MS[Math.min(attempts - 1, POLL_SCHEDULE_MS.length - 1)] ?? MAX_INTERVAL_MS;
     const remaining = input.timeoutMs - elapsed;
-    await sleep(Math.min(scheduled, MAX_INTERVAL_MS, remaining), input.signal);
+    await wait(Math.min(scheduled, MAX_INTERVAL_MS, remaining), input.signal);
   }
 }
