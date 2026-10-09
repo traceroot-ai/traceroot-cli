@@ -14,6 +14,15 @@
  * a try/catch for a case that is not an error.
  */
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  // An abort that has already dispatched will never dispatch again, so a
+  // listener registered after it hears nothing and the wait runs to term. Every
+  // copy of this had that hole; it stayed invisible because the one caller that
+  // passes a signal re-checks `aborted` at the top of its own loop. That is a
+  // property of that loop, not of this function — a `sleep` handed an aborted
+  // signal has already been told not to wait.
+  if (signal?.aborted === true) {
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
     // The listener is dropped once the timer has fired, so a loop that sleeps
     // many times against one long-lived signal does not accumulate one dead
