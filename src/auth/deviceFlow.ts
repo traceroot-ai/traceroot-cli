@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { normalizeBaseUrl } from "../api/client.js";
 import { CliError, ExitCode, type Writers, logInfo } from "../output.js";
+import { sleep } from "../util/sleep.js";
 import { getVersion } from "../version.js";
 
 /** The allowlisted OAuth client id for this CLI (server-side allowlist). */
@@ -45,7 +46,7 @@ export interface DeviceFlowDeps {
   fetchImpl?: typeof globalThis.fetch;
   /** Optional per-request timeout in milliseconds (each poll is one request). */
   timeoutMs?: number;
-  /** Injectable for tests; defaults to a real timer sleep. */
+  /** Injectable for tests; defaults to the shared timer in `util/sleep`. */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable for tests; defaults to `Date.now`. */
   now?: () => number;
@@ -87,7 +88,7 @@ interface TokenPollBody {
  */
 export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowResult> {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const wait = deps.sleep ?? sleep;
   const now = deps.now ?? Date.now;
   const openBrowser = deps.openBrowser ?? openBrowserForPlatform;
   const env = deps.env ?? process.env;
@@ -230,7 +231,7 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   while (true) {
     // Sleep no longer than the time left in the window: a poll interval longer
     // than expires_in must fail at expiry, not interval-many seconds later.
-    await sleep(Math.min(intervalS * 1000, Math.max(deadline - now(), 0)));
+    await wait(Math.min(intervalS * 1000, Math.max(deadline - now(), 0)));
     // Re-check AFTER sleeping: an interval that steps past the deadline must not
     // send one more poll that could accept a token after expiry.
     if (now() >= deadline) {
@@ -345,8 +346,13 @@ export function browserOpenCommand(platform: NodeJS.Platform, url: string): [str
 /**
  * Opens `url` with the platform opener, detached so the CLI's poll loop never
  * waits on the browser. Resolves `false` when the spawn fails synchronously.
+ *
+ * Exported so `setup` opens a browser the same way `login` does. It had its own
+ * copy, which disagreed with this one on Windows — and `cmd /c start` is the
+ * form this one deliberately avoids, for the injection reason
+ * {@link browserOpenCommand} describes.
  */
-async function openBrowserForPlatform(url: string): Promise<boolean> {
+export async function openBrowserForPlatform(url: string): Promise<boolean> {
   const [cmd, args] = browserOpenCommand(process.platform, url);
   return new Promise((resolve) => {
     try {
