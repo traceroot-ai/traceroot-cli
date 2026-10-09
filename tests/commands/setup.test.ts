@@ -13,19 +13,21 @@ import {
   resolveTraceTimeoutSec,
   resumeQuestion,
   runSetup,
+  setupFailureExit,
 } from "../../src/commands/setup.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import type { DoctorCheck } from "../../src/doctor/types.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
-import { ExitCode, isCliError } from "../../src/output.js";
+import { ExitCode, isCliError, reportError } from "../../src/output.js";
 import { SetupError } from "../../src/setup/errors.js";
 import { SETUP_STAGES } from "../../src/setup/types.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
 import { StringSink } from "../helpers/stringSink.js";
 import { plain } from "../setup/colour.js";
 import {
+  authEmpty,
   authWithKey,
   defaultFlags,
   fakeApiClient,
@@ -700,6 +702,91 @@ describe("finding a previous, unfinished run", () => {
     });
 
     expect(err.data).toContain("pass --resume to continue it");
+  });
+});
+
+describe("a failed run under --json", () => {
+  /** A run that fails before any network call: no credential, nobody to ask. */
+  async function failedRun(json: boolean): Promise<{
+    result: Awaited<ReturnType<typeof runSetup>>;
+    out: StringSink;
+    err: StringSink;
+  }> {
+    const { writers, out, err } = makeWriters();
+    const result = await runSetup({
+      ctx: { auth: authEmpty(), json },
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({ auth: authEmpty() }),
+    });
+    return { result, out, err };
+  }
+
+  /**
+   * Every JSON object either stream emitted that carries an `error`. Prose
+   * lines are skipped: stderr may still carry a warning, which the output
+   * contract allows — stdout is the stream that has to stay machine-readable.
+   */
+  function errorEnvelopes(out: StringSink, err: StringSink): Record<string, unknown>[] {
+    return [...out.data.split("\n"), ...err.data.split("\n")]
+      .filter((line) => line.trim().startsWith("{"))
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((value) => value.error !== undefined);
+  }
+
+  it("reports the failure exactly once, with setup's own code", async () => {
+    const { result, out, err } = await failedRun(true);
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("NOT_AUTHENTICATED");
+
+    // What the command does with the failed result, as `registerSetup` does it.
+    const failure = setupFailureExit(result, true);
+    if (failure.kind === "throw") {
+      reportError(failure.error, { json: true }, { out, err });
+    }
+
+    const envelopes = errorEnvelopes(out, err);
+    expect(envelopes).toHaveLength(1);
+    expect((envelopes[0].error as { code: string }).code).toBe("NOT_AUTHENTICATED");
+    // The exit status still travels, so a script's `$?` is unchanged.
+    expect(failure).toEqual({ kind: "exit", code: result.error?.exitCode });
+  });
+
+  it("would have named the wrong class had it been rethrown", async () => {
+    // Why the rethrow is wrong rather than merely redundant: setup's codes are
+    // numbered separately from the shared exit-code table, so NOT_AUTHENTICATED
+    // (2) reads there as `usage` — a consumer taking the last line saw a bad
+    // invocation reported for an authentication failure.
+    const { result } = await failedRun(true);
+    const { writers, err } = makeWriters();
+    reportError(result.error, { json: true }, writers);
+    expect((JSON.parse(err.data).error as { code: string }).code).toBe("usage");
+  });
+
+  it("still rethrows for a human, where the central handler is the only reporter", async () => {
+    const { result, out, err } = await failedRun(false);
+    expect(setupFailureExit(result, false)).toEqual({ kind: "throw", error: result.error });
+    // Nothing reported it yet: the stage renderer ignores the `result` event.
+    expect(out.data).toBe("");
+    expect(err.data).not.toContain("error:");
+  });
+
+  it("leaves a successful run and a cancellation alone", async () => {
+    const base = { stagesRun: [], checkpoint: newCheckpoint(new Date()), trace: null };
+    expect(setupFailureExit({ ...base, ok: true, error: null }, true)).toEqual({ kind: "none" });
+    const cancelled = new SetupError({
+      stage: "select_agent",
+      code: "CANCELLED",
+      message: "Cancelled.",
+    });
+    expect(setupFailureExit({ ...base, ok: false, error: cancelled }, true)).toEqual({
+      kind: "none",
+    });
+    expect(setupFailureExit({ ...base, ok: false, error: cancelled }, false)).toEqual({
+      kind: "none",
+    });
   });
 });
 

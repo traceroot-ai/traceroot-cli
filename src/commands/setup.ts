@@ -14,6 +14,7 @@ import {
   writeCheckpoint,
 } from "../setup/checkpoint.js";
 import { acknowledgeTraces } from "../setup/ending.js";
+import type { SetupError } from "../setup/errors.js";
 import { STAGE_LABELS, type SetupEmitter, jsonEmitter, stageLineEmitter } from "../setup/events.js";
 import { type SetupDeps, defaultSetupDeps, runSetupMachine } from "../setup/machine.js";
 import { acknowledgeProduction } from "../setup/production.js";
@@ -122,6 +123,38 @@ export function closingLine(result: SetupResult): string {
  */
 export function closingSentence(result: SetupResult): string | null {
   return result.ok && result.trace !== null ? "You can now use TraceRoot in production." : null;
+}
+
+/**
+ * How a failed run leaves the process: by rethrowing, or by exit code alone.
+ *
+ * Non-`--json` rethrows, so the central handler renders the message exactly
+ * like every other command's error.
+ *
+ * `--json` must not. {@link SetupError} extends `CliError`, so a rethrow reached
+ * the shared reporter, which derives the error's name from its *numeric* exit
+ * status — and setup's codes are numbered separately from the shared table's:
+ * NOT_AUTHENTICATED is 2, which that table reads as `usage`, and AGENT_FAILED is
+ * 5, which it reads as `network`. One failure therefore produced two envelopes,
+ * and the second named a class the run had nothing to do with. The `result`
+ * event has already reported the failure with setup's own code and message, so
+ * json mode needs the exit status and nothing else.
+ *
+ * A cancellation exits 0 by design and is neither: rendering "error:" in red
+ * over a question the user simply answered no to would be the tool arguing with
+ * them, and the closing line has already said what happened.
+ */
+export type SetupFailureExit =
+  | { kind: "none" }
+  | { kind: "throw"; error: SetupError }
+  | { kind: "exit"; code: number };
+
+export function setupFailureExit(result: SetupResult, json: boolean): SetupFailureExit {
+  const error = result.error;
+  if (result.ok || error === null || error.exitCode === 0) {
+    return { kind: "none" };
+  }
+  return json ? { kind: "exit", code: error.exitCode } : { kind: "throw", error };
 }
 
 /**
@@ -436,15 +469,14 @@ export function registerSetup(program: Command): void {
         }),
       });
 
-      if (!result.ok && result.error !== null && result.error.exitCode !== 0) {
+      const failure = setupFailureExit(result, json);
+      if (failure.kind === "throw") {
         // Thrown so the central handler renders it exactly like every other
         // command's error, and so its per-class exit code is honoured.
-        //
-        // Except a cancellation, which exits 0 by design: rendering "error:" in
-        // red over a question the user simply answered no to would be the tool
-        // arguing with them, and the closing line has already said what
-        // happened.
-        throw result.error;
+        throw failure.error;
+      }
+      if (failure.kind === "exit") {
+        process.exitCode = failure.code;
       }
     });
 
