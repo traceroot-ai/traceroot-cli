@@ -125,6 +125,21 @@ export function closingSentence(result: SetupResult): string | null {
 }
 
 /**
+ * Reads `--service` for a command nested under `setup`.
+ *
+ * `setup` declares the flag as well, and an ancestor parses before its
+ * subcommands do: commander assigns the value to the first command that
+ * recognises the flag, so `setup doctor --service api` leaves `doctor`'s own
+ * options empty. Reading those options therefore always saw `undefined`, and
+ * `doctor` fell back to the repository root — answering "setup has not been run
+ * here" for a monorepo run that had completed under `--service api`, which is
+ * the one situation the flag exists for.
+ */
+export function resolveServiceOption(command: Command): string | undefined {
+  return command.optsWithGlobals().service as string | undefined;
+}
+
+/**
  * The question a run asks when it finds a previous run's checkpoint.
  *
  * Two different situations, and they cannot share a sentence. A checkpoint that
@@ -413,13 +428,16 @@ export function registerSetup(program: Command): void {
     // The same option `setup` takes: nothing outside the per-service checkpoint
     // records which service a run chose, so without it a run under `--service`
     // cannot be diagnosed from the repository root — the one case this exists for.
+    //
+    // Declared here so it is listed in `setup doctor --help`; where the value
+    // actually lands is {@link resolveServiceOption}'s problem.
     .option("--service <path>", "path of the service whose setup run to diagnose")
-    .action(async (opts, command: Command) => {
+    .action(async (_opts, command: Command) => {
       const ctx = contextFromCommand(command);
       const report = await runDoctor({
         ctx,
         cwd: process.cwd(),
-        service: opts.service as string | undefined,
+        service: resolveServiceOption(command),
         env: process.env,
         configPath: configPath(),
         writers: defaultWriters,
