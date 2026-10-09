@@ -2,7 +2,15 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensureIgnored, upsertEnvContent, upsertEnvFile } from "../../src/setup/envWrite.js";
+import { DEFAULT_HOST } from "../../src/commands/constants.js";
+import {
+  HOST_ENV,
+  KEY_ENV,
+  applicationEnvKeys,
+  ensureIgnored,
+  upsertEnvContent,
+  upsertEnvFile,
+} from "../../src/setup/envWrite.js";
 
 /** Every root this file makes, so none is left behind in the system tmpdir. */
 const roots: string[] = [];
@@ -89,5 +97,31 @@ describe("deciding whether git already ignores the credential", () => {
     writeFileSync(join(root, ".gitignore"), ".env.traceroot\n", "utf8");
 
     expect(ensureIgnored(root, "api/.env.traceroot")).toBe("already");
+  });
+});
+
+describe("which variables an instrumented application needs", () => {
+  // One definition for two callers that used to disagree:
+  // `configure_repository` wrote the host for a non-default deployment, and
+  // the closing notice told the user to carry the key. Everything either of
+  // them knows about the set now comes from here.
+  it("is the key alone for the hosted product", () => {
+    expect(applicationEnvKeys(DEFAULT_HOST)).toEqual([KEY_ENV]);
+  });
+
+  it("adds the host for any other deployment", () => {
+    for (const host of ["https://staging.traceroot.ai", "http://localhost:8000"]) {
+      expect(applicationEnvKeys(host)).toEqual([KEY_ENV, HOST_ENV]);
+    }
+  });
+
+  it("claims nothing extra for a host it was not given", () => {
+    // An unknown host cannot imply a second variable, and naming one the user
+    // has no value for would send them looking for a line that is not there.
+    expect(applicationEnvKeys(undefined)).toEqual([KEY_ENV]);
+  });
+
+  it("puts the key first, because that is the order the file reads in", () => {
+    expect(applicationEnvKeys("https://staging.traceroot.ai")[0]).toBe(KEY_ENV);
   });
 });

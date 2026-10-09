@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const NUL = String.fromCharCode(0);
 import { BackendUnavailableError, SetupApiError } from "../../src/api/setup.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
+import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
@@ -2876,6 +2877,41 @@ describe("where a run leaves its files", () => {
     await runSetupMachine(ctx, mintingDeps());
 
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain("test1/.env.traceroot");
+  });
+
+  it("writes the host beside the key for a deployment that is not the hosted one", async () => {
+    // The other half of the pair the closing notice now names. This was written
+    // and never mentioned again: `TRACEROOT_HOST_URL` only appears off the
+    // default host, so no run against the hosted product reaches it, and the
+    // notice naming the key alone survived every run anyone had made.
+    pythonRepo();
+    initGit();
+    const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+    await runSetupMachine(ctx, mintingDeps());
+
+    const written = readFileSync(join(dir, ".env.traceroot"), "utf8");
+    expect(ctx.session?.host).toBe("https://api.example.test");
+    expect(written).toContain("TRACEROOT_API_KEY=tr-minted-secret-value-42");
+    expect(written).toContain("TRACEROOT_HOST_URL=https://api.example.test");
+  });
+
+  it("writes the key alone for the hosted product", async () => {
+    // A host line whose value is the default the SDK already uses is noise in a
+    // file the user is told to copy out of.
+    pythonRepo();
+    initGit();
+    const deps = mintingDeps();
+    deps.resolvedAuth = {
+      ...deps.resolvedAuth,
+      hostUrl: { value: DEFAULT_HOST, source: "config" },
+    };
+    const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+    await runSetupMachine(ctx, deps);
+
+    const written = readFileSync(join(dir, ".env.traceroot"), "utf8");
+    expect(ctx.session?.host).toBe(DEFAULT_HOST);
+    expect(written).toContain("TRACEROOT_API_KEY=");
+    expect(written).not.toContain("TRACEROOT_HOST_URL");
   });
 
   it("heads the credential file it creates with what it is", async () => {

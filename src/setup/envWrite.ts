@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_HOST } from "../commands/constants.js";
 
 /**
  * Writing the project credential into a dotenv file.
@@ -33,6 +34,40 @@ import { join } from "node:path";
 // first, and `removeEnvKeys` cannot remove the old one. `config/envFile.ts`
 // strips the same carriage return when reading.
 const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*?)\r?$/;
+
+/** The variable an instrumented application reads its key from. */
+export const KEY_ENV = "TRACEROOT_API_KEY";
+/** And the one that decides which instance it sends traces to. */
+export const HOST_ENV = "TRACEROOT_HOST_URL";
+
+/**
+ * Every variable an instrumented application needs in order to reach `host`.
+ *
+ * One definition, because it used to be two and they disagreed.
+ * `configure_repository` wrote `TRACEROOT_HOST_URL` alongside the key for any
+ * host but the default, while the closing notice named `TRACEROOT_API_KEY` and
+ * nothing else — so a staging or self-hosted user who followed the instruction
+ * exactly carried the key and left the host behind. The SDK defaults a missing
+ * host to the hosted product without a word, so the credential authenticated
+ * nowhere, nothing crashed, nothing warned, and the only visible symptom was
+ * that tracing appeared not to work.
+ *
+ * Asked of the host rather than read back out of the file, for two reasons. The
+ * file is not always there — a tracked `.env.traceroot` is refused, and a key
+ * that already resolves from the user's own environment is never written to one
+ * — and the notice has to be right on those runs too. And a user's own
+ * additions to the file are theirs: this answers "what does the application
+ * need from us", which is the question the closing instruction asks, not "what
+ * lines are in this file".
+ *
+ * Both the write and the notice go through here, which is what makes a third
+ * variable a one-line change rather than a second chance at the same mistake.
+ */
+export function applicationEnvKeys(host: string | undefined): string[] {
+  // An unknown host cannot imply a second variable, and the key alone is the
+  // whole set for the hosted product — which is every run but a deliberate one.
+  return host === undefined || host === DEFAULT_HOST ? [KEY_ENV] : [KEY_ENV, HOST_ENV];
+}
 
 /**
  * What a `.env.traceroot` says about itself, written once when setup creates it.
