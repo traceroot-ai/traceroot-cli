@@ -1,5 +1,6 @@
 import type { TraceList } from "../api/client.js";
 import { ExitCode } from "../output.js";
+import { sleep } from "../util/sleep.js";
 
 /**
  * Just enough of a client to poll for a trace.
@@ -94,7 +95,7 @@ export interface PollForTraceInput {
   ranAt: RunWindow | null;
   timeoutMs: number;
   signal?: AbortSignal;
-  /** Injected in tests; defaults to a real timer. */
+  /** Injected in tests; defaults to the shared timer in `util/sleep`. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
   /** Progress callback, so the caller can render an elapsed-time line. */
@@ -228,20 +229,6 @@ export function thinTraceFinding(spanCount: number): string {
 export type PollForTraceResult =
   | { found: true; trace: TraceVerification; attribution: TraceAttribution }
   | { found: false; waitedMs: number; attempts: number; lastError: string | null };
-
-function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
 
 interface Row {
   traceId: string;
@@ -448,7 +435,7 @@ async function earliestIn(
  * self-hosted deployments and would silently drift from the frontend's routing.
  */
 export async function pollForTrace(input: PollForTraceInput): Promise<PollForTraceResult> {
-  const sleep = input.sleep ?? defaultSleep;
+  const wait = input.sleep ?? sleep;
   const now = input.now ?? (() => Date.now());
   const began = now();
   let attempts = 0;
@@ -560,6 +547,6 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
     // cap could only ever lower a value, so it described a backoff the poll
     // does not have.
     const scheduled = POLL_SCHEDULE_MS[attempts - 1] ?? STEADY_INTERVAL_MS;
-    await sleep(Math.min(scheduled, input.timeoutMs - elapsed), input.signal);
+    await wait(Math.min(scheduled, input.timeoutMs - elapsed), input.signal);
   }
 }

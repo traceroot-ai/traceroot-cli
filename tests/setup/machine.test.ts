@@ -25,6 +25,7 @@ import { defaultSetupDeps, runSetupMachine, uniqueKeyName } from "../../src/setu
 import { makeSecret } from "../../src/setup/secret.js";
 import type { SetupContext, SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
+import { sleep } from "../../src/util/sleep.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
 import {
@@ -2527,6 +2528,13 @@ describe("production wiring", () => {
   // behavioural assertion would let back in.
   it("opens browsers with the device flow's opener, not a copy of it", () => {
     expect(defaultSetupDeps(authWithKey()).openBrowser).toBe(openBrowserForPlatform);
+  });
+
+  // Same reasoning, same shape: the production wiring had its own timer, byte
+  // for byte the one in `trace.ts`, and `sleep` is a dependency precisely so
+  // there is one of it to inject.
+  it("waits with the shared timer, not a copy of it", () => {
+    expect(defaultSetupDeps(authWithKey()).sleep).toBe(sleep);
   });
 });
 
