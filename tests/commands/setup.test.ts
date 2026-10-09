@@ -1,18 +1,21 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
 import { runDoctor } from "../../src/commands/doctor.js";
 import {
   canPrompt,
   closingLine,
+  resolveServiceOption,
   resolveTraceTimeoutSec,
   resumeQuestion,
   runSetup,
 } from "../../src/commands/setup.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
+import type { DoctorCheck } from "../../src/doctor/types.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { ExitCode, isCliError } from "../../src/output.js";
@@ -696,6 +699,84 @@ describe("finding a previous, unfinished run", () => {
     });
 
     expect(err.data).toContain("pass --resume to continue it");
+  });
+});
+
+describe("`setup doctor --service`", () => {
+  /** The real command tree, with `doctor`'s action swapped for a recorder. */
+  async function serviceSeenBy(argv: string[]): Promise<{
+    local: unknown;
+    resolved: string | undefined;
+  }> {
+    const program = buildProgram();
+    const setup = program.commands.find((c) => c.name() === "setup");
+    const doctor = setup?.commands.find((c) => c.name() === "doctor");
+    expect(doctor).toBeDefined();
+    let seen: { local: unknown; resolved: string | undefined } | null = null;
+    // Replaces the registered handler, so nothing reads the real config, the
+    // real working directory or the network.
+    doctor?.action((opts: Record<string, unknown>, command: Command) => {
+      seen = { local: opts.service, resolved: resolveServiceOption(command) };
+    });
+    await program.parseAsync(["node", "traceroot", ...argv]);
+    expect(seen).not.toBeNull();
+    return seen as unknown as { local: unknown; resolved: string | undefined };
+  }
+
+  it("finds the value commander handed to the parent command", async () => {
+    // `setup` declares `--service` too and parses first, so `doctor`'s own
+    // options stay empty however the flag is written — which is why reading them
+    // always saw `undefined` and the run was diagnosed at the repository root.
+    for (const argv of [
+      ["setup", "doctor", "--service", "api"],
+      ["setup", "doctor", "--service=api"],
+      ["setup", "--service", "api", "doctor"],
+    ]) {
+      const seen = await serviceSeenBy(argv);
+      expect(seen.local, `local options for \`${argv.join(" ")}\``).toBeUndefined();
+      expect(seen.resolved, `resolved service for \`${argv.join(" ")}\``).toBe("api");
+    }
+  });
+
+  it("stays undefined when the flag is not passed", async () => {
+    expect((await serviceSeenBy(["setup", "doctor"])).resolved).toBeUndefined();
+  });
+
+  it("is what lets a monorepo run be diagnosed from the repository root", async () => {
+    // The consequence the flag exists for: nothing outside the per-service
+    // checkpoint records which service a run chose.
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push(...SETUP_STAGES);
+    checkpoint.service = { path: "api", language: "python", framework: null };
+    checkpoint.trace = {
+      traceId: "t_1",
+      traceUrl: "https://app.example.test/trace/t_1",
+      observedAt: "2026-07-26T12:00:30.000Z",
+      waitedMs: 1000,
+    };
+    mkdirSync(join(dir, "api"), { recursive: true });
+    writeCheckpoint(join(dir, "api"), checkpoint);
+
+    const setupChecks = async (service: string | undefined): Promise<DoctorCheck[]> => {
+      const result = await runDoctor({
+        ctx: ctxWith(),
+        cwd: dir,
+        service,
+        env: {},
+        configPath: join(dir, ".traceroot", "config.json"),
+        writers: { out: new StringSink(), err: new StringSink() },
+        includeSetup: true,
+      });
+      return result.checks.filter((c) => c.category === "setup");
+    };
+
+    const named = await setupChecks("api");
+    expect(named.find((c) => c.name === "setup_completed")?.status).toBe("pass");
+    // Without it, the repository root is all doctor can see, and it reports a
+    // run that completed as never having happened.
+    const unnamed = await setupChecks(undefined);
+    expect(unnamed.find((c) => c.name === "setup_completed")).toBeUndefined();
+    expect(unnamed.find((c) => c.name === "setup_run")?.message).toContain("has not been run");
   });
 });
 
