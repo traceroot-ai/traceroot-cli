@@ -4,11 +4,18 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
 import { runDoctor } from "../../src/commands/doctor.js";
-import { canPrompt, closingLine, resumeQuestion, runSetup } from "../../src/commands/setup.js";
+import {
+  canPrompt,
+  closingLine,
+  resolveTraceTimeoutSec,
+  resumeQuestion,
+  runSetup,
+} from "../../src/commands/setup.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
+import { ExitCode, isCliError } from "../../src/output.js";
 import { SetupError } from "../../src/setup/errors.js";
 import { SETUP_STAGES } from "../../src/setup/types.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
@@ -689,6 +696,41 @@ describe("finding a previous, unfinished run", () => {
     });
 
     expect(err.data).toContain("pass --resume to continue it");
+  });
+});
+
+describe("--trace-timeout", () => {
+  it("defaults when the flag is absent", () => {
+    expect(resolveTraceTimeoutSec(undefined)).toBe(120);
+  });
+
+  it("accepts a positive whole number of seconds", () => {
+    expect(resolveTraceTimeoutSec("30")).toBe(30);
+    expect(resolveTraceTimeoutSec(" 30 ")).toBe(30);
+  });
+
+  it("rejects a value that is not a positive whole number of seconds", () => {
+    // Silently falling back to the default meant a typo'd flag produced a
+    // different run — a two-minute wait and a timeout — rather than an error
+    // naming the bad value. The global `--timeout` already throws here.
+    for (const bad of ["0", "-5", "6O", "abc", "", "1.5", "0x10", "1e2", " "]) {
+      let thrown: unknown;
+      try {
+        resolveTraceTimeoutSec(bad);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(isCliError(thrown), `expected --trace-timeout ${bad} to be a usage error`).toBe(true);
+      expect((thrown as { exitCode: number }).exitCode).toBe(ExitCode.usage);
+      expect((thrown as Error).message).toContain("invalid trace timeout");
+    }
+  });
+
+  it("rejects a value so large the wait could never end", () => {
+    // The poll compares elapsed time against the budget and caps its own sleep,
+    // so nothing errors on an absurd value — it simply never gives up.
+    expect(() => resolveTraceTimeoutSec("2147484")).toThrow(/invalid trace timeout/);
+    expect(() => resolveTraceTimeoutSec("99999999999")).toThrow(/invalid trace timeout/);
   });
 });
 
