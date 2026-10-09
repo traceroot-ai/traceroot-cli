@@ -125,6 +125,28 @@ export function closingSentence(result: SetupResult): string | null {
 }
 
 /**
+ * Rejects an invocation that names two different ways to instrument.
+ *
+ * `--manual` prints instructions for the user to follow; `--no-instrument`
+ * writes the task file for their own agent to follow. They are alternatives, and
+ * the machine's choice tests the method before the flag — so `--manual
+ * --no-instrument` quietly did the first and said nothing about the second. No
+ * precedence is invented here: there is no reading of the pair under which the
+ * dropped flag was what the caller meant, so the pair is a usage error.
+ */
+export function rejectConflictingMethodFlags(opts: {
+  manual?: unknown;
+  instrument?: unknown;
+}): void {
+  if (opts.manual === true && opts.instrument === false) {
+    throw new CliError(
+      "--manual cannot be combined with --no-instrument: --manual prints manual instructions, --no-instrument writes the instrumentation task for your own agent. Pass one.",
+      ExitCode.usage,
+    );
+  }
+}
+
+/**
  * Reads `--service` for a command nested under `setup`.
  *
  * `setup` declares the flag as well, and an ancestor parses before its
@@ -372,13 +394,17 @@ export function registerSetup(program: Command): void {
     )
     .action(async (_opts, command: Command) => {
       const opts = command.optsWithGlobals();
+      // Both of these read nothing but the argv, so they run before anything is
+      // resolved from disk: a bad invocation fails without having touched the
+      // repository, the config or the network.
+      rejectConflictingMethodFlags(opts);
+      const traceTimeoutSec = resolveTraceTimeoutSec(opts.traceTimeout as string | undefined);
+
       const ctx = contextFromCommand(command);
       const json = ctx.json;
       // `--json` implies `--no-input`: an event stream and an interactive prompt
       // cannot share stdout, and a machine consumer has nobody to ask.
       const noInput = opts.input === false || json;
-
-      const traceTimeoutSec = resolveTraceTimeoutSec(opts.traceTimeout as string | undefined);
 
       const flags: SetupFlags = {
         agent: opts.agent as string | undefined,
