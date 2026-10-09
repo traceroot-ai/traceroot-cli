@@ -345,8 +345,13 @@ export function browserOpenCommand(platform: NodeJS.Platform, url: string): [str
 /**
  * Opens `url` with the platform opener, detached so the CLI's poll loop never
  * waits on the browser. Resolves `false` when the spawn fails synchronously.
+ *
+ * Exported so `setup` opens a browser the same way `login` does. It had its own
+ * copy, which disagreed with this one on Windows — and `cmd /c start` is the
+ * form this one deliberately avoids, for the injection reason
+ * {@link browserOpenCommand} describes.
  */
-async function openBrowserForPlatform(url: string): Promise<boolean> {
+export async function openBrowserForPlatform(url: string): Promise<boolean> {
   const [cmd, args] = browserOpenCommand(process.platform, url);
   return new Promise((resolve) => {
     try {

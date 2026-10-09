@@ -18,7 +18,12 @@ import {
   readCredential,
   writeCredential,
 } from "../auth/credentials.js";
-import { type DeviceFlowDeps, type DeviceFlowResult, runDeviceFlow } from "../auth/deviceFlow.js";
+import {
+  type DeviceFlowDeps,
+  type DeviceFlowResult,
+  openBrowserForPlatform,
+  runDeviceFlow,
+} from "../auth/deviceFlow.js";
 import {
   type TokenProvider,
   type TokenProviderOptions,
@@ -164,23 +169,13 @@ export function defaultSetupDeps(resolvedAuth: ResolvedAuth): SetupDeps {
         tokenProvider: opts.tokenProvider,
         timeoutMs: opts.timeoutMs,
       }),
-    openBrowser: async (url) => {
-      // `open`/`xdg-open` are launched detached: setup must not block on a
-      // browser that keeps the terminal attached.
-      const program =
-        process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-      const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-      const { runProcess } = await import("./exec.js");
-      const result = await runProcess({
-        program,
-        args,
-        cwd: process.cwd(),
-        env: process.env,
-        stdio: "capture",
-        timeoutMs: 10_000,
-      });
-      return result.exitCode === 0;
-    },
+    // The device flow's own opener, not a second one. Setup's copy claimed to
+    // launch detached and then waited on a captured child with a 10s timeout,
+    // and it reached for `cmd /c start` on Windows — the form `deviceFlow`
+    // avoids because cmd.exe re-parses its command line. Nothing ever read the
+    // captured output: the only consumer treats the boolean as "say the URL out
+    // loud as well", so there was nothing to keep.
+    openBrowser: openBrowserForPlatform,
     // Both readline prompts drain first, for the same reason every `select`
     // does (see `discardTypeAhead`). The two closing acknowledgements are
     // consecutive questions with a block of prose between them, so a spare

@@ -14,13 +14,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 /** `git status --porcelain -z` record separator. */
 const NUL = String.fromCharCode(0);
 import { BackendUnavailableError, SetupApiError } from "../../src/api/setup.js";
+import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import type { SetupEvent } from "../../src/setup/events.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
-import { runSetupMachine, uniqueKeyName } from "../../src/setup/machine.js";
+import { defaultSetupDeps, runSetupMachine, uniqueKeyName } from "../../src/setup/machine.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import type { SetupContext, SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
@@ -2446,6 +2447,16 @@ describe("JSON mode", () => {
       ok: false,
       error: { stage: "detect_stack", code: "UNSUPPORTED" },
     });
+  });
+});
+
+describe("production wiring", () => {
+  // Setup used to carry its own opener, which disagreed with the device flow's
+  // on Windows. Identity, not behaviour: the only way the two can stay in step
+  // is for there to be one of them, and a second copy is exactly what a
+  // behavioural assertion would let back in.
+  it("opens browsers with the device flow's opener, not a copy of it", () => {
+    expect(defaultSetupDeps(authWithKey()).openBrowser).toBe(openBrowserForPlatform);
   });
 });
 
