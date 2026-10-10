@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensureIgnored, upsertEnvContent, upsertEnvFile } from "../../src/setup/envWrite.js";
+import { upsertEnvContent, upsertEnvFile } from "../../src/setup/envWrite.js";
 
 /** Every root this file makes, so none is left behind in the system tmpdir. */
 const roots: string[] = [];
@@ -70,24 +70,5 @@ describe("the file's permissions", () => {
     } else {
       expect(statSync(path).isFile()).toBe(true);
     }
-  });
-});
-
-describe("deciding whether git already ignores the credential", () => {
-  it("honours a later re-include instead of stopping at the first match", () => {
-    // Last match wins, as git itself does. Returning true on the first positive
-    // rule reported the file as ignored when a `!` line put it back — the one
-    // error here that ends with a credential in a commit.
-    const root = dir();
-    writeFileSync(join(root, ".gitignore"), ".env.traceroot\n!.env.traceroot\n", "utf8");
-
-    expect(ensureIgnored(root, "api/.env.traceroot")).toBe("appended");
-  });
-
-  it("still recognises a genuine ignore rule", () => {
-    const root = dir();
-    writeFileSync(join(root, ".gitignore"), ".env.traceroot\n", "utf8");
-
-    expect(ensureIgnored(root, "api/.env.traceroot")).toBe("already");
   });
 });

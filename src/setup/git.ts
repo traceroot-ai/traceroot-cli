@@ -104,3 +104,64 @@ export function changedSince(baseline: readonly string[], current: readonly stri
   const before = new Set(baseline);
   return current.filter((path) => !before.has(path));
 }
+
+/**
+ * What git says about whether a path is ignored.
+ *
+ * Three values, because there are three answers and collapsing them loses the
+ * one that matters. `unknown` is "git could not tell us" — no git on PATH, a
+ * directory that is not a repository, a broken index — and it must read as
+ * neither `ignored` (which would go silent about a live credential) nor
+ * `not-ignored` (which would assert a fact nobody established).
+ */
+export type IgnoreState = "ignored" | "not-ignored" | "unknown";
+
+export interface IsPathIgnoredInput {
+  /** Repository root, which is where the question is asked from. */
+  root: string;
+  /** The path to ask about, relative to `root` and `/`-separated. */
+  path: string;
+  runProcess: RunProcess;
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * Whether git ignores `path`, asked of git rather than worked out from a file.
+ *
+ * Reading `<root>/.gitignore` and matching patterns by hand gets this wrong in
+ * every direction. Git consults a `.gitignore` in every directory along the
+ * path, `.git/info/exclude`, the `core.excludesFile` in the user's home, and
+ * the index; it applies last-match-wins with `!` re-inclusion, and the full
+ * pattern language has `*`, `**`, character classes, trailing-slash
+ * directory-only rules and a leading-slash anchor. A matcher that handles the
+ * handful of spellings we thought of reports "not ignored" for a file the user
+ * ignored three directories up, and "ignored" for a pattern it half-parsed.
+ *
+ * One path per call, deliberately. `-q` exits 0 when *any* argument is ignored,
+ * so a batched call cannot say which — and this is asked about a file holding a
+ * live API key, where "something in that list was fine" is not an answer.
+ */
+export async function isPathIgnored(input: IsPathIgnoredInput): Promise<IgnoreState> {
+  const result = await input.runProcess({
+    program: "git",
+    // `--no-optional-locks` for the same reason `readGitState` uses it: this
+    // module reads and never writes, and `check-ignore` consults the index.
+    // `--` so a path beginning with a dash is a path and not a flag.
+    args: ["--no-optional-locks", "check-ignore", "-q", "--", input.path],
+    cwd: input.root,
+    env: input.env,
+    stdio: "capture",
+    timeoutMs: 15_000,
+  });
+
+  // 0 and 1 are the documented answers. Everything else is a failure wearing an
+  // exit code — 128 from git itself, 127 when `runProcess` could not spawn at
+  // all — and none of them is evidence about the file.
+  if (result.exitCode === 0) {
+    return "ignored";
+  }
+  if (result.exitCode === 1) {
+    return "not-ignored";
+  }
+  return "unknown";
+}

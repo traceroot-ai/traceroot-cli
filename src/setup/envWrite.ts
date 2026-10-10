@@ -7,7 +7,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
 
 /**
  * Writing the project credential into a dotenv file.
@@ -222,75 +221,4 @@ export function removeEnvKeys(path: string, keys: readonly string[]): string[] {
   }
   writeFileSync(path, kept.join("\n"), { mode: 0o600 });
   return removed;
-}
-
-/**
- * Whether an existing `.gitignore` already covers `entry`.
- *
- * `entry` is a path relative to the repository root, so it may contain slashes
- * — `test1/.env.traceroot` — and the anchoring rules git applies are what make
- * this worth spelling out rather than doing with `includes`:
- *
- * - A pattern with no slash matches a basename at ANY depth, so a plain
- *   `.env.traceroot` covers the file wherever under the root it lands.
- * - A pattern with a slash is anchored to the directory holding the
- *   `.gitignore`, so `/.env.traceroot` covers the root's copy and nothing else.
- *   Treating that as covering `test1/.env.traceroot` is precisely the mistake
- *   that would commit an API key.
- *
- * Conservative by construction: anything not recognised here is treated as not
- * covering the file, and the worst case is a duplicate ignore line. The
- * opposite error costs a leaked credential.
- */
-function alreadyIgnored(patterns: readonly string[], entry: string): boolean {
-  const basename = entry.slice(entry.lastIndexOf("/") + 1);
-  // Last match wins, as git itself does, and a leading `!` re-includes: returning
-  // on the first positive rule reported a file as ignored when a later `!` line
-  // put it back, which is the one error here that costs a leaked credential.
-  let ignored = false;
-  for (const raw of patterns) {
-    if (raw === "" || raw.startsWith("#")) {
-      continue;
-    }
-    const negated = raw.startsWith("!");
-    const pattern = negated ? raw.slice(1) : raw;
-    const matches =
-      // Exact, and the root-anchored spelling of the exact same path.
-      pattern === entry ||
-      pattern === `/${entry}` ||
-      // Unanchored: matches this basename at any depth, which includes ours.
-      (!pattern.includes("/") && (pattern === basename || pattern === ".env*"));
-    if (matches) {
-      ignored = !negated;
-    }
-  }
-  return ignored;
-}
-
-/**
- * Ensures a `.gitignore` rule covers `entry`, appending one when it is missing.
- *
- * `entry` is relative to `root`, which is the repository root — one ignore file
- * for the whole repository, because that is the one git consults for every path
- * in it. The alternative, a `.gitignore` dropped into the service directory,
- * would mean writing a new file into the user's application folder to protect a
- * file we put there ourselves.
- *
- * Returns the action taken so the caller can tell the user. Only ever appends —
- * a user's ignore file is theirs, and rewriting it would be a surprise.
- */
-export function ensureIgnored(root: string, entry: string): "already" | "appended" | "failed" {
-  const path = join(root, ".gitignore");
-  try {
-    const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const patterns = existing.split("\n").map((line) => line.trim());
-    if (alreadyIgnored(patterns, entry)) {
-      return "already";
-    }
-    const prefix = existing === "" || existing.endsWith("\n") ? "" : "\n";
-    writeFileSync(path, `${existing}${prefix}${entry}\n`);
-    return "appended";
-  } catch {
-    return "failed";
-  }
 }
