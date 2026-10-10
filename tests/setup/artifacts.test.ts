@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { relativeToRoot, serviceArtifactDir } from "../../src/setup/artifacts.js";
-import { ENV_FILE_HEADER, ensureIgnored, upsertEnvContent } from "../../src/setup/envWrite.js";
+import { ENV_FILE_HEADER, upsertEnvContent } from "../../src/setup/envWrite.js";
 import { SetupError } from "../../src/setup/errors.js";
 
 let root: string;
@@ -72,49 +72,24 @@ describe("where setup's own files go", () => {
 });
 
 describe("keeping the credential out of git", () => {
-  const read = (): string => readFileSync(join(root, ".gitignore"), "utf8");
+  it("names the path the file actually landed at, for git to be asked about", () => {
+    // The question used to be answered here, by matching patterns out of the
+    // repository root's `.gitignore`. It is asked of `git check-ignore` now —
+    // see `isPathIgnored` in `git.ts` — and this module's remaining job is to
+    // name the right path. `test1/.env` and `.env` are different files, and
+    // asking about the wrong one is how a tracked credential gets written to.
+    const test1 = serviceAt("test1");
 
-  it("ignores the path the file actually landed at", () => {
-    expect(ensureIgnored(root, "test1/.env.traceroot")).toBe("appended");
-    expect(read()).toContain("test1/.env.traceroot");
+    expect(relativeToRoot(root, join(test1, ".env"))).toBe("test1/.env");
+    expect(relativeToRoot(root, join(root, ".env"))).toBe(".env");
   });
 
-  it("does not mistake a root-anchored rule for cover of a nested file", () => {
-    // THE expensive mistake. `/.env.traceroot` is anchored to the directory
-    // holding the .gitignore, so it says nothing about `test1/.env.traceroot`.
-    // Reading it as "already ignored" commits an API key.
-    writeFileSync(join(root, ".gitignore"), "/.env.traceroot\n");
-    expect(ensureIgnored(root, "test1/.env.traceroot")).toBe("appended");
-    expect(read()).toContain("test1/.env.traceroot");
-  });
+  it("does not create or touch a .gitignore of its own", () => {
+    // Setup used to append a rule to the user's ignore file. It no longer
+    // writes to git at all: it reads the answer and tells the user.
+    serviceAt("test1");
 
-  it("accepts an unanchored rule, which git applies at any depth", () => {
-    // A bare basename genuinely does cover the nested file, so appending a
-    // second rule would be noise in the user's file.
-    writeFileSync(join(root, ".gitignore"), ".env.traceroot\n");
-    expect(ensureIgnored(root, "test1/.env.traceroot")).toBe("already");
-    expect(ensureIgnored(root, ".env.traceroot")).toBe("already");
-  });
-
-  it("accepts the usual dotenv wildcard", () => {
-    writeFileSync(join(root, ".gitignore"), ".env*\n");
-    expect(ensureIgnored(root, "test1/.env.traceroot")).toBe("already");
-  });
-
-  it("still covers the root case exactly as before", () => {
-    writeFileSync(join(root, ".gitignore"), "/.env.traceroot\n");
-    expect(ensureIgnored(root, ".env.traceroot")).toBe("already");
-  });
-
-  it("is not fooled by a comment that happens to name the file", () => {
-    writeFileSync(join(root, ".gitignore"), "# .env.traceroot is secret\n");
-    expect(ensureIgnored(root, ".env.traceroot")).toBe("appended");
-  });
-
-  it("appends rather than rewriting, and keeps the user's rules", () => {
-    writeFileSync(join(root, ".gitignore"), "node_modules\ndist\n");
-    expect(ensureIgnored(root, "api/.env.traceroot")).toBe("appended");
-    expect(read()).toBe("node_modules\ndist\napi/.env.traceroot\n");
+    expect(existsSync(join(root, ".gitignore"))).toBe(false);
   });
 });
 
@@ -126,9 +101,12 @@ describe("what the credential file says about itself", () => {
     const { content } = upsertEnvContent(null, { TRACEROOT_API_KEY: "tr-secret" });
     expect(content.startsWith(`${ENV_FILE_HEADER.join("\n")}\n`)).toBe(true);
     expect(content).toContain("TRACEROOT_API_KEY=tr-secret");
-    // Says not to commit it, and that it is disposable once it has done its job.
+    // Says who wrote it and not to commit it. It no longer says the file is
+    // disposable: that was true of a `.env.traceroot` only this tool read, and
+    // is false of the project's own `.env`, where deleting it takes the
+    // application's configuration with it.
     expect(content).toContain("Do not commit");
-    expect(content).toContain("deleted");
+    expect(content).not.toContain("deleted");
   });
 
   it("never puts the key in the comment", () => {
