@@ -1,9 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { ExitCode } from "../../src/output.js";
+import type { RunProcessOptions, RunProcessResult } from "../../src/setup/exec.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import { pollForTrace } from "../../src/setup/trace.js";
 import { verifyApplication } from "../../src/setup/verify.js";
 import { fakeRunProcess } from "./helpers.js";
+
+const KEY = "tr-a-long-enough-value";
+
+/** Every root this file makes, so none is left in the system tmpdir. */
+const roots: string[] = [];
+
+afterEach(() => {
+  while (roots.length > 0) {
+    rmSync(roots.pop() as string, { recursive: true, force: true });
+  }
+});
+
+/** A repository with the credential file this run would have written in it. */
+function repoWithCredentialFile(): { root: string; file: string } {
+  const root = mkdtempSync(join(tmpdir(), "traceroot-verify-"));
+  roots.push(root);
+  const file = join(root, ".env.traceroot");
+  writeFileSync(file, `TRACEROOT_API_KEY=${KEY}\n`, "utf8");
+  return { root, file };
+}
+
+const PROCESS_OK: RunProcessResult = {
+  exitCode: 0,
+  output: "",
+  durationMs: 1,
+  timedOut: false,
+  spawnFailed: false,
+};
 
 describe("running the project's own check twice", () => {
   it("points both runs at the same host, so only the credential differs", async () => {
@@ -15,8 +47,9 @@ describe("running the project's own check twice", () => {
       command: "npm test",
       cwd: "/repo",
       parentEnv: { PATH: "/usr/bin", TRACEROOT_HOST_URL: "https://stale.example.test" },
-      credential: makeSecret("tr-a-long-enough-value"),
+      credential: makeSecret(KEY),
       host: "https://api.example.test",
+      credentialFile: null,
       runProcess: run,
     });
 
@@ -24,9 +57,169 @@ describe("running the project's own check twice", () => {
     const [withKey, withoutKey] = runs;
     expect(withKey?.env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
     expect(withoutKey?.env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
-    expect(withKey?.env.TRACEROOT_API_KEY).toBe("tr-a-long-enough-value");
+    expect(withKey?.env.TRACEROOT_API_KEY).toBe(KEY);
     // Deleted, not blanked: absent and empty are different to an SDK.
     expect("TRACEROOT_API_KEY" in (withoutKey?.env ?? {})).toBe(false);
+  });
+
+  it("reports the window the application ran in, so a trace can be tied to it", async () => {
+    // The only thing that separates this run's trace from the project's other
+    // traffic. Measured around the run that had the credential, because that is
+    // the only one that can have emitted anything.
+    let clock = Date.parse("2026-07-26T12:00:00.000Z");
+    const result = await verifyApplication({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+      credentialFile: null,
+      runProcess: fakeRunProcess().run,
+      now: () => {
+        clock += 1000;
+        return clock;
+      },
+    });
+
+    expect(result.ranAt?.from.toISOString()).toBe("2026-07-26T12:00:01.000Z");
+    expect(result.ranAt?.to.toISOString()).toBe("2026-07-26T12:00:02.000Z");
+  });
+});
+
+describe("proving the application runs without the credential", () => {
+  /**
+   * An application whose instrumentation hard-fails unless a key is reachable —
+   * the failure mode the credential-free run exists to catch — and which reads
+   * the credential file from its entry point, as the instrumentation task tells
+   * the agent to do.
+   */
+  function appThatLoadsTheCredentialFile(file: string): {
+    run: (o: RunProcessOptions) => Promise<RunProcessResult>;
+    fileWasThere: boolean[];
+  } {
+    const fileWasThere: boolean[] = [];
+    const run = async (o: RunProcessOptions): Promise<RunProcessResult> => {
+      const onDisk = existsSync(file) && readFileSync(file, "utf8").includes("TRACEROOT_API_KEY=");
+      fileWasThere.push(onDisk);
+      const reachable = o.env.TRACEROOT_API_KEY !== undefined || onDisk;
+      return {
+        ...PROCESS_OK,
+        exitCode: reachable ? 0 : 1,
+        output: reachable ? "ok" : "RuntimeError: TRACEROOT_API_KEY is not set",
+      };
+    };
+    return { run, fileWasThere };
+  }
+
+  it("fails the check when the application reads the key back off disk", async () => {
+    // Deleting TRACEROOT_API_KEY from the child environment is not enough. The
+    // instrumentation task tells the agent to add `load_dotenv(".env.traceroot")`
+    // to the entry point, so with the file still on disk the credential-free run
+    // is a second run *with* the credential and the check passes for free.
+    const { file } = repoWithCredentialFile();
+    const { run, fileWasThere } = appThatLoadsTheCredentialFile(file);
+
+    const result = await verifyApplication({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+      credentialFile: file,
+      runProcess: run,
+    });
+
+    expect(result.verification.passed).toBe(false);
+    expect(result.failure?.phase).toBe("without");
+    expect(result.failure?.output).toContain("TRACEROOT_API_KEY is not set");
+    // In place for the run that is supposed to have the key, gone for the run
+    // that is supposed not to.
+    expect(fileWasThere).toEqual([true, false]);
+    expect(result.withheld).toEqual([file]);
+  });
+
+  it("puts the credential file back, contents intact", async () => {
+    const { root, file } = repoWithCredentialFile();
+    const { run } = appThatLoadsTheCredentialFile(file);
+
+    await verifyApplication({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+      credentialFile: file,
+      runProcess: run,
+    });
+
+    expect(readFileSync(file, "utf8")).toBe(`TRACEROOT_API_KEY=${KEY}\n`);
+    // And nothing left parked beside it.
+    expect(readdirSync(root)).toEqual([".env.traceroot"]);
+  });
+
+  it("puts the credential file back when the run throws", async () => {
+    // Losing a user's credential file because verification crashed would be a
+    // worse bug than the one the move exists to fix.
+    const { root, file } = repoWithCredentialFile();
+    let calls = 0;
+    const run = async (): Promise<RunProcessResult> => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error("spawn exploded");
+      }
+      return PROCESS_OK;
+    };
+
+    await expect(
+      verifyApplication({
+        command: "npm test",
+        cwd: "/repo",
+        parentEnv: {},
+        credential: makeSecret(KEY),
+        host: "https://api.example.test",
+        credentialFile: file,
+        runProcess: run,
+      }),
+    ).rejects.toThrow("spawn exploded");
+
+    expect(readFileSync(file, "utf8")).toBe(`TRACEROOT_API_KEY=${KEY}\n`);
+    expect(readdirSync(root)).toEqual([".env.traceroot"]);
+  });
+
+  it("moves nothing when this run wrote no credential file", async () => {
+    // A key that resolved from the user's own config is never written to a
+    // file, and there is nothing to move aside.
+    const { root } = repoWithCredentialFile();
+    const result = await verifyApplication({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+      credentialFile: null,
+      runProcess: fakeRunProcess().run,
+    });
+
+    expect(result.withheld).toEqual([]);
+    expect(readdirSync(root)).toEqual([".env.traceroot"]);
+  });
+
+  it("names a file that is not there without failing the run", async () => {
+    const { root, file } = repoWithCredentialFile();
+    rmSync(file);
+    const result = await verifyApplication({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+      credentialFile: file,
+      runProcess: fakeRunProcess().run,
+    });
+
+    expect(result.verification.passed).toBe(true);
+    expect(result.withheld).toEqual([]);
+    expect(readdirSync(root)).toEqual([]);
   });
 });
 
