@@ -920,6 +920,7 @@ describe("leaving nothing for the agent to look up", () => {
 describe("getting the credential setup wrote into the application", () => {
   const task = (input: {
     language?: "python" | "typescript";
+    entryPoint?: string;
     envFiles?: string[];
     credentialEnvFile?: string | null;
   }) =>
@@ -929,7 +930,7 @@ describe("getting the credential setup wrote into the application", () => {
         path: "svc",
         language: input.language ?? "python",
         framework: null,
-        entryPoint: "main.py",
+        entryPoint: input.entryPoint ?? "main.py",
         packageManager: "pip",
         evidence: ["requirements.txt"],
       } as never,
@@ -951,7 +952,27 @@ describe("getting the credential setup wrote into the application", () => {
     // a credential on disk that nothing would ever read.
     const rendered = task({ credentialEnvFile: "./.env.traceroot" });
     expect(rendered).toContain("from dotenv import load_dotenv");
-    expect(rendered).toContain('load_dotenv("./.env.traceroot")');
+    expect(rendered).toContain('load_dotenv(Path(__file__).resolve().parent / ".env.traceroot")');
+  });
+
+  it("resolves it against the entry point, not the directory the app is started from", () => {
+    // `credentialEnvFile` is named from where the agent stands, which is the
+    // service. The load is a line of the application's own source, and
+    // `python svc/main.py` from the repository root resolved `"./.env.traceroot"`
+    // against the root — python-dotenv treats a missing file as a no-op, so the
+    // key was never loaded and nothing said so.
+    const rendered = task({ credentialEnvFile: "./.env.traceroot" });
+    expect(rendered).toContain('load_dotenv(Path(__file__).resolve().parent / ".env.traceroot")');
+    expect(rendered).not.toContain('load_dotenv("./.env.traceroot")');
+    expect(rendered).toContain("from pathlib import Path");
+  });
+
+  it("climbs out of a nested entry point's directory to reach it", () => {
+    // The file follows the service; the entry point can sit below it.
+    const rendered = task({ entryPoint: "src/main.py", credentialEnvFile: "./.env.traceroot" });
+    expect(rendered).toContain(
+      'load_dotenv(Path(__file__).resolve().parent / "../.env.traceroot")',
+    );
   });
 
   it("tells the agent to declare the dependency it is being asked to import", () => {
@@ -980,7 +1001,9 @@ describe("getting the credential setup wrote into the application", () => {
     const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
     const lines = snippet.split("\n").filter((line) => line.startsWith("load_dotenv("));
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain('load_dotenv("../.env.traceroot")');
+    expect(lines[0]).toContain(
+      'load_dotenv(Path(__file__).resolve().parent / "../.env.traceroot")',
+    );
     expect(lines[1]).toContain('load_dotenv(Path(__file__).resolve().parent / "../.env")');
     expect(lines[0]).toMatch(/ {3}# the TraceRoot key setup wrote$/);
     expect(lines[1]).toMatch(/ {3}# the app's own credentials$/);

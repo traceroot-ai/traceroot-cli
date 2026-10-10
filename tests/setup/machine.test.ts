@@ -2922,7 +2922,7 @@ describe("where a run leaves its files", () => {
     await runSetupMachine(ctx, mintingDeps(process.run));
 
     const task = process.runs.find((run) => run.program === "claude")?.stdin ?? "";
-    expect(task).toContain('load_dotenv("./.env.traceroot")');
+    expect(task).toContain('load_dotenv(Path(__file__).resolve().parent / ".env.traceroot")');
     expect(task).toContain("Add `python-dotenv` to the dependency manifest");
   });
 
@@ -2991,10 +2991,14 @@ describe("where a run leaves its files", () => {
     await runSetupMachine(ctx, mintingDeps(process.run));
 
     const launch = process.runs.find((run) => run.program === "claude");
-    const named = /load_dotenv\("([^"]*\.env\.traceroot)"\)/.exec(launch?.stdin ?? "")?.[1];
+    const named =
+      /load_dotenv\(Path\(__file__\)\.resolve\(\)\.parent \/ "([^"]*\.env\.traceroot)"\)/.exec(
+        launch?.stdin ?? "",
+      )?.[1];
     expect(named).toBeDefined();
-    // Resolved from where the agent stands, it has to land on the file the run
-    // actually wrote.
+    // Anchored on the entry point, which this service keeps at its own root, so
+    // resolving from where the agent stands is the same anchor. Either way it
+    // has to land on the file the run actually wrote.
     expect(resolve(launch?.cwd ?? "", named ?? "")).toBe(join(dir, "test1", ".env.traceroot"));
   });
 });

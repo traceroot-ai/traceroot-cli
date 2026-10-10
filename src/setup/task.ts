@@ -188,7 +188,10 @@ function initSnippet(
   const calls = [
     credentialEnvFile === null
       ? null
-      : { call: `load_dotenv("${credentialEnvFile}")`, note: "the TraceRoot key setup wrote" },
+      : {
+          call: loadDotenvCall(credentialEnvFile, service.entryPoint ?? null),
+          note: "the TraceRoot key setup wrote",
+        },
     envFile === undefined
       ? null
       : {
@@ -201,14 +204,10 @@ function initSnippet(
   // than as one block with a note against each entry.
   const width = Math.max(0, ...calls.map(({ call }) => call.length));
   const loads = calls.map(({ call, note }) => `${call.padEnd(width)}   # ${note}`);
-  // `pathlib` only where a load actually uses it: the credential file is still
-  // named as a plain string, so a credential-only block would otherwise carry an
-  // import nothing in it needs.
-  const imports =
-    envFile === undefined
-      ? ["from dotenv import load_dotenv"]
-      : ["from pathlib import Path", "from dotenv import load_dotenv"];
-  const dotenv = loads.length > 0 ? [...imports, "", ...loads, ""] : [];
+  const dotenv =
+    loads.length > 0
+      ? ["from pathlib import Path", "from dotenv import load_dotenv", "", ...loads, ""]
+      : [];
   return [
     "```python",
     ...dotenvImports,
