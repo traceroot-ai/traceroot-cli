@@ -1,4 +1,4 @@
-import { relative, resolve } from "node:path";
+import { posix, relative, resolve } from "node:path";
 import type { ResolvedSdk } from "./sdk.js";
 import { installCommand } from "./sdk.js";
 import type { DetectedService } from "./types.js";
@@ -48,6 +48,34 @@ function bullet(lines: string[]): string {
  * diagnostics, never the pass/fail signal.
  */
 /**
+ * The env file as the entry point itself sees it.
+ *
+ * `detectEnvFiles` names the file relative to the service directory, which is
+ * where the agent is standing. The instruction it ends up in is not run from
+ * there, though — it is a line of the application's own source, and
+ * `python api/main.py` from the repository root resolves `"./.env"` against the
+ * repository root, finds nothing, and says nothing. Tracing is then silently
+ * off behind a line in the entry point that looks right.
+ *
+ * So the path is re-expressed against the entry point's own directory, to be
+ * anchored on `__file__` at runtime. An entry point that was not detected is
+ * taken to sit at the service root — the same assumption the directory-relative
+ * form made implicitly, so nothing is lost where the guess is wrong.
+ */
+function entryRelativeEnvFile(envFile: string, entryPoint: string | null): string {
+  // Forward slashes throughout: this becomes a path inside a Python string
+  // literal, where a Windows separator would read as an escape.
+  const slashed = (path: string): string => path.replaceAll("\\", "/");
+  const entryDir = posix.dirname(slashed(entryPoint ?? "main.py"));
+  return posix.relative(entryDir, slashed(envFile));
+}
+
+/** The load the entry point performs, anchored on its own location. */
+function loadDotenvCall(envFile: string, entryPoint: string | null): string {
+  return `load_dotenv(Path(__file__).resolve().parent / "${entryRelativeEnvFile(envFile, entryPoint)}")`;
+}
+
+/**
  * The canonical initialization block, spelled out rather than described.
  *
  * An agent handed a description rather than the code runs consecutive
@@ -71,15 +99,17 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
       "```",
     ].join("\n");
   }
+  const [envFile] = envFiles;
   const dotenv =
-    envFiles.length > 0
-      ? [
+    envFile === undefined
+      ? []
+      : [
+          "from pathlib import Path",
           "from dotenv import load_dotenv",
           "",
-          `load_dotenv("${envFiles[0]}")   # the app's own credentials`,
+          `${loadDotenvCall(envFile, service.entryPoint ?? null)}   # the app's own credentials`,
           "",
-        ]
-      : [];
+        ];
   return [
     "```python",
     ...dotenv,
@@ -119,6 +149,9 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   const { service, sdk, skillPath, verifyCommand, interactive } = input;
   const python = input.pythonInterpreter ?? null;
   const envFiles = input.envFiles ?? [];
+  // Held separately so it is narrowed where the instruction is built: the
+  // section exists only because there is a file to name.
+  const envFile = envFiles[0] ?? null;
 
   const runMode = interactive
     ? "You are running interactively. If something is genuinely ambiguous, ask the user."
@@ -369,7 +402,7 @@ If any of these fails, fix it before continuing. Do not report success with a fa
 
 ### 6. Run it once, so a trace actually exists
 ${
-  envFiles.length > 0
+  envFile !== null
     ? `
 The application may need credentials of its own to run — an LLM API key, a database URL. They are
 not in your environment and \`TRACEROOT_API_KEY\` is not one of them. These env files exist near
@@ -377,16 +410,19 @@ this service:
 
 ${bullet(envFiles.map((file) => `\`${file}\``))}
 
-Load them **from inside the entry point**, not from your shell:
+Load them **from inside the entry point**, resolved against that file rather than against the
+directory the app happens to be started from:
 
 ${
   service.language === "python"
     ? `\`\`\`python
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv("${envFiles[0]}")   # before traceroot.initialize()
+
+${loadDotenvCall(envFile, service.entryPoint ?? null)}   # before traceroot.initialize()
 \`\`\``
     : `\`\`\`typescript
-import "dotenv/config";        // or: config({ path: "${envFiles[0]}" })
+import "dotenv/config";        // or: config({ path: "${envFile}" })
 \`\`\``
 }
 

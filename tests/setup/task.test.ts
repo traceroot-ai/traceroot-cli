@@ -92,3 +92,58 @@ describe("the snippet the agent is told to paste", () => {
     expect(text).not.toContain("traceroot-sdk-ts");
   });
 });
+
+describe("the env file the entry point is told to load", () => {
+  // `detectEnvFiles` names the file relative to the service directory, and the
+  // instruction used to repeat that path verbatim. The application is not run
+  // from the service directory, though: `python api/main.py` from the
+  // repository root resolved `"./.env"` against the root, loaded nothing, and
+  // raised nothing — python-dotenv treats a missing file as a no-op — so
+  // tracing was silently off behind a line that looked correct.
+  it("resolves the app's env file against the entry point, not the working directory", () => {
+    const text = task({ service: service({ path: "api" }), envFiles: ["./.env"] });
+    expect(text).toContain('load_dotenv(Path(__file__).resolve().parent / ".env")');
+    expect(text).not.toContain('load_dotenv("./.env")');
+  });
+
+  it("climbs out of a nested entry point's own directory to reach it", () => {
+    const text = task({
+      service: service({ path: "api", entryPoint: "src/main.py" }),
+      envFiles: ["./.env"],
+    });
+    expect(text).toContain('load_dotenv(Path(__file__).resolve().parent / "../.env")');
+    expect(text).not.toContain('/ ".env")');
+  });
+
+  it("keeps the climb a repository-root env file already carries", () => {
+    // `detectEnvFiles` names the root's `.env` as `../.env` from a nested
+    // service, and the entry point sits at that service's root.
+    const text = task({ service: service({ path: "api" }), envFiles: ["../.env"] });
+    expect(text).toContain('load_dotenv(Path(__file__).resolve().parent / "../.env")');
+    expect(text).not.toContain('load_dotenv("../.env")');
+  });
+
+  it("imports pathlib everywhere it emits the load", () => {
+    // Step 3's snippet and step 6's reminder both emit the call. Either one
+    // handing the agent a `Path` it never imported is a NameError on first run.
+    const text = task({ envFiles: ["./.env"] });
+    expect(text.split("load_dotenv(Path(").length - 1).toBe(2);
+    expect(text.split("from pathlib import Path").length - 1).toBe(2);
+  });
+
+  it("emits no load, and no pathlib import, when no env file was found", () => {
+    const text = task();
+    expect(text).not.toContain("load_dotenv");
+    expect(text).not.toContain("from pathlib import Path");
+  });
+
+  it("does not hand a Node service a Python loader", () => {
+    const text = task({
+      service: service({ language: "typescript", entryPoint: "src/index.ts" }),
+      envFiles: ["./.env"],
+    });
+    expect(text).toContain('import "dotenv/config"');
+    expect(text).not.toContain("load_dotenv");
+    expect(text).not.toContain("from pathlib import Path");
+  });
+});
