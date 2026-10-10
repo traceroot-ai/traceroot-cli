@@ -140,6 +140,31 @@ describe("which variables it tells you to carry", () => {
     }
   });
 
+  it("keeps the variable list right when the file is one the project named", () => {
+    // The interaction, which neither half's own tests reach: the variable list
+    // is derived from the host, and the file is now whichever of the project's
+    // own env files the run chose. These were written as two separate changes
+    // that both edit this one sentence, so a future edit to either can silently
+    // drop the other — most likely by going back to naming the key alone.
+    const text = productionNotice({
+      language: "python",
+      host: STAGING,
+      credentialEnvFile: "apps/api/.env.local",
+    })
+      .map(plain)
+      .join("\n");
+
+    expect(text).toContain(
+      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local apps/api/.env.local file",
+    );
+    // Still shell-valid, and still naming both, in the half that is a command.
+    expect(text).toContain("export TRACEROOT_API_KEY TRACEROOT_HOST_URL in your shell");
+    expect(text).toContain("Exporting only TRACEROOT_API_KEY leaves the SDK on its default host");
+    // And the file is named whole rather than rebuilt from a directory and a
+    // constant filename, which is what would reintroduce `.env` here.
+    expect(text).not.toContain("apps/api/.env ");
+  });
+
   it("names exactly the set the credential file is written from", () => {
     // The structural half, and the reason this stays correct rather than
     // happening to be correct. The notice and `configure_repository` both ask
