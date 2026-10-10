@@ -51,12 +51,12 @@ export const HOST_ENV = "TRACEROOT_HOST_URL";
  * that tracing appeared not to work.
  *
  * Asked of the host rather than read back out of the file, for two reasons. The
- * file is not always there — a tracked `.env.traceroot` is refused, and a key
- * that already resolves from the user's own environment is never written to one
- * — and the notice has to be right on those runs too. And a user's own
- * additions to the file are theirs: this answers "what does the application
- * need from us", which is the question the closing instruction asks, not "what
- * lines are in this file".
+ * file is not always there — a tracked env file is refused, and a key that
+ * already resolves from the user's own environment is never written to one —
+ * and the notice has to be right on those runs too. And a user's own additions
+ * to the file are theirs: this answers "what does the application need from
+ * us", which is the question the closing instruction asks, not "what lines are
+ * in this file".
  *
  * Both the write and the notice go through here, which is what makes a third
  * variable a one-line change rather than a second chance at the same mistake.
