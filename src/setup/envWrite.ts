@@ -7,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { join } from "node:path";
 
 /**
  * Writing the project credential into a dotenv file.
@@ -16,15 +17,13 @@ import {
  * line, `chmod 0600`, and diff before writing so an unchanged value is not a
  * write at all.
  *
- * The target is always `.env.traceroot`, never `.env`: `.env` is frequently
- * committed and frequently holds shared, non-secret defaults, and a tool that
- * silently drops a live credential into a tracked file has done real damage.
- *
- * Nor `.env.local`. That name is Next.js's convention
- * and therefore already belongs to a great many of the repositories setup runs
- * in — writing into a file the project itself owns and loads means our lines and
- * theirs are indistinguishable afterwards, to a rerun and to a human. A file
- * named after this tool collides with nobody.
+ * The target is a file the project already loads — see
+ * {@link chooseCredentialEnvFile}. This module used to invent `.env.traceroot`
+ * so that our lines could never be confused with the user's. It bought that at
+ * the price of a filename no runtime reads: every loader had to be taught the
+ * path, the file had to be added to `.gitignore` by us, and a user who deleted
+ * it as the header invited them to broke their own application. A credential
+ * nothing loads is not a safer credential, it is a setup that did not happen.
  */
 
 // `\r?$` because `.` does not match `\r`: without it a CRLF file matches no line
@@ -34,14 +33,18 @@ import {
 const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*?)\r?$/;
 
 /**
- * What a `.env.traceroot` says about itself, written once when setup creates it.
+ * What a credential env file this run *created* says about itself.
  *
- * A file appears in someone's repository with a live credential in it and no
- * account of where it came from is a file nobody can reason about. So the
- * header says all of it: who wrote it, what is in it, that it must not be
- * committed, and that it can be deleted once it has done its job.
- * The last line matters most — without it the honest reading of a secret on
- * disk is "this is permanent now".
+ * Written once, at creation, and never added to a file the project already had
+ * — the whole point of writing into the project's own `.env` is that the
+ * credential sits among the user's other secrets, and prefacing their file with
+ * a note about ours would be the loudest thing in it.
+ *
+ * Two facts, both load-bearing: who wrote the file, so it is not a mystery a
+ * month later, and that it must not be committed. The old header also said the
+ * file could be deleted once traces were flowing, which was true of a file only
+ * this tool read and is false of this one: deleting it now takes the
+ * application's own configuration with it.
  *
  * `#` because that is the comment syntax dotenv parsers actually implement, and
  * because {@link upsertEnvContent} already skips any line that is not a
@@ -52,9 +55,59 @@ const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*?)\r?$/;
  * a constant and cannot be handed a value by accident.
  */
 export const ENV_FILE_HEADER: readonly string[] = [
-  "# Written by `traceroot setup`. This file contains a live API key.",
-  "# Do not commit it. It can be deleted once your application is sending traces.",
+  "# Created by `traceroot setup`. This file contains a live API key.",
+  "# Do not commit it.",
 ];
+
+/**
+ * The env file names a project is expected to own, in the order they are found.
+ *
+ * Shared with `detectEnvFiles` so that the file setup writes the credential
+ * into and the files setup tells the agent about are drawn from one list. A
+ * third name added here is a name both of them learn.
+ */
+export const PROJECT_ENV_FILES: readonly string[] = [".env", ".env.local"];
+
+export interface CredentialEnvFile {
+  /** Bare filename, to be joined onto the service directory. */
+  name: string;
+  /** False when the file is not on disk yet and the caller will create it. */
+  existed: boolean;
+}
+
+/**
+ * Which of the project's env files the credential belongs in.
+ *
+ * Preference, and the reasons, in order:
+ *
+ * 1. An existing `.env.local`. Where that name is a convention at all it is the
+ *    convention for local secrets, and the toolchains that define it gitignore
+ *    it out of the box — `create-next-app` ships `.env*.local`. A project that
+ *    has one has already nominated it as the place a live key goes.
+ * 2. An existing `.env`. The common case, and the file every dotenv
+ *    implementation in both ecosystems reads without being told to.
+ * 3. A `.env` we create. Never a `.env.local` we create: a file we invent has
+ *    to be one the project's loader finds by default, and `.env` is the only
+ *    name that qualifies. `python-dotenv`'s `load_dotenv()` searches for `.env`
+ *    and no other name, so a `.env.local` conjured into a Python project would
+ *    reproduce precisely the bug this module stopped having — a credential in a
+ *    file nothing reads.
+ *
+ * `.env.local` before `.env` is the one ordering that is not obvious, because
+ * `.env` is the more widely read name. The tiebreak is not which file is read;
+ * it is which file is committed. Next.js documents `.env` as the place for
+ * shared defaults that belong in version control, and a run that put a live key
+ * there would be refused by the caller's tracked-file check and leave the user
+ * with nothing — while the `.env.local` beside it was both loaded and ignored.
+ */
+export function chooseCredentialEnvFile(serviceDir: string): CredentialEnvFile {
+  for (const name of [".env.local", ".env"]) {
+    if (existsSync(join(serviceDir, name))) {
+      return { name, existed: true };
+    }
+  }
+  return { name: ".env", existed: false };
+}
 
 /** Quotes a value only when it would otherwise be misparsed. */
 function quoteIfNeeded(value: string): string {

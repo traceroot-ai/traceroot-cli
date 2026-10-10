@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
+import { PROJECT_ENV_FILES } from "./envWrite.js";
 
 /**
  * Finds the Python the service is actually run with.
@@ -89,13 +90,18 @@ export function detectPythonEnvironment(
  *
  * Returned relative to the agent's working directory, which is the service, so
  * the path can be pasted straight into a command.
+ *
+ * One of them now holds the TraceRoot key as well: `configure_repository` runs
+ * before the stage that builds the agent's task and writes into a file from
+ * {@link PROJECT_ENV_FILES}, so a file it created is found here like any other.
+ * That is the point of writing there — the credential is not a separate thing
+ * the agent has to load separately.
  */
 export function detectEnvFiles(root: string, servicePath: string): string[] {
   const serviceDir = servicePath === "." ? root : join(root, servicePath);
-  const names = [".env", ".env.local"];
   const found: string[] = [];
   for (const dir of serviceDir === root ? [root] : [serviceDir, root]) {
-    for (const name of names) {
+    for (const name of PROJECT_ENV_FILES) {
       const candidate = join(dir, name);
       if (existsSync(candidate)) {
         found.push(dir === serviceDir ? `./${name}` : relative(serviceDir, candidate));
