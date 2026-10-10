@@ -6,15 +6,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
 import { runDoctor } from "../../src/commands/doctor.js";
 import {
-  canPrompt,
-  closingLine,
   rejectConflictingMethodFlags,
   resolveServiceOption,
   resolveTraceTimeoutSec,
+} from "../../src/commands/setup.js";
+import {
+  canPrompt,
+  closingLine,
   resumeQuestion,
   runSetup,
   setupFailureExit,
-} from "../../src/commands/setup.js";
+} from "../../src/commands/setup/run.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import type { DoctorCheck } from "../../src/doctor/types.js";
