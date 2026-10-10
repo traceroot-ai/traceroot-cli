@@ -60,7 +60,7 @@ describe("the file's permissions", () => {
     // Nothing to write is not nothing to fix: the file holds a live key, and the
     // mode is part of what this function promises.
     const root = dir();
-    const path = join(root, ".env.traceroot");
+    const path = join(root, ".env");
     writeFileSync(path, "TRACEROOT_API_KEY=same\n", "utf8");
     chmodSync(path, 0o644);
 
