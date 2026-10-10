@@ -2447,16 +2447,23 @@ const verifyApplicationStage: StageDefinition = {
     }
 
     wizardProgress(ctx, `Verifying the application: ${command}`);
-    const { verification, failure } = await verifyApplication({
+    const { verification, failure, ranAt } = await verifyApplication({
       command,
       cwd: service.path === "." ? ctx.root : join(ctx.root, service.path),
       parentEnv: deps.env,
       credential: credential.key,
       host: session.host,
+      // The credential-free run is only credential-free if the file the entry
+      // point loads for itself goes with it. Undefined here is an answer rather
+      // than an omission: `configure_repository` writes no file when git tracks
+      // the one it would have used, or when the key already resolved from the
+      // user's own environment.
+      credentialFile: ctx.credentialEnvFile ?? null,
       runProcess: deps.runProcess,
       signal: ctx.signal,
     });
     ctx.application = verification;
+    ctx.applicationRanAt = ranAt;
     ctx.checkpoint.application = verification;
 
     if (!verification.passed) {
@@ -2529,6 +2536,7 @@ const verifyTrace: StageDefinition = {
       outcome = await pollForTrace({
         client,
         startedAt: new Date(ctx.checkpoint.startedAt),
+        ranAt: ctx.applicationRanAt ?? null,
         timeoutMs,
         signal: ctx.signal,
         sleep: deps.sleep,

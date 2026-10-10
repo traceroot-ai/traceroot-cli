@@ -307,6 +307,18 @@ export interface SetupContext {
   method?: InstrumentMethod;
   instrumentation?: InstrumentationResult;
   application?: ApplicationVerification;
+  /**
+   * When `verify_application` ran the instrumented application, or null when it
+   * never ran one.
+   *
+   * Deliberately not checkpointed. It exists so `verify_trace` can tell a trace
+   * this run produced from one the project happened to receive while setup was
+   * open, and a resumed run cannot honestly make that distinction: the window
+   * belongs to a process that ended in an earlier invocation. Absent here means
+   * the trace is attributed to the whole setup window instead, which is what
+   * `TraceAttribution.basis` reports.
+   */
+  applicationRanAt?: { from: Date; to: Date } | null;
   trace?: TraceVerification;
 }
 

@@ -166,6 +166,11 @@ describe("trace polling", () => {
     const result = await pollForTrace({
       client,
       startedAt,
+      // No application-run window: these cover the poll's schedule, parsing and
+      // error handling, none of which depends on attribution. `null` is what a
+      // run that executed nothing reports, and it keeps the whole setup window
+      // in scope — the behaviour every assertion below was written against.
+      ranAt: null,
       timeoutMs: 10_000,
       sleep: async () => undefined,
     });
@@ -181,6 +186,7 @@ describe("trace polling", () => {
     const result = await pollForTrace({
       client,
       startedAt,
+      ranAt: null,
       timeoutMs: 5,
       sleep: async () => undefined,
       now: () => {
@@ -196,6 +202,7 @@ describe("trace polling", () => {
     const result = await pollForTrace({
       client: fakeApiClient({ traces: [] }),
       startedAt,
+      ranAt: null,
       timeoutMs: 100,
       sleep: async () => undefined,
       now: () => {
@@ -221,6 +228,7 @@ describe("trace polling", () => {
     const result = await pollForTrace({
       client,
       startedAt,
+      ranAt: null,
       timeoutMs: 1000,
       sleep: async () => undefined,
     });
@@ -235,6 +243,7 @@ describe("trace polling", () => {
     const result = await pollForTrace({
       client: fakeApiClient({ traces: [traceRow({ trace_start_time: justAfterStart })] }),
       startedAt,
+      ranAt: null,
       timeoutMs: 1000,
       sleep: async () => undefined,
     });
@@ -264,6 +273,7 @@ describe("trace polling", () => {
         ],
       }),
       startedAt,
+      ranAt: null,
       timeoutMs: 1000,
       sleep: async () => undefined,
     });
@@ -281,6 +291,7 @@ describe("trace polling", () => {
         traces: [traceRow({ trace_id: "unreadable", trace_start_time: "not a date" })],
       }),
       startedAt,
+      ranAt: null,
       timeoutMs: 1000,
       sleep: async () => undefined,
     });
@@ -298,6 +309,7 @@ describe("trace polling", () => {
     const result = await pollForTrace({
       client,
       startedAt,
+      ranAt: null,
       timeoutMs: 10_000,
       sleep: async () => undefined,
     });
@@ -319,6 +331,7 @@ describe("trace polling", () => {
     const result = await pollForTrace({
       client,
       startedAt,
+      ranAt: null,
       timeoutMs: 10_000,
       sleep: async () => undefined,
     });
