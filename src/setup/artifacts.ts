@@ -11,12 +11,12 @@ import { detectStack } from "./stack.js";
  * run across two directories, and puts the credential two levels above the
  * application that has to read it, which is the one place it is no use.
  *
- * The credential is what settles the rule. `.env.traceroot` is read by the
- * process that runs the user's application, from the directory that
- * application lives in; a copy at the repository root of a monorepo is a file
- * nobody will find and nothing will load. So the artefacts follow the service,
- * and the checkpoint and config follow the credential rather than being
- * scattered away from it.
+ * The credential is what settles the rule. It goes into the project's own env
+ * file, which is read by the process that runs the user's application, from the
+ * directory that application lives in; a copy at the repository root of a
+ * monorepo is a file nobody will find and nothing will load. So the artefacts
+ * follow the service, and the checkpoint and config follow the credential
+ * rather than being scattered away from it.
  *
  * The repository root still keeps the things that are genuinely about the
  * repository (the git checks, the agent's working directory, the `.gitignore`

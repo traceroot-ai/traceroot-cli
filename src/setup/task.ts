@@ -43,11 +43,16 @@ export interface BuildSetupTaskInput {
    * it from — which is the one thing this field exists to prevent.
    */
   credentialFiles: readonly string[];
-   * The dotenv file this run wrote the project credential into, relative to the
-   * agent's working directory. Null when no credential file was written — a
-   * tracked `.env.traceroot` is refused, and a key that already resolved from
-   * the user's own config is never written to one at all. Naming a file that is
-   * not there would replace a missing credential with an exception.
+  /**
+   * Which of {@link envFiles} holds the TraceRoot key, relative to the agent's
+   * working directory. Null when no credential file was written — a tracked env
+   * file is refused, and a key that already resolved from the user's own
+   * environment is never written to one at all.
+   *
+   * It is one of `envFiles`, not a file of its own: the credential goes into the
+   * project's `.env` now, so the agent loads one file and gets both. Naming it
+   * separately buys one sentence — that this load is what keeps tracing working
+   * after the run ends — and nothing else.
    */
   credentialEnvFile?: string | null;
 }
@@ -160,14 +165,16 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
  * Three extra lines put the pair inside the `__main__` guard, where it runs when
  * the application does.
  */
-function initSnippet(
-  service: DetectedService,
-  envFiles: readonly string[],
-  credentialEnvFile: string | null,
-): string {
+function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
+  const [envFile] = envFiles;
   if (service.language !== "python") {
     return [
       "```typescript",
+      // The env load goes above the SDK import, not merely before
+      // `initialize()`. ES module imports are evaluated in source order, so a
+      // side-effect import of `dotenv/config` placed here runs first — and it
+      // has to, because `initialize()` reads the key out of `process.env`.
+      ...(envFile === undefined ? [] : ['import "dotenv/config";   // the key lives here', ""]),
       'import { initialize, observe } from "@traceroot-ai/traceroot";',
       "",
       "// Before importing the SDK you are instrumenting.",
@@ -175,39 +182,24 @@ function initSnippet(
       "```",
     ].join("\n");
   }
-  const [envFile] = envFiles;
-  // The credential file first, then the app's own. Both are loads the agent
-  // would otherwise have to invent, and the order is the order they matter in:
-  // the SDK reads its key at `initialize()`, the application reads its own
-  // keys later.
+  // One load, of the project's own env file.
   //
-  // The credential file is the line that closes the loop. Before it, setup
-  // wrote `.env.traceroot` and nothing on the machine ever read it — the key
-  // reached the application through this run's child environment and vanished
-  // with it, so the first time the user started their own app it sent nothing.
-  const calls = [
-    credentialEnvFile === null
-      ? null
-      : {
-          call: loadDotenvCall(credentialEnvFile, service.entryPoint ?? null),
-          note: "the TraceRoot key setup wrote",
-        },
-    envFile === undefined
-      ? null
-      : {
-          call: loadDotenvCall(envFile, service.entryPoint ?? null),
-          note: "the app's own credentials",
-        },
-  ].filter((entry) => entry !== null);
-  // Comments aligned across the calls. Two paths of different lengths put the
-  // two notes at different columns, which reads as two unrelated lines rather
-  // than as one block with a note against each entry.
-  const width = Math.max(0, ...calls.map(({ call }) => call.length));
-  const loads = calls.map(({ call, note }) => `${call.padEnd(width)}   # ${note}`);
+  // There were two: this file, and a `.env.traceroot` setup had written the key
+  // into. The second existed only because that filename was ours and no runtime
+  // read it. The key is in the file below now, so the load that fetches the
+  // application's own credentials fetches the TraceRoot key with them — and the
+  // paragraph that had to argue the extra load was not dead code is gone with
+  // it.
   const dotenv =
-    loads.length > 0
-      ? ["from pathlib import Path", "from dotenv import load_dotenv", "", ...loads, ""]
-      : [];
+    envFile === undefined
+      ? []
+      : [
+          "from pathlib import Path",
+          "from dotenv import load_dotenv",
+          "",
+          loadDotenvCall(envFile, service.entryPoint ?? null),
+          "",
+        ];
   return [
     "```python",
     ...dotenvImports,
@@ -622,7 +614,6 @@ they are.
 
 ${initSnippet(service, envFiles, credentialEnvFile)}
 ${credentialEnvFileNote(service, credentialEnvFile)}
-${initSnippet(service, envFiles)}
 
 Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
 gunicorn, a queue worker — has no such place to put it, so initialize where the framework starts
@@ -709,8 +700,7 @@ ${
   envFile !== null
     ? `
 The application may need credentials of its own to run — an LLM API key, a database URL. They are
-not in your environment and \`TRACEROOT_API_KEY\` is not one of them. These env files exist near
-this service:
+not in your environment. These env files exist near this service:
 
 ${bullet(envFiles.map((file) => `\`${file}\``))}
 
@@ -748,7 +738,15 @@ starts and emits no trace.
     : ""
 }
 
-Your shell cannot do this for you — \`set -a\`, \`. file\`, \`$(...)\` and multi-part pipelines are
+${
+  credentialEnvFile === null
+    ? ""
+    : `\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` into \`${credentialEnvFile}\`, so that load is also
+what keeps tracing working once this run ends: the key is in **your** environment because setup put
+it there for this run, and nothing hands it to the user's next one.
+
+`
+}Your shell cannot do this for you — \`set -a\`, \`. file\`, \`$(...)\` and multi-part pipelines are
 all refused by your own sandbox, and trying them costs minutes. Loading in-process is also the
 better answer: it is what makes the application runnable by a human afterwards, which a shell
 incantation in your scrollback does not. Add the dotenv package to the manifest if you import it.

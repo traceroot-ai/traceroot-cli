@@ -1018,9 +1018,9 @@ describe("the pasted key", () => {
 });
 
 describe("project credential", () => {
-  it("reuses a valid key already in .env.traceroot rather than minting another", async () => {
+  it("reuses a valid key already in the project's .env rather than minting another", async () => {
     pythonRepo();
-    writeFileSync(join(dir, ".env.traceroot"), "TRACEROOT_API_KEY=tr-existing-env-key-99\n");
+    writeFileSync(join(dir, ".env"), "TRACEROOT_API_KEY=tr-existing-env-key-99\n");
     let minted = 0;
     const deps = makeDeps({
       auth: authWithKey(),
@@ -1048,7 +1048,7 @@ describe("project credential", () => {
 
   it("refuses to overwrite a key that points at a different project", async () => {
     pythonRepo();
-    writeFileSync(join(dir, ".env.traceroot"), "TRACEROOT_API_KEY=tr-other-project-key-77\n");
+    writeFileSync(join(dir, ".env"), "TRACEROOT_API_KEY=tr-other-project-key-77\n");
     const deps = makeDeps({
       auth: authWithKey(),
       client: fakeApiClient({
@@ -1069,7 +1069,7 @@ describe("project credential", () => {
     expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
     expect(result.error?.message).toContain("other");
     // The file must be untouched.
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain("tr-other-project-key-77");
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-other-project-key-77");
   });
 
   it("mints a uniquely-named key and never prints it", async () => {
@@ -1115,10 +1115,8 @@ describe("project credential", () => {
     expect(ctx.credential?.keyName).toMatch(/-2$/);
     expect(out.data).not.toContain("tr-minted-secret-value-42");
     expect(err.data).not.toContain("tr-minted-secret-value-42");
-    // But it does reach `.env.traceroot`, which is where the app reads it from.
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(
-      "tr-minted-secret-value-42",
-    );
+    // But it does reach the project's `.env`, which is where the app reads it.
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-minted-secret-value-42");
   });
 
   it("names the manual fallback when key creation is not deployed", async () => {
@@ -1197,14 +1195,14 @@ describe("the credential the instrumented application will read", () => {
     // inherited and the user's shell will hand to their application.
     expect(deps.env.TRACEROOT_API_KEY).toBe(KEY);
     expect(statusOf(events, "configure_repository")).toBe("skipped");
-    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+    expect(existsSync(join(dir, ".env"))).toBe(false);
   });
 
   it("names no credential file to the agent when it never wrote one", async () => {
     // The converse of the load the task now carries. This stage is satisfied
-    // before it runs when the application can already resolve the key, so there
-    // is no `.env.traceroot` on disk — and telling the entry point to load one
-    // would trade a credential the app already has for an exception on startup.
+    // before it runs when the application can already resolve the key, so no
+    // env file is created — and telling the entry point to load the key from a
+    // file would trade a credential the app already has for a false lead.
     pythonRepo();
     initGit();
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
@@ -1219,12 +1217,12 @@ describe("the credential the instrumented application will read", () => {
     await runSetupMachine(ctx, deps);
 
     expect(statusOf(events, "configure_repository")).toBe("skipped");
-    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+    expect(existsSync(join(dir, ".env"))).toBe(false);
     // The assertion below is a negative one, so it passes for free if the run
     // never got as far as launching an agent. Pin the launch down first.
     const launch = process.runs.find((run) => run.program === "claude");
     expect(launch).toBeDefined();
-    expect(launch?.stdin ?? "").not.toContain(".env.traceroot");
+    expect(launch?.stdin ?? "").not.toContain("wrote `TRACEROOT_API_KEY` into");
   });
 
   it("writes nothing for a key already in the `.env` beside the application", async () => {
@@ -1236,10 +1234,11 @@ describe("the credential the instrumented application will read", () => {
     const result = await runSetupMachine(ctx, configuredKeyRun(authFrom("auto-env-file")));
 
     expect(result.error).toBeNull();
-    // The file an application's own dotenv loader reads really does hold it.
-    expect(readFileSync(join(dir, ".env"), "utf8")).toContain(KEY);
+    // The file an application's own dotenv loader reads really does hold it —
+    // and it is now the very file this stage would have written to, so being
+    // byte-for-byte unchanged is the proof that nothing was written.
+    expect(readFileSync(join(dir, ".env"), "utf8")).toBe(`TRACEROOT_API_KEY=${KEY}\n`);
     expect(statusOf(events, "configure_repository")).toBe("skipped");
-    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
   });
 
   it("writes nothing for a key exported in its env-assignment form", async () => {
@@ -1255,7 +1254,7 @@ describe("the credential the instrumented application will read", () => {
 
     expect(result.error).toBeNull();
     expect(statusOf(events, "configure_repository")).toBe("skipped");
-    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+    expect(existsSync(join(dir, ".env"))).toBe(false);
   });
 
   // The converse: the source says the application can resolve the credential
@@ -1271,7 +1270,7 @@ describe("the credential the instrumented application will read", () => {
 
     expect(result.error).toBeNull();
     expect(statusOf(events, "configure_repository")).toBe("ok");
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain(KEY);
   });
 
   it("writes anyway when there is no `.env` to have resolved from", async () => {
@@ -1283,12 +1282,14 @@ describe("the credential the instrumented application will read", () => {
 
     expect(result.error).toBeNull();
     expect(statusOf(events, "configure_repository")).toBe("ok");
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain(KEY);
   });
 
-  it("writes anyway when the `.env` holds a different key", async () => {
+  it("replaces a stale key in the `.env` rather than writing beside it", async () => {
     // A stale `.env` is not this credential, and the application loading it
-    // would authenticate as something else or not at all.
+    // would authenticate as something else or not at all. The replacement is in
+    // place now, in the file the application already reads — the superseded
+    // value does not survive beside the new one.
     pythonRepo();
     initGit();
     writeFileSync(join(dir, ".env"), "TRACEROOT_API_KEY=tr-some-other-key\n");
@@ -1298,7 +1299,9 @@ describe("the credential the instrumented application will read", () => {
 
     expect(result.error).toBeNull();
     expect(statusOf(events, "configure_repository")).toBe("ok");
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+    const written = readFileSync(join(dir, ".env"), "utf8");
+    expect(written).toContain(KEY);
+    expect(written).not.toContain("tr-some-other-key");
   });
 
   // Each of these reached the stage looking like a key already in the
@@ -1320,11 +1323,11 @@ describe("the credential the instrumented application will read", () => {
 
       expect(result.error).toBeNull();
       expect(statusOf(events, "configure_repository")).toBe("ok");
-      expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(KEY);
+      expect(readFileSync(join(dir, ".env"), "utf8")).toContain(KEY);
     });
   }
 
-  it("writes the pasted key, and ignores the file it wrote", async () => {
+  it("writes the pasted key, and leaves the user's .gitignore alone", async () => {
     // The run that found this: authenticated by paste, `configure_repository`
     // recorded `skipped` and completed, and setup closed by telling the user to
     // run an application whose `traceroot.initialize()` had no credential to
@@ -1344,8 +1347,10 @@ describe("the credential the instrumented application will read", () => {
 
     expect(result.error).toBeNull();
     expect(statusOf(events, "configure_repository")).toBe("ok");
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toContain(pasted);
-    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain(".env.traceroot");
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain(pasted);
+    // The stage used to append a rule here. It asks git and tells the user now;
+    // the user's ignore file is theirs.
+    expect(existsSync(join(dir, ".gitignore"))).toBe(false);
   });
 });
 
@@ -1970,9 +1975,7 @@ describe("resume and rerun", () => {
 
     expect(revoked).toBe("ak_1");
     // The rolled-back credential is gone from the env file too.
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).not.toContain(
-      "tr-minted-secret-value-42",
-    );
+    expect(readFileSync(join(dir, ".env"), "utf8")).not.toContain("tr-minted-secret-value-42");
   });
 
   it("is a cheap no-op when rerun after success", async () => {
@@ -2819,12 +2822,10 @@ describe("where a run leaves its files", () => {
     const result = await runSetupMachine(ctx, mintingDeps());
 
     expect(result.ok).toBe(true);
-    expect(readFileSync(join(sub, ".env.traceroot"), "utf8")).toContain(
-      "tr-minted-secret-value-42",
-    );
+    expect(readFileSync(join(sub, ".env"), "utf8")).toContain("tr-minted-secret-value-42");
     expect(existsSync(join(sub, ".traceroot", "setup.json"))).toBe(true);
     // And nothing of ours left at the root.
-    expect(existsSync(join(dir, ".env.traceroot"))).toBe(false);
+    expect(existsSync(join(dir, ".env"))).toBe(false);
     expect(existsSync(join(dir, ".traceroot", "setup.json"))).toBe(false);
   });
 
@@ -2866,16 +2867,66 @@ describe("where a run leaves its files", () => {
     );
   });
 
-  it("ignores the credential at the path it actually landed at", async () => {
-    // The entry has to name `test1/.env.traceroot`. Getting this wrong commits
-    // an API key, which is the one mistake in this file that cannot be undone.
+  it("warns, naming the path it actually landed at, when git does not ignore it", async () => {
+    // The entry has to name `test1/.env`, which is the path git was asked
+    // about. This stage used to append that line to the user's `.gitignore`
+    // itself, off a matcher that read only the root ignore file; it asks
+    // `git check-ignore` now and leaves the acting to the user.
     pythonRepo();
     initGit();
     const sub = subService();
-    const { ctx } = makeCtx({ cwd: sub, flags: { agent: "claude", project: "demo" } });
-    await runSetupMachine(ctx, mintingDeps());
+    const process = fakeRunProcess({
+      gitStatus: ["", " M test1/main.py"],
+      // `check-ignore` exits 1 when the path is not ignored. `ls-files` has to
+      // keep saying "not tracked" or the stage refuses before it ever asks, so
+      // the two are told apart by subcommand rather than by program.
+      git: (args) => (args.includes("check-ignore") ? { exitCode: 1 } : { exitCode: 0 }),
+    });
+    const { ctx, err } = makeCtx({ cwd: sub, flags: { agent: "claude", project: "demo" } });
 
-    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain("test1/.env.traceroot");
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    const warning = plain(err.data);
+    expect(warning).toContain("warning: test1/.env holds a live API key");
+    expect(warning).toContain("Add a line for test1/.env to .gitignore");
+    // Warned, not refused: the key still reached the file. Refusing here would
+    // fail on a fresh repository with no `.gitignore` at all, which is the case
+    // setup is most useful in.
+    expect(readFileSync(join(sub, ".env"), "utf8")).toContain("tr-minted-secret-value-42");
+    expect(existsSync(join(dir, ".gitignore"))).toBe(false);
+  });
+
+  it("says so when it cannot tell whether git ignores the file", async () => {
+    // The state the old code handled worst: `ensureIgnored` returned "failed"
+    // and the caller dropped it on the floor, so a run that could not tell
+    // whether a live credential was ignored said nothing at all. 128 is what
+    // git exits with when it cannot answer.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      git: (args) => (args.includes("check-ignore") ? { exitCode: 128 } : { exitCode: 0 }),
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    expect(plain(err.data)).toContain("could not check whether git ignores .env");
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-minted-secret-value-42");
+  });
+
+  it("stays quiet when git already ignores the file", async () => {
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      git: (args) => (args.includes("check-ignore") ? { exitCode: 0 } : { exitCode: 0 }),
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    expect(plain(err.data)).not.toContain(".gitignore");
   });
 
   it("heads the credential file it creates with what it is", async () => {
@@ -2884,8 +2935,8 @@ describe("where a run leaves its files", () => {
     const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
     await runSetupMachine(ctx, mintingDeps());
 
-    const written = readFileSync(join(dir, ".env.traceroot"), "utf8");
-    expect(written.startsWith("# Written by `traceroot setup`.")).toBe(true);
+    const written = readFileSync(join(dir, ".env"), "utf8");
+    expect(written.startsWith("# Created by `traceroot setup`.")).toBe(true);
     expect(written).toContain("Do not commit");
     // The key is in the file, and never in the part explaining the file.
     for (const line of written.split("\n")) {
@@ -2902,9 +2953,8 @@ describe("where a run leaves its files", () => {
     const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
     await runSetupMachine(ctx, mintingDeps());
 
-    expect(existsSync(join(dir, ".env.traceroot"))).toBe(true);
+    expect(existsSync(join(dir, ".env"))).toBe(true);
     expect(existsSync(join(dir, ".traceroot", "setup.json"))).toBe(true);
-    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain(".env.traceroot");
   });
 
   it("tells the agent to load the credential file, on a repository with no env file of its own", async () => {
@@ -2914,7 +2964,8 @@ describe("where a run leaves its files", () => {
     // run on actually looks like. The task's dotenv block was gated on the
     // app's own env files, so on exactly this repository it was omitted, and
     // the run finished having written a credential to disk that nothing would
-    // ever read.
+    // ever read. The `.env` this run creates is one of the app's own env files,
+    // so `detectEnvFiles` finds it and the one load covers both.
     pythonRepo();
     initGit();
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
@@ -2922,8 +2973,8 @@ describe("where a run leaves its files", () => {
     await runSetupMachine(ctx, mintingDeps(process.run));
 
     const task = process.runs.find((run) => run.program === "claude")?.stdin ?? "";
-    expect(task).toContain('load_dotenv(Path(__file__).resolve().parent / ".env.traceroot")');
-    expect(task).toContain("Add `python-dotenv` to the dependency manifest");
+    expect(task).toContain('load_dotenv(Path(__file__).resolve().parent / ".env")');
+    expect(task).toContain("wrote `TRACEROOT_API_KEY` into `./.env`");
   });
 
   it("does not name a credential file git refused to let it write", async () => {
@@ -2935,12 +2986,12 @@ describe("where a run leaves its files", () => {
     // still works: the key reaches the child through its environment.
     pythonRepo();
     initGit();
-    writeFileSync(join(dir, ".env.traceroot"), "# committed by mistake\n");
+    writeFileSync(join(dir, ".env"), "# committed by mistake\n");
     const process = fakeRunProcess({
       gitStatus: ["", " M main.py"],
       // `git status` is answered above this, and `ls-files` is the only other
       // git call setup makes — so this reports the file as tracked.
-      results: { git: { output: ".env.traceroot\n" } },
+      results: { git: { output: ".env\n" } },
     });
     const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
 
@@ -2948,10 +2999,10 @@ describe("where a run leaves its files", () => {
 
     // Untouched is the proof the write was refused: the stage overwrites this
     // file whenever it is allowed to.
-    expect(readFileSync(join(dir, ".env.traceroot"), "utf8")).toBe("# committed by mistake\n");
+    expect(readFileSync(join(dir, ".env"), "utf8")).toBe("# committed by mistake\n");
     const launch = process.runs.find((run) => run.program === "claude");
     expect(launch).toBeDefined();
-    expect(launch?.stdin ?? "").not.toContain(".env.traceroot");
+    expect(launch?.stdin ?? "").not.toContain("wrote `TRACEROOT_API_KEY` into");
   });
 
   it("survives a credential file it cannot read, rather than failing the stage", async () => {
@@ -2962,10 +3013,10 @@ describe("where a run leaves its files", () => {
     // back, over a file whose only consequence was whether a path got named.
     pythonRepo();
     initGit();
-    mkdirSync(join(dir, ".env.traceroot"));
+    mkdirSync(join(dir, ".env"));
     const process = fakeRunProcess({
       gitStatus: ["", " M main.py"],
-      results: { git: { output: ".env.traceroot\n" } },
+      results: { git: { output: ".env\n" } },
     });
     const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
 
@@ -2974,7 +3025,7 @@ describe("where a run leaves its files", () => {
     expect(result.error).toBeNull();
     const launch = process.runs.find((run) => run.program === "claude");
     expect(launch).toBeDefined();
-    expect(launch?.stdin ?? "").not.toContain(".env.traceroot");
+    expect(launch?.stdin ?? "").not.toContain("wrote `TRACEROOT_API_KEY` into");
   });
 
   it("names the credential file from where the agent stands, not from the root", async () => {
@@ -2991,15 +3042,14 @@ describe("where a run leaves its files", () => {
     await runSetupMachine(ctx, mintingDeps(process.run));
 
     const launch = process.runs.find((run) => run.program === "claude");
-    const named =
-      /load_dotenv\(Path\(__file__\)\.resolve\(\)\.parent \/ "([^"]*\.env\.traceroot)"\)/.exec(
-        launch?.stdin ?? "",
-      )?.[1];
+    const named = /load_dotenv\(Path\(__file__\)\.resolve\(\)\.parent \/ "([^"]*\.env)"\)/.exec(
+      launch?.stdin ?? "",
+    )?.[1];
     expect(named).toBeDefined();
     // Anchored on the entry point, which this service keeps at its own root, so
     // resolving from where the agent stands is the same anchor. Either way it
     // has to land on the file the run actually wrote.
-    expect(resolve(launch?.cwd ?? "", named ?? "")).toBe(join(dir, "test1", ".env.traceroot"));
+    expect(resolve(launch?.cwd ?? "", named ?? "")).toBe(join(dir, "test1", ".env"));
   });
 });
 

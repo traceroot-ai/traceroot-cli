@@ -43,10 +43,10 @@ import { createActivityParser } from "./activity.js";
 import { detectAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
-import { ensureIgnored, upsertEnvFile } from "./envWrite.js";
+import { chooseCredentialEnvFile, upsertEnvFile } from "./envWrite.js";
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
-import { changedSince, readGitState } from "./git.js";
+import { changedSince, isPathIgnored, readGitState } from "./git.js";
 import { buildInvocation, launchAgent } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
 import { writeSetupReport } from "./report.js";
@@ -97,15 +97,35 @@ import {
 const KEY_ENV = "TRACEROOT_API_KEY";
 const HOST_ENV = "TRACEROOT_HOST_URL";
 /**
- * Credentials are written here — never to `.env`, which is often committed.
+ * The credential goes into a file the project already loads.
  *
- * Named after this tool rather than after Next.js. `.env.local` is a framework
- * convention, which means it is a file the user's own project
- * may already own and already load: setup appending a credential to it puts our
- * value into their file, and a rerun has no way to tell which lines are ours.
- * `.env.traceroot` belongs to us, says so, and collides with nothing.
+ * There used to be a constant here — `.env.traceroot`, a name chosen so our
+ * lines could never be confused with the user's. Everything awkward about this
+ * stage followed from it. No runtime reads that name, so the agent's task had to
+ * teach a loader; nothing ignores that name, so this stage had to edit the
+ * user's `.gitignore`; and the file's own header invited the user to delete it,
+ * which would have been fine for a file only this tool read.
+ *
+ * `applicationCanResolve` below already settles the argument: it returns true
+ * for `auto-env-file` — a key in the project's own `.env` — and skips this stage
+ * entirely. We agreed the project's env file was the right place and then wrote
+ * somewhere else. The name is now chosen from what the project has; see
+ * {@link chooseCredentialEnvFile}.
  */
-const ENV_FILE = ".env.traceroot";
+
+/**
+ * The project env file this run writes the credential into, absolute.
+ *
+ * Asked once per use rather than cached, and that is safe because the answer
+ * cannot change under us: the chooser prefers an existing `.env.local`, then an
+ * existing `.env`, and otherwise names the `.env` this stage is about to create
+ * — and after that creation it returns the same `.env`. Every stage in the run
+ * therefore reads and writes one file, which is what lets
+ * `reuseExistingKey` find a key a previous run left behind.
+ */
+function credentialEnvPath(ctx: SetupContext): string {
+  return join(ctx.artifactDir, chooseCredentialEnvFile(ctx.artifactDir).name);
+}
 const SKILL_NAME = "traceroot-instrument-repo";
 
 /**
@@ -387,7 +407,7 @@ const baselineChanges = new WeakMap<SetupContext, string[]>();
  * The resolved credential, but only when it is a project API key.
  *
  * A session credential lives in the same slot and is useless to the paths that
- * want a key — they hand it to `whoami` or write it into `.env.traceroot`, and
+ * want a key — they hand it to `whoami` or write it into an env file, and
  * neither means anything for a session token.
  */
 function apiKeyFrom(auth: SetupDeps["resolvedAuth"]): string | undefined {
@@ -1183,7 +1203,7 @@ const acquireProjectKey: StageDefinition = {
 
     const api = deps.createSetupApi({ host: session.host, apiKey: session.userKey.reveal() });
 
-    // Reuse before minting: a key already in `.env.traceroot` that authenticates to
+    // Reuse before minting: a key already in the project's env file that authenticates to
     // the selected project is the right key, and a rerun of setup must not
     // accumulate a new credential every time.
     const reused = await reuseExistingKey(ctx, deps, project.projectId);
@@ -1209,7 +1229,7 @@ const acquireProjectKey: StageDefinition = {
           [
             "Provide a project key instead:",
             "  traceroot setup --api-key <project key>",
-            `or add ${KEY_ENV}=<project key> to ${ENV_FILE} and rerun setup.`,
+            `or add ${KEY_ENV}=<project key> to ${relativeToRoot(ctx.root, credentialEnvPath(ctx))} and rerun setup.`,
           ].join("\n"),
         );
       }
@@ -1234,12 +1254,27 @@ const acquireProjectKey: StageDefinition = {
     ctx.checkpoint.projectKeyHint = ctx.credential.key.hint;
     mintedKeys.set(ctx, created.id);
     // The plaintext key is deliberately not printed. It goes into the child's
-    // environment and into `.env.traceroot`; putting it on the terminal would leave a
-    // live credential in scrollback and in any captured output.
+    // environment and into the project's env file; putting it on the terminal
+    // would leave a live credential in scrollback and in any captured output.
     wizardProgress(ctx, `Created project API key '${created.name}' (${ctx.credential.key.hint}).`);
     return "ok";
   },
 };
+
+/**
+ * The project's env files with the credential's own at the head of the list.
+ *
+ * Both sides name their paths relative to the service directory the agent
+ * stands in, so a plain string comparison is the right dedupe: `detectEnvFiles`
+ * emits `./.env` for a file beside the service and `../.env` for the
+ * repository root's, and {@link credentialEnvFile} uses the same two spellings.
+ */
+function withCredentialFirst(found: string[], credential: string | null): string[] {
+  if (credential === null) {
+    return found;
+  }
+  return [credential, ...found.filter((file) => file !== credential)];
+}
 
 /** Keys minted by this run, so a later failure can revoke them. */
 const mintedKeys = new WeakMap<SetupContext, string>();
@@ -1257,7 +1292,8 @@ async function reuseExistingKey(
   deps: SetupDeps,
   projectId: string,
 ): Promise<ProjectCredential | null> {
-  const envPath = join(ctx.artifactDir, ENV_FILE);
+  const envPath = credentialEnvPath(ctx);
+  const envEntry = relativeToRoot(ctx.root, envPath);
   if (!existsSync(envPath)) {
     return null;
   }
@@ -1283,7 +1319,7 @@ async function reuseExistingKey(
     throw new SetupError({
       stage: "acquire_project_key",
       code: "UNSAFE_OVERWRITE",
-      message: `A TraceRoot key is already present in ${ENV_FILE} but could not be verified (${session.host} was unreachable), so setup stopped rather than replacing it.`,
+      message: `A TraceRoot key is already present in ${envEntry} but could not be verified (${session.host} was unreachable), so setup stopped rather than replacing it.`,
       remedy: "Check your connection and rerun `traceroot setup`.",
     });
   }
@@ -1292,11 +1328,11 @@ async function reuseExistingKey(
     throw new SetupError({
       stage: "acquire_project_key",
       code: "UNSAFE_OVERWRITE",
-      message: `${ENV_FILE} already contains a working TraceRoot key for project '${who.project_name ?? who.project_id}', but setup selected '${ctx.project?.projectName}'.`,
+      message: `${envEntry} already contains a working TraceRoot key for project '${who.project_name ?? who.project_id}', but setup selected '${ctx.project?.projectName}'.`,
       remedy: [
         "Run setup for that project instead:",
         `  traceroot setup --project ${who.project_name ?? who.project_id}`,
-        `or remove ${KEY_ENV} from ${ENV_FILE} if it is stale.`,
+        `or remove ${KEY_ENV} from ${envEntry} if it is stale.`,
       ].join("\n"),
     });
   }
@@ -1401,11 +1437,11 @@ const configureRepository: StageDefinition = {
   async run(ctx, deps) {
     const credential = requireCredential(ctx);
     const session = requireSession(ctx);
-    const envPath = join(ctx.artifactDir, ENV_FILE);
-    // The same file named from the repository root, which is what both git and
-    // `.gitignore` want. `.env.traceroot` at the root and `api/.env.traceroot`
-    // are different files, and asking git about the wrong one is how a tracked
-    // credential gets written to anyway.
+    const target = chooseCredentialEnvFile(ctx.artifactDir);
+    const envPath = join(ctx.artifactDir, target.name);
+    // The same file named from the repository root, which is what git wants. A
+    // `.env` at the root and an `api/.env` are different files, and asking git
+    // about the wrong one is how a tracked credential gets written to anyway.
     const envEntry = relativeToRoot(ctx.root, envPath);
 
     if (ctx.inGitRepo) {
@@ -1421,9 +1457,14 @@ const configureRepository: StageDefinition = {
         // Writing a live credential into a tracked file would put it one `git
         // commit -a` away from a public repository. Degrade instead of failing:
         // the child environment handoff still works for this run.
+        //
+        // This is the one case that refuses, and it stays a refusal now that the
+        // file is the project's own. Tracked means the next `git commit -a`
+        // carries the key with no further decision from the user, and there is
+        // nothing this stage could add to the repository to prevent it.
         wizardWarn(
           ctx,
-          `${ENV_FILE} is tracked by git, so the API key was not written to it. The key is available to this setup run only; add it to an untracked env file to persist it.`,
+          `${envEntry} is tracked by git, so the API key was not written to it. The key is available to this setup run only; add it to an untracked env file to persist it.`,
         );
         return "skipped";
       }
@@ -1434,31 +1475,79 @@ const configureRepository: StageDefinition = {
       updates[HOST_ENV] = session.host;
     }
     const result = upsertEnvFile(envPath, updates);
-    wroteEnvKeys.set(ctx, result.written);
+    wroteEnvKeys.set(ctx, { path: envPath, keys: result.written });
+    // The file is the project's and holds a usable key either way, so the
+    // closing notice and the report can name it whether or not this run was the
+    // one that put the key there.
+    ctx.credentialEnvFile = envPath;
+
+    if (ctx.inGitRepo) {
+      await warnIfNotIgnored(ctx, deps, envEntry);
+    }
 
     if (result.written.length === 0) {
-      wizardProgress(ctx, `${ENV_FILE} already up to date.`);
+      wizardProgress(ctx, `${envEntry} already up to date.`);
       return "skipped";
     }
-    if (ctx.inGitRepo) {
-      // The entry is the path from the repository root, not the bare filename.
-      // A bare `.env.traceroot` in the root ignore file would in fact cover a
-      // nested one — an unanchored pattern matches at any depth — but the
-      // reverse reading is the dangerous one, and naming the actual path is the
-      // only version that is right no matter how the user's ignore file is
-      // already written.
-      const ignored = ensureIgnored(ctx.root, envEntry);
-      if (ignored === "appended") {
-        wizardProgress(ctx, `Added ${envEntry} to .gitignore.`);
-      }
-    }
-    wizardProgress(ctx, `Wrote ${result.written.join(", ")} to ${envEntry} (0600).`);
+    wizardProgress(
+      ctx,
+      target.existed
+        ? `Wrote ${result.written.join(", ")} to ${envEntry} (0600).`
+        : `Created ${envEntry} with ${result.written.join(", ")} (0600).`,
+    );
     return "ok";
   },
 };
 
-/** Env keys this run wrote, so a failure can roll them back. */
-const wroteEnvKeys = new WeakMap<SetupContext, string[]>();
+/** The file and keys this run wrote, so a failure can roll them back. */
+const wroteEnvKeys = new WeakMap<SetupContext, { path: string; keys: string[] }>();
+
+/**
+ * Says so when the file now holding a live key is not ignored by git.
+ *
+ * Says, and does not act. This stage used to append a line to the user's
+ * `.gitignore`, which was a write into a file nobody asked us to touch and was
+ * decided by a matcher that read only the ignore file at the repository root —
+ * blind to a nested `.gitignore`, to `.git/info/exclude` and to the user's
+ * global excludes, and therefore liable to add a duplicate rule for a path
+ * already covered. `git check-ignore` is the authority on the question, and the
+ * answer belongs to the user to act on. Laminar and PostHog both ask and never
+ * edit; it is the right line.
+ *
+ * Warn rather than refuse, which is the opposite of what the tracked case does,
+ * and deliberately. Tracked means the key travels on the next `git commit -a`
+ * with nothing further asked of the user. Merely unignored means git will list
+ * the file in `git status` before anything is committed — the user sees it, and
+ * this line tells them what to do. Refusing here would also break the case
+ * setup is most useful in: a fresh repository with no `.gitignore` at all, where
+ * a refusal leaves the user with no credential and no way forward.
+ *
+ * The third state is the one the old code got worst. It returned `"failed"` and
+ * the caller dropped it on the floor, so a run that could not tell whether a
+ * live credential was ignored said nothing at all. "Cannot tell" is reported as
+ * itself here, because it is not evidence that the file is safe.
+ */
+async function warnIfNotIgnored(ctx: SetupContext, deps: SetupDeps, entry: string): Promise<void> {
+  const state = await isPathIgnored({
+    root: ctx.root,
+    path: entry,
+    runProcess: deps.runProcess,
+    env: deps.env,
+  });
+  if (state === "not-ignored") {
+    wizardWarn(
+      ctx,
+      `${entry} holds a live API key and git does not ignore it. Add a line for ${entry} to .gitignore before you commit.`,
+    );
+    return;
+  }
+  if (state === "unknown") {
+    wizardWarn(
+      ctx,
+      `could not check whether git ignores ${entry}, which now holds a live API key; confirm it is not committed.`,
+    );
+  }
+}
 
 /**
  * The credential file, named relative to a directory, or null when there is
@@ -1492,7 +1581,7 @@ function envFileKey(path: string): string | undefined {
 }
 
 function credentialEnvFile(ctx: SetupContext, from: string): string | null {
-  const path = join(ctx.artifactDir, ENV_FILE);
+  const path = credentialEnvPath(ctx);
   // Existing is not enough: `configure_repository` also writes nothing when git
   // tracks the file, and then what is on disk is whatever was committed — a
   // different project's key, or a placeholder. Advertising it there hands the
@@ -1982,6 +2071,7 @@ const instrument: StageDefinition = {
     // resolvable from here, which is the whole reason this is computed once
     // and shared rather than derived twice.
     const agentCwd = service.path === "." ? ctx.root : join(ctx.root, service.path);
+    const credentialFile = credentialEnvFile(ctx, agentCwd);
     // Found once and used twice: the task names it as the interpreter to use,
     // and the launch has to allow the agent to actually execute it.
     const pythonInterpreter =
@@ -2008,22 +2098,25 @@ const instrument: StageDefinition = {
       // service runs on is slow for an agent to establish, and all of it
       // happens before the first edit.
       pythonInterpreter,
-      envFiles: detectEnvFiles(ctx.root, service.path),
-      // The credential file this run wrote, so the entry point loads it.
+      // One list, with the credential's file first.
       //
-      // `detectEnvFiles` cannot supply this and should not be widened to: it
-      // answers "which files hold the application's own secrets", which is a
-      // different question with a different answer in the task, and the file
-      // setup wrote is not one of them. It also only ever finds files that
-      // existed before setup ran, which `.env.traceroot` on a fresh project by
-      // definition did not.
+      // The credential used to be a second, parallel instruction: its own path,
+      // its own loader, its own paragraph explaining that loading it was not
+      // redundant. It needed all of that because the file was ours and nothing
+      // read it. Now it is one of the project's own env files, so it belongs in
+      // the list of them — `detectEnvFiles` finds it unprompted, since
+      // `configure_repository` runs several stages before this one.
       //
-      // Named relative to where the agent stands, like every other path in the
-      // task. The artefacts follow the service but the service is chosen later
-      // — a run started at the root of a monorepo writes the credential at the
-      // root and instruments `api/`, so this is `../.env.traceroot` as often as
-      // it is `./.env.traceroot`, and it is computed rather than assumed.
-      credentialEnvFile: credentialEnvFile(ctx, agentCwd),
+      // First, not merely present, because `buildSetupTask` puts the head of
+      // this list in the snippet it hands the agent. `detectEnvFiles` returns
+      // the service's files before the repository root's, and the credential
+      // does not always land in the service: the artefact directory is fixed
+      // before the pipeline starts while the service is detected here, so a run
+      // started at the root of a monorepo writes the key at the root and
+      // instruments `api/`. Deduped, because in the ordinary case it is already
+      // in there.
+      envFiles: withCredentialFirst(detectEnvFiles(ctx.root, service.path), credentialFile),
+      credentialEnvFile: credentialFile,
     });
 
     if (method === "manual") {
@@ -2266,7 +2359,7 @@ const instrument: StageDefinition = {
 /**
  * The last thing asked before an LLM starts editing the user's code.
  *
- * Everything up to here was reversible — a key, a line in `.env.traceroot`, a
+ * Everything up to here was reversible — a key, a line in the project's env file, a
  * skill directory. This is the step that is not, and a user who has been
  * pressing Enter through a wizard should be stopped once and told, in one
  * sentence, what is about to happen to their repository.
@@ -2645,10 +2738,13 @@ async function rollback(ctx: SetupContext, deps: SetupDeps): Promise<void> {
   }
 
   const written = wroteEnvKeys.get(ctx);
-  if (written !== undefined && written.length > 0 && keyId !== undefined) {
+  if (written !== undefined && written.keys.length > 0 && keyId !== undefined) {
     const { removeEnvKeys } = await import("./envWrite.js");
     try {
-      removeEnvKeys(join(ctx.artifactDir, ENV_FILE), written);
+      // The path this run actually wrote, not one recomputed here. The rollback
+      // must take our keys out of the file they went into and leave every other
+      // line in it alone, and that file is the user's own now.
+      removeEnvKeys(written.path, written.keys);
     } catch {
       // best-effort
     }

@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,12 +18,7 @@ import {
   readCheckpoint,
   writeCheckpoint,
 } from "../../src/setup/checkpoint.js";
-import {
-  ensureIgnored,
-  removeEnvKeys,
-  upsertEnvContent,
-  upsertEnvFile,
-} from "../../src/setup/envWrite.js";
+import { removeEnvKeys, upsertEnvContent, upsertEnvFile } from "../../src/setup/envWrite.js";
 import { SETUP_EXIT_CODES, SetupError } from "../../src/setup/errors.js";
 import { splitCommand } from "../../src/setup/exec.js";
 import { changedSince, parsePorcelain } from "../../src/setup/git.js";
@@ -166,7 +169,7 @@ describe("env file writing", () => {
   });
 
   it("writes with 0600 permissions", () => {
-    const path = join(dir, ".env.traceroot");
+    const path = join(dir, ".env");
     upsertEnvFile(path, { TRACEROOT_API_KEY: "k" });
     if (process.platform !== "win32") {
       expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -175,7 +178,7 @@ describe("env file writing", () => {
   });
 
   it("removes only the named keys", () => {
-    const path = join(dir, ".env.traceroot");
+    const path = join(dir, ".env");
     writeFileSync(path, "# keep\nFOO=1\nTRACEROOT_API_KEY=k\n", "utf8");
     expect(removeEnvKeys(path, ["TRACEROOT_API_KEY"])).toEqual(["TRACEROOT_API_KEY"]);
     const after = readFileSync(path, "utf8");
@@ -184,15 +187,14 @@ describe("env file writing", () => {
     expect(after).not.toContain("TRACEROOT_API_KEY");
   });
 
-  it("appends a gitignore rule only when one is missing", () => {
-    expect(ensureIgnored(dir, ".env.traceroot")).toBe("appended");
-    expect(ensureIgnored(dir, ".env.traceroot")).toBe("already");
-    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe(".env.traceroot\n");
-  });
+  it("leaves the user's .gitignore alone", () => {
+    // This module used to append a rule here. It no longer edits the file at
+    // all: `git check-ignore` answers the question, and acting on the answer is
+    // the user's. See `isPathIgnored` in `git.ts` and `warnIfNotIgnored` in
+    // `machine.ts`.
+    upsertEnvFile(join(dir, ".env"), { TRACEROOT_API_KEY: "k" });
 
-  it("recognizes a broad .env* rule as already covering the file", () => {
-    writeFileSync(join(dir, ".gitignore"), ".env*\n", "utf8");
-    expect(ensureIgnored(dir, ".env.traceroot")).toBe("already");
+    expect(existsSync(join(dir, ".gitignore"))).toBe(false);
   });
 });
 
@@ -944,131 +946,83 @@ describe("getting the credential setup wrote into the application", () => {
       credentialEnvFile: input.credentialEnvFile ?? null,
     });
 
-  it("loads it on a fresh project, which has no env file of its own", () => {
-    // The case `setup` exists for, and the case the dotenv block never used to
-    // reach: a project with no `.env` and no `.env.local`, where the only env
-    // file on disk is the one this run just wrote. Gated on the app's own
-    // files, the block was omitted exactly here — so the run ended having put
-    // a credential on disk that nothing would ever read.
-    const rendered = task({ credentialEnvFile: "./.env.traceroot" });
-    expect(rendered).toContain("from dotenv import load_dotenv");
-    expect(rendered).toContain('load_dotenv(Path(__file__).resolve().parent / ".env.traceroot")');
-  });
-
-  it("resolves it against the entry point, not the directory the app is started from", () => {
-    // `credentialEnvFile` is named from where the agent stands, which is the
-    // service. The load is a line of the application's own source, and
-    // `python svc/main.py` from the repository root resolved `"./.env.traceroot"`
-    // against the root — python-dotenv treats a missing file as a no-op, so the
-    // key was never loaded and nothing said so.
-    const rendered = task({ credentialEnvFile: "./.env.traceroot" });
-    expect(rendered).toContain('load_dotenv(Path(__file__).resolve().parent / ".env.traceroot")');
-    expect(rendered).not.toContain('load_dotenv("./.env.traceroot")');
-    expect(rendered).toContain("from pathlib import Path");
-  });
-
-  it("climbs out of a nested entry point's directory to reach it", () => {
-    // The file follows the service; the entry point can sit below it.
-    const rendered = task({ entryPoint: "src/main.py", credentialEnvFile: "./.env.traceroot" });
-    expect(rendered).toContain(
-      'load_dotenv(Path(__file__).resolve().parent / "../.env.traceroot")',
-    );
-  });
-
-  it("tells the agent to declare the dependency it is being asked to import", () => {
-    // The follow-through used to live only in the section about the app's own
-    // env files, so a fresh project got neither the load nor this.
-    expect(task({ credentialEnvFile: "./.env.traceroot" })).toContain(
-      "Add `python-dotenv` to the dependency manifest",
-    );
-  });
-
-  it("says why the load is not dead code, because everything else says it is", () => {
-    // The hard rules tell the agent `TRACEROOT_API_KEY` is already in its
-    // environment and not to confirm, print or grep for it. An agent holding
-    // that and no explanation drops the load as redundant — and dropping it is
-    // the whole failure, because the key is in *its* environment only for the
-    // length of this run.
-    const rendered = task({ credentialEnvFile: "./.env.traceroot" });
-    expect(rendered).toContain("is not redundant");
-    expect(rendered).toContain("put it there for this run");
-  });
-
-  it("loads the credential before the app's own file, and aligns the pair", () => {
-    const rendered = task({ envFiles: ["../.env"], credentialEnvFile: "../.env.traceroot" });
-    // The snippet in step 3 only. Step 6 shows the same call again, for the
-    // app's own files, and it is a different block with a different point.
+  it("loads the credential's file once, not twice", () => {
+    // It was twice: one `load_dotenv` for the app's own file and a second for
+    // the `.env.traceroot` setup had written. The credential is in the project's
+    // own env file now, so the two loads are one file and one line.
+    const rendered = task({ envFiles: ["./.env"], credentialEnvFile: "./.env" });
     const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
     const lines = snippet.split("\n").filter((line) => line.startsWith("load_dotenv("));
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain(
-      'load_dotenv(Path(__file__).resolve().parent / "../.env.traceroot")',
-    );
-    expect(lines[1]).toContain('load_dotenv(Path(__file__).resolve().parent / "../.env")');
-    expect(lines[0]).toMatch(/ {3}# the TraceRoot key setup wrote$/);
-    expect(lines[1]).toMatch(/ {3}# the app's own credentials$/);
-    // The notes share a column: one block with a note against each entry,
-    // rather than two unrelated lines. Asserted as a column rather than as a
-    // padding width, which moves whenever either call's shape changes.
-    expect(lines[0]?.indexOf("#")).toBe(lines[1]?.indexOf("#"));
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe('load_dotenv(Path(__file__).resolve().parent / ".env")');
   });
 
-  it("names no file when the run did not write one", () => {
-    // A tracked `.env.traceroot` is refused and a key that already resolved
-    // from the user's own config is never written to one, so the file is
-    // genuinely absent. Naming it anyway would trade a missing credential for
-    // an exception on the first line of the entry point.
+  it("says that the one load is what keeps tracing working after the run", () => {
+    // The hard rules tell the agent `TRACEROOT_API_KEY` is already in its
+    // environment and not to confirm, print or grep for it. An agent holding
+    // that and no explanation treats the load as redundant — and the key is in
+    // *its* environment only for the length of this run. One sentence now,
+    // where the old filename needed a paragraph per language.
+    const rendered = task({ envFiles: ["./.env"], credentialEnvFile: "./.env" });
+
+    expect(rendered).toContain("wrote `TRACEROOT_API_KEY` into `./.env`");
+    expect(rendered).toContain("keeps tracing working once this run ends");
+  });
+
+  it("no longer teaches a loader for a filename of our own", () => {
+    // All of this existed because `.env.traceroot` was a name no runtime reads:
+    // a start-script flag, an environment variable naming the path, and a Node
+    // version floor for the only flag that tolerates the file being absent. The
+    // project's own `.env` is read by whatever the project already uses.
+    for (const language of ["python", "typescript"] as const) {
+      const rendered = task({ language, envFiles: ["./.env"], credentialEnvFile: "./.env" });
+      expect(rendered).not.toContain(".env.traceroot");
+      expect(rendered).not.toContain("--env-file");
+      expect(rendered).not.toContain("DOTENV_CONFIG_PATH");
+      expect(rendered).not.toContain("Node 22.9");
+    }
+  });
+
+  it("puts TypeScript's env load above the import it has to precede", () => {
+    // ES module imports are evaluated in source order, so a side-effect import
+    // of `dotenv/config` above the SDK import runs first — and it has to,
+    // because `initialize()` reads the key out of `process.env`.
+    const rendered = task({ language: "typescript", envFiles: ["./.env"] });
+    const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
+
+    expect(snippet.indexOf('import "dotenv/config"')).toBeGreaterThan(-1);
+    expect(snippet.indexOf('import "dotenv/config"')).toBeLessThan(
+      snippet.indexOf("@traceroot-ai/traceroot"),
+    );
+    expect(rendered).not.toContain("load_dotenv");
+  });
+
+  it("still tells the agent to declare the dependency it imports", () => {
+    expect(task({ envFiles: ["./.env"], credentialEnvFile: "./.env" })).toContain(
+      "Add the dotenv package to the manifest if you import it",
+    );
+  });
+
+  it("names no credential file when the run did not write one", () => {
+    // A tracked env file is refused, and a key that already resolved from the
+    // user's own environment is never written to one. The app's own file is a
+    // separate question and still answered.
     const rendered = task({ envFiles: ["../.env"], credentialEnvFile: null });
-    expect(rendered).not.toContain(".env.traceroot");
-    // The app's own file is a separate question and still answered.
+
+    expect(rendered).not.toContain("wrote `TRACEROOT_API_KEY` into");
     expect(rendered).toContain('load_dotenv(Path(__file__).resolve().parent / "../.env")');
   });
 
-  it("does not hand TypeScript a load that would run after the imports", () => {
-    // ES module imports are hoisted, so a `dotenv` call written above them is
-    // evaluated after them — the SDK would initialize with no key and the line
-    // would look correct. The file has to be loaded before the process starts.
-    const rendered = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
-    expect(rendered).not.toContain("load_dotenv");
-    expect(rendered).toContain("before the process starts");
-    expect(rendered).toContain("imports are hoisted");
-  });
+  it("still resolves the load against the entry point, not the launch directory", () => {
+    // Unchanged by the move, and still the thing that silently breaks: the path
+    // is named from where the agent stands, but the load is a line of the
+    // application's own source, and `python svc/main.py` from the repository
+    // root would resolve `"./.env"` against the root and find nothing.
+    const rendered = task({ entryPoint: "src/main.py", envFiles: ["./.env"] });
 
-  it("preloads dotenv rather than a flag that fails when the file is absent", () => {
-    // `node --env-file=<missing>` exits 9 with `not found`, and the credential
-    // file is gitignored by design — so it is absent in CI and in production
-    // images, where that flag turns "tracing is not configured" into "the
-    // application does not boot". The preload treats a missing file as a no-op
-    // on every runtime the SDK supports.
-    const rendered = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
-    expect(rendered).toContain("node -r dotenv/config");
-    expect(rendered).toContain("--import dotenv/config");
-    expect(rendered).toContain("DOTENV_CONFIG_PATH=./.env.traceroot");
-    // The crashing form, which the note used to recommend. `--env-file-if-exists`
-    // is offered below and does not contain this substring.
-    expect(rendered).not.toContain("--env-file=./.env.traceroot");
-  });
-
-  it("offers the no-dependency flag only from the version that has it", () => {
-    // `--env-file-if-exists` arrived in Node 22.9. Naming it without the floor
-    // sends a 20.6-to-22.8 user from exit 9 to `bad option`, which fails in the
-    // same place for a different reason.
-    const rendered = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
-    expect(rendered).toContain("On Node 22.9 or newer,");
-    expect(rendered).toContain("--env-file-if-exists=./.env.traceroot");
-    // The old floor belonged to the flag that is no longer recommended.
-    expect(rendered).not.toContain("Node 20.6");
-  });
-
-  it("names the package it has just made the app depend on, as Python's branch does", () => {
-    // The Python branch says "Add `python-dotenv` to the dependency manifest".
-    // The Node instruction now imports `dotenv` too, and a reader should not
-    // have to discover that from a failing start script.
-    const node = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
-    expect(node).toContain("add `dotenv` to the dependency");
-    expect(task({ credentialEnvFile: "./.env.traceroot" })).toContain(
-      "Add `python-dotenv` to the dependency manifest",
-    );
+    expect(rendered).toContain('load_dotenv(Path(__file__).resolve().parent / "../.env")');
+    expect(rendered).not.toContain('load_dotenv("./.env")');
   });
 });
 

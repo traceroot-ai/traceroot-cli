@@ -27,6 +27,15 @@ export interface FakeProcessOptions {
   results?: Record<string, Partial<RunProcessResult>>;
   /** `git status --porcelain -z` output, keyed by call order (last value repeats). */
   gitStatus?: string[];
+  /**
+   * Result per git invocation, chosen from its arguments.
+   *
+   * `results` is keyed by program name, which cannot tell one git subcommand
+   * from another — and setup now makes three different ones, where
+   * `check-ignore` and `ls-files` have to be able to answer differently.
+   * `status` is still served by `gitStatus` above.
+   */
+  git?: (args: readonly string[]) => Partial<RunProcessResult>;
 }
 
 /**
@@ -57,7 +66,10 @@ export function fakeRunProcess(options: FakeProcessOptions = {}): {
       return { exitCode: 0, output: value, durationMs: 1, timedOut: false, spawnFailed: false };
     }
 
-    const override = options.results?.[o.program];
+    const override =
+      o.program === "git" && options.git !== undefined
+        ? options.git(o.args)
+        : options.results?.[o.program];
     // A real capture streams as it goes; replaying the canned output through
     // `onData` is what lets the activity feed be exercised without a process.
     if (override?.output !== undefined && override.output !== "") {
