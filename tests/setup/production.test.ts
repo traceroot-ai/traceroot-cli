@@ -15,15 +15,15 @@ describe("what the notice says", () => {
     // right here; that is where to go and look.
     const notice = text("python");
     expect(notice).toContain("TRACEROOT_API_KEY");
-    expect(notice).toContain(".env.traceroot");
+    expect(notice).toContain("./.env");
     expect(notice).not.toContain("Setup wrote");
   });
 
   it("tells a Python user their local run is not configured either", () => {
-    // The SDK reads os.environ and carries no dotenv dependency, and Python
-    // does not read .env.traceroot. Saying "you are set up locally" would be wrong
-    // on their very next run, not just on their next deploy. Compressed to one
-    // line, but not dropped: this is the caveat that bites before any deploy.
+    // The SDK reads os.environ and carries no dotenv dependency, so a plain
+    // `python main.py` with no `load_dotenv()` call still sends nothing. Saying
+    // "you are set up locally" would be wrong on their very next run, not just
+    // on their next deploy. Compressed to one line, but not dropped.
     const notice = text("python");
     expect(notice).toContain("os.environ");
     expect(notice).toContain("python-dotenv");
@@ -33,18 +33,21 @@ describe("what the notice says", () => {
     expect(text("python")).not.toContain("Next.js");
   });
 
-  it("does not let a JavaScript user think a framework will load the file", () => {
-    // This is the sentence the rename invalidated. While the file was called
-    // `.env.local` it was Next.js's own convention and Next.js loaded it; the
-    // notice said so, correctly. `.env.traceroot` is nobody's convention, which
-    // is exactly the point of the name and also the cost of it — so the notice
-    // now has to say the opposite, and say it about Next.js by name, because
-    // that is the belief a reader arrives with.
+  it("does not claim a framework fails to load the project's own env file", () => {
+    // The line it replaces said "nothing loads it at runtime, not node and not
+    // Next.js". That was true of a filename nobody's convention covered. Said
+    // about the project's own `.env` it is false for most of the readers it
+    // reaches — Next.js, Vite and docker-compose all load it — and a footnote a
+    // reader can see is wrong is a footnote they stop reading. What is left is
+    // the part that stays true for all of them: the SDK reads process.env.
     for (const language of ["typescript", "javascript"] as const) {
       const notice = text(language);
-      expect(notice).toContain("nothing loads .env.traceroot at runtime");
-      expect(notice).toContain("not Next.js");
-      expect(notice).toContain("--env-file=.env.traceroot");
+      expect(notice).toContain("the SDK reads process.env");
+      expect(notice).toContain("a plain node entry point needs dotenv");
+      expect(notice).not.toContain("not Next.js");
+      // The flag guidance is gone with the filename that needed it: `--env-file`
+      // exits non-zero on a missing file, and the file is gitignored by design.
+      expect(notice).not.toContain("--env-file");
       expect(notice).not.toContain("os.environ");
     }
   });
@@ -56,19 +59,23 @@ describe("what the notice says", () => {
     expect(notice).toContain("export TRACEROOT_API_KEY");
   });
 
-  it("names the directory the credential actually landed in", () => {
-    // The file follows the service, so a run that instrumented `apps/api` wrote
-    // the key there. Saying `./` sends the user to a path they do not have.
-    const notice = productionNotice({ language: "python", envFileDir: "apps/api" })
+  it("names the file the credential actually landed in, name and all", () => {
+    // Both halves vary: the file follows the service, and the name is whichever
+    // of the project's own env files the run chose. Saying `./.env` when the key
+    // went to `apps/api/.env.local` sends the user to a file they do not have.
+    const notice = productionNotice({
+      language: "python",
+      credentialEnvFile: "apps/api/.env.local",
+    })
       .map(plain)
       .join("\n");
-    expect(notice).toContain("apps/api/.env.traceroot");
-    expect(notice).not.toContain("./.env.traceroot");
+    expect(notice).toContain("apps/api/.env.local");
+    expect(notice).not.toContain("./.env ");
   });
 
-  it("still says ./ for a service at the repository root", () => {
-    const notice = productionNotice({ language: "python", envFileDir: "." }).map(plain).join("\n");
-    expect(notice).toContain("./.env.traceroot");
+  it("falls back to ./.env when the caller names no file", () => {
+    const notice = productionNotice({ language: "python" }).map(plain).join("\n");
+    expect(notice).toContain("./.env");
   });
 
   it("opens on the verb, with no heading in front of it", () => {
@@ -79,7 +86,7 @@ describe("what the notice says", () => {
     for (const language of ["python", "typescript", null] as const) {
       const notice = productionNotice({ language }).map(plain);
       expect(notice[0]).toContain("Add the TRACEROOT_API_KEY token");
-      expect(notice[0]).toContain("./.env.traceroot");
+      expect(notice[0]).toContain("./.env");
       expect(notice[0]).toContain("to your production environment.");
       expect(notice[0]).not.toContain("Production Setup:");
     }

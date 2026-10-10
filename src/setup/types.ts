@@ -216,13 +216,22 @@ export interface SetupContext {
   /** Repository root (git root when inside one, else `cwd`). */
   root: string;
   /**
-   * Where this run's own files go: `.env.traceroot` and `.traceroot/`.
+   * Where this run's own files go: the credential env file and `.traceroot/`.
    *
    * The service directory, not the repository root — see `artifacts.ts`. Fixed
    * before the pipeline starts, because `--resume` has to find the checkpoint
    * before any stage has run.
    */
   artifactDir: string;
+  /**
+   * The project env file this run put the credential in, absolute.
+   *
+   * Undefined when none was written: git tracks the file setup would have used,
+   * or the application already resolves the key from its own environment. Set by
+   * `configure_repository` so the closing notice and the report name the file
+   * the user actually has rather than one this tool would have invented.
+   */
+  credentialEnvFile?: string;
   json: boolean;
   /** True when the CLI may prompt: TTYs, not CI, not `--json`, not `--no-input`. */
   canPrompt: boolean;

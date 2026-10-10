@@ -16,8 +16,8 @@ import { settleAcknowledgement } from "./wizard.js";
  *
  * A first trace from a developer's laptop is the headline promise, and it is
  * also the point at which onboarding tools habitually stop — leaving the user
- * with a working local setup, a `.env.traceroot` they did not write, and no idea
- * that neither travels. So the run ends on exactly this note.
+ * with a working local setup, a key in a gitignored file, and no idea that
+ * neither travels. So the run ends on exactly this note.
  *
  * One instruction and one footnote. It was five lines of runtime trivia with
  * the instruction last, which is the wrong way round for the final thing a
@@ -27,26 +27,32 @@ import { settleAcknowledgement } from "./wizard.js";
  * The footnote survives the compression because it is true and it bites
  * locally, not only on deploy. Neither the Python nor the TypeScript SDK
  * carries a dotenv dependency; `traceroot-py/traceroot/env.py` reads
- * `os.environ` and nothing else. So `.env.traceroot` is only ever loaded by
- * something outside the SDK — a framework, a flag, a library — and for a plain
- * `python main.py` that something does not exist. Telling a Python user their
- * local setup is finished would be wrong on their next run.
+ * `os.environ` and nothing else. The credential now sits in the project's own
+ * env file, so whether it reaches the SDK is a question about the project's
+ * loader rather than about this tool — which is an improvement, because a great
+ * many projects already have one, and a statement the footnote has to make
+ * carefully rather than flatly. It no longer claims nothing loads the file; it
+ * says the SDK does not, and names what would.
  */
 
 /** The environment variable an instrumented application reads its key from. */
 const KEY_ENV = "TRACEROOT_API_KEY";
-const ENV_FILE = ".env.traceroot";
+/** Where the credential lands when the caller does not say. */
+const DEFAULT_ENV_FILE = "./.env";
 
 export interface ProductionNoticeInput {
   /** The instrumented service's language; null when the run never settled one. */
   language: StackLanguage | null;
   /**
-   * Where the credential actually landed, relative to the repository root, or `.`
-   * for the root itself. The file follows the service, so a run that named one
-   * must name the directory here or the notice points at a path the user does not
-   * have.
+   * The file the credential actually landed in, as the user should see it:
+   * relative to the repository root, `./`-prefixed at the root.
+   *
+   * Both halves vary now. The file follows the service, so a run that
+   * instrumented `apps/api` wrote it there; and the *name* is whichever of the
+   * project's own env files the run chose, which is `.env.local` as readily as
+   * `.env`. Naming the wrong one sends the user to a file they do not have.
    */
-  envFileDir?: string;
+  credentialEnvFile?: string;
 }
 
 /**
@@ -61,8 +67,8 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
   // sentence turns on, and colouring it the same as the variable made the line
   // read as one long token rather than an instruction with a subject.
   const key = wizardEnvVar(KEY_ENV);
-  const dir = input.envFileDir === undefined || input.envFileDir === "." ? "." : input.envFileDir;
-  const file = wizardEmphasis(dir === "." ? `./${ENV_FILE}` : `${dir}/${ENV_FILE}`);
+  const path = input.credentialEnvFile ?? DEFAULT_ENV_FILE;
+  const file = wizardEmphasis(path);
 
   return [
     // One sentence, unwrapped, and nothing parenthetical inside it. This was
@@ -78,35 +84,43 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
     `Add the ${key} token from your local ${file} file to your production environment.`,
     // The caveat, compressed to a line, because it is true and it bites
     // locally rather than only on deploy: neither SDK carries a dotenv
-    // dependency, so nothing reads this file at runtime unless the user
-    // arranges it. `.env.traceroot` is nobody's convention — that is the point
-    // of the name and also the cost of it.
-    wizardAside(localCaveat(input.language)),
+    // dependency, so the file reaches the process environment only if the
+    // project loads it.
+    wizardAside(localCaveat(input.language, path)),
   ];
 }
 
 /**
- * Why the file the setup just wrote does not, on its own, do anything.
+ * Why the file holding the key may still not reach the SDK.
  *
- * Per language because the remedy genuinely differs, and the Python one is the
- * one that surprises people: `traceroot/env.py` reads `os.environ` and nothing
- * else, so a plain `python main.py` starts with no key and sends no traces even
- * on the machine where setup succeeded.
+ * Per language because the mechanism genuinely differs, and because the honest
+ * answer changed when the credential moved into the project's own env file. The
+ * old line said nothing loads it, which was true of a name nobody's convention
+ * covered. Said about `.env` it would be false for most of the readers it
+ * reaches — Next.js, Vite, Django and docker-compose all load it — and a
+ * footnote a reader can see is wrong is a footnote they stop reading.
+ *
+ * So it says the part that stays true for everyone: the SDK itself reads only
+ * the process environment. Whether the file gets there is the project's
+ * loader's job, and each language gets the remedy that actually applies.
  */
-function localCaveat(language: StackLanguage | null): string {
+function localCaveat(language: StackLanguage | null, file: string): string {
   if (language === "python") {
-    return `Locally too: the SDK reads os.environ and nothing loads ${ENV_FILE} at runtime — export ${KEY_ENV} in your shell, or load the file with python-dotenv.`;
+    // The one that surprises people: `traceroot/env.py` reads `os.environ` and
+    // nothing else, so a plain `python main.py` with no `load_dotenv()` call
+    // starts with no key and sends nothing, on the very machine where setup
+    // just succeeded.
+    return `Locally too: the SDK reads os.environ, so ${file} only reaches it if your app loads it — call python-dotenv's load_dotenv(), or export ${KEY_ENV} in your shell.`;
   }
   if (language === null) {
     // No language settled, so no runtime to name. Says the true general thing
     // rather than guessing at a remedy that might not apply.
-    return `Locally too: the SDK reads the environment and nothing loads ${ENV_FILE} at runtime — export ${KEY_ENV} in your shell, or load the file with whatever your runtime provides.`;
+    return `Locally too: the SDK reads the process environment, so ${file} only reaches it if your app loads it — export ${KEY_ENV} in your shell if it does not.`;
   }
-  // Every JavaScript runtime, and Next.js by name, because "my framework loads
-  // .env files" is the belief a reader arrives with. It was true while this
-  // file was called `.env.local`; it is not true of a name nobody's convention
-  // covers.
-  return `Locally too: nothing loads ${ENV_FILE} at runtime, not node and not Next.js — run with --env-file=${ENV_FILE}, load it with dotenv, or export ${KEY_ENV} in your shell.`;
+  // Next.js by name, because "my framework loads .env files" is the belief a
+  // reader arrives with — and for this file it is usually right. The line's job
+  // is now to mark the case where it is not, which is a plain entry point.
+  return `Locally too: the SDK reads process.env, so ${file} only reaches it if your app loads it — a framework such as Next.js does, a plain node entry point needs dotenv or export ${KEY_ENV} in your shell.`;
 }
 
 export interface AcknowledgeProductionInput extends ProductionNoticeInput {

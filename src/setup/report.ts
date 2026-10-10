@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { writeFileSecure } from "../util/secureFile.js";
 import type { SetupContext } from "./types.js";
 
@@ -103,7 +103,15 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     "",
     "| Path | Why |",
     "|---|---|",
-    "| `.env.traceroot` | `TRACEROOT_API_KEY` for the application. Git-ignored. |",
+    // The credential's own row only when a credential was written. The file is
+    // one of the project's own now, so neither its name nor its presence is a
+    // constant: `configure_repository` refuses a file git tracks, and does not
+    // run at all when the application already resolves the key. Printing the row
+    // regardless claimed a file this run never touched, and "Git-ignored" went
+    // from a thing setup arranged to a thing setup only checks.
+    ctx.credentialEnvFile !== undefined
+      ? `| \`${cell(relative(ctx.root, ctx.credentialEnvFile))}\` | \`TRACEROOT_API_KEY\` for the application. |`
+      : "",
     "| `.traceroot/config.json` | The CLI's own credential. Git-ignored. |",
     "| `.traceroot/setup.json` | Checkpoint, so `--resume` can continue. |",
     ctx.agent !== undefined

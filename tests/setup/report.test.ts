@@ -59,6 +59,24 @@ describe("the report table", () => {
 });
 
 describe("writing the report", () => {
+  it("names the credential file this run actually used", () => {
+    // The row used to be a constant naming `.env.traceroot`. The file is one of
+    // the project's own now, so its name varies — `.env.local` as readily as
+    // `.env` — and a run in a monorepo wrote it beside the service.
+    const text = renderSetupReport(ctx({ credentialEnvFile: "/repo/apps/api/.env.local" }), NOW);
+
+    expect(text).toContain("| `apps/api/.env.local` | `TRACEROOT_API_KEY` for the application. |");
+  });
+
+  it("omits the credential row when no credential file was written", () => {
+    // `configure_repository` refuses a file git tracks, and does not run at all
+    // when the application already resolves the key from its own environment.
+    // The old constant row claimed a file this run never touched.
+    const text = renderSetupReport(ctx(), NOW);
+
+    expect(text).not.toContain("TRACEROOT_API_KEY` for the application");
+  });
+
   it("replaces a symlink at its path instead of writing through it", () => {
     // `.traceroot/` is the run's own directory, but the report is the last thing
     // a run writes and the only file here written after an agent has been let
