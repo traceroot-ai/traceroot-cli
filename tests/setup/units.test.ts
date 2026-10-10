@@ -1030,9 +1030,45 @@ describe("getting the credential setup wrote into the application", () => {
     // would look correct. The file has to be loaded before the process starts.
     const rendered = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
     expect(rendered).not.toContain("load_dotenv");
-    expect(rendered).toContain("--env-file=./.env.traceroot");
     expect(rendered).toContain("before the process starts");
     expect(rendered).toContain("imports are hoisted");
+  });
+
+  it("preloads dotenv rather than a flag that fails when the file is absent", () => {
+    // `node --env-file=<missing>` exits 9 with `not found`, and the credential
+    // file is gitignored by design — so it is absent in CI and in production
+    // images, where that flag turns "tracing is not configured" into "the
+    // application does not boot". The preload treats a missing file as a no-op
+    // on every runtime the SDK supports.
+    const rendered = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
+    expect(rendered).toContain("node -r dotenv/config");
+    expect(rendered).toContain("--import dotenv/config");
+    expect(rendered).toContain("DOTENV_CONFIG_PATH=./.env.traceroot");
+    // The crashing form, which the note used to recommend. `--env-file-if-exists`
+    // is offered below and does not contain this substring.
+    expect(rendered).not.toContain("--env-file=./.env.traceroot");
+  });
+
+  it("offers the no-dependency flag only from the version that has it", () => {
+    // `--env-file-if-exists` arrived in Node 22.9. Naming it without the floor
+    // sends a 20.6-to-22.8 user from exit 9 to `bad option`, which fails in the
+    // same place for a different reason.
+    const rendered = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
+    expect(rendered).toContain("On Node 22.9 or newer,");
+    expect(rendered).toContain("--env-file-if-exists=./.env.traceroot");
+    // The old floor belonged to the flag that is no longer recommended.
+    expect(rendered).not.toContain("Node 20.6");
+  });
+
+  it("names the package it has just made the app depend on, as Python's branch does", () => {
+    // The Python branch says "Add `python-dotenv` to the dependency manifest".
+    // The Node instruction now imports `dotenv` too, and a reader should not
+    // have to discover that from a failing start script.
+    const node = task({ language: "typescript", credentialEnvFile: "./.env.traceroot" });
+    expect(node).toContain("add `dotenv` to the dependency");
+    expect(task({ credentialEnvFile: "./.env.traceroot" })).toContain(
+      "Add `python-dotenv` to the dependency manifest",
+    );
   });
 });
 

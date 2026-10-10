@@ -253,6 +253,17 @@ const FALLBACK_INTERPRETER = "./.venv/bin/python";
  * *after* the imports it was meant to precede — there the file has to be loaded
  * before the process starts, which is a change to how the app is launched
  * rather than a line of code.
+ *
+ * That change is a `dotenv` preload rather than `--env-file`, which looks like
+ * the smaller one and is not: the credential file is gitignored by design, so it
+ * is absent in CI and in production images, and `node --env-file=<missing>`
+ * exits 9 before the application starts. Recommending it would turn "tracing is
+ * not configured" into "the application does not boot", in the one environment
+ * nobody runs `traceroot setup` in. `--env-file-if-exists` tolerates the absence
+ * but only from Node 22.9, so it cannot carry the instruction on its own — on
+ * 20.6 through 22.8 it is an unknown option, which fails the same way. The
+ * preload works on every runtime the SDK supports and treats a missing file as
+ * a no-op, at the cost of a dependency the task now tells the agent to declare.
  */
 function credentialEnvFileNote(service: DetectedService, credentialEnvFile: string | null): string {
   if (credentialEnvFile === null) {
@@ -270,10 +281,14 @@ Add \`python-dotenv\` to the dependency manifest, since you are importing it.
 \`traceroot setup\` wrote \`TRACEROOT_API_KEY\` to \`${credentialEnvFile}\`. It is in **your**
 environment because setup put it there for this run; nothing loads that file afterwards, so the
 application stops sending traces the moment this run ends. Load it **before the process starts**:
-on Node 20.6 or newer, \`--env-file=${credentialEnvFile}\` on the start script is the smallest
-change; on older runtimes, which do not have that flag, preload \`dotenv\` from outside the entry
-point. Not from inside the entry point: ES module imports are hoisted, so a \`dotenv\` call
-written above them still runs after they have been evaluated.
+preload \`dotenv\` on the start script — \`node -r dotenv/config\`, or \`--import dotenv/config\` for
+ES modules — with \`DOTENV_CONFIG_PATH=${credentialEnvFile}\`, and add \`dotenv\` to the dependency
+manifest, since you are importing it. On Node 22.9 or newer,
+\`--env-file-if-exists=${credentialEnvFile}\` does the same job without the package. Not plain
+\`--env-file\`: that file is gitignored, so it is absent in CI and in production images, where that
+flag exits non-zero and the application never starts. Not from inside the entry point either: ES
+module imports are hoisted, so a \`dotenv\` call written above them still runs after they have been
+evaluated.
 `;
 }
 
