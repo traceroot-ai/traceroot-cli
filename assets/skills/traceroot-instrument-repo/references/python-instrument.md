@@ -26,10 +26,13 @@ traceroot.initialize(
 ### Supported integrations
 
 TraceRoot auto-instruments many model providers and agent frameworks (OpenAI, Anthropic,
-LangChain/LangGraph, and more). The canonical, current list is the docs integrations overview:
-**https://traceroot.ai/docs/integrations/overview** — coverage changes over time, so treat the
-docs page (not this file) as the source of truth, and don't assume a library is unsupported
-without checking it.
+LangChain/LangGraph, and more). The installed SDK is the current list — read it with the one command below rather than fetching
+a docs page, which costs a network round trip to learn something the package already knows.
+Coverage changes over time, so don't assume a library is unsupported without looking.
+
+Until the SDK is installed there is nothing to introspect, so work from the published list at
+https://traceroot.ai/docs/integrations/overview for the analyze step only — once it is
+installed, the enum below is authoritative.
 
 Pass only the `Integration.*` members for libraries the project actually uses. The enum names
 aren't always the obvious ones (e.g. Gemini is `Integration.GOOGLE_GENAI`), so rather than
@@ -39,6 +42,10 @@ guessing, list the exact members available in the installed SDK:
 from traceroot import Integration
 print([i.name for i in Integration])  # exact members for your installed version
 ```
+
+Run this **once**, with the interpreter your task names rather than bare `python`, and read every
+member you need off that single result. Re-checking per integration is the same answer again at
+the cost of another interpreter start.
 
 ## Add manual spans with `@observe`
 

@@ -25,7 +25,7 @@ TraceRoot.initialize({
 
 Other supported `instrumentModules` keys: `claudeAgentSDK`, `bedrock`, `openaiAgents` (pass the imported module, same as above). Pass only the ones the project uses. For the Vercel AI SDK, no entry is needed — set `experimental_telemetry: { isEnabled: true }` on each call and TraceRoot enriches those spans automatically. For Mastra, use `@traceroot-ai/mastra`'s `TraceRootExporter` instead of `instrumentModules`.
 
-The TS runtime supports fewer frameworks than Python (many agent frameworks are Python-only). The canonical, current list per runtime is https://traceroot.ai/docs/integrations/overview — treat the docs page as the source of truth, since coverage changes over time.
+The TS runtime supports fewer frameworks than Python (many agent frameworks are Python-only). The installed package is the current list — read the `instrumentModules` keys from `node_modules/@traceroot-ai/traceroot`'s type declarations rather than fetching a docs page, which costs a network round trip to learn what the dependency already states. Those keys are the auto-instrumentation coverage; the Vercel AI SDK and Mastra paths above are separate and are not keys. Coverage changes over time, so look rather than assume. Before the dependency is installed there is nothing to read, so consult the published list at https://traceroot.ai/docs/integrations/overview for the analyze step only; once `node_modules` exists, those type declarations are authoritative.
 
 ### LangChain note
 
@@ -44,7 +44,7 @@ TraceRoot.initialize({
 Use `observe()` to wrap functions that represent meaningful steps: agent entrypoints, tool calls, orchestration logic.
 
 ```typescript
-import { observe } from '@traceroot-ai/traceroot';
+import { observe, updateCurrentSpan } from '@traceroot-ai/traceroot';
 
 // Agent entrypoint
 const result = await observe({ name: 'agent.run', type: 'agent' }, async () => {
@@ -58,8 +58,11 @@ const docs = await observe({ name: 'search_tool', type: 'tool' }, async () => {
 
 // Generic span with input recorded
 const answer = await observe(
-  { name: 'process_step', type: 'span', input: { query } },
-  async () => await processQuery(query),
+  { name: 'process_step', type: 'span' },
+  async () => {
+    updateCurrentSpan({ input: { query } });
+    return await processQuery(query);
+  },
 );
 ```
 
@@ -69,7 +72,6 @@ const answer = await observe(
 |--------|------|---------|-------------|
 | `name` | `string` | `fn.name` or `'anonymous'` | Span name shown in the UI |
 | `type` | `string` | `'span'` | `'span'`, `'tool'`, `'agent'`, or `'llm'` |
-| `input` | `unknown` | — | Input data to record on the span |
 | `metadata` | `object` | — | Static metadata to attach |
 | `tags` | `string[]` | — | Tags for filtering |
 
