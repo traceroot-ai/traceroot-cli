@@ -35,6 +35,7 @@
     "codegen": "openapi-typescript openapi.json -o src/api/generated/schema.ts",
     "codegen:check": "node scripts/codegen-check.mjs",
     "skills:refresh": "node scripts/refresh-skills.mjs",
+    "skills:check": "node scripts/check-skills-provenance.mjs",
     "pack:check": "node scripts/pack-check.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome lint .",
