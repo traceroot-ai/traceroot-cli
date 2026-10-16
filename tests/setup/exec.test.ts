@@ -308,3 +308,126 @@ describe("a Ctrl+C part-way through a captured run", () => {
     15000,
   );
 });
+
+describe("a survivor that ignored SIGTERM", () => {
+  it.skipIf(WINDOWS)(
+    "is still escalated to SIGKILL once the run has settled",
+    async () => {
+      // The run settles a quarter-second after the direct child exits, which is
+      // the moment a grandchild that ignored SIGTERM is still running. The
+      // escalation is the only thing left that ends it, so it has to keep the
+      // CLI alive long enough to fire: this harness awaits the run and then has
+      // nothing else to do, which is the shape of the last stage of a run.
+      const dir = await workspace();
+      const marker = join(dir, "survived");
+      const grandchild = join(dir, "grandchild.cjs");
+      const child = join(dir, "child.cjs");
+      const harness = join(dir, "harness.mjs");
+      const module = new URL("../../dist/setup/exec.js", import.meta.url).href;
+
+      await writeFile(
+        grandchild,
+        [
+          // Ignoring SIGTERM is what leaves only the escalation, and `inherit`
+          // below is what makes it the holder of the run's stdio pipes.
+          'process.on("SIGTERM", () => {});',
+          'setTimeout(() => require("node:fs").writeFileSync(process.argv[2], "late"), 3500);',
+        ].join("\n"),
+      );
+      await writeFile(
+        child,
+        [
+          'const { spawn } = require("node:child_process");',
+          'spawn(process.execPath, [process.argv[2], process.argv[3]], { stdio: "inherit" });',
+          "setTimeout(() => {}, 8000);",
+        ].join("\n"),
+      );
+      await writeFile(
+        harness,
+        [
+          `const { runProcess } = await import(${JSON.stringify(module)});`,
+          "await runProcess({",
+          "  program: process.execPath,",
+          `  args: [${JSON.stringify(child)}, ${JSON.stringify(grandchild)}, ${JSON.stringify(marker)}],`,
+          `  cwd: ${JSON.stringify(dir)},`,
+          '  env: { PATH: process.env.PATH ?? "" },',
+          '  stdio: "capture",',
+          "  timeoutMs: 300,",
+          "});",
+        ].join("\n"),
+      );
+
+      const result = spawnSync(process.execPath, [harness], { encoding: "utf8" });
+      await sleep(4000);
+
+      expect(result.status).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    },
+    19000,
+  );
+});
+
+describe("a cancelled run whose binary is missing", () => {
+  it("neither signals the CLI's own group nor waits out the escalation", async () => {
+    // A failed spawn hands back a child with no pid and emits `error` with no
+    // `exit` to follow it, so the run settles with `exited` still false. On a
+    // run cancelled before the stage started, that left two marks. The SIGTERM
+    // went through `child.kill` on a child that never existed, which reaches
+    // `kill(0, …)` — the CLI's OWN process group — and `stillRunning()` read
+    // that child as live, so the escalation was never cleared: a referenced
+    // two-second timer held the CLI open after a run that had settled in three
+    // milliseconds.
+    //
+    // Out of process, and `detached` so the harness leads a group of its own:
+    // that stray signal would otherwise land on the test runner's group. The
+    // harness catches it rather than dying of it, so the escalation delay is
+    // observable too instead of being cut short.
+    const dir = await workspace();
+    const harness = join(dir, "harness.mjs");
+    const module = new URL("../../dist/setup/exec.js", import.meta.url).href;
+
+    await writeFile(
+      harness,
+      [
+        `const { runProcess } = await import(${JSON.stringify(module)});`,
+        "let selfSignalled = null;",
+        'process.on("SIGTERM", () => {',
+        '  selfSignalled = "SIGTERM";',
+        "});",
+        "const controller = new AbortController();",
+        "controller.abort();",
+        "const result = await runProcess({",
+        '  program: "traceroot-no-such-binary-exists",',
+        "  args: [],",
+        `  cwd: ${JSON.stringify(dir)},`,
+        '  env: { PATH: process.env.PATH ?? "" },',
+        '  stdio: "capture",',
+        "  signal: controller.signal,",
+        "});",
+        // Node dispatches a signal handler from the event loop rather than from
+        // the `kill` that raised it, so a pending one needs a turn to arrive.
+        "await new Promise((resolve) => setTimeout(resolve, 100));",
+        "const { exitCode, spawnFailed } = result;",
+        "process.stdout.write(`${JSON.stringify({ exitCode, spawnFailed, selfSignalled })}\\n`);",
+      ].join("\n"),
+    );
+
+    const started = Date.now();
+    const run = spawnSync(process.execPath, [harness], { encoding: "utf8", detached: true });
+    const elapsed = Date.now() - started;
+
+    expect(run.signal).toBe(null);
+    expect(run.status).toBe(0);
+    expect(elapsed).toBeLessThan(1500);
+    const reported = JSON.parse(run.stdout) as {
+      exitCode: number;
+      spawnFailed: boolean;
+      selfSignalled: string | null;
+    };
+    expect(reported.selfSignalled).toBe(null);
+    // The outcome itself is unchanged: the caller still learns that the program
+    // was never there.
+    expect(reported.spawnFailed).toBe(true);
+    expect(reported.exitCode).toBe(127);
+  }, 15000);
+});

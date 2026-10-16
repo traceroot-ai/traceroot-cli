@@ -1,5 +1,5 @@
 import { S_BAR, S_STEP_ERROR, S_STEP_SUBMIT } from "@clack/prompts";
-import color from "picocolors";
+import { createColors } from "picocolors";
 import { type Writers, colorEnabled, writeJson } from "../output.js";
 import type { SetupErrorCode } from "./errors.js";
 import type { SetupStage, SetupStageStatus } from "./types.js";
@@ -146,10 +146,16 @@ export function stageLineEmitter(writers: Writers): SetupEmitter {
   // picocolors decides from stdout and from `CI`, never from the sink being
   // written to; the CLI's contract is the sink's own `colorEnabled`, so a
   // redirected stderr gets plain text like every other command's output.
-  const on = colorEnabled(writers.err);
-  const dim = (text: string): string => (on ? color.dim(text) : text);
-  const cyan = (text: string): string => (on ? color.cyan(text) : text);
-  const red = (text: string): string => (on ? color.red(text) : text);
+  //
+  // An instance built from that answer rather than a gate in front of the
+  // default one. The default instance latches its decision at import, from
+  // stdout — so a gate could only ever turn colour off: `traceroot setup
+  // > out.log` on a terminal left the rail and the markers unpainted, because
+  // stdout was a file while the frame was going to the terminal stderr. The
+  // enablement has to be the thing that is replaced, not something wrapped
+  // around it.
+  const paint = createColors(colorEnabled(writers.err));
+  const { dim, cyan, red } = paint;
   const rail = dim(S_BAR);
   const started = new Set<SetupStage>();
 

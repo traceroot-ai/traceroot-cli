@@ -1,4 +1,4 @@
-import { CliError } from "../output.js";
+import { CliError, ExitCode } from "../output.js";
 import type { SetupStage } from "./types.js";
 
 /**
@@ -17,21 +17,48 @@ export type SetupErrorCode =
   | "TRACE_TIMEOUT"
   | "BACKEND_UNSUPPORTED"
   | "UNSAFE_OVERWRITE"
-  // A user pressing Ctrl+C is not a failure; it exits 0 like a declined prompt.
-  | "CANCELLED";
+  // A question the user answered no to. A decision rather than a fault, so it
+  // exits 0: a non-zero code here would make a deliberate stop look like a bug
+  // to every script that wraps this command.
+  | "CANCELLED"
+  // A question the user never answered — Ctrl+C, or Escape, at a prompt. The
+  // same keypress a shell reports as 130, and the reason it cannot share
+  // `CANCELLED`'s 0: `traceroot setup && <next step>` must not carry on through
+  // an interrupt, and the only thing that stops it is a non-zero status.
+  | "INTERRUPTED";
 
-/** Stable code → exit status. Part of the command's contract; do not renumber. */
+/**
+ * Stable code → exit status. Part of the command's contract; do not renumber.
+ *
+ * Two bands, because these numbers are not setup's to spend. 1–5 belong to the
+ * whole CLI ({@link ExitCode}) and are referenced rather than repeated here, so
+ * a script that reads 3 as "re-authenticate" is right whichever command handed
+ * it back. Setup's own outcomes start at 10, and the gap is deliberate: the
+ * shared table owns everything below it, including numbers it has not used yet.
+ *
+ * They were numbered from 2 up, which collided with all of it —
+ * `setup --trace-timeout abc` exits 2 as a usage error and so did a run that was
+ * not logged in, AGENT_FAILED shared 5 with the retryable network class, and the
+ * `--json` envelope, which derives its `code` string from the number, named a
+ * class the run had nothing to do with.
+ *
+ * 130 is the shell's own convention for a process ended by SIGINT, not a number
+ * this table invented, which is why it sits outside both bands.
+ */
 export const SETUP_EXIT_CODES: Readonly<Record<SetupErrorCode, number>> = {
-  UNEXPECTED: 1,
-  NOT_AUTHENTICATED: 2,
-  AMBIGUOUS: 3,
-  UNSUPPORTED: 4,
-  AGENT_FAILED: 5,
-  APP_VERIFICATION_FAILED: 6,
-  TRACE_TIMEOUT: 7,
-  BACKEND_UNSUPPORTED: 8,
-  UNSAFE_OVERWRITE: 9,
+  UNEXPECTED: ExitCode.internal,
+  // Not setup-specific at all: no credentials is what the shared `auth` class
+  // already means, and a caller re-authenticating in response is right.
+  NOT_AUTHENTICATED: ExitCode.auth,
+  AMBIGUOUS: 10,
+  UNSUPPORTED: 11,
+  AGENT_FAILED: 12,
+  APP_VERIFICATION_FAILED: 13,
+  TRACE_TIMEOUT: 14,
+  BACKEND_UNSUPPORTED: 15,
+  UNSAFE_OVERWRITE: 16,
   CANCELLED: 0,
+  INTERRUPTED: 130,
 };
 
 export interface SetupErrorOptions {

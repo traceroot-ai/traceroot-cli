@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserOpenCommand, runDeviceFlow } from "../../src/auth/deviceFlow.js";
+import { browserOpenCommand, formatUserCode, runDeviceFlow } from "../../src/auth/deviceFlow.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { type FetchCall, createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -437,6 +437,36 @@ describe("runDeviceFlow", () => {
     expect((h.opened[0] as string).match(/\?/g)?.length).toBe(1);
   });
 
+  it("prints the code grouped and still sends it raw", async () => {
+    // What the auth host actually issues: eight characters, no separator. The
+    // fixture above is already grouped, which is why it never showed this.
+    const h = harness({
+      responder: (call) =>
+        call.url.endsWith("/api/auth/device/code")
+          ? jsonResponse({
+              device_code: "dev-1",
+              user_code: "UPGU6SCV",
+              verification_uri: "https://ui/device",
+              expires_in: 1800,
+              interval: 5,
+            })
+          : jsonResponse({ access_token: "sess-1" }),
+    });
+    await h.run();
+
+    // Shown the way the browser shows it, so the two codes read as one code.
+    expect(h.err.data).toContain("Confirm this code in your browser: UPGU-6SCV");
+    // And nowhere else. The hyphen is not part of the code: the verification
+    // URL — printed, and handed to the browser opener — carries the raw value,
+    // because that is what the auth host's lookups compare against.
+    expect(new URL(h.opened[0] as string).searchParams.get("user_code")).toBe("UPGU6SCV");
+    expect(h.err.data).toContain("https://ui/device?user_code=UPGU6SCV");
+    expect(h.err.data).not.toContain("user_code=UPGU-6SCV");
+    // The poll grant is the device code, which this never touches.
+    const poll = h.calls.find((c) => c.url.endsWith("/api/auth/device/token"));
+    expect(JSON.parse(String(poll?.init.body)).device_code).toBe("dev-1");
+  });
+
   it("surfaces a device/code failure as a CliError", async () => {
     const h = harness({
       responder: () => jsonResponse({ error: "invalid_client" }, 400),
@@ -506,6 +536,21 @@ describe("runDeviceFlow timeouts and malformed bodies", () => {
     );
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).message).toContain("incomplete");
+  });
+});
+
+describe("formatUserCode", () => {
+  it("groups the eight-character code the auth host issues", () => {
+    expect(formatUserCode("UPGU6SCV")).toBe("UPGU-6SCV");
+  });
+
+  it("leaves a code it does not recognise exactly as it arrived", () => {
+    // Already grouped by the server: regrouping would move the separator.
+    expect(formatUserCode("ABCD-EFGH")).toBe("ABCD-EFGH");
+    // Some other length: there is no fourth character to break after that a
+    // user could check against the browser.
+    expect(formatUserCode("ABC123")).toBe("ABC123");
+    expect(formatUserCode("ABCDEFGHIJ")).toBe("ABCDEFGHIJ");
   });
 });
 

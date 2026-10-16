@@ -204,6 +204,7 @@ export const runProcess: RunProcess = (options) =>
     }
 
     let drainTimer: NodeJS.Timeout | undefined;
+    let escalation: NodeJS.Timeout | undefined;
 
     const finish = (exitCode: number, spawnFailed = false): void => {
       if (settled) {
@@ -228,6 +229,13 @@ export const runProcess: RunProcess = (options) =>
       }
       clearTimeout(timer);
       clearTimeout(drainTimer);
+      // The escalation is the one timer this does not always clear, because it
+      // is the one timer whose job starts here: see `kill`. It goes only when
+      // nothing is left for it to reach, so an ordinary kill — the group died on
+      // SIGTERM — still ends the process without a two-second tail.
+      if (escalation !== undefined && !stillRunning()) {
+        clearTimeout(escalation);
+      }
       if (pgid !== undefined) {
         detachedGroups.delete(pgid);
         if (detachedGroups.size === 0) {
@@ -245,12 +253,27 @@ export const runProcess: RunProcess = (options) =>
     };
 
     /**
+     * Whether a process was ever started, which both checks below have to ask.
+     *
+     * A failed spawn still hands back a child object, but one with no pid, and
+     * it emits `error` with no `exit` to follow — so neither check can be read
+     * straight off the child. `child.kill` on it reaches `kill(0, …)`, which
+     * signals the CLI's OWN process group rather than a child; and `exited`
+     * never becomes true, which read a child that never existed as live and so
+     * left the escalation armed with nothing for it to reach.
+     */
+    const hasProcess = (): boolean => child.pid !== undefined;
+
+    /**
      * Signals the child, and on POSIX its whole process group.
      *
      * `child.kill` reaches only the direct child, so a grandchild survived it
      * and kept both the work and the stdio pipes alive.
      */
     const signalChild = (signal: NodeJS.Signals): void => {
+      if (!hasProcess()) {
+        return;
+      }
       if (pgid !== undefined) {
         signalGroup(pgid, signal);
         return;
@@ -259,11 +282,30 @@ export const runProcess: RunProcess = (options) =>
     };
 
     /** True while anything this run started is still running. */
-    const stillRunning = (): boolean => (pgid === undefined ? !exited : signalGroup(pgid, 0));
+    const stillRunning = (): boolean => {
+      if (!hasProcess()) {
+        return false;
+      }
+      return pgid === undefined ? !exited : signalGroup(pgid, 0);
+    };
 
     const kill = (): void => {
       signalChild("SIGTERM");
-      setTimeout(() => {
+      // One escalation per run, however many ways the kill arrives: a timeout
+      // and an abort can both fire, and each sends its own SIGTERM, but the
+      // deadline for honouring the first one is the deadline.
+      if (escalation !== undefined) {
+        return;
+      }
+      // Referenced, which every other timer here is not, and deliberately
+      // outliving the promise. The promise settles DRAIN_GRACE_MS after the
+      // direct child exits, and that is precisely the moment a grandchild which
+      // ignored SIGTERM is still running — so an unreferenced timer lets Node
+      // exit first whenever nothing else is holding the CLI open, which is what
+      // the end of a run looks like, and the survivor this kill was meant to
+      // end outlives the CLI. `finish` releases it as soon as the group is
+      // gone.
+      escalation = setTimeout(() => {
         // Gated on the group rather than on the promise: the promise now
         // settles shortly after the direct child exits, which is exactly when
         // a grandchild that ignored SIGTERM is still running and still needs
@@ -271,7 +313,7 @@ export const runProcess: RunProcess = (options) =>
         if (stillRunning()) {
           signalChild("SIGKILL");
         }
-      }, KILL_ESCALATION_MS).unref?.();
+      }, KILL_ESCALATION_MS);
     };
 
     const onAbort = (): void => {
