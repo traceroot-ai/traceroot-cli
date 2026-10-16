@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join, relative } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import { PROJECT_ENV_FILES } from "./envWrite.js";
 
 /**
@@ -75,6 +75,67 @@ export function detectPythonEnvironment(
     }
   }
   return { interpreter: null };
+}
+
+/**
+ * Puts a virtualenv's scripts on PATH, the way activating it would.
+ *
+ * `detect_stack` names the project's own check as the project documents it —
+ * `pytest`, not `.venv/bin/pytest` — because that is the command a user types
+ * and the one that belongs in a report. It resolves for them because their
+ * shell has the virtualenv activated. The CLI's own environment does not, so
+ * spawning that command verbatim fails with ENOENT before a single test runs,
+ * and the run reports a project whose tests fail after instrumentation when
+ * the tests were never reached.
+ *
+ * The interpreter named here is the one the agent was told to install the SDK
+ * into, so the environment the check runs in is the environment the
+ * instrumented code was installed into. Those two must not disagree.
+ *
+ * Which spellings of PATH this rewrites depends on the platform, because the
+ * variable itself does. On POSIX the lookup reads `PATH` and only `PATH`:
+ * `Path` and `path` are unrelated variables that reach the child intact, so
+ * they are left exactly as they were found — deleting them loses whatever the
+ * parent meant by them, and prepending the virtualenv to one of their values
+ * replaces the real PATH with something that was never a search path.
+ *
+ * On Windows every spelling is one variable, which a spread copy of
+ * `process.env` cannot represent: the child would be handed both `Path` and
+ * `PATH`, and which of them wins is the host's business. There they are
+ * collapsed onto a single key, so the virtualenv cannot land on the spelling
+ * that loses and silently never reach the child. (Windows is not verifiable
+ * from this repository's test platform; what is verifiable is that Node's own
+ * spawn path calls those keys case-insensitive on win32 and passes on only one
+ * of each.)
+ *
+ * A non-absolute interpreter is ignored. `dirname("python3")` is `"."`, and
+ * prepending that would put the service directory at the front of the child's
+ * PATH, where a repository file named `pytest` would be executed in preference
+ * to the real one.
+ */
+export function withVenvOnPath(
+  env: NodeJS.ProcessEnv,
+  interpreter: string | null,
+): NodeJS.ProcessEnv {
+  if (interpreter === null || !isAbsolute(interpreter)) {
+    return env;
+  }
+  const binDir = dirname(interpreter);
+  // Read at call time rather than at module load, so the Windows branch is
+  // reachable from a test running on a POSIX host.
+  const inherited =
+    process.platform === "win32"
+      ? Object.keys(env).filter((name) => name.toUpperCase() === "PATH")
+      : ["PATH"];
+  const current = inherited
+    .map((name) => env[name])
+    .find((value) => value !== undefined && value !== "");
+  const next: NodeJS.ProcessEnv = { ...env };
+  for (const name of inherited) {
+    delete next[name];
+  }
+  next.PATH = current === undefined ? binDir : `${binDir}${delimiter}${current}`;
+  return next;
 }
 
 /**
