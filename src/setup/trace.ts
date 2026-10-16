@@ -32,6 +32,32 @@ const POLL_SCHEDULE_MS = [2000, 2000, 3000, 5000] as const;
 const STEADY_INTERVAL_MS = 5000;
 
 /**
+ * How long the run's own window keeps the poll to itself after it has closed.
+ *
+ * A trace is in this list once the backend has finished receiving it, which is
+ * seconds after it started, so a window that closed a moment ago can still fill
+ * up. That grace is worth waiting for: a trace inside the window is
+ * attributable to this run, and one that merely arrived during setup is not.
+ *
+ * Waiting the whole timeout for it is not. Once the window has been closed this
+ * long and is still empty, nothing ran the application inside it and no further
+ * waiting changes that — the project's check can exercise instrumented code
+ * without ever reaching the entry point, which is the ordinary case, not a
+ * strange one. The poll used to hold its one wider look until the deadline, so
+ * a run whose trace was already in the project reported success two minutes
+ * after it could have. Past the grace the wider look is taken on every attempt
+ * instead, and what it finds is reported for what it is.
+ *
+ * How long the grace is, is not a judgement about any backend's ingestion lag,
+ * which this process cannot measure. It is {@link POLL_SCHEDULE_MS} spent in
+ * full: the point at which the poll's own back-off gives up on a prompt arrival
+ * and settles into {@link STEADY_INTERVAL_MS}. Deriving it means there is one
+ * decision about how long "promptly" is rather than two that can disagree, and
+ * tuning the schedule carries the grace with it.
+ */
+export const WINDOW_GRACE_MS = POLL_SCHEDULE_MS.reduce((total, ms) => total + ms, 0);
+
+/**
  * The endpoint's documented maximum. One page, newest-first, with no ascending
  * order and no cursor, so "the earliest trace" is only ever the earliest of
  * this page — which is why the page is as wide as the endpoint allows and why
@@ -102,6 +128,101 @@ export interface TraceAttribution {
   candidates: number;
   /** The page came back full, so a matching trace may have fallen off the end. */
   truncated: boolean;
+  /**
+   * How many spans the trace holds, or null when the response did not say.
+   *
+   * The one field in a list row that says anything about how much of the
+   * application the trace covers, and the reason this interface is where it
+   * belongs: a span count is not part of the trace's identity, it is evidence
+   * about what the trace shows. {@link isThinTrace} is the only reading of it
+   * this process is prepared to defend.
+   *
+   * Null rather than zero for "not said". `span_count` is required and
+   * non-nullable in the published list response, so in practice a number always
+   * arrives; the null exists because this poll reads rows structurally, and a
+   * deployment or a stub that omits the field must not be read as a trace with
+   * nothing in it — the one value that would make the run say the opposite of
+   * the truth.
+   */
+  spanCount: number | null;
+}
+
+/**
+ * The most spans a trace can hold and still show less than it appears to.
+ *
+ * One. A trace with a single span is one instrumented function, entered and
+ * left, with nothing instrumented running inside it. It establishes that the
+ * SDK is installed, that the credential reaches the backend and that something
+ * ran — and nothing at all about how much of the application is covered,
+ * because there is no parent and child in it to read a call path from. That is
+ * a structural fact about the trace rather than a guess about the program.
+ *
+ * Any number above one would be a guess. Two spans could be an entry point and
+ * its one model call, which for some programs is the entire program; five could
+ * be a third of a single request. Nothing this run has looked at says which: a
+ * list row carries a span count and no structure, and stack detection reports
+ * the language, the framework and the entry point, and nothing about which
+ * functions call a model or are registered as tools. So the bound sits at the
+ * one place where the reading needs no knowledge of the application at all.
+ *
+ * It is still the wrong bound for a single-function script, where one span is
+ * the whole truth. Which is why what it produces is a remark and never a
+ * failure: the run says how many spans it found and what one span does and does
+ * not show, and leaves the judgement with the only party that knows the
+ * program.
+ */
+export const THIN_TRACE_MAX_SPANS = 1;
+
+/**
+ * Whether a span count is small enough to be worth saying out loud.
+ *
+ * One function, so the threshold is decided once. A second copy of `<= 1` in
+ * the report and a third in the closing output would be three things that can
+ * disagree about what a run promised.
+ *
+ * An unknown count is not thin. A deployment that did not report one has told
+ * this process nothing, and silence is not evidence of a small trace.
+ *
+ * Narrows rather than returning a bare boolean, so a caller that goes on to
+ * print the number does not have to re-test for it and risk disagreeing with
+ * this function about which values are numbers.
+ */
+export function isThinTrace(spanCount: number | null | undefined): spanCount is number {
+  return typeof spanCount === "number" && spanCount <= THIN_TRACE_MAX_SPANS;
+}
+
+/**
+ * A span count as prose rather than as a figure.
+ *
+ * Here beside the threshold because the count and the reading of it are one
+ * decision, and because the count is printed by more than one surface — the
+ * report's verdict, the report's trace row, the line the poll closes on. Three
+ * spellings of "1 span" read as three different findings.
+ */
+export function spanPhrase(count: number): string {
+  if (count === 0) {
+    return "no spans";
+  }
+  return count === 1 ? "a single span" : `${count} spans`;
+}
+
+/**
+ * What a trace this process calls thin actually holds, in the words every
+ * surface that reports it uses.
+ *
+ * Written once and shared, because the report and the closing output make the
+ * same claim about the same trace, and a run whose two records of it read
+ * differently is worse than either of them on its own. Each surface supplies
+ * its own subject and its own next step; this is the finding they share.
+ *
+ * Claims nothing about the application. "One instrumented function ran" is read
+ * off the span count; whether that is the whole program is not knowable from
+ * here, and the sentence deliberately stops before saying so.
+ */
+export function thinTraceFinding(spanCount: number): string {
+  return spanCount === 1
+    ? "holds a single span: one instrumented function ran, and nothing instrumented ran inside it"
+    : `holds ${spanPhrase(spanCount)}: the response reports nothing in it at all`;
 }
 
 export type PollForTraceResult =
@@ -127,6 +248,7 @@ interface Row {
   traceUrl: string;
   startTime: string;
   name: string;
+  spanCount: number | null;
 }
 
 function rowOf(value: unknown): Row | null {
@@ -138,6 +260,7 @@ function rowOf(value: unknown): Row | null {
   const traceUrl = row.trace_url;
   const startTime = row.trace_start_time;
   const name = row.name;
+  const spanCount = row.span_count;
   if (typeof traceId !== "string" || typeof traceUrl !== "string") {
     return null;
   }
@@ -146,6 +269,14 @@ function rowOf(value: unknown): Row | null {
     traceUrl,
     startTime: typeof startTime === "string" ? startTime : "",
     name: typeof name === "string" ? name : "",
+    // Whole and not negative, or not a count. A fractional or negative
+    // `span_count` is not a number any reading of it would survive, and the
+    // honest answer to a row carrying one is that the response did not say how
+    // many spans the trace holds.
+    spanCount:
+      typeof spanCount === "number" && Number.isInteger(spanCount) && spanCount >= 0
+        ? spanCount
+        : null,
   };
 }
 
@@ -175,7 +306,7 @@ function rowsOf(response: unknown): unknown[] {
 }
 
 /**
- * Parses a trace start time to epoch milliseconds.
+ * Parses a trace start time to epoch milliseconds, fraction and all.
  *
  * The backend emits UTC timestamps with no zone designator
  * (`2026-07-28T23:29:34.593000`). `Date.parse` reads a date-time without an
@@ -184,10 +315,28 @@ function rowsOf(response: unknown): unknown[] {
  * emitted trace fall behind the run's start bound and be discarded, reporting a
  * timeout for a trace that had already arrived. Assume UTC when no zone is
  * given, which is what the backend means.
+ *
+ * The return is fractional because the timestamps are microsecond-precision and
+ * `Date.parse` keeps three digits of the fraction and drops the rest. Dropping
+ * them rounds every trace *down*, towards the start of the run, and the window
+ * bounds here are inclusive — so a trace that started a fraction of a
+ * millisecond after the application stopped parses as having started exactly
+ * when it stopped, and is admitted as this run's own. Microseconds are not a
+ * rounding detail at the edge of a window: either side of it is a different
+ * claim about where a trace came from.
  */
 function parseStartTime(value: string): number {
   const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
-  return Date.parse(hasZone ? value : `${value}Z`);
+  const milliseconds = Date.parse(hasZone ? value : `${value}Z`);
+  if (!Number.isFinite(milliseconds)) {
+    return milliseconds;
+  }
+  // Whatever `Date.parse` discarded: the fourth fractional digit onwards, read
+  // back as a fraction of a millisecond. Added rather than subtracted whichever
+  // side of the epoch the value falls on, because dropping digits always lowers
+  // the parsed instant.
+  const fraction = /\.(\d{4,})/.exec(value)?.[1];
+  return fraction === undefined ? milliseconds : milliseconds + Number(`0.${fraction.slice(3)}`);
 }
 
 interface Search {
@@ -204,8 +353,17 @@ interface Search {
  * call what they show "your first trace". An application that emits several
  * traces per run (one per query, say) makes that a race: whichever surface
  * happens to look after the second trace lands links to the second one, and the
- * two disagree about which trace the run produced. Sorting here makes the
- * answer the same no matter when anyone looked.
+ * two disagree about which trace the run produced. Sorting here settles the
+ * page: two surfaces reading the same rows agree on which trace is first.
+ *
+ * It does not settle ingestion, and nothing on this side could. A trace appears
+ * in this list when the backend has finished receiving it, which is not the
+ * order the traces started in, so a look taken while the earlier of two traces
+ * is still arriving reports the later one. What this returns is the earliest
+ * trace of the window that had arrived by the time it was asked — the poll
+ * chooses as soon as the window is not empty rather than waiting for it to
+ * settle, because the alternative is a user watching a terminal for the length
+ * of the backend's ingestion lag to improve a link they already have.
  */
 async function earliestIn(
   client: TraceLister,
@@ -278,6 +436,13 @@ async function earliestIn(
  * during setup" reading come back, and then it is labelled as such in
  * {@link TraceAttribution} rather than passed off as proof.
  *
+ * Exhausted means closed and given {@link WINDOW_GRACE_MS} to fill, not "the
+ * timeout expired". The window can close without the application ever having
+ * run in it — the project's check exercises instrumented code without reaching
+ * its entry point, which is the common shape of a test suite — and holding the
+ * wider look until the deadline made that case wait out the entire trace
+ * budget for a trace that was already in the project.
+ *
  * The permalink is the `trace_url` the backend returned, echoed verbatim — the
  * same rule `traces get` follows. Constructing a URL client-side would break
  * self-hosted deployments and would silently drift from the frontend's routing.
@@ -306,6 +471,7 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
       name: row.name,
       candidates: search.candidates,
       truncated: search.truncated,
+      spanCount: row.spanCount,
     },
   });
 
@@ -329,6 +495,18 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
           search.earliest,
           input.ranAt === null ? "setup-window" : "application-run",
         );
+      }
+      // Nothing in the run's own window, and the window has had its grace. The
+      // wider reading is the weaker claim either way, so taking it now rather
+      // than at the deadline costs the report nothing it would have said — and
+      // it is the difference between a user waiting two seconds and a user
+      // watching a spinner for the whole trace budget while the trace they are
+      // waiting for is already in the list.
+      if (input.ranAt !== null && now() - input.ranAt.to.getTime() >= WINDOW_GRACE_MS) {
+        const wider = await earliestIn(input.client, wholeRun);
+        if (wider.earliest !== null) {
+          return found(wider, wider.earliest, "setup-window");
+        }
       }
       lastError = null;
     } catch (err) {
