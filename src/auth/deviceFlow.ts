@@ -212,7 +212,7 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
       writers,
     );
   }
-  logInfo(`Confirm this code in your browser: ${userCode}`, writers);
+  logInfo(`Confirm this code in your browser: ${formatUserCode(userCode)}`, writers);
   logInfo(`Open ${verifyUrl}`, writers);
   try {
     await openBrowser(verifyUrl);
@@ -284,6 +284,37 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
       res.status >= 500 ? ExitCode.network : ExitCode.auth,
     );
   }
+}
+
+/** Characters in the code the auth host issues, and where its hyphen goes. */
+const USER_CODE_LENGTH = 8;
+const USER_CODE_GROUP = 4;
+
+/**
+ * The user code as the browser shows it: `XXXX-XXXX`.
+ *
+ * Display only, and that is the whole of the contract. The hyphen is not part
+ * of the code: the raw value is what goes into the verification URL's
+ * `user_code` parameter, and the auth host stores and compares the code without
+ * it — its device-verify, device-approve and device-deny lookups strip hyphens
+ * before querying. So the separator exists for a person reading eight
+ * characters off a screen and nowhere else, which is why only the printed
+ * string goes through here.
+ *
+ * The browser grouped the characters and the terminal did not, leaving a user
+ * to work out for themselves that the two codes in front of them were the same
+ * one.
+ *
+ * Anything that is not the eight-character code this flow expects — a different
+ * length, or a code the server grouped itself — is printed exactly as it
+ * arrived. Regrouping an unfamiliar shape would put a separator somewhere the
+ * browser does not, which is the fault this fixes wearing the other hat.
+ */
+export function formatUserCode(raw: string): string {
+  if (raw.length !== USER_CODE_LENGTH || raw.includes("-")) {
+    return raw;
+  }
+  return `${raw.slice(0, USER_CODE_GROUP)}-${raw.slice(USER_CODE_GROUP)}`;
 }
 
 function asString(value: unknown): string | undefined {

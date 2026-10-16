@@ -289,6 +289,29 @@ On failure the human-readable message goes to stderr as `error: <message>`. Unde
 `{"error":{"code":"<class>","message":"<text>"}}` — while stdout stays empty, so a
 `jq` pipeline over stdout is never corrupted by an error.
 
+The five classes above belong to the whole CLI and mean the same thing whichever
+command handed them back, which is why every number below `10` stays reserved for
+them. `setup` has outcomes no other command can produce — the trace never
+arrived, the coding agent crashed, the file was already there — so it numbers
+those from `10` up rather than overloading one of the five:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | A question answered no. Declining is a decision rather than a fault, so a script that wraps `setup` carries on. |
+| `10` | More than one candidate matched and nothing chose between them. |
+| `11` | The repository's language or framework is not one `setup` can instrument. |
+| `12` | The coding agent ran and exited non-zero. |
+| `13` | The application's own build, start or check command failed. |
+| `14` | Instrumentation landed, but no trace reached TraceRoot before the deadline. |
+| `15` | This TraceRoot deployment is missing an endpoint the step needs; the message names a manual fallback. |
+| `16` | Writing would have overwritten something `setup` was not told it could replace. |
+| `130` | Ctrl+C or Escape at a prompt. The shell's own status for a run ended by `SIGINT`, not a number this table assigns, and the reason it cannot share the `0` above: `traceroot setup && <next step>` must not run the next step over an abandoned run. |
+
+The two numbers `setup` does take from the shared table it takes unchanged: an
+unexpected failure is `1`, and a run with no usable credentials is the same `3`
+every other command reports, so a caller re-authenticating in response is right
+whichever one it came from.
+
 ## Skills & agents
 
 Make your coding agent TraceRoot-aware without touching your application source. The
