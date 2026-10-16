@@ -317,11 +317,15 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   const completed = new Set(checkpoint.completedStages);
   const finished = completed.has("complete") && checkpoint.trace !== undefined;
-  // Neither of these is a failed setup, so neither may fail `doctor`: a
-  // cancellation exits 0 in `setup`, and a run that stopped short on purpose
-  // (`--no-instrument`) recorded no error at all.
-  const cancelled = checkpoint.lastError?.code === "CANCELLED";
-  const failed = checkpoint.lastError !== undefined && !cancelled;
+  // None of these is a failed setup, so none may fail `doctor`: declining
+  // exits 0, an interrupt exits 130 only so a shell chain cannot continue
+  // through the keypress meant to stop it, and a run that stopped short on
+  // purpose (`--no-instrument`) recorded no error at all. All three are the
+  // user stopping the run, not the run breaking — and a non-zero status is
+  // not the same thing as a fault.
+  const stoppedByUser =
+    checkpoint.lastError?.code === "CANCELLED" || checkpoint.lastError?.code === "INTERRUPTED";
+  const failed = checkpoint.lastError !== undefined && !stoppedByUser;
 
   checks.push({
     name: "setup_completed",
@@ -336,7 +340,7 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
     checks.push({
       name: "setup_last_error",
       category: "setup",
-      status: cancelled ? "warn" : "fail",
+      status: stoppedByUser ? "warn" : "fail",
       // The message was authored secret-free by SetupError; it is safe to echo.
       message: `Last error (${checkpoint.lastError.code}): ${checkpoint.lastError.message.split("\n")[0]}`,
     });

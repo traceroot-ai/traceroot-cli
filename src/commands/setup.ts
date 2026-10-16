@@ -155,7 +155,10 @@ export function registerSetup(program: Command): void {
   const setup = program
     .command("setup")
     .description("Connect this repository to TraceRoot and verify your first trace")
-    .option("--agent <agent>", "coding agent to run: claude, codex, or generic")
+    .option(
+      "--agent <agent>",
+      "coding agent to run: claude; for any other agent use --no-instrument",
+    )
     .option("--language <language>", "language to instrument: python or typescript")
     .option("--service <path>", "path of the service to instrument (disambiguates a monorepo)")
     .option("--project <name-or-id>", "TraceRoot project to send traces to")

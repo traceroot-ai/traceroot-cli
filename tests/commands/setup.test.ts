@@ -23,6 +23,8 @@ import type { DoctorCheck } from "../../src/doctor/types.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { ExitCode, isCliError, reportError } from "../../src/output.js";
+import { ALL_AGENTS } from "../../src/agents/index.js";
+import { LAUNCHABLE_AGENTS } from "../../src/setup/agents.js";
 import { SetupError } from "../../src/setup/errors.js";
 import { SETUP_STAGES } from "../../src/setup/types.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
@@ -87,6 +89,38 @@ describe("setup command registration", () => {
     const setup = program.commands.find((c) => c.name() === "setup");
     expect(setup).toBeDefined();
     expect(setup?.commands.map((c) => c.name())).toContain("doctor");
+  });
+
+  it("names on `--agent` exactly the agents setup can run", () => {
+    // The help text is a literal rather than built from `LAUNCHABLE_AGENTS`,
+    // because this file is in the module graph of every `traceroot`
+    // invocation and importing the selector would pull the agent registry
+    // into the startup path of commands that never touch it. The cost of the
+    // literal is that it can drift from the list, so the two are compared
+    // here instead — a test is free to import what this file must not.
+    const program = buildProgram();
+    const setup = program.commands.find((c) => c.name() === "setup");
+    const description = (setup?.options ?? []).find((o) => o.long === "--agent")?.description ?? "";
+
+    for (const adapter of LAUNCHABLE_AGENTS) {
+      expect(description, `\`--agent\` help names ${adapter.id}`).toContain(adapter.id);
+    }
+    // And names no agent it cannot run. `generic` and `codex` are still valid
+    // `skills install` targets and still reachable through `--no-instrument`,
+    // so the help has to point there rather than list them as runnable.
+    const unlaunchable = ALL_AGENTS.filter(
+      (adapter) => !LAUNCHABLE_AGENTS.some((a) => a.id === adapter.id),
+    );
+    expect(
+      unlaunchable.length,
+      "a non-launchable agent exists to make this assertion mean something",
+    ).toBeGreaterThan(0);
+    for (const adapter of unlaunchable) {
+      expect(description, `\`--agent\` help does not offer ${adapter.id}`).not.toContain(
+        adapter.id,
+      );
+    }
+    expect(description).toContain("--no-instrument");
   });
 
   it("exposes only flags that map to a real decision", () => {
@@ -491,6 +525,38 @@ describe("doctor reports setup state", () => {
     };
   }
 
+  it("does not call an interrupted run a failure", async () => {
+    // An interrupt exits 130, but only so that `traceroot setup && <next>`
+    // cannot continue through the keypress meant to stop it. A non-zero status
+    // is not the same thing as a fault, and `doctor` must not report the user
+    // pressing Ctrl+C as a broken setup — it is the same kind of stop as
+    // declining, which exits 0.
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push("precheck", "authenticate");
+    checkpoint.lastError = {
+      stage: "select_agent",
+      code: "INTERRUPTED",
+      message: "Setup interrupted.",
+    };
+    writeCheckpoint(dir, checkpoint);
+
+    const out = new StringSink();
+    const err = new StringSink();
+    const report = await runDoctor({
+      ctx: { auth: auth(), json: false },
+      cwd: dir,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out, err },
+      detection: detection(),
+      includeSetup: true,
+    });
+
+    const setupChecks = report.checks.filter((c) => c.category === "setup");
+    expect(setupChecks.find((c) => c.name === "setup_completed")?.status).toBe("warn");
+    expect(setupChecks.find((c) => c.name === "setup_last_error")?.status).toBe("warn");
+  });
+
   it("reports an incomplete setup as a hard failure with the resume hint", async () => {
     const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
     checkpoint.completedStages.push("precheck", "authenticate", "instrument");
@@ -756,15 +822,20 @@ describe("a failed run under --json", () => {
     expect(failure).toEqual({ kind: "exit", code: result.error?.exitCode });
   });
 
-  it("would have named the wrong class had it been rethrown", async () => {
-    // Why the rethrow is wrong rather than merely redundant: setup's codes are
-    // numbered separately from the shared exit-code table, so NOT_AUTHENTICATED
-    // (2) reads there as `usage` — a consumer taking the last line saw a bad
-    // invocation reported for an authentication failure.
+  it("classifies a missing credential as an authentication failure", async () => {
+    // This test used to assert `usage`, and the name said the rethrow "would
+    // have named the wrong class": setup's statuses were numbered from 1, so
+    // NOT_AUTHENTICATED was 2, which is `usage` in the shared table — a
+    // consumer taking that line read a bad invocation where the run had failed
+    // to authenticate. The codes start above the shared table now and
+    // NOT_AUTHENTICATED is the shared `auth` status, so the class is right.
+    // What is left of the original point is the other half of it: the rethrow
+    // is redundant, because the test above already proves the failure is
+    // reported exactly once.
     const { result } = await failedRun(true);
     const { writers, err } = makeWriters();
     reportError(result.error, { json: true }, writers);
-    expect((JSON.parse(err.data).error as { code: string }).code).toBe("usage");
+    expect((JSON.parse(err.data).error as { code: string }).code).toBe("auth");
   });
 
   it("still rethrows for a human, where the central handler is the only reporter", async () => {
