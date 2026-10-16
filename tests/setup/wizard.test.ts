@@ -90,8 +90,8 @@ describe("lines inside the frame", () => {
 
   it("dims progress without moving it off the rail", () => {
     const t = target();
-    wizardProgress(t, "Wrote TRACEROOT_API_KEY to .env.traceroot (0600).");
-    expect(plain(t.err.data)).toBe("│  Wrote TRACEROOT_API_KEY to .env.traceroot (0600).\n");
+    wizardProgress(t, "Wrote TRACEROOT_API_KEY to .env (0600).");
+    expect(plain(t.err.data)).toBe("│  Wrote TRACEROOT_API_KEY to .env (0600).\n");
   });
 
   it("leaves nothing loose between the opening and closing lines", () => {
