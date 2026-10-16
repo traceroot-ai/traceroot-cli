@@ -25,8 +25,17 @@ export interface RecordedRun {
 export interface FakeProcessOptions {
   /** Result per program name; anything unlisted exits 0 with no output. */
   results?: Record<string, Partial<RunProcessResult>>;
-  /** `git status --porcelain` output, keyed by call order (last value repeats). */
+  /** `git status --porcelain -z` output, keyed by call order (last value repeats). */
   gitStatus?: string[];
+  /**
+   * Result per git invocation, chosen from its arguments.
+   *
+   * `results` is keyed by program name, which cannot tell one git subcommand
+   * from another — and setup now makes three different ones, where
+   * `check-ignore` and `ls-files` have to be able to answer differently.
+   * `status` is still served by `gitStatus` above.
+   */
+  git?: (args: readonly string[]) => Partial<RunProcessResult>;
 }
 
 /**
@@ -48,14 +57,19 @@ export function fakeRunProcess(options: FakeProcessOptions = {}): {
       stdin: o.stdin,
     });
 
-    if (o.program === "git" && o.args[0] === "status") {
+    // `includes`, not `args[0]`: the probe passes `--no-optional-locks` before the
+    // subcommand so it cannot take `index.lock`.
+    if (o.program === "git" && o.args.includes("status")) {
       const statuses = options.gitStatus ?? [""];
       const value = statuses[Math.min(gitCalls, statuses.length - 1)] ?? "";
       gitCalls += 1;
       return { exitCode: 0, output: value, durationMs: 1, timedOut: false, spawnFailed: false };
     }
 
-    const override = options.results?.[o.program];
+    const override =
+      o.program === "git" && options.git !== undefined
+        ? options.git(o.args)
+        : options.results?.[o.program];
     // A real capture streams as it goes; replaying the canned output through
     // `onData` is what lets the activity feed be exercised without a process.
     if (override?.output !== undefined && override.output !== "") {
@@ -185,8 +199,6 @@ export function makeContext(json = false): Context {
 
 export function defaultFlags(overrides: Partial<SetupFlags> = {}): SetupFlags {
   return {
-    skills: false,
-    mcp: false,
     browser: false,
     instrument: true,
     resume: false,

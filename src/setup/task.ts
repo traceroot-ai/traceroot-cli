@@ -43,6 +43,18 @@ export interface BuildSetupTaskInput {
    * it from — which is the one thing this field exists to prevent.
    */
   credentialFiles: readonly string[];
+  /**
+   * Which of {@link envFiles} holds the TraceRoot key, relative to the agent's
+   * working directory. Null when no credential file was written — a tracked env
+   * file is refused, and a key that already resolved from the user's own
+   * environment is never written to one at all.
+   *
+   * It is one of `envFiles`, not a file of its own: the credential goes into the
+   * project's `.env` now, so the agent loads one file and gets both. Naming it
+   * separately buys one sentence — that this load is what keeps tracing working
+   * after the run ends — and nothing else.
+   */
+  credentialEnvFile?: string | null;
 }
 
 function bullet(lines: string[]): string {
@@ -154,17 +166,53 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
  * the application does.
  */
 function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
+  const [envFile] = envFiles;
   if (service.language !== "python") {
+    // The env load, named rather than imported for its side effect — and both
+    // it and `initialize()` inside the function the file runs, not at module
+    // scope.
+    //
+    // `import "dotenv/config"` is what this used to show, and it reads `.env`
+    // resolved against `process.cwd()` — neither this file's directory nor
+    // necessarily the file the credential went into, which is wherever
+    // `chooseCredentialEnvFile` put it. The explicit call names the file setup
+    // actually wrote and anchors it on the entry point.
+    //
+    // Module scope is the other half of it, and the reason the comment that
+    // used to sit above `initialize()` here is gone. Module scope runs on
+    // import, so a test suite that imports this module loads the credential and
+    // starts the SDK, and then every test reaching an instrumented function
+    // exports a trace of its own. `observe(options, fn, ...args)` invokes rather
+    // than wraps, auto-initializing at call time when `TRACEROOT_API_KEY` is
+    // set, so there is no module-scope wrapper to arm either — with the load
+    // inside the function, an imported module exports nothing. And the claim
+    // that `initialize()` must precede the provider's import was never true of
+    // this SDK: the instrumentors patch the provider's class methods through
+    // `wrapt`, which does not care whether it was imported first. What it has to
+    // precede is the first model call and the first `observe`.
+    const load =
+      envFile === undefined
+        ? { imports: [] as string[], call: [] as string[] }
+        : {
+            imports: ['import { config } from "dotenv";'],
+            call: [
+              `  ${loadDotenvCallTs(envFile, service.entryPoint)};   // the app's own credentials`,
+            ],
+          };
     return [
       "```typescript",
+      ...load.imports,
       'import { initialize, observe } from "@traceroot-ai/traceroot";',
       "",
-      "// Before importing the SDK you are instrumenting.",
-      "initialize();",
+      "// The function this file calls when it is run directly — not module scope.",
+      "async function main() {",
+      ...load.call,
+      "  initialize();",
+      "  await run();   // whatever this file already does",
+      "}",
       "```",
     ].join("\n");
   }
-  const [envFile] = envFiles;
   const dotenvImports =
     envFile === undefined ? [] : ["from pathlib import Path", "from dotenv import load_dotenv", ""];
   // Indented, because it belongs to the guard below rather than to the module.
@@ -255,6 +303,7 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // Held separately so it is narrowed where the instruction is built: the
   // section exists only because there is a file to name.
   const envFile = envFiles[0] ?? null;
+  const credentialEnvFile = input.credentialEnvFile ?? null;
 
   // Where the agent's own credential is, which is no longer always "in your
   // environment". `buildAgentEnv` withholds the variable whenever a file the
@@ -613,8 +662,7 @@ ${
   envFile !== null
     ? `
 The application may need credentials of its own to run — an LLM API key, a database URL. They are
-not in your environment and \`TRACEROOT_API_KEY\` is not one of them. These env files exist near
-this service:
+not in your environment. These env files exist near this service:
 
 ${bullet(envFiles.map((file) => `\`${file}\``))}
 
@@ -652,7 +700,15 @@ starts and emits no trace.
     : ""
 }
 
-Your shell cannot do this for you — \`set -a\`, \`. file\`, \`$(...)\` and multi-part pipelines are
+${
+  credentialEnvFile === null
+    ? ""
+    : `\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` into \`${credentialEnvFile}\`, so that load is also
+what keeps tracing working once this run ends: the key is in **your** environment because setup put
+it there for this run, and nothing hands it to the user's next one.
+
+`
+}Your shell cannot do this for you — \`set -a\`, \`. file\`, \`$(...)\` and multi-part pipelines are
 all refused by your own sandbox, and trying them costs minutes. Loading in-process is also the
 better answer: it is what makes the application runnable by a human afterwards, which a shell
 incantation in your scrollback does not. Add the dotenv package to the manifest if you import it.
@@ -728,11 +784,17 @@ function asStringOrNull(value: unknown): string | null {
 /**
  * Extracts the agent's completion block from its output.
  *
- * Deliberately lenient and deliberately non-load-bearing. Parsing agent prose is
- * fragile, so nothing downstream depends on this succeeding: a missing or
- * malformed block yields `null` and the run continues, because the CLI
- * establishes every fact that matters (files changed, tests passing, trace
- * arrived) by observation rather than by report.
+ * Deliberately lenient. Parsing agent prose is fragile, so a missing or
+ * malformed block yields `null` and the run continues: the CLI establishes
+ * every fact that matters (files changed, tests passing, trace arrived) by
+ * observation rather than by report.
+ *
+ * One claim is acted on, and only in the direction that cannot invent success.
+ * An agent reporting `files_changed: []` fails the instrument stage, because a
+ * run that edited nothing instrumented nothing — and a sandboxed agent that was
+ * stopped from editing says exactly that and still exits 0. The stage requires
+ * the worktree to agree before it fails, so a dropped or malformed block is
+ * still nobody's failure.
  */
 export function parseCompletion(output: string): ParsedCompletion | null {
   const fence = /```(?:json)?[ \t]*traceroot-setup-result[ \t]*\r?\n([\s\S]*?)```/g;

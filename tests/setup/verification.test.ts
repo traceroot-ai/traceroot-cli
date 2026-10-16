@@ -321,6 +321,11 @@ describe("proving the application runs without the credential", () => {
       calls += 1;
       // The second run is the credential-free one, with both files parked.
       if (calls === 2) {
+        // Parking leaves this run's own credential-stripped copy at the
+        // original path, so the directory has to replace that copy rather than
+        // appear beside it. Without the removal this is EEXIST from `mkdir`,
+        // not the EISDIR from `rename` the test is about.
+        rmSync(file, { force: true });
         mkdirSync(file);
       }
       return PROCESS_OK;
@@ -368,6 +373,11 @@ describe("proving the application runs without the credential", () => {
     const run = async (): Promise<RunProcessResult> => {
       calls += 1;
       if (calls === 2) {
+        // Parking leaves this run's own credential-stripped copy at the
+        // original path, so the directory has to replace that copy rather than
+        // appear beside it. Without the removal this is EEXIST from `mkdir`,
+        // not the EISDIR from `rename` the test is about.
+        rmSync(file, { force: true });
         mkdirSync(file);
         throw new Error("spawn exploded");
       }
