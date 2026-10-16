@@ -1,25 +1,47 @@
 # TypeScript instrumentation
 
-## Initialize once
+## Initialize once, on the path that runs the application
 
-Call `TraceRoot.initialize()` at the application entry point, before any LLM library imports. Load env vars first.
+Call `TraceRoot.initialize()` inside the function the entry point calls to start itself, and not at
+module scope. Module scope runs on import, and a project's test suite imports its entry point:
+initialize there and every test that reaches an instrumented function exports a trace of its own,
+each one indistinguishable from the application's afterwards. Load the env vars on that same path,
+beside it — which is why the snippet below calls `config()` rather than importing
+`dotenv/config` for its side effect at module scope.
+
+The order that matters is not the import order. `initialize()` has to run before the first model
+call and before the first `observe()` callback runs. `observe(options, fn, ...args)` invokes rather
+than wraps, so there is no module-scope wrapper to order against: it starts the SDK itself at call
+time when nothing else has, and a second `initialize()` after that is skipped with a warning, so
+the modules named here would never be instrumented. Auto-instrumentation patches the provider
+library's own methods, which takes effect whatever the import order — so leave the provider imports
+where they are.
 
 ```typescript
-import 'dotenv/config'; // must come before TraceRoot import
+import { config } from 'dotenv';
 import { TraceRoot } from '@traceroot-ai/traceroot';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import * as lcCallbackManager from '@langchain/core/callbacks/manager';
 
-TraceRoot.initialize({
-  instrumentModules: {
-    openAI: OpenAI,       // auto-instruments all OpenAI calls
-    anthropic: Anthropic, // auto-instruments Anthropic calls
-    langchain: lcCallbackManager,  // see LangChain note below
-  },
-  // Use only the modules present in the project
-});
+async function main() {
+  config();
+  TraceRoot.initialize({
+    instrumentModules: {
+      openAI: OpenAI,       // auto-instruments all OpenAI calls
+      anthropic: Anthropic, // auto-instruments Anthropic calls
+      langchain: lcCallbackManager,  // see LangChain note below
+    },
+    // Use only the modules present in the project
+  });
+  await run();  // whatever this entry point already does
+}
 ```
+
+A module another process imports in order to run it — a server started by a process manager, a
+queue worker — has no such function, so initialize at the framework's own startup hook instead. In
+that case run the project's own checks with `TRACEROOT_ENABLED=false` in the environment so that
+they do not export.
 
 `TRACEROOT_API_KEY` is read from the environment automatically. No need to pass it explicitly.
 
@@ -34,6 +56,7 @@ Pass the callbacks manager module, not the LangChain class:
 ```typescript
 import * as lcCallbackManager from '@langchain/core/callbacks/manager';
 
+// A key in the one initialize() call above, on the run path — not a second call.
 TraceRoot.initialize({
   instrumentModules: { langchain: lcCallbackManager },
 });

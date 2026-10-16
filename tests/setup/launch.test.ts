@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentEnv, buildInvocation, launchAgent } from "../../src/setup/launch.js";
 import { makeSecret } from "../../src/setup/secret.js";
+import { buildSetupTask, taskInterpreters } from "../../src/setup/task.js";
+import type { DetectedService } from "../../src/setup/types.js";
 import { fakeRunProcess } from "./helpers.js";
 
 describe("reaching a skill that lives outside the working directory", () => {
@@ -33,6 +35,20 @@ describe("reaching a skill that lives outside the working directory", () => {
     expect(invocation.args.indexOf("--add-dir")).toBeLessThan(
       invocation.args.indexOf("--disallowedTools"),
     );
+  });
+});
+
+describe("which agents can be launched at all", () => {
+  it("refuses an agent setup has no verified way to drive", () => {
+    // Setup only offers the agents in `LAUNCHABLE_AGENTS`, so nothing should
+    // reach here with another id — and if something does, failing at the
+    // invocation is better than spawning a run whose sandbox, network and
+    // package-manager cache nobody has established.
+    for (const agentId of ["codex", "generic"] as const) {
+      expect(() => buildInvocation({ agentId, task: "t", interactive: false })).toThrow(
+        /cannot be launched/,
+      );
+    }
   });
 });
 
@@ -82,17 +98,96 @@ describe("letting the agent run what it was told to run", () => {
   });
 });
 
+describe("the interpreter the task recommends and the one the agent may run", () => {
+  const ROOT = "/repo";
+  const SERVICE_PATH = "api";
+
+  function task(pythonInterpreter: string | null): string {
+    return buildSetupTask({
+      service: {
+        path: SERVICE_PATH,
+        language: "python",
+        framework: null,
+        entryPoint: "main.py",
+        packageManager: "pip",
+        testCommand: null,
+        evidence: [],
+      } as unknown as DetectedService,
+      root: ROOT,
+      sdk: { package: "traceroot", version: "1.2.3", source: "registry" },
+      skillPath: ".claude/skills/traceroot-instrument-repo",
+      verifyCommand: null,
+      interactive: false,
+      existingInstrumentation: [],
+      pythonInterpreter,
+      credentialFiles: [],
+    });
+  }
+
+  function rules(pythonInterpreter: string | null): string[] {
+    return buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: taskInterpreters(pythonInterpreter, ROOT, SERVICE_PATH),
+    }).args;
+  }
+
+  /**
+   * The program out of the task's own run command, read back rather than
+   * restated. Both halves of each assertion below therefore come from the
+   * prose, so a change to how the task names the interpreter moves the
+   * expectation with it instead of leaving it behind.
+   */
+  function programInRunCommand(text: string): string {
+    const command = /run it with: `([^`]+)`/.exec(text)?.[1];
+    expect(command).toBeDefined();
+    return (command as string).split(" ")[0];
+  }
+
+  it("allows the relative spelling the run command uses for a virtualenv in the tree", () => {
+    const interpreter = "/repo/api/.venv/bin/python";
+    const named = programInRunCommand(task(interpreter));
+    // Non-vacuous only because the two spellings differ. The absolute path is
+    // the one a caller has in hand, and it is not the one the task gives.
+    expect(named).not.toBe(interpreter);
+    expect(rules(interpreter)).toContain(`Bash(${named}:*)`);
+    // And the absolute path as well: the install step names it that way,
+    // quotes included, because there the quoting is written for the agent.
+    expect(rules(interpreter)).toContain(`Bash(${interpreter}:*)`);
+  });
+
+  it("allows the absolute spelling when the interpreter sits outside the repository", () => {
+    const interpreter = "/opt/homebrew/bin/python3";
+    const named = programInRunCommand(task(interpreter));
+    expect(named).toBe(interpreter);
+    expect(rules(interpreter)).toContain(`Bash(${interpreter}:*)`);
+  });
+
+  it("allows the virtualenv the task tells a service without one to create", () => {
+    // Not covered by `python3` or `python` being allowed outright: the task
+    // says to stop using those and use the new virtualenv from then on, and a
+    // permission rule matches the start of a command literally.
+    const named = /run the application with `([^`]+)` throughout/.exec(task(null))?.[1];
+    expect(named).toBeDefined();
+    expect(rules(null)).toContain(`Bash(${named}:*)`);
+  });
+});
+
 describe("where the credential is allowed to appear", () => {
   const KEY = "tr-a-long-enough-credential";
 
-  it("puts it in the child's environment and leaves the parent's alone", () => {
-    // Not argv (visible in `ps`), not the task file (written to disk), and not
-    // the parent's own environment, which would leak into every later child in
-    // this process.
+  it("puts it in the child's environment when that is the only channel", () => {
+    // No file the application can read the key out of, so the environment is
+    // all there is — and an agent that cannot authenticate cannot prove any of
+    // its own work. Not argv (visible in `ps`), not the task file (written to
+    // disk), and not the parent's own environment, which would leak into every
+    // later child in this process.
     const parentEnv: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
     const env = buildAgentEnv({
       parentEnv,
       credential: makeSecret(KEY),
+      credentialFiles: [],
       host: "https://api.example.test",
     });
 
@@ -100,6 +195,27 @@ describe("where the credential is allowed to appear", () => {
     expect(env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
     expect(env.PATH).toBe("/usr/bin");
     expect(parentEnv.TRACEROOT_API_KEY).toBeUndefined();
+  });
+
+  it("withholds it when a file the application loads already holds it", () => {
+    // Every command the agent runs inherits this variable and the SDK
+    // initializes from it unasked, so an agent that runs the project's own test
+    // suite to check its work exported a trace per instrumented call — into the
+    // user's project, under the same key as the application's own traces. With
+    // the key in the file the entry point loads, the application reaches it the
+    // way production will deliver it and the suite reaches nothing.
+    const env = buildAgentEnv({
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: ["/repo/.env"],
+      host: "https://api.example.test",
+    });
+
+    expect("TRACEROOT_API_KEY" in env).toBe(false);
+    // The host stays either way: it is not a credential, nothing exports
+    // without a key, and an agent pointed at the wrong instance is a long
+    // debugging session for a user.
+    expect(env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
   });
 
   for (const interactive of [false, true]) {
@@ -112,6 +228,7 @@ describe("where the credential is allowed to appear", () => {
         cwd: "/repo",
         parentEnv: { PATH: "/usr/bin" },
         credential: makeSecret(KEY),
+        credentialFiles: [],
         host: "https://api.example.test",
         runProcess: run,
       });
@@ -122,4 +239,30 @@ describe("where the credential is allowed to appear", () => {
       expect(launched?.stdin ?? "").not.toContain(KEY);
     });
   }
+
+  it("carries the withholding through the launch, not only the env builder", async () => {
+    // `launchAgent` builds the child's environment itself, so a gate the caller
+    // cannot reach through it is a gate the run never applies.
+    const { run, runs } = fakeRunProcess();
+    const invocation = buildInvocation({ agentId: "claude", task: "do it", interactive: false });
+    await launchAgent({
+      invocation,
+      task: "do it",
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: ["/repo/.env"],
+      host: "https://api.example.test",
+      runProcess: run,
+    });
+
+    const launched = runs[0];
+    expect(launched).toBeDefined();
+    expect("TRACEROOT_API_KEY" in (launched?.env ?? {})).toBe(false);
+    expect(launched?.env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
+    // And the key is still redacted out of everything the launch does carry,
+    // which is the property the list above never depended on.
+    expect(launched?.args.join(" ")).not.toContain(KEY);
+    expect(launched?.stdin ?? "").not.toContain(KEY);
+  });
 });

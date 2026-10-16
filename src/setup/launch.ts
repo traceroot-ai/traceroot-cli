@@ -131,13 +131,11 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
             promptVia: "stdin",
             interactive: false,
           };
-    case "codex":
-      return interactive
-        ? { program: "codex", args: [], promptVia: "argv", interactive: true }
-        : { program: "codex", args: ["exec", "-"], promptVia: "stdin", interactive: false };
     default:
-      // `generic` has no launchable binary; the machine routes this case to the
-      // prompt-only path before ever getting here.
+      // Only the agents in `LAUNCHABLE_AGENTS` reach here with a case of their
+      // own. `generic` has no launchable binary at all, and the machine routes
+      // it — like any id setup does not drive — to the prompt-only path before
+      // ever getting here.
       throw new Error(`agent '${agentId}' cannot be launched`);
   }
 }
@@ -148,8 +146,14 @@ export interface LaunchAgentInput {
   cwd: string;
   /** Parent environment to derive the child's from. */
   parentEnv: NodeJS.ProcessEnv;
-  /** The application credential handed to the agent. */
+  /**
+   * The application credential: always redacted out of the agent's output, and
+   * put in its environment only when {@link buildAgentEnv} has nowhere else to
+   * put it.
+   */
   credential: Secret;
+  /** See {@link buildAgentEnv}. */
+  credentialFiles: readonly string[];
   host: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -163,24 +167,61 @@ export interface LaunchAgentInput {
 }
 
 /**
- * Builds the child's environment: the parent's, plus the TraceRoot credential.
+ * Builds the child's environment: the parent's, the host, and the credential
+ * only when no file the application loads already holds it.
  *
- * The credential is placed here and nowhere else — not in `argv` (visible in
- * `ps`), not in the task file (which is written to disk), and not in the
- * parent's own environment (which would leak into every later child in this
- * process). A scoped copy achieves the handoff without mutating the parent's
- * environment globally, and is trivially assertable in a test.
+ * `credentialFiles` is every file the application can read this credential out
+ * of, and it is the same list — settled in the same place, for the same reason —
+ * that `verifyApplication` is given: the project env file the run wrote the key
+ * into, plus the project's own file when the key resolved from one that was
+ * already there. Empty means there is no such file, and the environment is the
+ * only channel left.
+ *
+ * Non-empty, the variable is not merely redundant here but harmful. *Every*
+ * command the agent runs inherits the agent's environment, and the SDK
+ * initializes from this variable unasked — `observe` starts it when nothing
+ * else has — so an agent that runs the project's own test suite to check its
+ * work exports a trace per instrumented call, into the user's project, under
+ * the same key as the application's own traces. Those are the traces setup then
+ * has to tell apart from the application's, and the task's claim that the suite
+ * "loads no credential and starts no SDK" is only true once this variable is
+ * gone. Withholding it leaves the credential reaching the application the way
+ * production will deliver it: out of the file the entry point loads.
+ *
+ * Which is also why the caller decides rather than this function: with no such
+ * file, an agent that cannot authenticate cannot prove any of its own work.
+ *
+ * Withholding means not adding it. A key the user's own shell exports is in
+ * `parentEnv` already and stays there — the agent runs in the user's
+ * environment, and taking a variable back out of it is a different decision
+ * from declining to add one. `verifyApplication` does take it out, because
+ * there the question put to the application is explicitly "and without the
+ * key"; here it is only which channel setup itself uses.
+ *
+ * When the credential does go here it goes here and nowhere else — not in
+ * `argv` (visible in `ps`), not in the task file (which is written to disk),
+ * and not in the parent's own environment (which would leak into every later
+ * child in this process). A scoped copy achieves the handoff without mutating
+ * the parent's environment globally, and is trivially assertable in a test.
+ *
+ * `host` is unconditional. It is not a credential, nothing exports without a
+ * key, and an agent that inherits the wrong instance is a long debugging
+ * session for a self-hosted or staging user.
  */
 export function buildAgentEnv(input: {
   parentEnv: NodeJS.ProcessEnv;
   credential: Secret;
+  credentialFiles: readonly string[];
   host: string;
 }): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...input.parentEnv,
-    TRACEROOT_API_KEY: input.credential.reveal(),
     TRACEROOT_HOST_URL: input.host,
   };
+  if (input.credentialFiles.length === 0) {
+    env.TRACEROOT_API_KEY = input.credential.reveal();
+  }
+  return env;
 }
 
 /** Runs the agent with the task and a scoped environment. */
@@ -193,6 +234,7 @@ export function launchAgent(input: LaunchAgentInput): Promise<RunProcessResult> 
     env: buildAgentEnv({
       parentEnv: input.parentEnv,
       credential: input.credential,
+      credentialFiles: input.credentialFiles,
       host: input.host,
     }),
     stdin: invocation.promptVia === "stdin" ? task : undefined,

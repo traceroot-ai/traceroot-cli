@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { relativeToRoot, serviceArtifactDir } from "../../src/setup/artifacts.js";
-import { ENV_FILE_HEADER, upsertEnvContent } from "../../src/setup/envWrite.js";
+import {
+  ENV_FILE_HEADER,
+  chooseCredentialEnvFile,
+  upsertEnvContent,
+  upsertEnvFile,
+} from "../../src/setup/envWrite.js";
 import { SetupError } from "../../src/setup/errors.js";
 
 let root: string;
@@ -85,11 +90,22 @@ describe("keeping the credential out of git", () => {
   });
 
   it("does not create or touch a .gitignore of its own", () => {
-    // Setup used to append a rule to the user's ignore file. It no longer
-    // writes to git at all: it reads the answer and tells the user.
-    serviceAt("test1");
+    // Setup used to append a rule to the user's ignore file. It no longer writes
+    // to git at all: it reads the answer with `git check-ignore` and tells the
+    // user.
+    //
+    // The credential write is performed here rather than assumed. Asserting the
+    // absence of a file after creating only fixtures passes whatever the code
+    // does, so it reported "setup leaves your ignore file alone" without ever
+    // running the part of setup that used not to.
+    const test1 = serviceAt("test1");
+    const target = chooseCredentialEnvFile(test1);
+    const result = upsertEnvFile(join(test1, target.name), { TRACEROOT_API_KEY: "tr-secret" });
 
+    expect(result.created).toBe(true);
+    expect(existsSync(join(test1, target.name))).toBe(true);
     expect(existsSync(join(root, ".gitignore"))).toBe(false);
+    expect(existsSync(join(test1, ".gitignore"))).toBe(false);
   });
 });
 

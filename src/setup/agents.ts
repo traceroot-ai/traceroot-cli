@@ -1,7 +1,7 @@
 import { constants, accessSync, existsSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { ALL_AGENTS, requireAgent } from "../agents/index.js";
-import type { AgentAdapter } from "../agents/types.js";
+import { ALL_AGENTS } from "../agents/index.js";
+import type { AgentAdapter, AgentId } from "../agents/types.js";
 import { SetupError } from "./errors.js";
 import type { SelectFn } from "./select.js";
 import type { DetectedAgent } from "./types.js";
@@ -50,6 +50,28 @@ export function resolveOnPath(
   return null;
 }
 
+/**
+ * The agents setup will run on the user's behalf.
+ *
+ * Deliberately narrower than {@link ALL_AGENTS}, which is the list the CLI
+ * installs skills for. Installing a skill asks nothing of an agent. Driving one
+ * headless through install, edit, run and report asks for a writable workspace,
+ * network access, a package-manager cache the agent is allowed to write, and an
+ * environment this CLI controls rather than one the user's shell profile
+ * re-exports over the top of. A place here is earned by a recorded run of this
+ * pipeline that reached a trace, for each package manager the language has —
+ * not by the agent being installable.
+ *
+ * An agent that is not on this list is still a first-class skill target, and
+ * `--no-instrument` still writes the instrumentation task out for it.
+ */
+const LAUNCHABLE_AGENT_IDS: readonly AgentId[] = ["claude"];
+
+/** {@link LAUNCHABLE_AGENT_IDS} as adapters, in the registry's stable order. */
+export const LAUNCHABLE_AGENTS: readonly AgentAdapter[] = ALL_AGENTS.filter((adapter) =>
+  LAUNCHABLE_AGENT_IDS.includes(adapter.id),
+);
+
 export interface DetectAgentsOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
@@ -57,11 +79,15 @@ export interface DetectAgentsOptions {
 }
 
 /**
- * Probes every known agent for two independent facts: whether it is
+ * Probes each agent setup can run for two independent facts: whether it is
  * *configured* (a skills/config directory exists) and whether it is *runnable*
  * (its binary resolves on PATH). Only a runnable agent can be launched, so
  * conflating the two — as the CLI's existing `AgentAdapter.detect` does, since
  * it only checks directories — would let setup select an agent it cannot start.
+ *
+ * {@link LAUNCHABLE_AGENTS} rather than every adapter the CLI knows: an agent
+ * reported here becomes a run option, and offering one whose headless run has
+ * not been established is the same error one step earlier.
  *
  * Each signal carries a human-readable reason so `setup doctor` can explain
  * itself rather than printing a bare boolean.
@@ -70,7 +96,7 @@ export function detectAgents(options: DetectAgentsOptions): DetectedAgent[] {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
 
-  return ALL_AGENTS.map((adapter) => {
+  return LAUNCHABLE_AGENTS.map((adapter) => {
     const evidence: string[] = [];
 
     const detection = adapter.detect(options.cwd);
@@ -112,6 +138,30 @@ export interface SelectAgentInput {
 }
 
 /**
+ * The adapter for an explicitly requested agent, when setup can run it.
+ *
+ * `requireAgent` validates against the whole registry, which is the right list
+ * for `skills install` and the wrong one here: it accepts an agent whose
+ * headless run has never been established, and the failure then surfaces
+ * somewhere inside that agent rather than at the flag that named it.
+ */
+function requireLaunchableAgent(id: string): AgentAdapter {
+  const adapter = LAUNCHABLE_AGENTS.find((a) => a.id === id);
+  if (adapter === undefined) {
+    throw new SetupError({
+      stage: "select_agent",
+      code: "UNSUPPORTED",
+      message: `Setup cannot run '${id}'. It can run: ${LAUNCHABLE_AGENTS.map((a) => a.id).join(", ")}.`,
+      remedy: [
+        "Name one of those, or write the instrumentation task out and run it with the agent you prefer:",
+        "  traceroot setup --no-instrument",
+      ].join("\n"),
+    });
+  }
+  return adapter;
+}
+
+/**
  * Resolution ladder, in the shape the CLI already uses for skills and agents
  * elsewhere: an explicit flag always wins; exactly one runnable agent
  * auto-selects; several runnable agents prompt when that is possible and
@@ -127,9 +177,9 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
   const { detected, requested, canPrompt } = input;
 
   if (requested !== undefined) {
-    // Validates against the adapter allowlist, so an unknown id fails with the
-    // supported names rather than silently falling through.
-    const adapter: AgentAdapter = requireAgent(requested);
+    // Validates against the agents setup can run, so an id it cannot drive
+    // fails here with the names it can rather than inside that agent later.
+    const adapter: AgentAdapter = requireLaunchableAgent(requested);
     const match = detected.find((d) => d.id === adapter.id);
     const resolved: DetectedAgent = match ?? {
       id: adapter.id,
@@ -159,7 +209,8 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
       code: "UNSUPPORTED",
       message: "No coding agent was found on PATH, so setup cannot run one for you.",
       remedy: [
-        "Install Claude Code or Codex, then rerun `traceroot setup`.",
+        // Named from the list rather than spelled out, so the two cannot drift.
+        `Install ${LAUNCHABLE_AGENTS.map((a) => a.displayName).join(" or ")}, then rerun \`traceroot setup\`.`,
         "Or generate the instrumentation prompt and run it yourself:",
         "  traceroot setup --no-instrument",
       ].join("\n"),

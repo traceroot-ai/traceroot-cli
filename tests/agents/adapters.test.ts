@@ -112,14 +112,16 @@ describe("displaySkillPath", () => {
 
 describe("agent binaries", () => {
   // `binary` is what lets setup report an agent as runnable: it is looked up on
-  // PATH, and its absence downgrades the agent rather than hiding it. An adapter
-  // that forgets the field silently loses that check.
+  // PATH, and its absence downgrades the agent rather than hiding it. Carried
+  // only by the agents setup launches, because `setup/agents.ts` is its only
+  // reader — a name on an adapter nothing looks up is a field whose consumer
+  // stopped asking.
   it("names the binary to look for on PATH", () => {
     expect(claudeAdapter.binary).toBe("claude");
-    expect(codexAdapter.binary).toBe("codex");
   });
 
-  it("leaves the binary unset for the agent that has no CLI of its own", () => {
+  it("leaves the binary unset for an agent setup does not launch", () => {
+    expect(codexAdapter.binary).toBeUndefined();
     expect(genericAdapter.binary).toBeUndefined();
   });
 });
