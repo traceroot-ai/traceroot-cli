@@ -4,7 +4,13 @@ import { writeFileSecure } from "../util/secureFile.js";
 import { getVersion } from "../version.js";
 import { SETUP_EXIT_CODES, type SetupErrorCode } from "./errors.js";
 import { findGitRoot } from "./git.js";
-import { SETUP_STAGES, type SetupCheckpoint, type SetupStage } from "./types.js";
+import {
+  SETUP_STAGES,
+  type SetupCheckpoint,
+  type SetupStage,
+  type VerificationOutcome,
+  type VerificationRun,
+} from "./types.js";
 
 /**
  * The checkpoint lives beside the config the CLI already owns, so the existing
@@ -125,8 +131,24 @@ export function readCheckpoint(root: string): SetupCheckpoint | null {
   if (isService(obj.service)) {
     checkpoint.service = obj.service;
   }
-  if (isApplication(obj.application)) {
-    checkpoint.application = obj.application;
+  const application = readApplication(obj.application);
+  if (application !== null) {
+    checkpoint.application = application;
+  }
+  // The pre-instrumentation measurement. Kept even when the verification above
+  // is absent: a run that instrumented and then died before verifying has one,
+  // and it is the only thing that lets the resumed verification attribute a
+  // failure.
+  if (isRun(obj.applicationBaseline)) {
+    checkpoint.applicationBaseline = obj.applicationBaseline as VerificationRun;
+  }
+  // Per entry rather than all-or-nothing: this list is the only record that a
+  // key was created, so one malformed row must not take the others with it.
+  if (Array.isArray(obj.mintedKeys)) {
+    const keys = obj.mintedKeys.filter(isMintedKey);
+    if (keys.length > 0) {
+      checkpoint.mintedKeys = keys;
+    }
   }
   if (isTrace(obj.trace)) {
     checkpoint.trace = obj.trace;
@@ -156,7 +178,7 @@ function isRun(value: unknown): boolean {
   );
 }
 
-function isApplication(value: unknown): value is NonNullable<SetupCheckpoint["application"]> {
+function isApplication(value: unknown): value is Record<string, unknown> {
   return (
     isRecord(value) &&
     (value.command === null || typeof value.command === "string") &&
@@ -164,6 +186,54 @@ function isApplication(value: unknown): value is NonNullable<SetupCheckpoint["ap
     isRun(value.withoutCredentials) &&
     typeof value.passed === "boolean" &&
     (value.skippedReason === null || typeof value.skippedReason === "string")
+  );
+}
+
+function isOutcome(value: unknown): value is VerificationOutcome {
+  return (
+    value === "passed" || value === "failed" || value === "inconclusive" || value === "skipped"
+  );
+}
+
+/**
+ * Reads the application verification, filling in what a checkpoint written by
+ * an older CLI does not carry.
+ *
+ * `outcome` and `baseline` arrived after this file shipped, so requiring them
+ * would make every checkpoint from a previous version fail the guard and have
+ * its whole verification dropped — turning a `--resume` into a second full run
+ * of the user's test suite. Derived instead: `passed` and `skippedReason`
+ * already distinguish the three outcomes that existed, and `inconclusive` is
+ * not among them, so nothing can be mistaken for it.
+ */
+function readApplication(value: unknown): NonNullable<SetupCheckpoint["application"]> | null {
+  if (!isApplication(value)) {
+    return null;
+  }
+  const outcome: VerificationOutcome = isOutcome(value.outcome)
+    ? value.outcome
+    : value.passed === true
+      ? "passed"
+      : typeof value.skippedReason === "string"
+        ? "skipped"
+        : "failed";
+  return {
+    command: (value.command as string | null) ?? null,
+    baseline: isRun(value.baseline) ? (value.baseline as VerificationRun) : null,
+    withCredentials: value.withCredentials as VerificationRun,
+    withoutCredentials: value.withoutCredentials as VerificationRun,
+    outcome,
+    passed: value.passed === true,
+    skippedReason: typeof value.skippedReason === "string" ? value.skippedReason : null,
+  };
+}
+
+function isMintedKey(value: unknown): value is NonNullable<SetupCheckpoint["mintedKeys"]>[number] {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    (value.name === null || typeof value.name === "string") &&
+    typeof value.hint === "string"
   );
 }
 

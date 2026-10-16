@@ -47,6 +47,43 @@ describe("setup API client", () => {
     await expect(api.listApiKeys("p_1")).rejects.toBeInstanceOf(BackendUnavailableError);
   });
 
+  it("reports a 404 that says what was missing as that failure, not as an undeployed feature", async () => {
+    // Regression: the 404 branch ran before the one that reads the body, so a
+    // project id that does not resolve was reported as a route this deployment
+    // does not have — sending the reader after a server-side gap that is not
+    // there, with the server's own explanation discarded unread.
+    const { fetchImpl } = stubFetch([{ status: 404, body: { detail: "Project not found" } }]);
+    const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
+
+    await expect(
+      api.createProjectApiKey({ projectId: "p_gone", name: "n", expiresInDays: null }),
+    ).rejects.toSatisfy((err: unknown) => {
+      expect(err).toBeInstanceOf(SetupApiError);
+      expect(err).not.toBeInstanceOf(BackendUnavailableError);
+      expect((err as SetupApiError).status).toBe(404);
+      expect((err as Error).message).toBe("Project not found");
+      return true;
+    });
+  });
+
+  it("still calls a bodyless 404 an absent endpoint", async () => {
+    // Nothing to read means nothing to go on, and the callers degrade to a
+    // documented manual path on this error — so an unreadable body has to keep
+    // reaching it rather than becoming a bare "request failed with status 404".
+    const { fetchImpl } = stubFetch([{ status: 404 }]);
+    const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
+    await expect(api.listProjects()).rejects.toBeInstanceOf(BackendUnavailableError);
+  });
+
+  it("still calls the router's own bare 'Not Found' an absent endpoint", async () => {
+    // What a framework answers for a path it cannot route. It names no
+    // resource, so it is the one 404 body that really does mean the route is
+    // missing.
+    const { fetchImpl } = stubFetch([{ status: 404, body: { detail: "Not Found" } }]);
+    const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
+    await expect(api.listProjects()).rejects.toBeInstanceOf(BackendUnavailableError);
+  });
+
   it("surfaces the backend's error detail for other failures", async () => {
     const { fetchImpl } = stubFetch([{ status: 403, body: { detail: "forbidden here" } }]);
     const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });

@@ -19,9 +19,15 @@ import type { ResolvedAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
+import { SETUP_EXIT_CODES } from "../../src/setup/errors.js";
 import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
-import { defaultSetupDeps, runSetupMachine, uniqueKeyName } from "../../src/setup/machine.js";
+import {
+  defaultSetupDeps,
+  projectOptions,
+  runSetupMachine,
+  uniqueKeyName,
+} from "../../src/setup/machine.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import type { SetupContext, SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
@@ -53,6 +59,17 @@ afterEach(() => {
 });
 
 /** A minimal single-service Python repository. */
+/**
+ * An unsigned JWT carrying `claims`, for the one thing the wizard reads out of
+ * an access token: who signed in. Nothing verifies it — `decodeJwtClaims` only
+ * base64url-decodes the payload — so three dot-separated segments is the whole
+ * of the shape that matters.
+ */
+function jwtWithClaims(claims: Record<string, unknown>): string {
+  const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  return `header.${payload}.signature`;
+}
+
 function pythonRepo(): void {
   writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
   writeFileSync(join(dir, "main.py"), "print('hi')\n");
@@ -150,7 +167,7 @@ describe("happy path", () => {
     expect(result.trace?.traceUrl).toBe(odd);
   });
 
-  it("hands the credential to the agent through the environment, not argv", async () => {
+  it("withholds the credential from the agent once a file the application loads holds it", async () => {
     pythonRepo();
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
@@ -163,8 +180,17 @@ describe("happy path", () => {
 
     const agentRun = process.runs.find((r) => r.program === "claude");
     expect(agentRun).toBeDefined();
+    // Never on the command line, whichever channel carries it.
     expect(agentRun?.args.join(" ")).not.toContain("tr-live-project-key-abcd");
-    expect(agentRun?.env.TRACEROOT_API_KEY).toBe("tr-live-project-key-abcd");
+    // This run wrote the credential into a file the entry point loads, so the
+    // environment is no longer the channel and the agent is not given the key.
+    // With it present, anything the agent runs can export a trace — including
+    // the project's own test suite, which is what made a suite-emitted trace
+    // look like proof that the application was instrumented.
+    expect(agentRun?.env.TRACEROOT_API_KEY).toBeUndefined();
+    // The host is not a credential and travels either way, or the agent cannot
+    // tell which deployment it is instrumenting against.
+    expect(agentRun?.env.TRACEROOT_HOST_URL).toBeDefined();
     // The parent environment given to deps must be untouched.
     expect(deps.env.TRACEROOT_API_KEY).toBeUndefined();
   });
@@ -180,11 +206,15 @@ describe("happy path", () => {
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
     await runSetupMachine(ctx, deps);
 
+    // Three runs, not two: the first is the baseline taken before the agent
+    // edits anything, which is what lets a later failure be attributed. The
+    // verification is the pair after it.
     const checks = process.runs.filter((r) => r.program === "pytest");
-    expect(checks).toHaveLength(2);
-    expect(checks[0]?.env.TRACEROOT_API_KEY).toBeDefined();
+    expect(checks).toHaveLength(3);
+    const [, withKey, withoutKey] = checks;
+    expect(withKey?.env.TRACEROOT_API_KEY).toBeDefined();
     // Absent, not empty: an SDK treats "" as configured-but-blank.
-    expect("TRACEROOT_API_KEY" in (checks[1]?.env ?? {})).toBe(false);
+    expect("TRACEROOT_API_KEY" in (withoutKey?.env ?? {})).toBe(false);
   });
 
   it("records a non-secret checkpoint", async () => {
@@ -325,7 +355,7 @@ describe("authentication", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
-    expect(result.error?.exitCode).toBe(9);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.UNSAFE_OVERWRITE);
     expect(result.error?.message).toContain("rather than replacing it");
   });
 
@@ -336,7 +366,7 @@ describe("authentication", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("NOT_AUTHENTICATED");
-    expect(result.error?.exitCode).toBe(2);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.NOT_AUTHENTICATED);
     expect(result.error?.message).toContain("--api-key");
   });
 
@@ -447,6 +477,45 @@ describe("authentication", () => {
     // clock the fake `sleep` cannot fast-forward, so they are not
     // deterministically testable here — see `pollDeviceCode`'s own suite in
     // the shared device flow's own tests for that transport behaviour.)
+  });
+
+  it("marks the signed-in line with one glyph, not two", async () => {
+    pythonRepo();
+    const setupApi = fakeSetupApi({
+      listProjects: async () => [{ project_id: "p_1", project_name: "demo", workspace_id: "w_1" }],
+      createProjectApiKey: async (input) => ({
+        id: "ak_1",
+        name: input.name,
+        hint: "tr-4444-5555",
+        project_id: input.projectId,
+        scope: "admin",
+        expires_at: null,
+        key: "tr-browser-minted-key-1234",
+      }),
+    });
+    const deps = makeDeps({
+      auth: authEmpty(),
+      setupApi,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    // The name on the line comes from the access token's `email` claim, which
+    // is the only identity a user credential carries.
+    deps.createTokenProvider = () => ({
+      getAccessToken: async () => jwtWithClaims({ email: "someone@example.test" }),
+      invalidate: () => undefined,
+    });
+    const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    // One marker in the gutter. `wizardNote` puts the glyph on the block's
+    // first row, so a line composed with one of its own arrived as
+    // "◇  ◆  Signed in as …" — two markers for one step.
+    const rows = plain(err.data).split("\n");
+    expect(rows).toContain("◇  Signed in as someone@example.test.");
+    expect(rows.some((row) => /^[◇◆]\s+[◇◆]/.test(row))).toBe(false);
   });
 
   it("persists the session credential the browser sign-in returned", async () => {
@@ -849,7 +918,9 @@ describe("authentication", () => {
     // Rerunning setup in a repository must not fail just because the previous
     // run named a key after it; the old secret is unrecoverable anyway.
     expect(result.ok).toBe(true);
-    expect(attempted).toHaveLength(2);
+    // Three attempts for two keys: the first name was taken, so it was retried
+    // with the run date appended, and the application's key follows.
+    expect(attempted).toHaveLength(3);
     expect(attempted[1]).not.toBe(attempted[0]);
     expect(attempted[1]).toContain(attempted[0]);
   });
@@ -934,7 +1005,7 @@ describe("authentication", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
-    expect(result.error?.exitCode).toBe(8);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.BACKEND_UNSUPPORTED);
     expect(result.error?.message).toContain("--no-browser");
   });
 });
@@ -1014,6 +1085,107 @@ describe("the pasted key", () => {
     expect(result.error?.code).toBe("NOT_AUTHENTICATED");
     expect(result.error?.message).toContain("No API key was entered.");
     expect(sentToClient).toEqual([]);
+  });
+});
+
+describe("the project picker's rows", () => {
+  it("tells two projects of the same name apart by their workspaces", () => {
+    // A project name is unique only inside its workspace, and every sign-in
+    // path lists projects across all of them, so this is the ordinary case
+    // rather than an edge one. Labelled with the name alone these two rows were
+    // one choice as far as the reader could see.
+    const options = projectOptions([
+      { project_id: "p_1", project_name: "test", workspace_id: "w_1", workspace_name: "Acme" },
+      { project_id: "p_2", project_name: "test", workspace_id: "w_2", workspace_name: "Globex" },
+    ]);
+
+    // Nothing about what is being chosen changes: the label is still the
+    // project name and the value still the project id.
+    expect(options.map((o) => o.label)).toEqual(["test", "test"]);
+    expect(options.map((o) => o.value)).toEqual(["p_1", "p_2"]);
+    // What the reader has to go on differs, and names the owning workspace.
+    expect(options[0]?.hint).toContain("Acme");
+    expect(options[1]?.hint).toContain("Globex");
+    expect(options[0]?.hint).not.toBe(options[1]?.hint);
+    // An empty hint would satisfy the line above and distinguish nothing.
+    expect(options[0]?.hint).toBeTruthy();
+    expect(options[1]?.hint).toBeTruthy();
+  });
+
+  it("tells them apart when the two workspaces are named the same as well", () => {
+    // Nothing refuses a second workspace with an existing name, and the
+    // dashboard's default name for a new one comes from the owner's email
+    // domain — so two people onboarding from one company each get a workspace
+    // called the same thing, and anyone invited to both reads that name twice.
+    // The workspace name alone therefore does not separate these rows.
+    const options = projectOptions([
+      { project_id: "p_1", project_name: "test", workspace_id: "w_1", workspace_name: "Acme" },
+      { project_id: "p_2", project_name: "test", workspace_id: "w_2", workspace_name: "Acme" },
+    ]);
+
+    expect(options[0]?.hint).not.toBe(options[1]?.hint);
+    expect(options[0]?.hint).toContain("w_1");
+    expect(options[1]?.hint).toContain("w_2");
+  });
+
+  it("names the workspace by its id when the payload carries no name for it", () => {
+    // A type obligation rather than a deployment anyone runs: one old enough to
+    // omit the name is old enough to 404 the route. What matters is that the
+    // hint still identifies a workspace instead of going blank.
+    const [option] = projectOptions([
+      { project_id: "p_1", project_name: "test", workspace_id: "w_1", workspace_name: null },
+    ]);
+
+    expect(option?.hint).toBe("w_1");
+  });
+
+  it("is what the project question is actually built from", async () => {
+    // The rows above are only worth anything if the prompt uses them, so this
+    // reaches the real question through a sign-in and reads what it was handed.
+    pythonRepo();
+    const setupApi = fakeSetupApi({
+      listProjects: async () => [
+        { project_id: "p_1", project_name: "test", workspace_id: "w_1", workspace_name: "Acme" },
+        { project_id: "p_2", project_name: "test", workspace_id: "w_2", workspace_name: "Globex" },
+      ],
+      createProjectApiKey: async (input) => ({
+        id: "ak_1",
+        name: input.name,
+        hint: "tr-4444-5555",
+        project_id: input.projectId,
+        scope: input.scope ?? "admin",
+        expires_at: null,
+        key: "tr-browser-minted-key-1234",
+      }),
+    });
+    const base = makeDeps({
+      auth: authEmpty(),
+      setupApi,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      // The second `test`, which is unreachable without something telling the
+      // two apart.
+      answers: ["p_2"],
+    });
+    const asked: Array<Parameters<typeof base.select>[0]> = [];
+    const deps = {
+      ...base,
+      select: (input: Parameters<typeof base.select>[0]) => {
+        asked.push(input);
+        return base.select(input);
+      },
+    };
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    const question = asked.find((input) => input.message.includes("Which project"));
+    expect(question?.options.map((o) => `${o.label} — ${o.hint}`)).toEqual([
+      "test — Acme (w_1)",
+      "test — Globex (w_2)",
+    ]);
+    expect(result.ok).toBe(true);
+    expect(ctx.project?.projectId).toBe("p_2");
   });
 });
 
@@ -1225,6 +1397,27 @@ describe("the credential the instrumented application will read", () => {
     expect(launch?.stdin ?? "").not.toContain("wrote `TRACEROOT_API_KEY` into");
   });
 
+  it("names the credential file on a rerun that had nothing to write", async () => {
+    // The file already holds the right values, so `upsertEnvFile` writes
+    // nothing and the stage reports `skipped`. It is still the file the
+    // application loads, so the closing notice and the report have to name it:
+    // reading `credentialEnvFile` as "what this run wrote" leaves a rerun
+    // silent about the file the user actually has.
+    pythonRepo();
+    initGit();
+    const existing = `TRACEROOT_API_KEY=${KEY}\nTRACEROOT_HOST_URL=https://api.example.test\n`;
+    writeFileSync(join(dir, ".env"), existing);
+    const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, configuredKeyRun(authFrom("config")));
+
+    expect(result.error).toBeNull();
+    // The stage ran and found nothing to do, rather than being skipped before it.
+    expect(statusOf(events, "configure_repository")).toBe("skipped");
+    expect(readFileSync(join(dir, ".env"), "utf8")).toBe(existing);
+    expect(ctx.credentialEnvFile).toBe(join(dir, ".env"));
+  });
+
   it("writes nothing for a key already in the `.env` beside the application", async () => {
     pythonRepo();
     initGit();
@@ -1431,7 +1624,7 @@ describe("stack and agent selection", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("UNSUPPORTED");
-    expect(result.error?.exitCode).toBe(4);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.UNSUPPORTED);
     expect(result.error?.message).toContain("Go");
   });
 
@@ -1466,6 +1659,36 @@ describe("stack and agent selection", () => {
     expect(result.error?.code).toBe("UNSUPPORTED");
     expect(result.error?.remedy).toContain("--no-instrument");
   });
+
+  it("permits the interpreter spelling the task it sent actually names", async () => {
+    // Both halves come out of one real run — the task the machine handed the
+    // agent, and the permission rules it launched the agent with — so neither
+    // is restated here and the two cannot come apart without this failing.
+    pythonRepo();
+    initGit();
+    // A virtualenv beside the service is what makes the two spellings differ:
+    // the task names it relatively, to keep the agent out of a quoting problem,
+    // and the launch used to permit only the absolute path.
+    mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+    writeFileSync(join(dir, ".venv", "bin", "python"), "");
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    const named = /run it with: `([^` ]+)/.exec(launch?.stdin ?? "")?.[1];
+    expect(named).toBeDefined();
+    // Non-vacuous only because the task does not name the absolute path, which
+    // is the spelling a caller has in hand and the one that was permitted.
+    expect(named).not.toBe(join(dir, ".venv", "bin", "python"));
+    expect(launch?.args).toContain(`Bash(${named}:*)`);
+  });
 });
 
 describe("failure handling", () => {
@@ -1485,7 +1708,7 @@ describe("failure handling", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("AGENT_FAILED");
-    expect(result.error?.exitCode).toBe(5);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.AGENT_FAILED);
     expect(result.error?.message).toContain("main.py");
     expect(result.error?.remedy).toContain("Nothing was reverted");
   });
@@ -1497,9 +1720,10 @@ describe("failure handling", () => {
     const wrapped: SetupDeps["runProcess"] = async (o) => {
       if (o.program === "pytest") {
         pytestCalls += 1;
-        // Passes with the key, fails without it — the exact regression the
-        // second run exists to catch.
-        return pytestCalls === 1
+        // Three runs: the baseline before anything is instrumented, then the
+        // verification pair. Only the last one — the credential-free run — is
+        // meant to fail, which is the exact regression it exists to catch.
+        return pytestCalls < 3
           ? { exitCode: 0, output: "", durationMs: 1, timedOut: false, spawnFailed: false }
           : {
               exitCode: 1,
@@ -1520,7 +1744,7 @@ describe("failure handling", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
-    expect(result.error?.exitCode).toBe(6);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.APP_VERIFICATION_FAILED);
     expect(result.error?.message).toContain("must keep working when TraceRoot is absent");
     expect(result.error?.message).toContain("KeyError");
   });
@@ -1536,7 +1760,7 @@ describe("failure handling", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("TRACE_TIMEOUT");
-    expect(result.error?.exitCode).toBe(7);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.TRACE_TIMEOUT);
     expect(result.error?.remedy).toContain("--resume");
   });
 
@@ -1600,10 +1824,446 @@ describe("failure handling", () => {
     expect(ctx.application?.command).toBe("pytest");
     expect(ctx.application?.withCredentials.ran).toBe(true);
     expect(ctx.application?.withoutCredentials.ran).toBe(true);
+    // The baseline first, then the pair. The baseline carries no credential
+    // either, so the pair is identified by position rather than by env.
     const checks = process.runs.filter((run) => run.program === "pytest");
-    expect(checks).toHaveLength(2);
-    expect(checks[0]?.env.TRACEROOT_API_KEY).toBeDefined();
-    expect(checks[1]?.env.TRACEROOT_API_KEY).toBeUndefined();
+    expect(checks).toHaveLength(3);
+    expect(checks[0]?.env.TRACEROOT_API_KEY).toBeUndefined();
+    expect(checks[1]?.env.TRACEROOT_API_KEY).toBeDefined();
+    expect(checks[2]?.env.TRACEROOT_API_KEY).toBeUndefined();
+  });
+});
+
+describe("a suite that was already failing", () => {
+  /** A run whose project check fails every time it is invoked. */
+  function redSuite(): ReturnType<typeof fakeRunProcess> {
+    return fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      results: { pytest: { exitCode: 1, output: "E   assert 1 == 2\n1 failed" } },
+    });
+  }
+
+  it("does not blame instrumentation for a check that was red beforehand", async () => {
+    // A real run ended on "pytest failed after instrumentation" for a suite
+    // that was failing before setup started, which sent the user looking for a
+    // fault in work that had just been done correctly.
+    pythonRepo();
+    initGit();
+    const process = redSuite();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    // Not a failure, and the run goes on to establish the thing it still can.
+    expect(result.error).toBeNull();
+    expect(result.ok).toBe(true);
+    expect(ctx.application?.outcome).toBe("inconclusive");
+    expect(ctx.application?.passed).toBe(false);
+    expect(ctx.application?.baseline).toMatchObject({ ran: true, exitCode: 1 });
+    expect(result.trace?.traceId).toBe("t_1");
+    expect(plain(err.data)).toContain("failing before setup changed anything");
+
+    // Two runs of the suite, not three: the credential-free run exists to show
+    // the application works without TraceRoot, which a suite failing either way
+    // cannot show, so it is not attempted.
+    expect(process.runs.filter((r) => r.program === "pytest")).toHaveLength(2);
+  });
+
+  it("carries the outcome into the JSON envelope as its own value", async () => {
+    // `passed: false` is true of both a broken suite and broken
+    // instrumentation, and a consumer acts on them differently.
+    pythonRepo();
+    initGit();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: redSuite().run,
+    });
+    const { ctx, events } = makeCtx({ json: true, flags: { agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    const stage = events.find(
+      (e) => e.event === "stage" && e.stage === "verify_application" && e.status !== "start",
+    );
+    expect(stage?.event === "stage" ? stage.data : undefined).toMatchObject({
+      outcome: "inconclusive",
+      passed: false,
+      baseline_exit_code: 1,
+    });
+    const settled = events.find((e) => e.event === "result");
+    expect(settled?.event === "result" ? settled.data : undefined).toMatchObject({
+      application_outcome: "inconclusive",
+      application_passed: false,
+    });
+  });
+
+  it("still fails when the check passed before the run and fails after it", async () => {
+    // The baseline is what makes the claim attributable, so the message says
+    // the thing it can now support.
+    pythonRepo();
+    initGit();
+    let calls = 0;
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const runProcess: SetupDeps["runProcess"] = async (o) => {
+      if (o.program === "pytest") {
+        calls += 1;
+        // The baseline passes; everything after it fails.
+        return calls === 1
+          ? { exitCode: 0, output: "", durationMs: 1, timedOut: false, spawnFailed: false }
+          : { exitCode: 1, output: "boom", durationMs: 1, timedOut: false, spawnFailed: false };
+      }
+      return process.run(o);
+    };
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
+    expect(plain(result.error?.message ?? "")).toContain(
+      "passed before this run instrumented anything, and fails now",
+    );
+    expect(ctx.application?.outcome).toBe("failed");
+  });
+
+  it("takes no baseline on the route that writes the task, and names no cause", async () => {
+    // `--no-instrument` writes the instrumentation task and edits nothing, so
+    // there is no moment inside the run at which a "before" could be measured —
+    // the code changes afterwards, outside this process. The decision is to
+    // measure nothing there rather than carry a baseline whose age nothing can
+    // check, and the consequence has to be an outcome that names no cause.
+    pythonRepo();
+    initGit();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: redSuite().run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude", instrument: false } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.checkpoint.applicationBaseline).toBeUndefined();
+    // Not a failure of this run, and in the same word the agent route uses for
+    // a suite it measured and found red.
+    expect(result.error).toBeNull();
+    expect(ctx.application?.outcome).toBe("inconclusive");
+    expect(ctx.application?.passed).toBe(false);
+    const said = plain(err.data);
+    expect(said).toContain("nothing ran it before the code was instrumented");
+    // And not the other inconclusive sentence, which would assert a prior
+    // failure nothing observed.
+    expect(said).not.toContain("failing before setup changed anything");
+    // The failing output still reaches the user: it is the only diagnostic a
+    // run with no baseline has.
+    expect(said).toContain("assert 1 == 2");
+  });
+
+  it("covers --manual by the same decision as the task-file route", async () => {
+    // Both hand the edit over; neither has an "about to change your code"
+    // instant inside the run. A decision that held for one and not the other
+    // would be a difference with no reason behind it.
+    pythonRepo();
+    initGit();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: redSuite().run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude", method: "manual" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.checkpoint.applicationBaseline).toBeUndefined();
+    expect(result.error).toBeNull();
+    expect(ctx.application?.outcome).toBe("inconclusive");
+    expect(plain(err.data)).toContain("nothing ran it before the code was instrumented");
+  });
+
+  it("runs every check in the virtualenv the real check uses", async () => {
+    // The command is `pytest` as the project documents it, which resolves only
+    // because the user's shell has the virtualenv activated. Handed the CLI's
+    // own environment it fails to spawn, and the measurement the whole
+    // mechanism depends on never happens — on the commonest shape of Python
+    // project there is.
+    pythonRepo();
+    initGit();
+    const venvPython = join(dir, ".venv", "bin", "python");
+    mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+    writeFileSync(venvPython, "");
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    const checks = process.runs.filter((r) => r.program === "pytest");
+    expect(checks).toHaveLength(3);
+    // All three of them: the baseline, and the two verification runs after it.
+    // Asserted together because they are one claim — the comparison is only a
+    // comparison if every run is made in the same environment — and because
+    // pinning the baseline alone is what let this through the first time. The
+    // baseline was handed the interpreter, the verification was not, and a run
+    // stopped on `pytest` not being found after the instrumentation had
+    // already succeeded. Nothing failed until it was in front of a user.
+    for (const check of checks) {
+      expect(check.env.PATH).toContain(join(dir, ".venv", "bin"));
+    }
+    expect(ctx.checkpoint.applicationBaseline).toMatchObject({ ran: true, exitCode: 0 });
+  });
+
+  it("says nothing about the suite when the baseline could not run", async () => {
+    // An un-run baseline has `exitCode: null`, and `null !== 0`. Warning on the
+    // code alone announced that the project's suite does not pass whenever the
+    // measurement simply did not happen — a false claim about the user's code,
+    // made on every run where the command could not be spawned.
+    //
+    // Silence about the suite is right here, but it is not the whole answer:
+    // a command that cannot spawn cannot be baselined either, so this branch
+    // also swallows a spawn failure, and the one thing the user could act on —
+    // that `pytest` was never found — does not reach them. Distinguishing the
+    // two needs the spawn-failure fields on the verification failure, which
+    // arrive with the branch that adds them rather than here, so that is where
+    // the distinction is made and tested.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      results: { pytest: { spawnFailed: true, exitCode: 127 } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.checkpoint.applicationBaseline).toMatchObject({ ran: false, exitCode: null });
+    // Nothing is claimed about the project's own suite, which was never
+    // measured — and nothing is said about it either way.
+    expect(plain(err.data)).not.toContain("does not pass");
+    expect(ctx.application?.outcome).toBe("inconclusive");
+    // The run carries on rather than failing: nothing was measured, so there is
+    // nothing to fail on. What it does not yet do is say that the command could
+    // not be started.
+    expect(result.error).toBeNull();
+    // And it does not claim the suite passes either — only that nothing here
+    // established it.
+    expect(plain(err.data)).toContain("could not establish whether");
+  });
+
+  it("does not retake the baseline on a resumed instrumentation", async () => {
+    // A resumed `instrument` stage runs over a worktree the agent may already
+    // have edited, where a second measurement would be the wrong thing wearing
+    // the name of a baseline.
+    pythonRepo();
+    initGit();
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.applicationBaseline = { ran: true, exitCode: 1, durationMs: 5 };
+    const process = redSuite();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({
+      resumeFrom: previous,
+      flags: { agent: "claude", resume: true },
+    });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(ctx.application?.outcome).toBe("inconclusive");
+    expect(ctx.checkpoint.applicationBaseline).toMatchObject({ durationMs: 5 });
+    // One run of the suite: the verification's first phase. No baseline, and no
+    // credential-free run.
+    expect(process.runs.filter((r) => r.program === "pytest")).toHaveLength(1);
+  });
+});
+
+describe("the two keys a run mints", () => {
+  interface Minted {
+    name: string;
+    scope?: string;
+  }
+
+  /**
+   * A browser sign-in whose key mints are recorded, with an optional refusal
+   * for one scope so the authorization path can be exercised.
+   */
+  function signInRun(options: { refuse?: "admin" } = {}): {
+    deps: SetupDeps;
+    minted: Minted[];
+    keyed: Minted[];
+    configured: { api_key: string }[];
+    runs: RecordedRun[];
+  } {
+    const minted: Minted[] = [];
+    const keyed: Minted[] = [];
+    const configured: { api_key: string }[] = [];
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const key = (name: string, scope?: string) =>
+      `tr-${scope ?? "unscoped"}-${name.includes("cli") ? "cli" : "app"}-key`;
+    const setupApi = fakeSetupApi({
+      listProjects: async () => [{ project_id: "p_1", project_name: "demo", workspace_id: "w_1" }],
+      createProjectApiKey: async (input) => {
+        minted.push({ name: input.name, scope: input.scope });
+        if (options.refuse === input.scope) {
+          throw new SetupApiError(
+            "Minting an admin-scoped key requires the workspace admin role",
+            403,
+          );
+        }
+        return {
+          id: `ak_${minted.length}`,
+          name: input.name,
+          hint: `tr-hint-${minted.length}`,
+          project_id: input.projectId,
+          scope: input.scope ?? "ingest",
+          expires_at: null,
+          key: key(input.name, input.scope),
+        };
+      },
+      listApiKeys: async () => [],
+      createApiKey: async (input) => {
+        keyed.push({ name: input.name, scope: input.scope });
+        return {
+          id: "ak_keyed",
+          name: input.name,
+          hint: "tr-hint-keyed",
+          project_id: input.projectId,
+          scope: input.scope ?? "ingest",
+          expires_at: null,
+          key: "tr-keyed-key",
+        };
+      },
+    });
+    const deps = makeDeps({
+      auth: authEmpty(),
+      setupApi,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+      storedCredential: { sessionToken: makeSecret("tru-saved-token"), expiresAt: null },
+      onWriteConfig: (config) => configured.push(config),
+    });
+    return { deps, minted, keyed, configured, runs: process.runs };
+  }
+
+  it("gives the application a key that can only send telemetry", async () => {
+    // The application's key travels with the application: into CI, into
+    // containers, into whatever runs it. One key doing both jobs meant every
+    // deployment carried a credential that could enumerate and revoke the
+    // project's keys.
+    pythonRepo();
+    const { deps, minted, configured } = signInRun();
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(minted.map((m) => m.scope)).toEqual(["admin", "ingest"]);
+    // The admin key is the CLI's own, and the only one persisted to its config.
+    const cli = minted.find((m) => m.scope === "admin");
+    const app = minted.find((m) => m.scope === "ingest");
+    expect(cli?.name).toContain("cli");
+    expect(app?.name).not.toContain("cli");
+    expect(configured).toHaveLength(1);
+    expect(configured[0]?.api_key).toBe("tr-admin-cli-key");
+    // And the ingest key is the one the application gets.
+    expect(ctx.credential?.key.reveal()).toBe("tr-ingest-app-key");
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-ingest-app-key");
+    expect(readFileSync(join(dir, ".env"), "utf8")).not.toContain("tr-admin-cli-key");
+  });
+
+  it("reads the first trace back on the CLI's credential, not the application's", async () => {
+    // An ingest key can send telemetry and nothing else. Reading traces with it
+    // worked only because the trace routes do not enforce scope yet, so this
+    // stage would have broken on the day they started to.
+    pythonRepo();
+    const reads: (string | undefined)[] = [];
+    const { deps, minted } = signInRun();
+    const wrapped: SetupDeps = {
+      ...deps,
+      createSetupApi: (opts) => {
+        reads.push(opts.apiKey);
+        return deps.createSetupApi(opts);
+      },
+    };
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, wrapped);
+
+    expect(result.ok).toBe(true);
+    expect(minted).toHaveLength(2);
+    // Named from the context rather than spelled out, so this cannot pass by
+    // the application's key simply being called something else.
+    const appKey = ctx.credential?.key.reveal();
+    expect(appKey).toBeDefined();
+    expect(reads).not.toContain(appKey);
+    expect(reads).toContain("tr-admin-cli-key");
+  });
+
+  it("falls back to a send-only CLI key when this account may not mint one", async () => {
+    // Minting a key that manages a project's other keys is reserved for a
+    // workspace admin, because that is the capability the dashboard reserves
+    // for one. A member must still be able to set their repository up.
+    pythonRepo();
+    const { deps, minted } = signInRun({ refuse: "admin" });
+    const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(minted.map((m) => m.scope)).toEqual(["admin", "ingest", "ingest"]);
+    expect(plain(err.data)).toContain("cannot mint a key that manages other keys");
+  });
+
+  it("asks for ingest on the other mint path too", async () => {
+    // The two paths used to assume opposite things: one minted admin because
+    // "an ingest key cannot read traces", while the other already read traces
+    // with an ingest key. Both now say what they want.
+    //
+    // Reached by making `whoami` resolve a different project than the one
+    // selected, which is what sends `acquire_project_key` past its reuse fast
+    // path and into the mint.
+    pythonRepo();
+    const { deps, keyed } = signInRun();
+    const withKey: SetupDeps = {
+      ...deps,
+      resolvedAuth: authWithKey("tr-user-supplied-key"),
+      createClient: () =>
+        fakeApiClient({
+          whoamiResult: async () => whoami({ project_id: "p_other" }),
+          traces: [traceRow()],
+        }),
+    };
+    const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+
+    const result = await runSetupMachine(ctx, withKey);
+
+    expect(result.ok).toBe(true);
+    expect(keyed).toHaveLength(1);
+    expect(keyed[0]?.scope).toBe("ingest");
+    // And that minted key is the one the application gets.
+    expect(ctx.credential?.key.reveal()).toBe("tr-keyed-key");
   });
 });
 
@@ -1654,7 +2314,7 @@ describe("proving the agent installed the SDK", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("AGENT_FAILED");
-    expect(result.error?.exitCode).toBe(5);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.AGENT_FAILED);
     expect(result.error?.message).toContain("import traceroot");
     expect(result.error?.message).toContain("python3");
     expect(result.error?.message).toContain("traceroot SDK was not installed");
@@ -1862,6 +2522,106 @@ describe("proving the agent installed the SDK", () => {
   });
 });
 
+describe("proving the agent did something", () => {
+  /** An agent's completion block, as it arrives on stdout. */
+  function completion(body: Record<string, unknown>, prose = "done"): string {
+    return [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n");
+  }
+
+  it("fails the stage when the agent reports it changed nothing", async () => {
+    // Exit 0 means the agent finished, not that it acted. A sandboxed agent
+    // blocked from installing or editing reports the block and still exits 0 —
+    // and without this the run passes `verify_application` on untouched code,
+    // then spends the whole trace timeout before blaming the instrumented path
+    // for never running.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      // Clean before and after: nothing was touched.
+      gitStatus: ["", ""],
+      results: {
+        claude: {
+          output: completion({
+            files_changed: [],
+            trace_id: null,
+            notes: "npm install was blocked: EPERM writing /Users/x/.npm/_cacache",
+          }),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.stage).toBe("instrument");
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(plain(result.error?.message ?? "")).toContain("without changing any files");
+    // The agent's own account of the block, quoted rather than summarised away.
+    expect(plain(result.error?.message ?? "")).toContain("EPERM");
+    expect(result.error?.remedy).toContain("--resume");
+    // The stage is not recorded, so `--resume` runs it again rather than
+    // restoring a result that never happened.
+    expect(result.checkpoint.completedStages).not.toContain("instrument");
+    // And the run stops here rather than carrying on to the checks that would
+    // pass on untouched code.
+    expect(result.checkpoint.completedStages).not.toContain("verify_application");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("accepts a report of edits the worktree did not see", async () => {
+    // `observedChangedFiles` is empty outside a git repository and whenever
+    // `git status` could not be read, so the observation alone would fail runs
+    // that worked. The agent's claim has to agree before the stage fails.
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: { claude: { output: completion({ files_changed: ["main.py"], trace_id: null }) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("does not fail a service that already carried TraceRoot", async () => {
+    // There the right amount of editing may genuinely be none: the task tells
+    // the agent to extend what is present rather than duplicate it.
+    writeFileSync(
+      join(dir, "pyproject.toml"),
+      '[project]\ndependencies = ["traceroot","pytest"]\n',
+    );
+    writeFileSync(join(dir, "main.py"), "import traceroot\n\ntraceroot.initialize()\n");
+    initGit();
+    const process = fakeRunProcess({
+      gitStatus: ["", ""],
+      results: { claude: { output: completion({ files_changed: [], trace_id: null }) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.existingInstrumentation.present).toBe(true);
+    expect(result.error).toBeNull();
+  });
+});
+
 describe("resume and rerun", () => {
   it("resumes an interrupted run from the checkpoint", async () => {
     pythonRepo();
@@ -1901,7 +2661,7 @@ describe("resume and rerun", () => {
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
   });
 
-  it("does not revoke a minted key when the user asked to resume", async () => {
+  it("does not revoke a minted key when the failure leaves a run to resume", async () => {
     pythonRepo();
     let revoked = 0;
     const deps = makeDeps({
@@ -1939,7 +2699,52 @@ describe("resume and rerun", () => {
     expect(revoked).toBe(0);
   });
 
-  it("revokes a key it minted when a later stage fails without --resume", async () => {
+  it("does not revoke it on that failure without --resume either", async () => {
+    // The flag describes the *previous* run. This one stopped at "no trace
+    // yet", told the user to run their application and resume — and then
+    // revoked the key their application needs to send the trace with, and took
+    // it back out of the env file, for no reason other than that the flag was
+    // absent.
+    pythonRepo();
+    let revoked = 0;
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({
+        whoamiResult: async () => whoami({ project_id: "p_other" }),
+        traces: [],
+      }),
+      setupApi: fakeSetupApi({
+        listProjects: async () => [
+          { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+        ],
+        listApiKeys: async () => [],
+        createApiKey: async ({ name }) => ({
+          id: "ak_1",
+          name,
+          hint: "tr-…9999",
+          project_id: "p_1",
+          scope: "ingest",
+          expires_at: null,
+          key: "tr-minted-secret-value-42",
+        }),
+        revokeApiKey: async () => {
+          revoked += 1;
+        },
+      }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx } = makeCtx({
+      flags: { agent: "claude", project: "demo", traceTimeoutSec: 1 },
+    });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(revoked).toBe(0);
+    // And the credential the remedy depends on is still where it was written.
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-minted-secret-value-42");
+  });
+
+  it("revokes a key it minted when the run is over rather than paused", async () => {
     pythonRepo();
     let revoked: string | null = null;
     const deps = makeDeps({
@@ -1968,14 +2773,27 @@ describe("resume and rerun", () => {
       }),
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
+    // Something no stage anticipated, which is the ending that gets no benefit
+    // of the doubt: it has not promised the user a resume, so what it created
+    // is litter.
+    const failing: SetupDeps = {
+      ...deps,
+      resolveSdk: async () => {
+        throw new Error("the registry refused the request");
+      },
+    };
     const { ctx } = makeCtx({
       flags: { agent: "claude", project: "demo", traceTimeoutSec: 1 },
     });
-    await runSetupMachine(ctx, deps);
+    const result = await runSetupMachine(ctx, failing);
 
+    expect(result.error?.code).toBe("UNEXPECTED");
     expect(revoked).toBe("ak_1");
-    // The rolled-back credential is gone from the env file too.
-    expect(readFileSync(join(dir, ".env"), "utf8")).not.toContain("tr-minted-secret-value-42");
+    // And the `.env` this run created goes with it. The repository had none
+    // before, so what is left once the key comes out is a file whose own header
+    // says it contains a live API key — read as configuration by the next tool
+    // to look at it, and true of nothing.
+    expect(existsSync(join(dir, ".env"))).toBe(false);
   });
 
   it("is a cheap no-op when rerun after success", async () => {
@@ -2000,6 +2818,225 @@ describe("resume and rerun", () => {
     expect(result.ok).toBe(true);
     // No second agent launch and no second instrumentation.
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(agentRunsAfterFirst);
+  });
+});
+
+describe("what a failed run takes back", () => {
+  /**
+   * A browser sign-in that reaches instrumentation and then fails for a reason
+   * no stage anticipated, which is the shape of the run this exists for: two
+   * keys minted during sign-in, a credential written into the project's env
+   * file, and nothing to show for either.
+   */
+  function signInThenFail(
+    options: {
+      revokeFails?: boolean;
+      /** Let the run finish instead, so the success path is reachable. */
+      succeed?: boolean;
+      /** Called where the failure happens, while the run is still in flight. */
+      atFailure?: () => void;
+    } = {},
+  ): {
+    deps: SetupDeps;
+    minted: string[];
+    revoked: string[];
+  } {
+    const minted: string[] = [];
+    const revoked: string[] = [];
+    const setupApi = fakeSetupApi({
+      listProjects: async () => [{ project_id: "p_1", project_name: "demo", workspace_id: "w_1" }],
+      createProjectApiKey: async (input) => {
+        minted.push(input.name);
+        return {
+          id: `ak_${minted.length}`,
+          name: input.name,
+          hint: `tr-hint-${minted.length}`,
+          project_id: input.projectId,
+          scope: input.scope ?? "ingest",
+          expires_at: null,
+          key: `tr-${input.scope}-secret-value-${minted.length}`,
+        };
+      },
+      revokeApiKey: async (id) => {
+        if (options.revokeFails === true) {
+          throw new Error("the session was revoked while the run was in flight");
+        }
+        revoked.push(id);
+      },
+    });
+    const deps = makeDeps({
+      auth: authEmpty(),
+      setupApi,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      storedCredential: { sessionToken: makeSecret("tru-saved-token"), expiresAt: null },
+    });
+    return {
+      deps:
+        options.succeed === true
+          ? deps
+          : {
+              ...deps,
+              resolveSdk: async () => {
+                options.atFailure?.();
+                throw new Error("the registry refused the request");
+              },
+            },
+      minted,
+      revoked,
+    };
+  }
+
+  it("revokes both keys the sign-in stage minted, and names them", async () => {
+    // The rollback read a list only `acquire_project_key` appended to. Sign-in
+    // mints two — the CLI's own credential and the application's — and recorded
+    // neither, so a run that signed in and then failed left both live on the
+    // project with nothing anywhere marking them as orphaned.
+    pythonRepo();
+    const { deps, minted, revoked } = signInThenFail();
+    const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(false);
+    expect(minted).toHaveLength(2);
+    expect(revoked).toEqual(["ak_1", "ak_2"]);
+    // Named, because "a key" is not something a user can act on: the failure
+    // they are reading is about something else, and matching the line to a row
+    // in their project's key list is the whole of what makes it useful.
+    const said = plain(err.data);
+    expect(said).toContain("Revoked the 2 API keys");
+    for (const name of minted) {
+      expect(said).toContain(name);
+    }
+    expect(said).toContain("tr-hint-1");
+    // Never the key itself, on any path.
+    expect(said).not.toContain("secret-value");
+  });
+
+  it("says which keys are still live when it cannot revoke them", async () => {
+    // A revoke needs the network and a session, which are two of the things
+    // that fail in the first place. Claiming a rollback that did not happen
+    // would leave the user believing a live key is gone.
+    pythonRepo();
+    const { deps, revoked } = signInThenFail({ revokeFails: true });
+    const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(revoked).toEqual([]);
+    const said = plain(err.data);
+    expect(said).toContain("could not revoke");
+    expect(said).toContain("still live");
+    expect(said).toContain("Delete them from the project's API keys");
+    expect(said).not.toContain("Revoked the");
+    // And they stay in the durable record, because they are still out there.
+    expect(ctx.checkpoint.mintedKeys?.map((key) => key.id)).toEqual(["ak_1", "ak_2"]);
+  });
+
+  it("writes a minted key to disk before the run can lose it", async () => {
+    // The case this has to survive is a key minted and then not recorded
+    // because the process died, and no in-memory list survives that. So the
+    // checkpoint is written at the mint rather than at the end of the stage,
+    // and this reads it from disk from inside the run, four stages later.
+    pythonRepo();
+    let midRun: ReturnType<typeof readCheckpoint> = null;
+    const { deps } = signInThenFail({
+      atFailure: () => {
+        midRun = readCheckpoint(dir);
+      },
+    });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(midRun?.mintedKeys?.map((key) => key.id)).toEqual(["ak_1", "ak_2"]);
+    // The hint and the name, never the key.
+    expect(midRun?.mintedKeys?.[0]).toMatchObject({ hint: "tr-hint-1" });
+    expect(JSON.stringify(midRun?.mintedKeys)).not.toContain("secret-value");
+    // Emptied again by the rollback as it revoked them, which is what leaves
+    // the record meaning "still out there" rather than "ever created".
+    expect(ctx.checkpoint.mintedKeys).toEqual([]);
+  });
+
+  it("empties the record when the run succeeds, since the keys are then in use", async () => {
+    // Otherwise the record would say a finished installation's own credentials
+    // are orphans, which is the one reading that could get a working key
+    // revoked.
+    pythonRepo();
+    const { deps, minted, revoked } = signInThenFail({ succeed: true });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(minted).toHaveLength(2);
+    expect(revoked).toEqual([]);
+    expect(ctx.checkpoint.mintedKeys).toEqual([]);
+    expect(readCheckpoint(dir)?.mintedKeys).toBeUndefined();
+  });
+
+  it("takes its own line out of the project's env file and nothing else", async () => {
+    // The file is the project's own, and may be full of things that have
+    // nothing to do with TraceRoot. A rollback that rewrote it would be a
+    // second, worse bug than the stale line it was clearing.
+    pythonRepo();
+    const existing = "# the project's own\nDATABASE_URL=postgres://localhost/app\nDEBUG=1\n";
+    writeFileSync(join(dir, ".env"), existing, "utf8");
+    const { deps } = signInThenFail();
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    // Still there, because the user put it there.
+    expect(existsSync(join(dir, ".env"))).toBe(true);
+    const after = readFileSync(join(dir, ".env"), "utf8");
+    expect(after).not.toContain("TRACEROOT_API_KEY");
+    expect(after).toContain("# the project's own");
+    expect(after).toContain("DATABASE_URL=postgres://localhost/app");
+    expect(after).toContain("DEBUG=1");
+  });
+
+  it("takes back a credential it wrote but did not mint", async () => {
+    // The env rollback used to be conditional on this run having minted a key,
+    // which coupled two unrelated things: the line is just as stale when the
+    // key came from `--api-key` or from the sign-in stage, and the stage that
+    // writes it does not care where it came from.
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey("tr-the-users-own-key-value"),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const failing: SetupDeps = {
+      ...deps,
+      resolveSdk: async () => {
+        throw new Error("the registry refused the request");
+      },
+    };
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, failing);
+
+    // Nothing was minted: the key is the user's own, reused as it was found.
+    expect(ctx.credential?.keyId).toBeNull();
+    expect(result.ok).toBe(false);
+    // And the file this run created to hold it is gone again.
+    expect(existsSync(join(dir, ".env"))).toBe(false);
+  });
+
+  it("mints through one function, so a new minting site cannot forget to record", async () => {
+    // A guard on the shape of the file rather than on behaviour: the defect was
+    // a stage that minted without recording, and no test of a run that *does*
+    // record can fail when a new stage is added that does not. The guarantee is
+    // that there is one place to go through, so this pins that there is.
+    const source = readFileSync(new URL("../../src/setup/machine.ts", import.meta.url), "utf8");
+    expect(source.split("api.createProjectApiKey(").length - 1).toBe(1);
+    expect(source.split("api.createApiKey(").length - 1).toBe(1);
+    // Both inside the one function that records, and nowhere else.
+    const chokepoint = source.slice(source.indexOf("async function mintRecordedKey("));
+    expect(chokepoint).toContain("api.createProjectApiKey(");
+    expect(chokepoint).toContain("api.createApiKey(");
   });
 });
 
@@ -3153,5 +4190,100 @@ describe("a token configured in the environment rather than saved on disk", () =
 
     // The point is that authentication did not stop the run.
     expect(result.checkpoint.completedStages).toContain("authenticate");
+  });
+});
+
+describe("how much of the application the first trace covers", () => {
+  /** A run that reaches a trace, with whatever `span_count` the backend reports. */
+  function run(trace: Record<string, unknown>, options: { json?: boolean } = {}) {
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow(trace)] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const harness = makeCtx({ json: options.json ?? false, flags: { agent: "claude" } });
+    return { harness, result: runSetupMachine(harness.ctx, deps) };
+  }
+
+  it("says so when the trace it found holds a single span", async () => {
+    // The run this closes. The closing report said "TraceRoot is connected and a
+    // trace has been received" and named a trace of one span — one instrumented
+    // function — so the central claim was true and the user was told their
+    // instrumentation worked.
+    const { harness, result } = run({ span_count: 1 });
+    const outcome = await result;
+
+    // Said, not failed: the credential works and the trace is real.
+    expect(outcome.ok).toBe(true);
+    expect(outcome.trace?.traceUrl).toBe("https://app.example.test/trace/t_1");
+    expect(plain(harness.err.data)).toContain(
+      "warning: your first trace holds a single span: one instrumented function ran, and nothing instrumented ran inside it. That is enough to show the credential works, and not enough to show that the instrumentation reaches the code you care about — open the trace and check that the functions you expected to see are in it.",
+    );
+    // And the line the wait closes on carries the size, which is where a user
+    // watching the run sees it first.
+    expect(plain(harness.err.data)).toContain("First trace received (a single span).");
+    // On the checkpoint, because the report is rendered from it — including by a
+    // `--resume` that never polled.
+    expect(outcome.checkpoint.trace?.spanCount).toBe(1);
+  });
+
+  it("says nothing of the kind about a trace that holds several", async () => {
+    const { harness, result } = run({ span_count: 7 });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(plain(harness.err.data)).not.toContain("warning: your first trace");
+    // The count is still reported. "Received" with no size to it is the claim
+    // that needed qualifying, and leaving it unqualified for the healthy case
+    // would leave a user no way to see the number at all.
+    expect(plain(harness.err.data)).toContain("First trace received (7 spans).");
+    expect(outcome.checkpoint.trace?.spanCount).toBe(7);
+  });
+
+  it("claims no size when the deployment did not report one", async () => {
+    // A row without `span_count`. Silence is not evidence of a small trace, so
+    // the run says what it always said and records no number.
+    const { harness, result } = run({});
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(plain(harness.err.data)).toContain("First trace received.");
+    expect(plain(harness.err.data)).not.toContain("warning: your first trace");
+    expect(outcome.checkpoint.trace?.spanCount).toBeUndefined();
+  });
+
+  it("carries the count into the JSON envelope, and the remark with it", async () => {
+    // A machine consumer has only the fields. The sentence reaches it as a
+    // `warn` event, and the number behind the sentence is on the stage so
+    // nothing has to parse prose to act on it.
+    const { harness, result } = run({ span_count: 1 }, { json: true });
+    await result;
+
+    const stage = harness.events.find(
+      (e) =>
+        e.event === "stage" &&
+        (e as unknown as { stage: string }).stage === "verify_trace" &&
+        e.status === "ok",
+    ) as unknown as { data: { span_count: number | null } };
+    expect(stage.data.span_count).toBe(1);
+    // The sentence itself still reaches stderr, unrailed, because stdout in this
+    // mode belongs to the event stream.
+    expect(harness.err.data).toContain("warning: your first trace holds a single span:");
+  });
+
+  it("reports null rather than zero for a count the JSON consumer never got", async () => {
+    // The two cases a consumer must be able to tell apart: a trace worth
+    // looking at, and a deployment that said nothing about this one.
+    const { harness, result } = run({}, { json: true });
+    await result;
+
+    const stage = harness.events.find(
+      (e) =>
+        e.event === "stage" &&
+        (e as unknown as { stage: string }).stage === "verify_trace" &&
+        e.status === "ok",
+    ) as unknown as { data: { span_count: number | null } };
+    expect(stage.data.span_count).toBeNull();
   });
 });

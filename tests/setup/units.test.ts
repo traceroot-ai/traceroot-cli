@@ -128,14 +128,18 @@ describe("checkpoint", () => {
 
 describe("SetupError", () => {
   it("maps every code to its documented exit status", () => {
-    expect(SETUP_EXIT_CODES.TRACE_TIMEOUT).toBe(7);
+    // 14, not 7: setup's own statuses start above the shared table's, so that a
+    // caller reading `$?` cannot mistake one of them for `usage` or `auth`. The
+    // literal stays here, in the one place that pins the published number; the
+    // assertion below only has to agree with it.
+    expect(SETUP_EXIT_CODES.TRACE_TIMEOUT).toBe(14);
     const err = new SetupError({
       stage: "verify_trace",
       code: "TRACE_TIMEOUT",
       message: "no trace",
       remedy: "run the app",
     });
-    expect(err.exitCode).toBe(7);
+    expect(err.exitCode).toBe(SETUP_EXIT_CODES.TRACE_TIMEOUT);
     expect(err.message).toContain("no trace");
     expect(err.message).toContain("run the app");
   });
@@ -489,6 +493,7 @@ describe("agent task", () => {
 
   it("scopes to one service and pins the version", () => {
     const task = buildSetupTask({
+      credentialFiles: [],
       service,
       root: "/repo",
       sdk: TEST_SDK,
@@ -505,11 +510,13 @@ describe("agent task", () => {
     // app with the key stripped, and querying the API for the trace.
     expect(task).not.toContain("TRACEROOT_API_KEY` removed");
     expect(task).toContain("do not run the application with the key unset");
-    expect(task).toContain("Do not run `traceroot traces list`");
+    expect(task).toContain("Do not query the API yourself");
+    expect(task).toContain("`traceroot traces list`");
   });
 
   it("tells a background agent to abort rather than guess", () => {
     const task = buildSetupTask({
+      credentialFiles: [],
       service,
       root: "/repo",
       sdk: TEST_SDK,
@@ -524,6 +531,7 @@ describe("agent task", () => {
 
   it("tells the agent to extend, not duplicate, an existing install", () => {
     const task = buildSetupTask({
+      credentialFiles: [],
       service,
       root: "/repo",
       sdk: TEST_SDK,
@@ -538,6 +546,7 @@ describe("agent task", () => {
 
   it("never embeds a credential", () => {
     const task = buildSetupTask({
+      credentialFiles: [],
       service,
       root: "/repo",
       sdk: TEST_SDK,
@@ -585,6 +594,9 @@ describe("agent invocation", () => {
       parentEnv: { PATH: "/usr/bin" },
       credential: secret,
       host: "https://api.example.test",
+      // No file holds the key, so the environment is the only channel — which
+      // is the case this test is about.
+      credentialFiles: [],
     });
     expect(invocation.args.join(" ")).not.toContain(secret.reveal());
     expect(env.TRACEROOT_API_KEY).toBe(secret.reveal());
@@ -597,7 +609,7 @@ describe("agent invocation", () => {
     // hundreds of bogus deny rules, leaving the agent with NO task. Observed in
     // a real run. Any variadic flag must be followed by a single-value flag.
     const VARIADIC = ["--disallowedTools", "--allowedTools"];
-    for (const agentId of ["claude", "codex"] as const) {
+    for (const agentId of ["claude"] as const) {
       for (const interactive of [true, false]) {
         const inv = buildInvocation({ agentId, task: "t", interactive });
         if (inv.promptVia !== "argv") {
@@ -624,7 +636,7 @@ describe("agent invocation", () => {
 
   it("never grants bypass-all permissions", () => {
     for (const interactive of [true, false]) {
-      for (const agentId of ["claude", "codex"] as const) {
+      for (const agentId of ["claude"] as const) {
         const args = buildInvocation({ agentId, task: "t", interactive }).args.join(" ");
         expect(args).not.toContain("bypassPermissions");
         expect(args).not.toContain("dangerously");
@@ -634,15 +646,16 @@ describe("agent invocation", () => {
   });
 
   it("pipes the task on stdin in background mode", () => {
-    expect(buildInvocation({ agentId: "codex", task: "t", interactive: false })).toMatchObject({
-      program: "codex",
-      args: ["exec", "-"],
+    expect(buildInvocation({ agentId: "claude", task: "t", interactive: false })).toMatchObject({
       promptVia: "stdin",
+      interactive: false,
     });
   });
 
-  it("refuses to launch the tool-neutral adapter", () => {
-    expect(() => buildInvocation({ agentId: "generic", task: "t", interactive: true })).toThrow();
+  it("refuses to launch an agent setup does not drive", () => {
+    for (const agentId of ["codex", "generic"] as const) {
+      expect(() => buildInvocation({ agentId, task: "t", interactive: true })).toThrow();
+    }
   });
 });
 
@@ -667,8 +680,10 @@ describe("setup report", () => {
       },
       application: {
         command: "pytest",
+        baseline: { ran: true, exitCode: 0, durationMs: 1 },
         withCredentials: { passed: true },
         withoutCredentials: { passed: true },
+        outcome: "passed",
         passed: true,
       },
       trace: { traceId: "abc123", traceUrl: "https://ui.example.test/t/abc123" },
@@ -718,6 +733,7 @@ describe("waiting for a trace only when there is one to wait for", () => {
     // Instrumenting emits nothing; running does. Leaving this implicit is how
     // a run ends with working instrumentation and no trace.
     const task = buildSetupTask({
+      credentialFiles: [],
       root: "/repo",
       service: {
         path: ".",
@@ -786,6 +802,7 @@ describe("installing into the interpreter the service runs on", () => {
 describe("everything the task settles so the agent does not have to", () => {
   const task = () =>
     buildSetupTask({
+      credentialFiles: [],
       root: "/repo",
       service: {
         path: "svc",
@@ -854,15 +871,21 @@ describe("everything the task settles so the agent does not have to", () => {
     expect(rendered).toContain("If a command is genuinely refused");
   });
 
-  it("points at the line the SDK prints instead of at the API", () => {
-    expect(task()).toContain("[traceroot] trace");
-    expect(task()).toContain("Do not run `traceroot traces list`");
+  it("promises no line the SDK does not print, and still keeps the agent off the API", () => {
+    // This asserted that the task contained `[traceroot] trace` — output no
+    // SDK produces. Pinning it held the agent to a stop condition that could
+    // never be met, so it re-ran the application to look for the line again.
+    const rendered = task();
+    expect(rendered).not.toContain("[traceroot] trace");
+    expect(rendered).toContain("There is no confirmation line to wait for");
+    expect(rendered).toContain("`traceroot traces list`");
   });
 });
 
 describe("leaving nothing for the agent to look up", () => {
   const task = (language: "python" | "typescript" = "python") =>
     buildSetupTask({
+      credentialFiles: [],
       root: "/repo",
       service: {
         path: "svc",
@@ -887,7 +910,9 @@ describe("leaving nothing for the agent to look up", () => {
     // someone how to look a thing up does not stop them looking it up.
     const rendered = task();
     expect(rendered).toContain("traceroot.initialize(integrations=[Integration.ANTHROPIC])");
-    expect(rendered).toContain("import anthropic   # must come after initialize()");
+    expect(rendered).toContain(
+      "import anthropic   # the provider library, imported wherever it already was",
+    );
     expect(rendered).toContain("Do not introspect the package");
   });
 
@@ -927,6 +952,7 @@ describe("getting the credential setup wrote into the application", () => {
     credentialEnvFile?: string | null;
   }) =>
     buildSetupTask({
+      credentialFiles: [],
       root: "/repo",
       service: {
         path: "svc",
@@ -952,10 +978,14 @@ describe("getting the credential setup wrote into the application", () => {
     // own env file now, so the two loads are one file and one line.
     const rendered = task({ envFiles: ["./.env"], credentialEnvFile: "./.env" });
     const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
-    const lines = snippet.split("\n").filter((line) => line.startsWith("load_dotenv("));
+    const lines = snippet
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("load_dotenv("));
 
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toBe('load_dotenv(Path(__file__).resolve().parent / ".env")');
+    expect(lines[0]).toContain('load_dotenv(Path(__file__).resolve().parent / ".env")');
+    expect(lines[0]).toContain("the app's own credentials");
   });
 
   it("says that the one load is what keeps tracing working after the run", () => {
@@ -984,18 +1014,59 @@ describe("getting the credential setup wrote into the application", () => {
     }
   });
 
-  it("puts TypeScript's env load above the import it has to precede", () => {
-    // ES module imports are evaluated in source order, so a side-effect import
-    // of `dotenv/config` above the SDK import runs first — and it has to,
-    // because `initialize()` reads the key out of `process.env`.
+  it("puts TypeScript's env load before the call that reads the key", () => {
+    // `import "dotenv/config"` reads `.env` and only `.env`, resolved against
+    // `process.cwd()` — so a service whose credential went into `.env.local`,
+    // or whose entry point is not at the service root, started with no
+    // TraceRoot key and nothing printed. `initialize()` reads `process.env`
+    // when it is called, so the explicit load has to sit above that call.
     const rendered = task({ language: "typescript", envFiles: ["./.env"] });
     const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
 
-    expect(snippet.indexOf('import "dotenv/config"')).toBeGreaterThan(-1);
-    expect(snippet.indexOf('import "dotenv/config"')).toBeLessThan(
-      snippet.indexOf("@traceroot-ai/traceroot"),
-    );
+    expect(snippet).not.toContain('import "dotenv/config"');
+    expect(snippet).toContain('config({ path: new URL(".env", import.meta.url) })');
+    expect(snippet.indexOf("config({ path:")).toBeLessThan(snippet.indexOf("initialize();"));
     expect(rendered).not.toContain("load_dotenv");
+  });
+
+  it("puts a TypeScript service's load and initialize inside the function it runs", () => {
+    // The same defect as the Python snippet's, in the one place a Node service
+    // was still shown the old placement. Module scope runs on import, so a test
+    // suite that imports the entry point loads the credential and starts the
+    // SDK, and every test reaching an instrumented function exports a trace of
+    // its own. `observe(options, fn, ...args)` invokes rather than wraps, so
+    // there is no module-scope wrapper to arm either: the load sitting inside
+    // the function is what keeps an imported module silent.
+    const rendered = task({ language: "typescript", envFiles: ["./.env"] });
+    const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
+
+    expect(snippet).toContain("async function main() {");
+    expect(snippet).toContain("\n  initialize();");
+    expect(snippet).toContain('\n  config({ path: new URL(".env", import.meta.url) })');
+    // Neither at the left margin, which is where both used to sit.
+    expect(snippet).not.toMatch(/\ninitialize\(\);/);
+    expect(snippet).not.toMatch(/\nconfig\(\{ path:/);
+  });
+
+  it("drops the import-order claim from the TypeScript snippet too", () => {
+    // The instrumentors patch the provider's class methods through `wrapt`,
+    // which works whether or not the provider was imported first, so
+    // initialization never had to precede that import — and the comment saying
+    // it did is why the pair sat at module scope.
+    const rendered = task({ language: "typescript", envFiles: ["./.env"] });
+    expect(rendered).not.toContain("Before importing the SDK you are instrumenting");
+  });
+
+  it("names the credential's own file in a TypeScript load, not `.env`", () => {
+    const rendered = task({
+      language: "typescript",
+      entryPoint: "src/index.ts",
+      envFiles: ["./.env.local", "./.env"],
+      credentialEnvFile: "./.env.local",
+    });
+
+    expect(rendered).toContain('config({ path: new URL("../.env.local", import.meta.url) })');
+    expect(rendered).not.toContain('import "dotenv/config"');
   });
 
   it("still tells the agent to declare the dependency it imports", () => {
@@ -1029,6 +1100,7 @@ describe("getting the credential setup wrote into the application", () => {
 describe("the task renders whole", () => {
   const render = () =>
     buildSetupTask({
+      credentialFiles: [],
       root: "/repo",
       service: {
         path: "svc",
@@ -1111,6 +1183,61 @@ describe("reading a checkpoint that cannot be trusted", () => {
 
     const checkpoint = readCheckpoint(root);
     expect(checkpoint).not.toBeNull();
+    expect(checkpoint?.application).toBeUndefined();
+  });
+
+  it("reads a verification written before outcomes existed", async () => {
+    // Requiring the new fields would drop the whole verification out of every
+    // checkpoint a previous version wrote, turning a `--resume` into a second
+    // full run of the user's test suite. `passed` and `skippedReason` already
+    // distinguish the three outcomes that existed, and `inconclusive` is not
+    // among them, so nothing can be mistaken for it.
+    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
+    const root = dir;
+    const ran = { ran: true, exitCode: 0, durationMs: 1 };
+    mkdirSync(join(root, ".traceroot"), { recursive: true });
+    writeFileSync(
+      join(root, ".traceroot", "setup.json"),
+      JSON.stringify({
+        version: 1,
+        startedAt: "2026-07-26T12:00:00.000Z",
+        completedStages: ["verify_application"],
+        application: {
+          command: "pytest",
+          withCredentials: ran,
+          withoutCredentials: ran,
+          passed: true,
+          skippedReason: null,
+        },
+      }),
+      "utf8",
+    );
+
+    const checkpoint = readCheckpoint(root);
+    expect(checkpoint?.application?.outcome).toBe("passed");
+    expect(checkpoint?.application?.baseline).toBeNull();
+    expect(checkpoint?.applicationBaseline).toBeUndefined();
+  });
+
+  it("keeps the pre-instrumentation measurement, verification or not", async () => {
+    // A run that instrumented and then died before verifying has a baseline and
+    // no verification, and that baseline is the only thing that lets the
+    // resumed verification attribute a failure.
+    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
+    const root = dir;
+    mkdirSync(join(root, ".traceroot"), { recursive: true });
+    writeFileSync(
+      join(root, ".traceroot", "setup.json"),
+      JSON.stringify({
+        version: 1,
+        startedAt: "2026-07-26T12:00:00.000Z",
+        applicationBaseline: { ran: true, exitCode: 1, durationMs: 9 },
+      }),
+      "utf8",
+    );
+
+    const checkpoint = readCheckpoint(root);
+    expect(checkpoint?.applicationBaseline).toMatchObject({ ran: true, exitCode: 1 });
     expect(checkpoint?.application).toBeUndefined();
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
@@ -43,7 +43,7 @@ import { createActivityParser } from "./activity.js";
 import { detectAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
-import { chooseCredentialEnvFile, upsertEnvFile } from "./envWrite.js";
+import { chooseCredentialEnvFile, removeEnvKeys, upsertEnvFile } from "./envWrite.js";
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
@@ -60,11 +60,11 @@ import {
   sdkPackageFor,
 } from "./sdk.js";
 import { type Secret, makeSecret } from "./secret.js";
-import { type SelectFn, interactiveSelect } from "./select.js";
+import { type SelectFn, type SelectOption, interactiveSelect } from "./select.js";
 import { startLineSpinner } from "./spinner.js";
 import { detectStack, normalizeLanguage } from "./stack.js";
-import { buildSetupTask, manualInstructions, parseCompletion } from "./task.js";
-import { pollForTrace } from "./trace.js";
+import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters } from "./task.js";
+import { isThinTrace, pollForTrace, spanPhrase, thinTraceFinding } from "./trace.js";
 import { discardTypeAhead } from "./tty.js";
 import type {
   DetectedAgent,
@@ -80,7 +80,7 @@ import type {
   SetupStageStatus,
   StackLanguage,
 } from "./types.js";
-import { verifyApplication } from "./verify.js";
+import { runBaselineCheck, verifyApplication } from "./verify.js";
 import {
   wizardAside,
   wizardEmphasis,
@@ -291,6 +291,30 @@ function isAuthRejection(err: unknown): boolean {
 function isExplicitSource(source: ResolvedAuth["credential"]["source"]): boolean {
   return source === "flag" || source === "env" || source === "env-file";
 }
+
+/**
+ * A failure that pauses the run rather than ending it.
+ *
+ * Two endings need telling apart, because only one of them may undo what the
+ * run created. A run that stopped because its agent is not installed, because
+ * the suite needs fixing, or because no trace has arrived yet is *paused*: its
+ * own message tells the user to rerun with `--resume`, and a rollback that
+ * revoked the credential they are about to resume with would break the thing it
+ * was tidying up after. A run that was cancelled, that cannot authenticate, or
+ * that hit something unexpected is *over*, and what it created is litter.
+ *
+ * Declared at the throw, not derived from the error's code. The same code is
+ * raised in places that mean different things — `UNEXPECTED` covers both a
+ * stage that died mid-edit and a programming fault in a helper — so a table
+ * keyed by code would be guessing, and the stage that raises the error is the
+ * only place that knows which ending it is.
+ *
+ * Nothing is paused by default. Absence of this class means the run is over,
+ * which is the direction that cleans up rather than the direction that leaves a
+ * live credential behind: the cost of being wrong is one more `setup` run,
+ * against an orphaned key nobody is watching.
+ */
+class PausedSetupError extends SetupError {}
 
 // ── PRECHECK ────────────────────────────────────────────────────────────────
 
@@ -762,9 +786,14 @@ async function browserSignIn(
     wizardWarn(ctx, "could not save the TraceRoot sign-in for future runs");
   }
 
+  // Not `wizardStepLine`: `wizardNote` puts the step glyph on the first row of
+  // the block itself, so composing one in as well printed two markers in the
+  // gutter — `◇  ◆  Signed in as …`. The glyph belongs to the block, and
+  // `wizardStepLine` is for the one caller that has no block to hang it on: the
+  // spinner, which needs the settled line in hand before it erases what it drew.
   wizardNote(
     ctx.writers,
-    [wizardStepLine(email === undefined ? "Signed in." : `Signed in as ${wizardValue(email)}.`)],
+    [email === undefined ? "Signed in." : `Signed in as ${wizardValue(email)}.`],
     { settled: true },
   );
 
@@ -869,8 +898,21 @@ async function userCredentialSignIn(
 
   const chosen = await chooseProject(ctx, deps, api, projects, "authenticate", options.workspaceId);
 
-  const created = await mintProjectKey(ctx, deps, api, chosen.project.projectId);
-  const key = makeSecret(created.key);
+  // Two keys, because they go to two places with different rights.
+  //
+  // `cli` is the credential this process keeps and `writeConfig` persists. It
+  // has to be able to manage keys — listing, minting and revoking a project's
+  // keys all require an admin-scoped key — and it has to be able to read traces
+  // back, which is how the run proves the first one arrived.
+  //
+  // `app` is written into the project's env file and travels with the
+  // application: into CI, into containers, into whatever runs it. It needs to
+  // send telemetry and nothing else. One key doing both jobs meant every
+  // deployment of the instrumented application carried a credential that could
+  // enumerate and revoke the project's keys.
+  const cli = await mintProjectKey(ctx, deps, api, chosen.project.projectId, "admin");
+  const app = await mintProjectKey(ctx, deps, api, chosen.project.projectId, "ingest");
+  const key = makeSecret(cli.key);
 
   // Verify before persisting, exactly as the browser path does. `whoami` is
   // also where `ui_base_url` comes from — the deployment's own answer for where
@@ -879,7 +921,7 @@ async function userCredentialSignIn(
     .createClient({ host, auth: { kind: "api-key", key: key.reveal() }, timeoutMs: 15_000 })
     .whoami();
 
-  deps.writeConfig({ api_key: created.key, host_url: host });
+  deps.writeConfig({ api_key: cli.key, host_url: host });
 
   ctx.session = {
     host,
@@ -895,19 +937,24 @@ async function userCredentialSignIn(
     // which stops SELECT_CONTEXT from asking again.
     origin: "from-session",
   };
+  // The application's key, not the CLI's. Everything downstream that writes a
+  // credential into the repository or hands one to a child process reads this.
+  const appKey = makeSecret(app.key);
   ctx.credential = {
-    key,
-    keyId: created.id,
-    keyName: created.name,
+    key: appKey,
+    keyId: app.id,
+    keyName: app.name,
     projectId: chosen.project.projectId,
-    expiresAt: created.expires_at,
+    expiresAt: app.expires_at,
     origin: "minted",
   };
   ctx.checkpoint.host = host;
   ctx.checkpoint.uiBaseUrl = who.ui_base_url;
   ctx.checkpoint.workspaceId = chosen.project.workspaceId;
-  ctx.checkpoint.projectKeyId = created.id;
-  ctx.checkpoint.projectKeyHint = key.hint;
+  // The key the report and the closing notice are about is the one the
+  // application carries, so the recorded id and hint are the application's.
+  ctx.checkpoint.projectKeyId = app.id;
+  ctx.checkpoint.projectKeyHint = appKey.hint;
   recordProject(ctx);
 
   wizardProgress(ctx, `Project ${chosen.project.projectName}.`);
@@ -915,44 +962,85 @@ async function userCredentialSignIn(
 }
 
 /**
- * Mints this repository's key, naming it after the repository.
+ * Mints one of this repository's two keys, naming it after the repository.
  *
  * A name collision means setup already ran here. The old key's secret is
  * unrecoverable by design, so there is nothing to reuse — the only options are
  * to mint a distinguishable sibling or to fail a rerun outright, and failing a
  * rerun would be absurd. The suffix is the run date, which keeps the key list
  * readable rather than filling it with opaque ids.
+ *
+ * The `admin` request can be refused on authorization rather than on
+ * authentication: minting a key that can manage a project's other keys is
+ * reserved for a workspace admin, because that is the capability the dashboard
+ * reserves for one. A member is therefore allowed to set their repository up
+ * and not allowed to mint that key — so the refusal falls back to `ingest`
+ * rather than ending the run. The CLI then cannot list or revoke keys on a
+ * later run, and says so at the point it tries, which is a smaller loss than
+ * refusing to onboard anyone who is not an admin.
  */
 async function mintProjectKey(
   ctx: SetupContext,
   deps: SetupDeps,
   api: SetupApi,
   projectId: string,
+  scope: "ingest" | "admin",
 ): Promise<CreatedApiKey> {
-  const base = `traceroot-${basename(ctx.root)}`;
-  const mint = (name: string) =>
-    api.createProjectApiKey({
+  // Distinct names, because the two keys are now distinguishable in a dashboard
+  // only by what they are called. The application's keeps the name setup has
+  // always used, so a rerun's duplicate-name handling is unchanged for it.
+  const base =
+    scope === "admin" ? `traceroot-cli-${basename(ctx.root)}` : `traceroot-${basename(ctx.root)}`;
+  const mint = (name: string, withScope: "ingest" | "admin") =>
+    mintRecordedKey(ctx, api, {
       projectId,
       name,
-      // The CLI reads traces back to verify the first one arrived, which an
-      // ingest-only key cannot do.
-      scope: "admin",
-      expiresInDays: null,
+      scope: withScope,
+      authenticatedBy: "user",
     });
 
+  const attempt = async (withScope: "ingest" | "admin"): Promise<CreatedApiKey> => {
+    try {
+      return await mint(base, withScope);
+    } catch (err) {
+      if (!isNameConflict(err)) {
+        throw err;
+      }
+      return await mint(`${base}-${deps.now().toISOString().slice(0, 10)}`, withScope);
+    }
+  };
+
+  if (scope === "ingest") {
+    return await attempt("ingest");
+  }
   try {
-    return await mint(base);
+    return await attempt("admin");
   } catch (err) {
-    if (!isNameConflict(err)) {
+    if (!isForbidden(err)) {
       throw err;
     }
-    return await mint(`${base}-${deps.now().toISOString().slice(0, 10)}`);
+    wizardWarn(
+      ctx,
+      "this account cannot mint a key that manages other keys, so the CLI's own credential can only send and read; ask a workspace admin if a later run needs to rotate it",
+    );
+    return await attempt("ingest");
   }
 }
 
 /** A 409 from the key-minting route: the name is taken. */
 function isNameConflict(err: unknown): boolean {
   return err instanceof SetupApiError && err.status === 409;
+}
+
+/**
+ * A 403: authenticated, and not authorized for what was asked.
+ *
+ * Distinguished from a 401 on purpose. A 401 means the credential is wrong and
+ * retrying with a narrower request changes nothing; a 403 means this request
+ * specifically was refused, which is the only case a narrower one can satisfy.
+ */
+function isForbidden(err: unknown): boolean {
+  return err instanceof SetupApiError && err.status === 403;
 }
 
 // ── SELECT_CONTEXT ──────────────────────────────────────────────────────────
@@ -1057,6 +1145,62 @@ async function chooseWorkspace(
 }
 
 /**
+ * The workspace a project belongs to, named the way `status` names every other
+ * identity: the name first, its id after.
+ *
+ * The id is not decoration. A workspace name is not unique either — nothing
+ * refuses a second workspace called the same thing, and the dashboard's default
+ * name for a new one is derived from the owner's email domain, so two
+ * colleagues onboarding from the same company both get a workspace with the
+ * same name and anyone invited to both reads it twice. Qualifying two projects
+ * named `test` with `Acme` would leave them reading identically all over again,
+ * which is the whole defect. The id ends it: a project name is unique within
+ * its workspace, so name plus workspace id cannot repeat.
+ *
+ * Written plainly rather than through `identity()`: this string lands in a
+ * prompt's hint, which the prompt layer dims as a whole, and a nested dim would
+ * end that dimming early for the rest of the line.
+ */
+function describeWorkspace(project: ProjectSummary): string {
+  const name = project.workspace_name?.trim() ?? "";
+  const id = project.workspace_id.trim();
+  if (name === "") {
+    // Every deployment that serves the project list sends a name, and one old
+    // enough to omit it is old enough to answer the route with a 404 — so this
+    // is a type obligation rather than a case to design for. The id is still an
+    // answer, which is what matters: the hint identifies a workspace instead of
+    // going blank.
+    return id;
+  }
+  return id === "" ? name : `${name} (${id})`;
+}
+
+/**
+ * The project picker's rows.
+ *
+ * The label stays the bare project name, because the project is the thing being
+ * chosen; the owning workspace goes in the dimmed hint beside it, which is what
+ * `hint` is for. A project name is only unique inside its workspace and every
+ * sign-in path lists projects across all of them, so a name appearing several
+ * times is the ordinary case here — and labelled with the name alone those rows
+ * are one choice as far as the reader can see, which makes a mis-pick both
+ * undetectable and consequential: it is what sends a repository's traces to the
+ * wrong project.
+ *
+ * Qualified unconditionally rather than only where today's list collides. A row
+ * that renders the same on every run is one a person can recognise from the
+ * last run and a test can pin, while a hint that appears only on a collision
+ * hides the workspace from exactly the account that is about to grow one.
+ */
+export function projectOptions(projects: readonly ProjectSummary[]): SelectOption[] {
+  return projects.map((project) => ({
+    value: project.project_id,
+    label: project.project_name,
+    hint: describeWorkspace(project),
+  }));
+}
+
+/**
  * Picks the project a repository will report to, given everything the caller
  * can already see.
  *
@@ -1143,7 +1287,7 @@ async function chooseProject(
   const answer = await deps.select({
     stage,
     message: "Which project should receive these traces?",
-    options: projects.map((p) => ({ value: p.project_id, label: p.project_name })),
+    options: projectOptions(projects),
   });
   const picked = projects.find((p) => p.project_id === answer);
   if (picked === undefined) {
@@ -1237,10 +1381,15 @@ const acquireProjectKey: StageDefinition = {
     }
 
     const name = uniqueKeyName(`traceroot-setup-${basename(ctx.root)}`, existingNames);
-    const created = await api.createApiKey({
+    const created = await mintRecordedKey(ctx, api, {
       name,
       projectId: project.projectId,
-      expiresInDays: null,
+      // The application's credential, so it sends telemetry and nothing else.
+      // Stated rather than left to the server's default: the other mint path
+      // asks for `admin` for the CLI's own key, and two paths that disagree by
+      // omission read as two paths that agree.
+      scope: "ingest",
+      authenticatedBy: "project-key",
     });
     ctx.credential = {
       key: makeSecret(created.key),
@@ -1252,7 +1401,6 @@ const acquireProjectKey: StageDefinition = {
     };
     ctx.checkpoint.projectKeyId = created.id;
     ctx.checkpoint.projectKeyHint = ctx.credential.key.hint;
-    mintedKeys.set(ctx, created.id);
     // The plaintext key is deliberately not printed. It goes into the child's
     // environment and into the project's env file; putting it on the terminal
     // would leave a live credential in scrollback and in any captured output.
@@ -1276,8 +1424,112 @@ function withCredentialFirst(found: string[], credential: string | null): string
   return [credential, ...found.filter((file) => file !== credential)];
 }
 
-/** Keys minted by this run, so a later failure can revoke them. */
-const mintedKeys = new WeakMap<SetupContext, string>();
+/** A key this run minted, with what the rollback needs to undo it. */
+interface MintedKey {
+  id: string;
+  /** As the dashboard lists it, so the user can find the right row. */
+  name: string | null;
+  /**
+   * The server's own display hint, not one derived here. It is the string the
+   * dashboard's key list shows, which is what makes a key named in a failure
+   * message findable; a hint computed locally would be a second spelling of
+   * the same key that matches nothing on screen.
+   */
+  hint: string;
+  /**
+   * The client that minted it, kept so the rollback can revoke through the same
+   * credential that created it.
+   *
+   * Not rebuilt from the session, which is why this field exists: the two keys
+   * the sign-in stage mints are created before `ctx.session` is assigned, so a
+   * rollback that reconstructed a client from the session would find nothing
+   * there and silently revoke neither.
+   */
+  api: SetupApi;
+}
+
+/**
+ * Keys minted by this run, in the order they were minted, so a later failure
+ * can revoke them.
+ *
+ * This process's own and nothing else's. A previous run's keys reach this
+ * process only through the checkpoint, and nothing can tell an orphan from a
+ * key that has since gone into service — so they are recorded there and never
+ * revoked from here. Revoking the wrong one breaks a working installation,
+ * which is worse than the untidiness this cleans up.
+ */
+const mintedKeys = new WeakMap<SetupContext, MintedKey[]>();
+
+/** What to ask for, and which route can be asked. */
+interface MintRequest {
+  projectId: string;
+  name: string;
+  scope: "ingest" | "admin";
+  /**
+   * Which route mints it, named for what authenticates the call rather than for
+   * the method: `user` goes to the route that takes a project id and a user's
+   * own credential, which is the only one that works before the project has a
+   * key; `project-key` goes to the route that derives the project from the key
+   * authenticating the request.
+   */
+  authenticatedBy: "user" | "project-key";
+}
+
+/**
+ * Mints a key and writes it down. The only place in this file that calls a
+ * key-creating route.
+ *
+ * A single function rather than a convention each stage remembers to follow.
+ * The rollback used to read a list that only one of the two minting stages
+ * appended to, so a run that signed in and failed later left two live keys on
+ * the project with nothing anywhere marking them as orphaned — and the gap was
+ * invisible, because a stage that mints is not obliged to record. Here it
+ * cannot do one without the other: the recording is between the mint returning
+ * and this function returning, so no caller can hold a key that is not in the
+ * ledger.
+ *
+ * Written to the checkpoint as well as to memory, immediately. A process that
+ * dies takes the in-memory ledger with it, and the checkpoint is the only thing
+ * that survives to say a key was created at all. `writeCheckpoint` never
+ * throws, so the durable record cannot itself be what loses the key. The one
+ * window this cannot close is a process that dies between the server minting
+ * the key and the response arriving here: nothing on this side of that call can
+ * know the key exists.
+ */
+async function mintRecordedKey(
+  ctx: SetupContext,
+  api: SetupApi,
+  request: MintRequest,
+): Promise<CreatedApiKey> {
+  const created =
+    request.authenticatedBy === "user"
+      ? await api.createProjectApiKey({
+          projectId: request.projectId,
+          name: request.name,
+          scope: request.scope,
+          expiresInDays: null,
+        })
+      : await api.createApiKey({
+          name: request.name,
+          projectId: request.projectId,
+          scope: request.scope,
+          expiresInDays: null,
+        });
+
+  const entry: MintedKey = {
+    id: created.id,
+    name: created.name,
+    hint: created.hint,
+    api,
+  };
+  mintedKeys.set(ctx, [...(mintedKeys.get(ctx) ?? []), entry]);
+  ctx.checkpoint.mintedKeys = [
+    ...(ctx.checkpoint.mintedKeys ?? []),
+    { id: entry.id, name: entry.name, hint: entry.hint },
+  ];
+  writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
+  return created;
+}
 
 /**
  * Looks for a key that already belongs to this repository and project.
@@ -1475,7 +1727,9 @@ const configureRepository: StageDefinition = {
       updates[HOST_ENV] = session.host;
     }
     const result = upsertEnvFile(envPath, updates);
-    wroteEnvKeys.set(ctx, { path: envPath, keys: result.written });
+    // `created`, because undoing a write and undoing a file are different
+    // things and only the writer knows which this was.
+    wroteEnvKeys.set(ctx, { path: envPath, keys: result.written, created: result.created });
     // The file is the project's and holds a usable key either way, so the
     // closing notice and the report can name it whether or not this run was the
     // one that put the key there.
@@ -1500,7 +1754,10 @@ const configureRepository: StageDefinition = {
 };
 
 /** The file and keys this run wrote, so a failure can roll them back. */
-const wroteEnvKeys = new WeakMap<SetupContext, { path: string; keys: string[] }>();
+const wroteEnvKeys = new WeakMap<
+  SetupContext,
+  { path: string; keys: string[]; created: boolean }
+>();
 
 /**
  * Says so when the file now holding a live key is not ignored by git.
@@ -1511,8 +1768,7 @@ const wroteEnvKeys = new WeakMap<SetupContext, { path: string; keys: string[] }>
  * blind to a nested `.gitignore`, to `.git/info/exclude` and to the user's
  * global excludes, and therefore liable to add a duplicate rule for a path
  * already covered. `git check-ignore` is the authority on the question, and the
- * answer belongs to the user to act on. Laminar and PostHog both ask and never
- * edit; it is the right line.
+ * answer belongs to the user to act on.
  *
  * Warn rather than refuse, which is the opposite of what the tracked case does,
  * and deliberately. Tracked means the key travels on the next `git commit -a`
@@ -2024,6 +2280,18 @@ async function checkSdkImportable(
   };
 }
 
+/**
+ * An agent's free-text note, short enough and flat enough for an error message.
+ *
+ * The note is the only place the agent's account of a block exists — the
+ * completion block has no field for "I was stopped", so there is nothing to
+ * match on and nothing is matched. It is quoted, not parsed.
+ */
+function oneLine(note: string, max = 200): string {
+  const flat = note.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
+
 const instrument: StageDefinition = {
   stage: "instrument",
   isSatisfied: (ctx) => ctx.instrumentation !== undefined,
@@ -2083,6 +2351,11 @@ const instrument: StageDefinition = {
       service,
       root: ctx.root,
       sdk,
+      // The same list the credential-free run takes, so the launch, the task
+      // and the verification cannot disagree about which channel carries the
+      // credential. Non-empty means a file the application loads holds the key,
+      // and the agent is not given it in its environment.
+      credentialFiles: applicationCredentialFiles(ctx),
       // Relative to the agent's cwd, not the repository root.
       //
       // The skill installs at the root — `<root>/.claude/skills/<name>` — while
@@ -2166,6 +2439,71 @@ const instrument: StageDefinition = {
 
     await confirmAgentLaunch(ctx, deps, adapter.displayName);
 
+    // The one measurement that cannot be taken later.
+    //
+    // Here, and not in a stage of its own, because it has to sit between two
+    // adjacent points: after the last question the user can answer "no" to —
+    // running somebody's test suite and then telling them the run was aborted
+    // is ten minutes spent on nothing — and before the first edit, after which
+    // "the suite fails" no longer distinguishes a suite this run broke from one
+    // that needed a database, a network, or a fix before setup arrived.
+    //
+    // The hand-over routes above return before this, and that is a decision
+    // rather than an omission.
+    //
+    // `--no-instrument` and `--manual` both leave the edit outside the run: the
+    // code changes afterwards, by the user or by an agent they drive
+    // themselves, possibly days later, with this process long gone. A
+    // measurement taken here would answer "was the suite red when setup wrote
+    // the task", which is not the question verification asks. Between those two
+    // moments the user may pull, fix the suite, break it, or change their
+    // dependencies — so such a baseline would support both of the causal claims
+    // verification makes while neither premise could be checked. The direction
+    // that matters is the excusing one: "your suite was already failing" over a
+    // measurement from last Tuesday would clear instrumentation that really did
+    // break something, with authority and in writing.
+    //
+    // Measuring on the resume instead is no better. The code has changed by
+    // then, so it is not a before.
+    //
+    // So those routes take no baseline, and the verification says so instead of
+    // naming a cause: `verifyApplication` reports a failing check with no
+    // baseline as `inconclusive`, the same word this route uses for a suite
+    // that was already red. Spending a ten-minute suite run in order to print a
+    // task file would also be absurd.
+    //
+    // Taken once: a resumed `instrument` stage runs over a worktree the agent
+    // may already have edited, where this would measure the wrong thing while
+    // looking like a baseline.
+    if (service.testCommand !== null && ctx.checkpoint.applicationBaseline === undefined) {
+      wizardProgress(ctx, `Checking \`${service.testCommand}\` before anything changes`);
+      const baseline = await runBaselineCheck({
+        command: service.testCommand,
+        cwd: agentCwd,
+        parentEnv: deps.env,
+        // The interpreter found above, the same one the agent is told to
+        // install into and the same one `verify_application` runs the real
+        // check with. Without it `pytest` is not on the child's PATH and the
+        // spawn fails before a single test runs — which is every Python
+        // project with a virtualenv, i.e. nearly all of them.
+        interpreter: pythonInterpreter,
+        runProcess: deps.runProcess,
+        signal: ctx.signal,
+      });
+      ctx.checkpoint.applicationBaseline = baseline;
+      // `ran`, not just the exit code. An un-run baseline has `exitCode: null`,
+      // and `null !== 0` — so warning on the code alone announced that the
+      // project's suite does not pass on every run where the measurement
+      // simply did not happen. That is the same false causal claim this whole
+      // mechanism exists to remove, pointed the other way.
+      if (baseline.ran && baseline.exitCode !== 0) {
+        wizardWarn(
+          ctx,
+          `${service.testCommand} does not pass yet, so it cannot verify the instrumentation either; this run will say so rather than blame the changes`,
+        );
+      }
+    }
+
     const tempDir = deps.makeTempDir();
     try {
       // This is the longest step of the run by a wide margin, and the only one
@@ -2205,6 +2543,7 @@ const instrument: StageDefinition = {
       let observedChangedFiles: string[];
       try {
         result = await launchAgent({
+          credentialFiles: applicationCredentialFiles(ctx),
           invocation: buildInvocation({
             agentId: agent.id,
             task,
@@ -2216,7 +2555,15 @@ const instrument: StageDefinition = {
             // it will reach for. An interpreter it cannot execute leaves it
             // able to write instrumentation and unable to prove any of it.
             allowedPrograms: [
-              ...(pythonInterpreter === null ? [] : [pythonInterpreter]),
+              // Every spelling the task names, not only the absolute one.
+              //
+              // The task names a service-local interpreter relatively in the
+              // command it tells the agent to run, because an absolute path
+              // under a directory with spaces and parentheses is a quoting
+              // problem the agent has to solve on the first try. A permission
+              // rule matches the start of a command literally, so allowing only
+              // the absolute path refuses exactly the command the task gave.
+              ...taskInterpreters(pythonInterpreter, ctx.root, service.path),
               "python3",
               "python",
               "uv",
@@ -2283,18 +2630,19 @@ const instrument: StageDefinition = {
         feed?.stopAndClear(wizardStepLine(`${adapter.displayName} finished.`));
       }
 
+      const reported = parseCompletion(result.output);
       ctx.instrumentation = {
         agentId: agent.id,
         mode: "background",
         exitCode: result.exitCode,
         durationMs: deps.now().getTime() - started,
-        reported: parseCompletion(result.output),
+        reported,
         observedChangedFiles,
         promptPath: null,
       };
 
       if (result.spawnFailed) {
-        throw new SetupError({
+        throw new PausedSetupError({
           stage: "instrument",
           code: "UNSUPPORTED",
           message: `Could not start ${adapter.displayName}.`,
@@ -2309,7 +2657,7 @@ const instrument: StageDefinition = {
           observedChangedFiles.length === 0
             ? "No files were changed."
             : `Files changed: ${observedChangedFiles.join(", ")}`;
-        throw new SetupError({
+        throw new PausedSetupError({
           stage: "instrument",
           code: "AGENT_FAILED",
           message: `${adapter.displayName} exited with status ${result.exitCode}. ${changed}`,
@@ -2318,10 +2666,55 @@ const instrument: StageDefinition = {
         });
       }
 
+      // Exit 0 is the agent saying it finished. It is not evidence that it did
+      // anything, and a sandboxed agent that could not act says both at once: a
+      // package install refused for want of a writable cache, a workspace it had
+      // no permission to edit, a command its own approval rules denied. It
+      // reports the block in its completion block and still exits 0.
+      //
+      // Without this the run carries on as though the service were
+      // instrumented. `verify_application` passes, because nothing about the
+      // application changed; the SDK probe below says nothing at all for a Node
+      // service, because there is no import to check; and the run then spends
+      // the entire trace timeout before `verify_trace` reports that the
+      // instrumented code path never ran — which is true, and names the symptom
+      // rather than the cause the agent had already stated.
+      //
+      // Both signals have to agree before this fires. The agent's own report
+      // that it changed nothing is a claim (see `parseCompletion`), and the
+      // worktree observation is empty outside a git repository and whenever
+      // `git status` could not be read — so either alone would fail runs that
+      // worked. A service that already carried TraceRoot is excluded too: there
+      // the right amount of editing may genuinely be none.
+      const changedNothing =
+        reported !== null &&
+        reported.filesChanged.length === 0 &&
+        observedChangedFiles.length === 0 &&
+        ctx.stack?.existingInstrumentation.present !== true;
+      if (changedNothing) {
+        throw new PausedSetupError({
+          stage: "instrument",
+          code: "AGENT_FAILED",
+          message: [
+            `${adapter.displayName} finished without changing any files, so ${service.path} is not instrumented.`,
+            reported.notes === null ? null : `It reported: ${oneLine(reported.notes)}`,
+          ]
+            .filter((part) => part !== null)
+            .join(" "),
+          remedy: [
+            "An agent that reports no edits was usually stopped from making them — a refused command, or a package install with nowhere writable to cache.",
+            "Clear what blocked it and rerun:",
+            "  traceroot setup --resume",
+            "Or write the task out and run it yourself:",
+            "  traceroot setup --no-instrument",
+          ].join("\n"),
+        });
+      }
+
       const sdkCheck = await checkSdkImportable(ctx, deps, service, sdk, agentCwd);
       if (sdkCheck !== null && !sdkCheck.importable) {
         const install = installCommand(sdk, service, service.language, sdkCheck.interpreter);
-        throw new SetupError({
+        throw new PausedSetupError({
           stage: "instrument",
           code: "AGENT_FAILED",
           message: `${adapter.displayName} finished, but \`import ${sdkCheck.check.module}\` fails under ${sdkCheck.check.display} — the ${sdk.package} SDK was not installed, so the instrumented code cannot run.`,
@@ -2414,9 +2807,59 @@ async function confirmAgentLaunch(
 
 // ── VERIFY_APPLICATION ──────────────────────────────────────────────────────
 
+/**
+ * The tail of a failing run's output: enough to see the error, little enough
+ * that a chatty test suite does not bury the remedy underneath it.
+ */
+function outputTail(output: string): string {
+  return output.split("\n").slice(-25).join("\n").trim();
+}
+
+/**
+ * Every file the application could read this run's credential out of.
+ *
+ * Not "the file this run wrote", which is what the credential-free run used to
+ * be told. `configure_repository` writes nothing when the key already resolved
+ * from the project's own `.env` — `applicationCanResolve` returns true and the
+ * stage is satisfied before it runs — so there is no file of ours to name,
+ * while the file the entry point loads sits on disk holding the key. The
+ * credential-free run then had the credential and the check passed without
+ * being made.
+ *
+ * A candidate earns its place by holding *this* credential, which is the test
+ * {@link credentialEnvFile} already applies before naming a file to the agent.
+ * An unrelated `.env`, or one holding a different project's key, is left alone.
+ * `ctx.cwd` is in the list because that is where `resolveAuth` looks for the
+ * `.env` it auto-discovers, and for a service in a subdirectory that is not the
+ * same file as {@link credentialEnvPath}.
+ */
+function applicationCredentialFiles(ctx: SetupContext): string[] {
+  const key = ctx.credential?.key.reveal();
+  if (key === undefined) {
+    return [];
+  }
+  const files: string[] = [];
+  for (const path of [ctx.credentialEnvFile, credentialEnvPath(ctx), join(ctx.cwd, ".env")]) {
+    if (
+      path === undefined ||
+      files.includes(path) ||
+      !existsSync(path) ||
+      !holdsKey(envFileKey(path), key)
+    ) {
+      continue;
+    }
+    files.push(path);
+  }
+  return files;
+}
+
 const verifyApplicationStage: StageDefinition = {
   stage: "verify_application",
-  isSatisfied: (ctx) => ctx.application?.passed === true,
+  // An inconclusive result is settled, not pending. Re-running a suite that was
+  // already failing produces the same answer and costs the same minutes, so a
+  // resume takes the recorded one.
+  isSatisfied: (ctx) =>
+    ctx.application?.outcome === "passed" || ctx.application?.outcome === "inconclusive",
   restore(ctx) {
     if (ctx.checkpoint.application !== undefined) {
       ctx.application = ctx.checkpoint.application;
@@ -2431,8 +2874,10 @@ const verifyApplicationStage: StageDefinition = {
     if (command === null) {
       ctx.application = {
         command: null,
+        baseline: null,
         withCredentials: { ran: false, exitCode: null, durationMs: 0 },
         withoutCredentials: { ran: false, exitCode: null, durationMs: 0 },
+        outcome: "skipped",
         passed: false,
         skippedReason: "no test or health command was detected",
       };
@@ -2449,16 +2894,42 @@ const verifyApplicationStage: StageDefinition = {
     wizardProgress(ctx, `Verifying the application: ${command}`);
     const { verification, failure, ranAt } = await verifyApplication({
       command,
+      // What the same command did before anything was instrumented, or null on
+      // a route that instrumented nothing. Absent is not "it passed": it is
+      // "nobody looked", and the failure path below says so rather than naming
+      // a cause it cannot establish.
+      baseline: ctx.checkpoint.applicationBaseline ?? null,
       cwd: service.path === "." ? ctx.root : join(ctx.root, service.path),
       parentEnv: deps.env,
+      // The same virtualenv the baseline measured in. `detect_stack` names the
+      // check as the project documents it — `pytest`, not `.venv/bin/pytest` —
+      // and that command resolves for the user because their shell has the
+      // virtualenv activated. Without this both runs below spawn against the
+      // CLI's own environment and fail with ENOENT after the instrumentation
+      // itself had succeeded, which reads to the user as changes that broke
+      // their suite. It is also the comparison's premise: a baseline taken in
+      // one environment and a verification taken in another are not the same
+      // measurement, so the two must not disagree about where `pytest` is.
+      //
+      // Resolved here rather than carried over from `instrument`. Creating the
+      // virtualenv is one of the things the agent is told to do, so an answer
+      // from before the launch is null in exactly the case this matters; and
+      // this stage also runs on a resume, where nothing instrumented anything
+      // in this process and there is no earlier answer to carry. The import
+      // check resolves it again for the first of those reasons.
+      interpreter:
+        service.language === "python"
+          ? detectPythonEnvironment(ctx.root, service.path, deps.env).interpreter
+          : null,
       credential: credential.key,
       host: session.host,
-      // The credential-free run is only credential-free if the file the entry
-      // point loads for itself goes with it. Undefined here is an answer rather
-      // than an omission: `configure_repository` writes no file when git tracks
-      // the one it would have used, or when the key already resolved from the
-      // user's own environment.
-      credentialFile: ctx.credentialEnvFile ?? null,
+      // The credential-free run is only credential-free if the key goes out of
+      // every file the entry point loads for itself, not just the one this run
+      // wrote — see {@link applicationCredentialFiles}. An empty list is an
+      // answer rather than an omission: a key that reaches the application only
+      // through the environment is withheld by building that environment
+      // without it.
+      credentialFiles: applicationCredentialFiles(ctx),
       runProcess: deps.runProcess,
       signal: ctx.signal,
     });
@@ -2466,16 +2937,55 @@ const verifyApplicationStage: StageDefinition = {
     ctx.applicationRanAt = ranAt;
     ctx.checkpoint.application = verification;
 
+    // A command that never started is not "inconclusive" in the sense this
+    // branch means. `outcome` is inconclusive whenever nothing baselined the
+    // check, and a command that cannot spawn cannot be baselined either, so
+    // without the second half of this condition it is unconditionally true for
+    // exactly the case a spawn failure is: the run warns that the suite "does
+    // not pass" — which asserts it ran — and then carries on as though the
+    // check had been made.
+    //
+    // Third incarnation of one bug, which is why this is spelled out rather
+    // than left to the next reader. cli#153 was "instrumentation blamed for a
+    // suite that was already failing". The fix for that warned on the
+    // baseline's exit code, which fired when the baseline had not run at all.
+    // The fix for *that* is the branch below, and it swallowed a command that
+    // could not be started. All three conflated "did not run" with "ran and
+    // failed"; a fourth will too unless the distinction is made here.
+    if (verification.outcome === "inconclusive") {
+      // Not a failure of this run, by one of two routes, and the sentence has
+      // to say which. Measured and already red is a finding about the project.
+      // Never measured is the absence of one, and it carries the failing output
+      // because nothing else in the run explains it. Said once, plainly, and
+      // then the run carries on to the thing it can still establish: whether a
+      // trace arrives.
+      wizardWarn(
+        ctx,
+        verification.baseline?.ran === true
+          ? `${command} does not pass on this project yet. It was failing before setup changed anything, so it cannot show whether the instrumentation is correct — nothing here is evidence against the changes.`
+          : `This run could not establish whether ${command} passes: nothing ran it before the code was instrumented, and the run after did not succeed either.${failure === null ? "" : `\n\n${outputTail(failure.output)}`}`,
+      );
+      return "skipped";
+    }
+
     if (!verification.passed) {
-      // Only the tail of the failing run's output: enough to see the error,
-      // little enough that a chatty test suite does not bury the remedy.
-      const tail =
-        failure === null ? "" : `\n\n${failure.output.split("\n").slice(-25).join("\n").trim()}`;
+      const tail = failure === null ? "" : `\n\n${outputTail(failure.output)}`;
+      // Only one of these three is a claim this run can support. "Failed after
+      // instrumentation" was printed whether or not anything had established
+      // that it passed before — which on a suite that was already red sent the
+      // user looking for a fault in work that had just been done correctly.
+      const measuredBefore = verification.baseline?.ran === true;
       const message =
         failure?.phase === "without"
           ? `\`${command}\` passed with TraceRoot configured but failed with ${KEY_ENV} removed. The application must keep working when TraceRoot is absent.${tail}`
-          : `\`${command}\` failed after instrumentation.${tail}`;
-      throw new SetupError({
+          : measuredBefore
+            ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
+            : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
+      // Paused, which is what this remedy has always promised and what the
+      // rollback used to contradict: the run revoked the key and took the
+      // credential back out of the env file, and then told the user to resume
+      // with it.
+      throw new PausedSetupError({
         stage: "verify_application",
         code: "APP_VERIFICATION_FAILED",
         message,
@@ -2500,14 +3010,19 @@ const verifyTrace: StageDefinition = {
     }
   },
   async run(ctx, deps) {
-    const credential = requireCredential(ctx);
     const session = requireSession(ctx);
     // The wizard's own client, not the generated one. The single read this
     // stage makes must not depend on which operations the tool registry chooses
     // to expose — it is the same public endpoint either way.
+    //
+    // Read on the user's own credential, never the application's. The
+    // application's key is ingest-scoped: it can send telemetry and nothing
+    // else, which is the whole point of giving the repository its own. Reading
+    // traces with it worked only because the trace routes do not enforce scope
+    // yet, so this stage would have broken on the day they started to.
     const client = deps.createSetupApi({
       host: session.host,
-      apiKey: credential.key.reveal(),
+      apiKey: session.userKey.reveal(),
       timeoutMs: 15_000,
     });
 
@@ -2546,17 +3061,24 @@ const verifyTrace: StageDefinition = {
       waiting?.stop("Stopped waiting for a trace.");
       throw err;
     }
+    // The size, whether or not it is small. This is the one line in the run
+    // where the application's own output arrives, and "received" with no size
+    // to it is the claim that turned out to need qualifying — a run reported it
+    // over a trace of one span. Omitted rather than guessed at when the
+    // response did not carry a count.
+    const received =
+      outcome.found && outcome.attribution.spanCount !== null
+        ? `First trace received (${spanPhrase(outcome.attribution.spanCount)}).`
+        : "First trace received.";
     waiting?.stop(
-      outcome.found
-        ? "First trace received."
-        : `No trace after ${Math.round(outcome.waitedMs / 1000)}s.`,
+      outcome.found ? received : `No trace after ${Math.round(outcome.waitedMs / 1000)}s.`,
     );
 
     if (!outcome.found && !somethingRan) {
       // Say the actual reason rather than reporting a timeout that never
       // really elapsed. Nothing exercised the code, so there is nothing to
       // have waited for.
-      throw new SetupError({
+      throw new PausedSetupError({
         stage: "verify_trace",
         code: "TRACE_TIMEOUT",
         message:
@@ -2566,7 +3088,7 @@ const verifyTrace: StageDefinition = {
     }
 
     if (!outcome.found) {
-      throw new SetupError({
+      throw new PausedSetupError({
         stage: "verify_trace",
         code: "TRACE_TIMEOUT",
         message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}`,
@@ -2581,8 +3103,30 @@ const verifyTrace: StageDefinition = {
       });
     }
 
-    ctx.trace = outcome.trace;
-    ctx.checkpoint.trace = outcome.trace;
+    // Kept on the record rather than only mentioned. The report is rendered
+    // from this, including on a `--resume` that rehydrates it from the
+    // checkpoint, so a count held only in this invocation would let a later run
+    // print the unqualified verdict over a trace this one had qualified.
+    const spanCount = outcome.attribution.spanCount;
+    const trace = spanCount === null ? outcome.trace : { ...outcome.trace, spanCount };
+    ctx.trace = trace;
+    ctx.checkpoint.trace = trace;
+
+    // Said, never fatal. The credential works, the backend has the trace, and a
+    // program that genuinely is one function has nothing more to show — failing
+    // a run over this would be worse than the sentence it qualifies. What it
+    // must not do is let the run close on "a trace has been received" and leave
+    // a user believing their application is covered when one function is.
+    //
+    // No judgement about the application's shape, because nothing this run
+    // inspected says what that shape is: it reports the count, says what the
+    // count means, and asks for a look.
+    if (isThinTrace(spanCount)) {
+      wizardWarn(
+        ctx,
+        `your first trace ${thinTraceFinding(spanCount)}. That is enough to show the credential works, and not enough to show that the instrumentation reaches the code you care about — open the trace and check that the functions you expected to see are in it.`,
+      );
+    }
     return "ok";
   },
 };
@@ -2695,7 +3239,7 @@ export async function runSetupMachine(ctx: SetupContext, deps: SetupDeps): Promi
         durationMs,
         data: { code: error.code },
       });
-      await rollback(ctx, deps);
+      await rollback(ctx, deps, error);
       ctx.emit({
         event: "result",
         ok: false,
@@ -2704,6 +3248,14 @@ export async function runSetupMachine(ctx: SetupContext, deps: SetupDeps): Promi
       });
       return { ok: false, stagesRun, checkpoint: ctx.checkpoint, trace: null, error };
     }
+  }
+
+  // Nothing is orphaned any more: the keys this run minted are the ones it just
+  // finished installing. Cleared so the record means what it says — keys a
+  // setup run created and no run put into service.
+  if ((ctx.checkpoint.mintedKeys ?? []).length > 0) {
+    ctx.checkpoint.mintedKeys = [];
+    writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
   }
 
   ctx.emit({ event: "result", ok: true, data: resultData(ctx) });
@@ -2717,46 +3269,143 @@ export async function runSetupMachine(ctx: SetupContext, deps: SetupDeps): Promi
 }
 
 /**
- * Undoes only what this run created. `--resume` suppresses it: the user has
- * declared they intend to continue, so tearing down the credential they are
- * about to reuse would be actively unhelpful.
+ * Undoes only what this run created, and only once the run is over.
+ *
+ * A paused run is left exactly as it is. That used to be decided by whether
+ * `--resume` was on the command line, which is a fact about the *previous* run
+ * and says nothing about how this one ended: a first run that stopped at
+ * verification printed "rerun `traceroot setup --resume` to finish" and then
+ * revoked the key the resume would have needed. The failure says which ending
+ * it is now — see {@link PausedSetupError}.
+ *
+ * Both halves work from what this run recorded as it went, never from a path or
+ * a credential recomputed here, so neither can reach anything a previous run
+ * left behind.
  */
-async function rollback(ctx: SetupContext, deps: SetupDeps): Promise<void> {
-  if (ctx.flags.resume) {
+async function rollback(ctx: SetupContext, deps: SetupDeps, error: SetupError): Promise<void> {
+  if (error instanceof PausedSetupError) {
     return;
   }
 
-  const keyId = mintedKeys.get(ctx);
-  if (keyId !== undefined && ctx.session !== undefined) {
+  await revokeMintedKeys(ctx, deps);
+  restoreEnvFile(ctx);
+}
+
+/**
+ * Revokes every key this run minted, and says which.
+ *
+ * Named, because the user cannot act on "a key". The failure they are reading
+ * is about something else entirely, and a line that says a credential appeared
+ * and was taken away again is only useful if they can match it to a row in
+ * their project's key list.
+ *
+ * Best-effort per key, and the ones that could not be revoked are reported as
+ * still live with where to remove them. A revoke needs the network and a
+ * session, which are two of the things that fail in the first place; claiming a
+ * rollback that did not happen would leave the user believing a live key is
+ * gone.
+ */
+async function revokeMintedKeys(ctx: SetupContext, deps: SetupDeps): Promise<void> {
+  const minted = mintedKeys.get(ctx) ?? [];
+  if (minted.length === 0) {
+    return;
+  }
+
+  const revoked: MintedKey[] = [];
+  const kept: MintedKey[] = [];
+  for (const key of minted) {
     try {
-      const api = deps.createSetupApi({
-        host: ctx.session.host,
-        apiKey: ctx.session.userKey.reveal(),
-      });
-      await api.revokeApiKey(keyId);
-      wizardProgress(ctx, "Revoked the API key created by this run.");
+      await key.api.revokeApiKey(key.id);
+      revoked.push(key);
     } catch {
-      // Best-effort: a key that outlives a failed setup is untidy, not unsafe,
-      // and failing the failure path would only obscure the real error.
-      wizardWarn(
-        ctx,
-        `could not revoke the API key created by this run (${ctx.checkpoint.projectKeyHint ?? "unknown"}); revoke it from the dashboard if it is unwanted`,
-      );
+      kept.push(key);
     }
   }
 
-  const written = wroteEnvKeys.get(ctx);
-  if (written !== undefined && written.keys.length > 0 && keyId !== undefined) {
-    const { removeEnvKeys } = await import("./envWrite.js");
-    try {
-      // The path this run actually wrote, not one recomputed here. The rollback
-      // must take our keys out of the file they went into and leave every other
-      // line in it alone, and that file is the user's own now.
-      removeEnvKeys(written.path, written.keys);
-    } catch {
-      // best-effort
-    }
+  if (revoked.length > 0) {
+    wizardProgress(ctx, `Revoked ${describeKeys(revoked)}, created by this run.`);
   }
+  if (kept.length > 0) {
+    wizardWarn(
+      ctx,
+      `could not revoke ${describeKeys(kept)}, created by this run — ${kept.length === 1 ? "it is" : "they are"} still live. Delete ${kept.length === 1 ? "it" : "them"} from the project's API keys at ${deps.resolvedAuth.hostUrl.value ?? ctx.session?.host ?? "your TraceRoot deployment"}.`,
+    );
+  }
+
+  // The durable record keeps exactly what is still out there.
+  const remaining = new Set(kept.map((key) => key.id));
+  const mine = new Set(minted.map((key) => key.id));
+  ctx.checkpoint.mintedKeys = (ctx.checkpoint.mintedKeys ?? []).filter(
+    (key) => !mine.has(key.id) || remaining.has(key.id),
+  );
+  writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
+}
+
+/** `name (hint)` for each, which is how the dashboard's key list reads. */
+function describeKeys(keys: readonly MintedKey[]): string {
+  const listed = keys.map((key) => `${key.name ?? "an unnamed key"} (${key.hint})`).join(", ");
+  return keys.length === 1 ? `the API key ${listed}` : `the ${keys.length} API keys ${listed}`;
+}
+
+/**
+ * Takes this run's credential back out of the project's env file.
+ *
+ * Not conditional on a key having been minted, which is what it used to be: the
+ * line is just as stale when the credential came from the sign-in stage, and
+ * that is the commonest route. A `TRACEROOT_API_KEY` left in a project's own
+ * configuration naming a key no run is using is worse than untidy — the next
+ * person to ask why no traces are arriving finds a configured credential,
+ * concludes configuration is done, and looks somewhere else.
+ *
+ * Only the keys this run wrote come out, so every other line in the file is
+ * left exactly as it was; `configure_repository` writes into one of the
+ * project's own files, which may be full of things that have nothing to do with
+ * TraceRoot.
+ *
+ * A file this run *created* is removed outright once nothing but its own header
+ * is left in it. That header says "Created by `traceroot setup`. This file
+ * contains a live API key" — true when it was written and false the moment the
+ * key comes out — and a `.env` that exists at all is read as configuration by
+ * the next tool to look. A file that was already there is never removed,
+ * whatever is left in it: it is the user's.
+ */
+function restoreEnvFile(ctx: SetupContext): void {
+  const written = wroteEnvKeys.get(ctx);
+  if (written === undefined || written.keys.length === 0) {
+    return;
+  }
+  const shown = relativeToRoot(ctx.root, written.path);
+  try {
+    const removed = removeEnvKeys(written.path, written.keys);
+    if (written.created && holdsNothingButComments(written.path)) {
+      rmSync(written.path, { force: true });
+      wizardProgress(ctx, `Removed ${shown}, which this run created.`);
+      return;
+    }
+    if (removed.length > 0) {
+      wizardProgress(ctx, `Removed ${removed.join(", ")} from ${shown}.`);
+    }
+  } catch {
+    wizardWarn(
+      ctx,
+      `could not take ${written.keys.join(", ")} back out of ${shown}; that line names a key this run did not finish setting up, so remove it by hand`,
+    );
+  }
+}
+
+/** Whether a dotenv file has nothing left in it but blank lines and comments. */
+function holdsNothingButComments(path: string): boolean {
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch {
+    // Gone already, or unreadable. Either way this is not the function that
+    // decides to delete something it cannot see.
+    return false;
+  }
+  return content
+    .split("\n")
+    .every((line) => line.trim() === "" || line.trimStart().startsWith("#"));
 }
 
 /** Non-secret per-stage payload for the JSON event stream. */
@@ -2821,7 +3470,17 @@ function stageData(ctx: SetupContext, stage: SetupStage): Record<string, unknown
         ? undefined
         : {
             command: ctx.application.command,
+            // `passed` is kept for the consumers that already read it, and is
+            // true only for an outright pass. `outcome` is what distinguishes
+            // the two false cases, which a reader acts on differently.
             passed: ctx.application.passed,
+            outcome: ctx.application.outcome,
+            // Both, because the exit code alone cannot say which kind of
+            // nothing it is: a baseline that was never taken and one that
+            // could not be spawned both report a null code, and only the
+            // second is a fact about this run.
+            baseline_ran: ctx.application.baseline?.ran ?? false,
+            baseline_exit_code: ctx.application.baseline?.exitCode ?? null,
             ran_without_credentials: ctx.application.withoutCredentials.ran,
             skipped_reason: ctx.application.skippedReason,
           };
@@ -2832,6 +3491,11 @@ function stageData(ctx: SetupContext, stage: SetupStage): Record<string, unknown
             trace_id: ctx.trace.traceId,
             trace_url: ctx.trace.traceUrl,
             waited_ms: ctx.trace.waitedMs,
+            // Null for "the response did not say", which a consumer has to be
+            // able to tell apart from a trace it should go and look at. The
+            // warning reaches json mode as a `warn` event; this is the number
+            // behind it, so a caller does not have to parse the sentence.
+            span_count: ctx.trace.spanCount ?? null,
           };
     default:
       return undefined;
@@ -2847,6 +3511,9 @@ function resultData(ctx: SetupContext): Record<string, unknown> {
     agent: ctx.agent?.id ?? null,
     sdk_version: ctx.checkpoint.sdkVersion ?? null,
     application_passed: ctx.application?.passed ?? null,
+    // Four values, because "did not pass" and "could not say" are different
+    // answers and a consumer branches on them differently.
+    application_outcome: ctx.application?.outcome ?? null,
     trace_id: ctx.trace?.traceId ?? null,
     trace_url: ctx.trace?.traceUrl ?? null,
     checkpoint_path: join(".traceroot", "setup.json"),

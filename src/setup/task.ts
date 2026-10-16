@@ -168,38 +168,58 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
 function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
   const [envFile] = envFiles;
   if (service.language !== "python") {
+    // The env load, named rather than imported for its side effect — and both
+    // it and `initialize()` inside the function the file runs, not at module
+    // scope.
+    //
+    // `import "dotenv/config"` is what this used to show, and it reads `.env`
+    // resolved against `process.cwd()` — neither this file's directory nor
+    // necessarily the file the credential went into, which is wherever
+    // `chooseCredentialEnvFile` put it. The explicit call names the file setup
+    // actually wrote and anchors it on the entry point.
+    //
+    // Module scope is the other half of it, and the reason the comment that
+    // used to sit above `initialize()` here is gone. Module scope runs on
+    // import, so a test suite that imports this module loads the credential and
+    // starts the SDK, and then every test reaching an instrumented function
+    // exports a trace of its own. `observe(options, fn, ...args)` invokes rather
+    // than wraps, auto-initializing at call time when `TRACEROOT_API_KEY` is
+    // set, so there is no module-scope wrapper to arm either — with the load
+    // inside the function, an imported module exports nothing. And the claim
+    // that `initialize()` must precede the provider's import was never true of
+    // this SDK: the instrumentors patch the provider's class methods through
+    // `wrapt`, which does not care whether it was imported first. What it has to
+    // precede is the first model call and the first `observe`.
+    const load =
+      envFile === undefined
+        ? { imports: [] as string[], call: [] as string[] }
+        : {
+            imports: ['import { config } from "dotenv";'],
+            call: [
+              `  ${loadDotenvCallTs(envFile, service.entryPoint)};   // the app's own credentials`,
+            ],
+          };
     return [
       "```typescript",
-      // The env load goes above the SDK import, not merely before
-      // `initialize()`. ES module imports are evaluated in source order, so a
-      // side-effect import of `dotenv/config` placed here runs first — and it
-      // has to, because `initialize()` reads the key out of `process.env`.
-      ...(envFile === undefined ? [] : ['import "dotenv/config";   // the key lives here', ""]),
+      ...load.imports,
       'import { initialize, observe } from "@traceroot-ai/traceroot";',
       "",
-      "// Before importing the SDK you are instrumenting.",
-      "initialize();",
+      "// The function this file calls when it is run directly — not module scope.",
+      "async function main() {",
+      ...load.call,
+      "  initialize();",
+      "  await run();   // whatever this file already does",
+      "}",
       "```",
     ].join("\n");
   }
-  // One load, of the project's own env file.
-  //
-  // There were two: this file, and a `.env.traceroot` setup had written the key
-  // into. The second existed only because that filename was ours and no runtime
-  // read it. The key is in the file below now, so the load that fetches the
-  // application's own credentials fetches the TraceRoot key with them — and the
-  // paragraph that had to argue the extra load was not dead code is gone with
-  // it.
-  const dotenv =
+  const dotenvImports =
+    envFile === undefined ? [] : ["from pathlib import Path", "from dotenv import load_dotenv", ""];
+  // Indented, because it belongs to the guard below rather than to the module.
+  const credentialLoad =
     envFile === undefined
       ? []
-      : [
-          "from pathlib import Path",
-          "from dotenv import load_dotenv",
-          "",
-          loadDotenvCall(envFile, service.entryPoint ?? null),
-          "",
-        ];
+      : [`    ${loadDotenvCall(envFile, service.entryPoint)}   # the app's own credentials`];
   return [
     "```python",
     ...dotenvImports,
@@ -226,63 +246,6 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
  * what the agent is allowed to execute, cannot come to disagree.
  */
 const FALLBACK_INTERPRETER = "./.venv/bin/python";
-
-/**
- * Why the credential load above is neither optional nor redundant.
- *
- * It has to be said outright, because every other thing this task says about
- * the key points the other way: `TRACEROOT_API_KEY` is already in the agent's
- * environment, and the hard rules tell it not to confirm, print or grep for it.
- * An agent reading that reasonably concludes a `load_dotenv` of a credential
- * file is dead code and drops it — and dropping it is exactly the failure. The
- * key is in the agent's environment because `traceroot setup` put it there for
- * the duration of this run; the user's own next run does not get it.
- *
- * Per language because the mechanism is not the same one. Python's loader runs
- * where it is written, so the line in the snippet is the whole answer and the
- * only cost is a dependency the task then tells the agent to declare. ES module
- * imports are hoisted, so the equivalent line in a TypeScript entry point runs
- * *after* the imports it was meant to precede — there the file has to be loaded
- * before the process starts, which is a change to how the app is launched
- * rather than a line of code.
- *
- * That change is a `dotenv` preload rather than `--env-file`, which looks like
- * the smaller one and is not: the credential file is gitignored by design, so it
- * is absent in CI and in production images, and `node --env-file=<missing>`
- * exits 9 before the application starts. Recommending it would turn "tracing is
- * not configured" into "the application does not boot", in the one environment
- * nobody runs `traceroot setup` in. `--env-file-if-exists` tolerates the absence
- * but only from Node 22.9, so it cannot carry the instruction on its own — on
- * 20.6 through 22.8 it is an unknown option, which fails the same way. The
- * preload works on every runtime the SDK supports and treats a missing file as
- * a no-op, at the cost of a dependency the task now tells the agent to declare.
- */
-function credentialEnvFileNote(service: DetectedService, credentialEnvFile: string | null): string {
-  if (credentialEnvFile === null) {
-    return "";
-  }
-  if (service.language === "python") {
-    return `
-Loading \`${credentialEnvFile}\` is not redundant. \`TRACEROOT_API_KEY\` is in **your** environment
-because \`traceroot setup\` put it there for this run; nothing loads that file afterwards, so
-without that line the application stops sending traces the moment this run ends.
-Add \`python-dotenv\` to the dependency manifest, since you are importing it.
-`;
-  }
-  return `
-\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` to \`${credentialEnvFile}\`. It is in **your**
-environment because setup put it there for this run; nothing loads that file afterwards, so the
-application stops sending traces the moment this run ends. Load it **before the process starts**:
-preload \`dotenv\` on the start script — \`node -r dotenv/config\`, or \`--import dotenv/config\` for
-ES modules — with \`DOTENV_CONFIG_PATH=${credentialEnvFile}\`, and add \`dotenv\` to the dependency
-manifest, since you are importing it. On Node 22.9 or newer,
-\`--env-file-if-exists=${credentialEnvFile}\` does the same job without the package. Not plain
-\`--env-file\`: that file is gitignored, so it is absent in CI and in production images, where that
-flag exits non-zero and the application never starts. Not from inside the entry point either: ES
-module imports are hoisted, so a \`dotenv\` call written above them still runs after they have been
-evaluated.
-`;
-}
 
 /**
  * The shortest unambiguous way to name an interpreter from the service directory.
@@ -612,8 +575,7 @@ you named would never be applied. Auto-instrumentation patches the provider libr
 which works whether or not that library has already been imported — so leave its imports where
 they are.
 
-${initSnippet(service, envFiles, credentialEnvFile)}
-${credentialEnvFileNote(service, credentialEnvFile)}
+${initSnippet(service, envFiles)}
 
 Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
 gunicorn, a queue worker — has no such place to put it, so initialize where the framework starts
@@ -822,11 +784,17 @@ function asStringOrNull(value: unknown): string | null {
 /**
  * Extracts the agent's completion block from its output.
  *
- * Deliberately lenient and deliberately non-load-bearing. Parsing agent prose is
- * fragile, so nothing downstream depends on this succeeding: a missing or
- * malformed block yields `null` and the run continues, because the CLI
- * establishes every fact that matters (files changed, tests passing, trace
- * arrived) by observation rather than by report.
+ * Deliberately lenient. Parsing agent prose is fragile, so a missing or
+ * malformed block yields `null` and the run continues: the CLI establishes
+ * every fact that matters (files changed, tests passing, trace arrived) by
+ * observation rather than by report.
+ *
+ * One claim is acted on, and only in the direction that cannot invent success.
+ * An agent reporting `files_changed: []` fails the instrument stage, because a
+ * run that edited nothing instrumented nothing — and a sandboxed agent that was
+ * stopped from editing says exactly that and still exits 0. The stage requires
+ * the worktree to agree before it fails, so a dropped or malformed block is
+ * still nobody's failure.
  */
 export function parseCompletion(output: string): ParsedCompletion | null {
   const fence = /```(?:json)?[ \t]*traceroot-setup-result[ \t]*\r?\n([\s\S]*?)```/g;
