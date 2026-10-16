@@ -1,4 +1,4 @@
-import type { Writers } from "../output.js";
+import type { Sink, Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import {
   DOCS_URL,
@@ -45,23 +45,29 @@ export interface TracesNoticeInput {
  * the ends of lines and makes three sentences read as six fragments. A
  * terminal already knows its own width; the only thing hand-wrapping
  * adds is a guess about it that is wrong on every window but one.
+ *
+ * `sink` is where the block is headed, because the bold line, the permalink
+ * and the grey caveat are painted here rather than by whatever prints them:
+ * the colour has to answer to the stream the lines land on, not to
+ * `process.stderr` on the way past. Defaults to it for a caller that is only
+ * reading the wording.
  */
-export function tracesNotice(input: TracesNoticeInput): string[] {
+export function tracesNotice(input: TracesNoticeInput, sink: Sink = process.stderr): string[] {
   return [
     // The instruction, and the only bold line in the block. Everything else
     // here is where to look afterwards; this is the thing to go and do, and it
     // is the step the wizard cannot take on the user's behalf.
-    wizardEmphasis("Run your application and exercise the code you just instrumented."),
+    wizardEmphasis("Run your application and exercise the code you just instrumented.", sink),
     "",
     "Traces will appear here:",
-    wizardLink(input.traceUrl),
+    wizardLink(input.traceUrl, undefined, sink),
     "",
     // Grey, and a grey link with it: this is the branch nobody wants to be on.
     // It has to be here — a dead end at the last step of onboarding is where a
     // first-run tool loses people — but at full contrast it competes with the
     // permalink above, which is the line that matters when things did work.
-    wizardAside("If traces do not show up, see the troubleshooting guide:"),
-    wizardMutedLink(DOCS_URL),
+    wizardAside("If traces do not show up, see the troubleshooting guide:", sink),
+    wizardMutedLink(DOCS_URL, sink),
   ];
 }
 
@@ -80,7 +86,7 @@ export interface AcknowledgeTracesInput extends TracesNoticeInput {
 
 /** Prints the block and, where there is a human, waits for them to take it in. */
 export async function acknowledgeTraces(input: AcknowledgeTracesInput): Promise<void> {
-  const lines = tracesNotice(input);
+  const lines = tracesNotice(input, input.writers.err);
   // A blank rail before the acknowledgement, and no glyph on it. The rail
   // supplies the separation on its own; without a marker in the gutter the line
   // still reads as part of this block rather than as a section of its own.
@@ -90,6 +96,6 @@ export async function acknowledgeTraces(input: AcknowledgeTracesInput): Promise<
   }
   // The answer is deliberately ignored: an acknowledgement, not a question.
   // Its only job is to stop the next block from scrolling this one away unread.
-  await input.prompt(`${wizardAcknowledgement(TRACES_ACK)} `);
+  await input.prompt(`${wizardAcknowledgement(TRACES_ACK, input.writers.err)} `);
   settleAcknowledgement(input.writers, TRACES_ACK);
 }

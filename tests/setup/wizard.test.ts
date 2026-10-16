@@ -54,7 +54,38 @@ describe("lines inside the frame", () => {
   it("gives a warning its own glyph and still keeps it on the rail", () => {
     const t = target();
     wizardWarn(t, "`claude` was not found on PATH");
-    expect(plain(t.err.data)).toBe("▲  warning: `claude` was not found on PATH\n");
+    expect(plain(t.err.data).split("\n").slice(0, -1)).toEqual([
+      "│",
+      "▲  warning: `claude` was not found on PATH",
+    ]);
+  });
+
+  it("separates a warning from the line it interrupts", () => {
+    // The fault this fixes: a warning landed flush against the answer to the
+    // question above it, so the thing the run was interrupting itself to say
+    // read as one more line of that answer.
+    const t = target();
+    wizardProgress(t, "Checking `pytest` before anything changes");
+    wizardWarn(t, "pytest does not pass yet");
+    expect(plain(t.err.data).split("\n").slice(0, -1)).toEqual([
+      "│  Checking `pytest` before anything changes",
+      "│",
+      "▲  warning: pytest does not pass yet",
+    ]);
+  });
+
+  it("opens a block and a warning the same way, so neither doubles the gap", () => {
+    // `wizardNote` supplies its own rail, and so does a warning now. Two in a
+    // row is two separated lines, not one with a hole above it.
+    const t = target();
+    wizardNote(t.writers, ["Git changes detected."]);
+    wizardWarn(t, "no test or health command was detected");
+    expect(plain(t.err.data).split("\n").slice(0, -1)).toEqual([
+      "│",
+      "◆  Git changes detected.",
+      "│",
+      "▲  warning: no test or health command was detected",
+    ]);
   });
 
   it("dims progress without moving it off the rail", () => {

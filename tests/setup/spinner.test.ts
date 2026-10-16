@@ -137,11 +137,31 @@ describe("waiting for the browser", () => {
     const { out, advance, tick } = harness();
     advance(12_000);
     tick();
-    // Wording only. `harness()` gives a TTY sink, but picocolors is off across
-    // this suite, so nothing here is coloured either way — which is why the
-    // "counter is not dimmed" claim lives in `wizard.colour.test.ts`, where
-    // colour is forced on and the assertion can actually fail.
+    // The sink is a terminal, so the line around it *is* coloured — the glyph
+    // below proves it — and the counter still arrives with nothing wrapped
+    // around it.
     expect(out.data).toContain(" [12s]");
+  });
+
+  it("paints by the sink rather than by the environment", () => {
+    // picocolors' default instance decides from the process: stdout's TTY,
+    // `FORCE_COLOR`, `CI`. None of them is this sink, so a spinner on a terminal
+    // came out unpainted whenever stdout was redirected, and a forced colour in
+    // CI painted one writing into a file. Built from the sink, both answers
+    // follow the sink.
+    const { out, advance, tick } = harness();
+    advance(12_000);
+    tick();
+
+    expect(out.data).toContain(`${ESC}[35m`);
+  });
+
+  it("writes no colour into a sink it cannot redraw", () => {
+    const { out, advance, tick } = harness(false);
+    advance(12_000);
+    tick();
+
+    expect(out.data).not.toContain(ESC);
   });
 
   it("counts down instead, when the wait has a deadline", () => {

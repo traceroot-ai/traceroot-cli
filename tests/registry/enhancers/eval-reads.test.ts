@@ -15,7 +15,10 @@ import { renderRun, resultsLine } from "../../../src/registry/enhancers/eval-run
 import { renderRunList } from "../../../src/registry/enhancers/eval-runs-list.js";
 import { latestRun, renderEvaluationList } from "../../../src/registry/enhancers/evals-list.js";
 import { createFakeFetch, jsonResponse } from "../../helpers/fakeFetch.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function sinks() {
   const out = new StringSink();

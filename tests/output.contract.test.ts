@@ -15,8 +15,15 @@ const binPath = fileURLToPath(new URL("../bin/traceroot.mjs", import.meta.url));
 // (TRACEROOT_TOKEN), and the home-directory credentials store — pointed at a
 // non-existent path so a real `traceroot login` on this machine can't flip the
 // expected no-credentials failure into a live prod mint call.
+//
+// `FORCE_COLOR` is dropped (an undefined value is left out of the child's
+// environment) for the same reason: it tells the CLI to paint whatever it is
+// writing to, so a runner that sets it would otherwise put escape codes in the
+// stderr these runs read back as plain text. What the spawned CLI is being asked
+// here is what it does with a pipe, not what it does with that instruction.
 const isolatedEnv: NodeJS.ProcessEnv = {
   ...process.env,
+  FORCE_COLOR: undefined,
   TRACEROOT_CONFIG_PATH: join(tmpdir(), "traceroot-cli-no-such-config", "config.json"),
   TRACEROOT_CREDENTIALS_PATH: join(tmpdir(), "traceroot-cli-no-such-creds", "credentials.json"),
   TRACEROOT_API_KEY: "",
@@ -29,13 +36,24 @@ const isolatedEnv: NodeJS.ProcessEnv = {
 // repo `.env` and flip a missing-credentials failure into a network one.
 const isolatedCwd = mkdtempSync(join(tmpdir(), "traceroot-cli-contract-"));
 
-function runIsolated(...args: string[]): { stdout: string; stderr: string; status: number | null } {
+interface SpawnedRun {
+  stdout: string;
+  stderr: string;
+  status: number | null;
+}
+
+/** One isolated run, with `env` added to (or removed from) the isolated environment. */
+function runIsolatedWith(env: NodeJS.ProcessEnv, ...args: string[]): SpawnedRun {
   const result = spawnSync(process.execPath, [binPath, ...args], {
     encoding: "utf8",
-    env: isolatedEnv,
+    env: { ...isolatedEnv, ...env },
     cwd: isolatedCwd,
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+}
+
+function runIsolated(...args: string[]): SpawnedRun {
+  return runIsolatedWith({}, ...args);
 }
 
 describe("output contract (spawned failing command)", () => {
@@ -57,6 +75,17 @@ describe("output contract (spawned failing command)", () => {
     const { stdout, stderr } = runIsolated("status");
     expect(stdout).not.toContain("\x1b[");
     expect(stderr).not.toContain("\x1b[");
+  });
+
+  it("emits them anyway when FORCE_COLOR asks for color", () => {
+    // Continuous integration, whole: stdout and stderr are pipes, nothing is a
+    // terminal, and the escape codes still have to come out, because the runner
+    // that set the variable is the thing that renders them. The pipe is what
+    // decides when nobody says otherwise — the run above — and saying otherwise
+    // is what this one does.
+    const { stdout, stderr } = runIsolatedWith({ FORCE_COLOR: "1", NO_COLOR: undefined }, "status");
+    expect(stderr).toContain("\x1b[");
+    expect(stdout).toBe("");
   });
 });
 

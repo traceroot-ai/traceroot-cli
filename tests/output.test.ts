@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CliError,
   ExitCode,
@@ -13,7 +13,10 @@ import {
   reportError,
   writeJson,
 } from "../src/output.js";
+import { withoutForcedColor } from "./helpers/plainColor.js";
 import { StringSink } from "./helpers/stringSink.js";
+
+withoutForcedColor();
 
 describe("handlePipeError", () => {
   it("exits cleanly (code 0) on EPIPE — a downstream reader closed the pipe", () => {
@@ -178,8 +181,38 @@ describe("colorEnabled", () => {
     expect(colorEnabled(new StringSink(false), {})).toBe(false);
   });
 
-  it("is true only on a TTY sink with NO_COLOR unset", () => {
+  it("is true on a TTY sink with neither variable set", () => {
     expect(colorEnabled(new StringSink(true), {})).toBe(true);
+  });
+
+  it("is true on a non-TTY sink when FORCE_COLOR asks for color", () => {
+    // Continuous integration, and this suite: nothing is a terminal, and the
+    // caller has said it renders SGR anyway. Without this the only way to get
+    // color was to be a TTY, so the one consumer that has to ask could not.
+    expect(colorEnabled(new StringSink(false), { FORCE_COLOR: "1" })).toBe(true);
+    // A sink that says nothing about itself is not a terminal either.
+    expect(colorEnabled(new StringSink(), { FORCE_COLOR: "true" })).toBe(true);
+  });
+
+  it("is false when NO_COLOR and FORCE_COLOR are both set, whatever the sink", () => {
+    // Two opposite instructions, one of which has to lose, and it is the
+    // request rather than the refusal — picocolors resolves the pair in this
+    // order too, so the wizard's palette cannot disagree with this answer.
+    const both: NodeJS.ProcessEnv = { NO_COLOR: "1", FORCE_COLOR: "1" };
+    expect(colorEnabled(new StringSink(true), both)).toBe(false);
+    expect(colorEnabled(new StringSink(false), both)).toBe(false);
+  });
+
+  it("does not read an empty FORCE_COLOR, or 0 or false, as asking for color", () => {
+    for (const value of ["", "0", "false"]) {
+      expect(colorEnabled(new StringSink(false), { FORCE_COLOR: value })).toBe(false);
+    }
+  });
+
+  it("still colors a terminal when FORCE_COLOR is one of those values", () => {
+    // They are not a refusal either — only NO_COLOR is — so the sink decides,
+    // and this sink is a terminal.
+    expect(colorEnabled(new StringSink(true), { FORCE_COLOR: "0" })).toBe(true);
   });
 });
 
@@ -190,5 +223,18 @@ describe("color application", () => {
     logWarn("warn text", w);
     reportError(new Error("err text"), {}, w);
     expect(err.data).not.toContain("\x1b[");
+  });
+
+  it("paints a sink that is not a terminal when the environment forces color", () => {
+    // The helpers that read `process.env` rather than taking an environment —
+    // which is all of the ones a command actually calls — are the point of the
+    // FORCE_COLOR clause, so they are what this asserts.
+    vi.stubEnv("NO_COLOR", undefined);
+    vi.stubEnv("FORCE_COLOR", "1");
+    const { w, err } = writers(false, false);
+    logProgress("dim text", w);
+    reportError(new Error("err text"), {}, w);
+    expect(err.data).toContain("\x1b[2mdim text\x1b[0m");
+    expect(err.data).toContain("\x1b[91merror: err text\x1b[0m");
   });
 });

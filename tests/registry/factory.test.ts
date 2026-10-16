@@ -7,7 +7,10 @@ import { buildProgram } from "../../src/cli.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { GROUPS, PLACEMENTS, type Placement } from "../../src/registry/naming.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
+import { withoutForcedColor } from "../helpers/plainColor.js";
 import { StringSink } from "../helpers/stringSink.js";
+
+withoutForcedColor();
 
 // The sessions tools have no production CLI surface (deferred until the SQL
 // query surface lands) and no enhancer, which makes them the ideal fixture for

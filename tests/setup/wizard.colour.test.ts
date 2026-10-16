@@ -3,17 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 /**
  * The wizard's helpers, with colour forced on.
  *
- * Everywhere else in this suite picocolors is off — no TTY, no `FORCE_COLOR` —
- * so every assertion about `wizardEmphasis` or `wizardLink` is an assertion
- * about plain text, and a helper that quietly stopped emphasising anything
- * would pass all of them. `FORCE_COLOR` cannot fix that from inside a test:
- * picocolors reads it once, when the module is first evaluated, and it lives in
- * `node_modules`, which vitest externalizes and never re-evaluates. Replacing
- * the module with an explicitly enabled instance is the way in.
+ * Everywhere else in this suite colour is off — the wizard keys it to stderr,
+ * which is a pipe under the runner — so every assertion about `wizardEmphasis`
+ * or `wizardLink` is an assertion about plain text, and a helper that quietly
+ * stopped emphasising anything would pass all of them. `FORCE_COLOR` cannot fix
+ * that from inside a test: picocolors reads the environment once, when the
+ * module is first evaluated, and it lives in `node_modules`, which vitest
+ * externalizes and never re-evaluates. Forcing every instance it builds is the
+ * way in; which stream the wizard builds its instance *from* is pinned in
+ * `wizard.stream.test.ts` instead.
  */
 vi.mock("picocolors", async (importOriginal) => {
   const actual = await importOriginal<typeof import("picocolors")>();
-  return { ...actual, default: actual.createColors(true) };
+  return { ...actual, createColors: () => actual.createColors(true) };
 });
 
 const ESC = String.fromCharCode(27);
@@ -61,7 +63,9 @@ describe("hue, when the terminal can show it", () => {
     // The troubleshooting guide is the branch nobody wants to be on. At the
     // same weight as the trace permalink it won by sitting lower on the screen.
     const { wizardMutedLink } = await import("../../src/setup/wizard.js");
-    expect(wizardMutedLink("https://docs.traceroot.ai", false)).toBe(
+    // One argument: the muted role takes no hyperlink flag, and the second
+    // parameter is now the sink its colour is decided from.
+    expect(wizardMutedLink("https://docs.traceroot.ai")).toBe(
       `${GREY}https://docs.traceroot.ai${OFF}`,
     );
   });

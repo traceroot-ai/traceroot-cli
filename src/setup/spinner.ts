@@ -1,5 +1,5 @@
 import { S_BAR } from "@clack/prompts";
-import color from "picocolors";
+import { createColors } from "picocolors";
 import type { Sink } from "../output.js";
 import { canRedraw } from "./tty.js";
 
@@ -122,10 +122,13 @@ export function startLineSpinner(input: LineSpinnerInput): LineSpinner {
   let frame = 0;
 
   const redraw = canRedraw(input.sink, env);
-  // Dimmed only where the sink is a terminal. picocolors decides from the
-  // process (`CI`, `FORCE_COLOR`, stdout's TTY), never from this sink, so the
-  // plain-log fallback below has to strip the colour itself to stay a plain log
-  // line rather than a line of escape codes in a file.
+  // Dimmed only where the sink is a terminal, and painted by an instance built
+  // from that same answer. picocolors decides from the process (`CI`,
+  // `FORCE_COLOR`, stdout's TTY), never from this sink, so its default instance
+  // got it wrong both ways: it wrote escape codes into a redirected log, and it
+  // left a terminal frame unpainted whenever stdout was the stream being
+  // redirected.
+  const color = createColors(redraw);
   const rail = redraw ? color.dim(S_BAR) : S_BAR;
   // Magenta rather than cyan for the spinning glyph. Cyan is what clack uses
   // for an active prompt, so the two were the same colour and a spinner read

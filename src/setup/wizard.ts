@@ -6,9 +6,44 @@ import {
   S_STEP_SUBMIT,
   S_WARN,
 } from "@clack/prompts";
-import color from "picocolors";
-import { type Writers, logInfo, logProgress, logWarn } from "../output.js";
+import { createColors } from "picocolors";
+import { type Sink, type Writers, logInfo, logProgress, logWarn } from "../output.js";
 import { canRedraw } from "./tty.js";
+
+/** A picocolors instance: the role functions a line gets painted with. */
+type Painter = ReturnType<typeof createColors>;
+
+/**
+ * picocolors, keyed to the stream a line is actually on its way to.
+ *
+ * picocolors' own default instance decides from *stdout*, once, when it is
+ * first imported: `FORCE_COLOR`, `--color`, `CI`, or stdout being a TTY. The
+ * wizard draws on stderr, so the frame was painted according to the wrong
+ * stream in both directions — `traceroot setup > out.log` on a terminal
+ * dropped every colour from a frame that was still on screen, while `traceroot
+ * setup 2> setup.log` wrote escape codes into the file.
+ *
+ * Asking `process.stderr` instead fixed both of those and left the same
+ * mistake one layer down. Every renderer here writes through the `writers.err`
+ * it was handed, which in production is `process.stderr` and in anything else
+ * — a capture, a log file, a second terminal — is not; a palette latched from
+ * the process stream would decide colour from a stream the renderer never
+ * writes a byte to. So the sink is the argument, as it already is for
+ * `stageLineEmitter` and for the line spinner, and nothing in this file
+ * decides colour before it knows where the line is going.
+ *
+ * `canRedraw` is the question the rest of this module already asks about
+ * `writers.err`, and it answers all three of the things colour has to respect:
+ * a pipe, `TERM=dumb`, and `NO_COLOR`.
+ *
+ * The role helpers below return a span rather than writing one, so they cannot
+ * know their destination: each takes the sink as an optional last argument and
+ * falls back to `process.stderr`, which is where every line of the wizard goes
+ * when nobody says otherwise. A renderer holding a sink always says.
+ */
+function painterFor(sink: Sink): Painter {
+  return createColors(canRedraw(sink, process.env));
+}
 
 /**
  * The frame around a setup run: one opening line, one closing block.
@@ -38,6 +73,7 @@ const SUPPORT_URL = "https://discord.gg/TM2m3CtKuC";
 
 /** Opens the frame. Everything the run prints from here on sits inside it. */
 export function wizardIntro(writers: Writers): void {
+  const color = painterFor(writers.err);
   writers.err.write(`${color.dim(S_BAR_START)}  ${color.bold(WIZARD_TITLE)}\n`);
 }
 
@@ -75,7 +111,7 @@ export function wizardIntro(writers: Writers): void {
  * intensity, a link sits in the text and is brighter. Anything that needs to be
  * told apart from a link by colour alone must not be cyan.
  */
-const LIGHT_BLUE = color.cyanBright;
+const lightBlue = (sink: Sink): Painter["cyanBright"] => painterFor(sink).cyanBright;
 
 /** Written out rather than embedded, so no control character reaches source. */
 const ESC = String.fromCharCode(27);
@@ -180,11 +216,15 @@ export function hyperlinksSupported(
  * away the fallback for a nicer-looking best case, and the fallback is the case
  * that has to keep working.
  *
- * `hyperlinks` is a parameter so a test can pin both forms; production calls it
- * with one argument and gets the environment's answer.
+ * `hyperlinks` is a parameter so a test can pin both forms. Left out, the
+ * answer comes from the environment and from `sink` — the stream the link is
+ * going to, which is the same thing that decides its colour.
  */
-export function wizardLink(url: string, hyperlinks: boolean = hyperlinksSupported()): string {
-  return paintedLink(url, LIGHT_BLUE, hyperlinks);
+export function wizardLink(url: string, hyperlinks?: boolean, sink: Sink = process.stderr): string {
+  // Both halves of the decision come from the same stream: a sink that cannot
+  // take colour cannot take an OSC 8 wrapper either, and the two answers
+  // disagreeing is how a log file ends up with half a hyperlink in it.
+  return paintedLink(url, lightBlue(sink), hyperlinks ?? hyperlinksSupported(process.env, sink));
 }
 
 /**
@@ -199,7 +239,7 @@ export function wizardLink(url: string, hyperlinks: boolean = hyperlinksSupporte
  * Not wrapped for clicking — see below for why that is the only way it can
  * actually stay grey.
  */
-export function wizardMutedLink(url: string): string {
+export function wizardMutedLink(url: string, sink: Sink = process.stderr): string {
   // No OSC 8, and that is the whole point of this function now.
   //
   // Our bytes were already pure grey — `ESC[90m` and nothing else. What made
@@ -213,7 +253,7 @@ export function wizardMutedLink(url: string): string {
   // lost: every terminal in the allowlist also auto-detects a bare URL and
   // makes it clickable on its own. `wizardLink` keeps OSC 8, because there the
   // terminal's styling and ours agree.
-  return GREY_TEXT(url.replace(CONTROL_CHARS, ""));
+  return greyText(url.replace(CONTROL_CHARS, ""), sink);
 }
 
 /** The OSC 8 wrapper, once, so the two link roles cannot drift apart. */
@@ -238,8 +278,8 @@ function paintedLink(url: string, paint: (text: string) => string, hyperlinks: b
  * has to be copied exactly — and giving it a colour of its own would say there
  * are two kinds of important where there is one.
  */
-export function wizardEnvVar(name: string): string {
-  return LIGHT_BLUE(name);
+export function wizardEnvVar(name: string, sink: Sink = process.stderr): string {
+  return lightBlue(sink)(name);
 }
 
 /**
@@ -262,8 +302,8 @@ export function wizardEnvVar(name: string): string {
  * Routed through picocolors' own enable/disable check so `NO_COLOR`, a pipe
  * and `TERM=dumb` still strip it.
  */
-const GREY_TEXT = (text: string): string =>
-  color.isColorSupported ? `${ESC}[38;5;245m${text}${ESC}[39m` : text;
+const greyText = (text: string, sink: Sink): string =>
+  painterFor(sink).isColorSupported ? `${ESC}[38;5;245m${text}${ESC}[39m` : text;
 
 /**
  * Supporting detail: true, worth keeping, not what the block is about.
@@ -274,13 +314,13 @@ const GREY_TEXT = (text: string): string =>
  * colour, and a colour is a thing every terminal in the allowlist can actually
  * draw.
  */
-export function wizardAside(text: string): string {
-  return GREY_TEXT(text);
+export function wizardAside(text: string, sink: Sink = process.stderr): string {
+  return greyText(text, sink);
 }
 
 /** The one word in a line that the line is actually about. */
-export function wizardEmphasis(text: string): string {
-  return color.bold(text);
+export function wizardEmphasis(text: string, sink: Sink = process.stderr): string {
+  return painterFor(sink).bold(text);
 }
 
 /**
@@ -291,7 +331,7 @@ export function wizardEmphasis(text: string): string {
  * by links and variable names, both of which are things to go and act on; green
  * is for things to check, and there is nothing left to do to either of them.
  */
-const GREEN = color.green;
+const green = (sink: Sink): Painter["green"] => painterFor(sink).green;
 
 /**
  * A value the run has settled on: a project, a workspace, a name that came back
@@ -302,8 +342,8 @@ const GREEN = color.green;
  * colouring the second is what lets someone confirm at a glance that the run
  * landed where they meant it to.
  */
-export function wizardValue(text: string): string {
-  return GREEN(text);
+export function wizardValue(text: string, sink: Sink = process.stderr): string {
+  return green(sink)(text);
 }
 
 /**
@@ -324,7 +364,7 @@ export function wizardValue(text: string): string {
  * Anything inside `text` that must stand out is the caller's to mark with
  * {@link wizardEmphasis}, which survives being composed in here.
  */
-export function wizardAcknowledgement(text: string): string {
+export function wizardAcknowledgement(text: string, sink: Sink = process.stderr): string {
   // The rail in the gutter, not a marker and not a blank.
   //
   // The green dot went because a marker is how every other line in the wizard
@@ -333,7 +373,7 @@ export function wizardAcknowledgement(text: string): string {
   // frame's vertical line simply stopped for two rows and started again, which
   // reads as the block having ended early. `│` is the frame, not a marker, so
   // it continues through a row that is waiting without claiming to open one.
-  return `${color.dim(S_BAR)}  ${text}  ${wizardAside("(Press Enter to continue)")}`;
+  return `${painterFor(sink).dim(S_BAR)}  ${text}  ${wizardAside("(Press Enter to continue)", sink)}`;
 }
 
 /**
@@ -349,7 +389,8 @@ export function wizardAcknowledgement(text: string): string {
  * already contains a bold span ends the dim early, and the row comes back half
  * grey and half not.
  */
-export function wizardAcknowledgementSettled(text: string): string {
+export function wizardAcknowledgementSettled(text: string, sink: Sink = process.stderr): string {
+  const color = painterFor(sink);
   return `${color.dim(S_BAR)}  ${color.dim(text)}`;
 }
 
@@ -373,10 +414,10 @@ export function settleAcknowledgement(writers: Writers, text: string): void {
   // answered line as it stands reads correctly instead.
   const columns = (process.stderr as unknown as { columns?: number }).columns ?? 80;
   // The prompt appends one space to the composed line.
-  if (visibleLength(wizardAcknowledgement(text)) + 1 > columns) {
+  if (visibleLength(wizardAcknowledgement(text, writers.err)) + 1 > columns) {
     return;
   }
-  writers.err.write(`${ESC}[1A${ESC}[2K${wizardAcknowledgementSettled(text)}\n`);
+  writers.err.write(`${ESC}[1A${ESC}[2K${wizardAcknowledgementSettled(text, writers.err)}\n`);
 }
 
 /**
@@ -467,6 +508,7 @@ export function wizardNote(
   lines: readonly string[],
   options: { dimFrom?: number; settled?: boolean } = {},
 ): void {
+  const color = painterFor(writers.err);
   const rail = color.dim(S_BAR);
   // Lines from `dimFrom` onwards are supporting detail rather than the point.
   // A list of forty changed paths at full contrast shouts louder than the
@@ -503,8 +545,8 @@ export function wizardNote(
  * glyph is the one {@link wizardNote} opens with: a step that collapsed to a
  * single sentence is still a step, and it has to look like one.
  */
-export function wizardStepLine(text: string): string {
-  return `${color.cyan(S_STEP_ACTIVE)}  ${text}`;
+export function wizardStepLine(text: string, sink: Sink = process.stderr): string {
+  return `${painterFor(sink).cyan(S_STEP_ACTIVE)}  ${text}`;
 }
 
 /**
@@ -526,7 +568,7 @@ export interface FramedOutput {
  * The one place this is decided. A line printed without it sits visibly outside
  * the frame, reading as a sentence about the wizard rather than part of it.
  */
-function onRail(text: string, decorate: (line: string) => string): string {
+function onRail(text: string, color: Painter, decorate: (line: string) => string): string {
   const rail = color.dim(S_BAR);
   return text
     .split("\n")
@@ -540,7 +582,7 @@ export function wizardLine(target: FramedOutput, text: string): void {
     logInfo(text, target.writers);
     return;
   }
-  target.writers.err.write(`${onRail(text, (line) => line)}\n`);
+  target.writers.err.write(`${onRail(text, painterFor(target.writers.err), (line) => line)}\n`);
 }
 
 /** Something the run did, dimmed: true, worth recording, not worth staring at. */
@@ -549,7 +591,8 @@ export function wizardProgress(target: FramedOutput, text: string): void {
     logProgress(text, target.writers);
     return;
   }
-  target.writers.err.write(`${onRail(text, color.dim)}\n`);
+  const color = painterFor(target.writers.err);
+  target.writers.err.write(`${onRail(text, color, color.dim)}\n`);
 }
 
 /**
@@ -559,18 +602,30 @@ export function wizardProgress(target: FramedOutput, text: string): void {
  * Keeps the `warning:` prefix the rest of the CLI uses. The messages are
  * written as continuations of it ("not inside a git repository — …") and read
  * as fragments without it.
+ *
+ * Opens on a rail line, the way {@link wizardNote} and the stage headings do.
+ * Without it a warning landed flush against whatever the run had just printed —
+ * the answer to a prompt, or a progress line — and an interruption that reads
+ * as the next line of what it interrupts is one a user scrolls straight past.
+ * The separation belongs here rather than in the messages: a `\n` baked into a
+ * string is wrong the moment that string is emitted anywhere else, and under
+ * `--json` it would be a blank line in a log.
+ *
+ * A rail rather than an empty line, because an empty line is a hole in the
+ * frame. `│` reads as blank and keeps the left edge continuous.
  */
 export function wizardWarn(target: FramedOutput, text: string): void {
   if (target.json) {
     logWarn(text, target.writers);
     return;
   }
+  const color = painterFor(target.writers.err);
   const [first = "", ...rest] = `warning: ${text}`.split("\n");
   const lines = [`${color.yellow(S_WARN)}  ${first}`];
   if (rest.length > 0) {
-    lines.push(onRail(rest.join("\n"), (line) => line));
+    lines.push(onRail(rest.join("\n"), color, (line) => line));
   }
-  target.writers.err.write(`${lines.join("\n")}\n`);
+  target.writers.err.write(`${color.dim(S_BAR)}\n${lines.join("\n")}\n`);
 }
 
 /**
@@ -595,19 +650,20 @@ export function wizardOutro(
   message: string,
   options: { closing?: string | null } = {},
 ): void {
+  const color = painterFor(writers.err);
   const rail = color.dim(S_BAR);
   const tail = [
     "",
     `${color.dim(S_BAR_END)}  ${message}`,
     "",
     ...(options.closing == null ? [] : [options.closing, ""]),
-    `If you ran into anything during setup, please open an issue at ${wizardLink(ISSUES_URL)}`,
+    `If you ran into anything during setup, please open an issue at ${wizardLink(ISSUES_URL, undefined, writers.err)}`,
     "",
     // Grey links, like the line they sit on. These are where to go if
     // something is wrong later, not something to do now, and a bright link
     // inside a grey sentence reads as the point of it.
-    wizardAside(`- Contact support: ${wizardMutedLink(SUPPORT_URL)}`),
-    wizardAside(`- Further documentation: ${wizardMutedLink(DOCS_URL)}`),
+    wizardAside(`- Contact support: ${wizardMutedLink(SUPPORT_URL, writers.err)}`, writers.err),
+    wizardAside(`- Further documentation: ${wizardMutedLink(DOCS_URL, writers.err)}`, writers.err),
     // Two, so the shell prompt lands with a blank line above it rather than
     // flush against the last bullet. A prompt hard against the final line of
     // output reads as one more line of that output, and the run's last word

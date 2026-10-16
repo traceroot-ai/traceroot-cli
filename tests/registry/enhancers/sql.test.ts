@@ -13,7 +13,10 @@ import {
   sql,
 } from "../../../src/registry/enhancers/sql.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function makeResult(over: Partial<SqlResult> = {}): SqlResult {
   return {

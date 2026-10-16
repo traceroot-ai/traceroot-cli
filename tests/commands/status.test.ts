@@ -4,7 +4,10 @@ import { runStatus } from "../../src/commands/status.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import { CliError, ExitCode, type Writers } from "../../src/output.js";
+import { withoutForcedColor } from "../helpers/plainColor.js";
 import { StringSink } from "../helpers/stringSink.js";
+
+withoutForcedColor();
 
 const FULL_TOKEN = "tr_secret_LEAK";
 const SESSION = "sess_secret_LEAK";
