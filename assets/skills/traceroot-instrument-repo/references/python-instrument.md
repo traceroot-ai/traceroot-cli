@@ -1,35 +1,54 @@
 # Python instrumentation
 
-## Initialize once
+## Initialize once, on the path that runs the application
 
-Call `traceroot.initialize()` at the application entry point, before any LLM library imports. Load env vars first.
+Call `traceroot.initialize()` where it runs when the application is **run** — inside the entry
+point's `if __name__ == "__main__":` block — and not at module scope. Module scope runs on import,
+and a project's test suite imports its entry point: initialize there and every test that reaches an
+instrumented function exports a trace of its own, each one indistinguishable from the
+application's afterwards. Load the env vars on that same path, beside it.
+
+The order that matters is not the import order. `initialize()` has to run before the first model
+call and before the first `@observe`-decorated function runs: `@observe` starts the SDK itself when
+nothing else has, and a second `initialize()` after that is skipped with a warning, so the
+integrations named here would never be applied. Auto-instrumentation patches the provider library's
+own methods through `wrapt`, which takes effect whatever the import order — so leave the provider
+imports where they are.
 
 ```python
 from dotenv import load_dotenv
-load_dotenv()  # must come before traceroot import
 
 import traceroot
 from traceroot import Integration
 
-traceroot.initialize(
-    integrations=[
-        Integration.OPENAI,      # auto-instruments all OpenAI calls
-        Integration.LANGCHAIN,   # auto-instruments LangChain/LangGraph
-        Integration.ANTHROPIC,   # auto-instruments Anthropic calls
-    ]
-    # Use only the integrations present in the project
-)
+if __name__ == "__main__":
+    load_dotenv()
+    traceroot.initialize(
+        integrations=[
+            Integration.OPENAI,      # auto-instruments all OpenAI calls
+            Integration.LANGCHAIN,   # auto-instruments LangChain/LangGraph
+            Integration.ANTHROPIC,   # auto-instruments Anthropic calls
+        ]
+        # Use only the integrations present in the project
+    )
+    main()  # whatever this entry point already does
 ```
+
+Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
+gunicorn, a queue worker — has no such block, so initialize at the framework's own startup hook
+instead. And an application that needs its own credentials while it is still being imported has to
+keep the load at module scope. In either case, run the project's own checks with
+`TRACEROOT_ENABLED=false` in the environment so that they do not export. None of this belongs in
+the project's test configuration — not a `conftest.py`, not a fixture, not a `pytest.ini`.
 
 `TRACEROOT_API_KEY` is read from the environment automatically. No need to pass it explicitly.
 
 ### Supported integrations
 
 TraceRoot auto-instruments many model providers and agent frameworks (OpenAI, Anthropic,
-LangChain/LangGraph, and more). The canonical, current list is the docs integrations overview:
-**https://traceroot.ai/docs/integrations/overview** — coverage changes over time, so treat the
-docs page (not this file) as the source of truth, and don't assume a library is unsupported
-without checking it.
+LangChain/LangGraph, and more). The installed SDK is the current list — read it with the one command below rather than fetching
+a docs page, which costs a network round trip to learn something the package already knows.
+Coverage changes over time, so don't assume a library is unsupported without looking.
 
 Pass only the `Integration.*` members for libraries the project actually uses. The enum names
 aren't always the obvious ones (e.g. Gemini is `Integration.GOOGLE_GENAI`), so rather than
@@ -39,6 +58,10 @@ guessing, list the exact members available in the installed SDK:
 from traceroot import Integration
 print([i.name for i in Integration])  # exact members for your installed version
 ```
+
+Run this **once**, with the interpreter your task names rather than bare `python`, and read every
+member you need off that single result. Re-checking per integration is the same answer again at
+the cost of another interpreter start.
 
 ## Add manual spans with `@observe`
 
