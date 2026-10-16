@@ -6,7 +6,10 @@ import { CliError, ExitCode } from "../../../src/output.js";
 import { renderSqlSchema } from "../../../src/registry/enhancers/sql-schema.js";
 import { GROUPS, PLACEMENTS } from "../../../src/registry/naming.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 /** Shaped like the server's curated schema, abbreviated. */
 function makeSchema(): SqlSchema {

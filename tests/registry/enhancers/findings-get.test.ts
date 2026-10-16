@@ -6,8 +6,11 @@ import {
   findingsGet,
   renderFinding,
 } from "../../../src/registry/enhancers/findings-get.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { runCli } from "../../helpers/runCli.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();

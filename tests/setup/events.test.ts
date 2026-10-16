@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Writers } from "../../src/output.js";
 import { type SetupEvent, jsonEmitter, stageLineEmitter } from "../../src/setup/events.js";
+import { withoutForcedColor } from "../helpers/plainColor.js";
 import { StringSink } from "../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -223,5 +226,20 @@ describe("colour, decided by the sink", () => {
 
     expect(err.data).not.toContain(ESC);
     expect(err.data).toContain("│");
+  });
+
+  it("paints that same sink when the environment forces colour", () => {
+    // A redirected stderr under a runner that renders SGR: not a terminal, and
+    // coloured all the same, because something downstream said it could show it.
+    vi.stubEnv("NO_COLOR", undefined);
+    vi.stubEnv("FORCE_COLOR", "1");
+    const { writers: w, err } = writers();
+    const emit = stageLineEmitter(w);
+    emit(settled("authenticate", "skipped"));
+    emit(start("verify_trace"));
+    emit(settled("verify_trace", "failed"));
+
+    expect(err.data).toContain(`${ESC}[2m`);
+    expect(err.data).toContain(`${ESC}[31m`);
   });
 });
