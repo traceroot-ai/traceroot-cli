@@ -1,4 +1,3 @@
-import { sanitizeFindingId } from "./finding-id.js";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
@@ -7,6 +6,7 @@ import { CliError, type Writers, logProgress } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { rejectExtras } from "../flags.js";
 import { onceOption } from "../flags.js";
+import { sanitizeFindingId } from "./finding-id.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 /** The four bundle files, in the fixed order they are reported. */

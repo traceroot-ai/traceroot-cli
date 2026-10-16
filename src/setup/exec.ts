@@ -127,12 +127,43 @@ export interface RunProcessResult {
   output: string;
   durationMs: number;
   timedOut: boolean;
-  /** True when the program could not be spawned at all (ENOENT). */
+  /**
+   * True when the program could not be started at all — the `spawn` call threw,
+   * or the child emitted `error` before running. Set for **every** spawn
+   * failure, not only a missing program: `EACCES` on a file that exists but is
+   * not executable lands here too, which is why {@link spawnErrorCode} carries
+   * the reason rather than letting callers assume one.
+   */
   spawnFailed: boolean;
+  /**
+   * The error code behind a spawn failure — usually libuv's (`ENOENT` for a
+   * program that is not on `PATH`, `EACCES` for one that cannot be executed),
+   * but a synchronous `spawn` throw can carry a Node-internal one instead,
+   * such as `ERR_INVALID_ARG_VALUE` for a NUL byte in an argument. Undefined
+   * when the child started, and when the failure carried no code.
+   *
+   * A caller rendering this to a user should name the causes it knows and say
+   * only that it could not start the program for the rest, rather than mapping
+   * an unfamiliar code onto the nearest familiar remedy.
+   */
+  spawnErrorCode?: string;
 }
 
 /** Injectable process runner, so every stage that shells out stays testable. */
 export type RunProcess = (options: RunProcessOptions) => Promise<RunProcessResult>;
+
+/**
+ * The code off a spawn error, when it carries one.
+ *
+ * Node puts it on `error.code` as a string — libuv's for a failure to exec,
+ * its own `ERR_*` for an argument it rejected before trying. Anything without
+ * one is a failure this module has nothing specific to say about, and callers
+ * render it as such rather than guessing at the most likely cause.
+ */
+function errorCode(err: unknown): string | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : undefined;
+}
 
 /** The conventional 128+n for a signalled exit, which has a null code. */
 function statusFor(code: number | null, signalName: NodeJS.Signals | null): number {
@@ -185,13 +216,14 @@ export const runProcess: RunProcess = (options) =>
           ? [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"]
           : [options.stdin === undefined ? "inherit" : "pipe", "inherit", "inherit"],
       });
-    } catch {
+    } catch (err) {
       return resolve({
         exitCode: 127,
         output: "",
         durationMs: Date.now() - started,
         timedOut: false,
         spawnFailed: true,
+        spawnErrorCode: errorCode(err),
       });
     }
 
@@ -206,7 +238,7 @@ export const runProcess: RunProcess = (options) =>
     let drainTimer: NodeJS.Timeout | undefined;
     let escalation: NodeJS.Timeout | undefined;
 
-    const finish = (exitCode: number, spawnFailed = false): void => {
+    const finish = (exitCode: number, spawnFailed = false, spawnErrorCode?: string): void => {
       if (settled) {
         return;
       }
@@ -249,6 +281,7 @@ export const runProcess: RunProcess = (options) =>
         durationMs: Date.now() - started,
         timedOut,
         spawnFailed,
+        spawnErrorCode,
       });
     };
 
@@ -369,7 +402,34 @@ export const runProcess: RunProcess = (options) =>
       child.stdin?.end(options.stdin);
     }
 
-    child.on("error", () => finish(127, true));
+    child.on("error", (err) => {
+      if (child.pid === undefined) {
+        // A failure to start. `spawn` reports EACCES, EAGAIN, EMFILE, ENFILE
+        // and ENOENT on this event rather than throwing, and the child it hands
+        // back for those never gets a pid — which is what tells them apart from
+        // everything below.
+        finish(127, true, errorCode(err));
+        return;
+      }
+      // This child started, so whatever went wrong is not a failure to start.
+      // Node emits `error` for a `kill` the kernel refused as well — EPERM for
+      // a child that re-execed something setuid, say — and the timeout and
+      // abort paths here both kill. Recording that code as a spawn failure told
+      // the user their command was not installed while it was still running.
+      if (exited) {
+        // `exit` has already fired and the real status is on its way out
+        // through the drain path below. Settling here would replace it with a
+        // failure that did not happen.
+        return;
+      }
+      // Still running, and now known to be unsignallable: `exit` is the only
+      // other way out of this promise, so settling is what keeps a child that
+      // cannot be stopped from hanging the run. `timedOut` still says why the
+      // signal was sent, and `spawnFailed` stays false, so no caller reports a
+      // command that never ran. The escalation to SIGKILL is already queued and
+      // may still land.
+      finish(1);
+    });
     child.on("exit", (code, signalName) => {
       exited = true;
       const status = statusFor(code, signalName);

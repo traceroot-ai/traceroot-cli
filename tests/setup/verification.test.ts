@@ -14,12 +14,12 @@ import { ExitCode } from "../../src/output.js";
 import type { RunProcessOptions, RunProcessResult } from "../../src/setup/exec.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import {
+  THIN_TRACE_MAX_SPANS,
+  WINDOW_GRACE_MS,
   isThinTrace,
   pollForTrace,
   spanPhrase,
-  THIN_TRACE_MAX_SPANS,
   thinTraceFinding,
-  WINDOW_GRACE_MS,
 } from "../../src/setup/trace.js";
 import { runBaselineCheck, verifyApplication } from "../../src/setup/verify.js";
 import { fakeRunProcess } from "./helpers.js";
@@ -130,6 +130,59 @@ describe("running the project's own check twice", () => {
 
     expect(result.ranAt?.from.toISOString()).toBe("2026-07-26T12:00:01.000Z");
     expect(result.ranAt?.to.toISOString()).toBe("2026-07-26T12:00:02.000Z");
+  });
+});
+
+describe("running the check in the environment the SDK was installed into", () => {
+  it("puts the virtualenv's scripts on PATH for both runs", async () => {
+    // `detect_stack` names the project's own check as the project documents it
+    // — `pytest`, not `.venv/bin/pytest`. That command exists only inside the
+    // virtualenv, so without this the spawn fails with ENOENT and the run
+    // reports a suite that broke after instrumentation without running one.
+    const { run, runs } = fakeRunProcess();
+    await verifyApplication({
+      command: "pytest",
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+      credentialFiles: [],
+      interpreter: "/repo/.venv/bin/python",
+      runProcess: run,
+    });
+
+    expect(runs).toHaveLength(2);
+    for (const recorded of runs) {
+      expect(recorded.env.PATH).toBe(`/repo/.venv/bin${delimiter}/usr/bin`);
+    }
+  });
+
+  it("says a command could not be spawned, rather than reporting an empty failure", async () => {
+    // A command that is not installed produces no output at all, so a caller
+    // that only knows "it failed" shows the user an empty log and sends them
+    // looking through instrumentation that is fine.
+    const result = await verifyApplication({
+      command: "pytest",
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      host: "https://api.example.test",
+      credentialFiles: [],
+      interpreter: null,
+      runProcess: async () => ({
+        exitCode: 127,
+        output: "",
+        durationMs: 4,
+        timedOut: false,
+        spawnFailed: true,
+        spawnErrorCode: "ENOENT",
+      }),
+    });
+
+    expect(result.verification.passed).toBe(false);
+    expect(result.failure?.spawnFailed).toBe(true);
+    expect(result.failure?.program).toBe("pytest");
+    expect(result.failure?.spawnErrorCode).toBe("ENOENT");
   });
 });
 

@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +22,7 @@ import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { SETUP_EXIT_CODES } from "../../src/setup/errors.js";
 import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
+import type { RunProcessResult } from "../../src/setup/exec.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
 import {
   defaultSetupDeps,
@@ -1749,6 +1751,162 @@ describe("failure handling", () => {
     expect(result.error?.message).toContain("KeyError");
   });
 
+  it("says the check could not be run when the command is not installed", async () => {
+    // The real run this came from: `pytest` lives in the project's virtualenv,
+    // the spawn failed with ENOENT, and the user was told their suite "failed
+    // after instrumentation" under an empty log — so they went looking through
+    // instrumentation that was fine.
+    pythonRepo();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const wrapped: SetupDeps["runProcess"] = async (o) =>
+      o.program === "pytest"
+        ? {
+            exitCode: 127,
+            output: "",
+            durationMs: 4,
+            timedOut: false,
+            spawnFailed: true,
+            spawnErrorCode: "ENOENT",
+          }
+        : process.run(o);
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: wrapped,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
+    expect(result.error?.message).toContain("could not be run");
+    expect(result.error?.message).toContain("`pytest` was not found");
+    expect(result.error?.message).not.toContain("failed after instrumentation");
+    expect(result.error?.remedy).toContain("Install it");
+  });
+
+  it("does not call a command that exists but cannot be executed 'not found'", async () => {
+    // `spawnFailed` is set for every spawn failure, not only ENOENT, so reading
+    // it alone sent the user looking for a file they already have.
+    pythonRepo();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const wrapped: SetupDeps["runProcess"] = async (o) =>
+      o.program === "pytest"
+        ? {
+            exitCode: 127,
+            output: "",
+            durationMs: 3,
+            timedOut: false,
+            spawnFailed: true,
+            spawnErrorCode: "EACCES",
+          }
+        : process.run(o);
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: wrapped,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
+    expect(result.error?.message).toContain("`pytest` is not executable");
+    expect(result.error?.message).not.toContain("was not found");
+    expect(result.error?.remedy).toContain("Make it executable");
+  });
+
+  /** A repository whose only service is a subdirectory, so it can be replaced. */
+  function subdirRepo(): void {
+    mkdirSync(join(dir, "svc"), { recursive: true });
+    writeFileSync(
+      join(dir, "svc", "pyproject.toml"),
+      '[project]\ndependencies = ["fastapi","pytest"]\n',
+    );
+    writeFileSync(join(dir, "svc", "main.py"), "print('hi')\n");
+  }
+
+  /**
+   * Wraps a runner with libuv's own answers for a `cwd` it cannot use, and
+   * breaks the service directory once the import check has run — the last thing
+   * before the verification, so the verification is what meets it.
+   *
+   * A `--resume` whose service directory went away between runs arrives at the
+   * same place by a longer road, through a checkpoint; this is that moment
+   * inside one run. The fake runner otherwise ignores `cwd` entirely, so
+   * without the refusals below the guard ahead of the spawn would be the only
+   * thing here that looked at the directory at all. Both codes are what a real
+   * `spawn` answers: ENOENT for a missing `cwd`, on the `error` event, and
+   * ENOTDIR for one that is a file, thrown outright.
+   */
+  function losingTheServiceDir(
+    run: SetupDeps["runProcess"],
+    breakIt: () => void,
+  ): SetupDeps["runProcess"] {
+    const refused = (code: string): RunProcessResult => ({
+      exitCode: 127,
+      output: "",
+      durationMs: 1,
+      timedOut: false,
+      spawnFailed: true,
+      spawnErrorCode: code,
+    });
+    return async (o) => {
+      if (!existsSync(o.cwd)) {
+        return refused("ENOENT");
+      }
+      if (!statSync(o.cwd).isDirectory()) {
+        return refused("ENOTDIR");
+      }
+      const result = await run(o);
+      if (o.program === "python3") {
+        breakIt();
+      }
+      return result;
+    };
+  }
+
+  it("blames the service directory that went missing, not the test runner", async () => {
+    // A `cwd` that is not there comes back ENOENT, the same code as a program
+    // that is not on PATH, so this used to tell the user to install `pytest`.
+    subdirRepo();
+    const process = fakeRunProcess({ gitStatus: ["", " M svc/main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: losingTheServiceDir(process.run, () =>
+        rmSync(join(dir, "svc"), { recursive: true, force: true }),
+      ),
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
+    expect(result.error?.message).toContain("svc no longer exists");
+    expect(result.error?.message).not.toContain("was not found");
+  });
+
+  it("says so when the service directory is no longer a directory", async () => {
+    // Existence is not the question `cwd` asks. A path that exists as a file is
+    // refused with ENOTDIR, which has no familiar cause to name, so the user got
+    // the generic wording — the same dead end the check above exists to remove.
+    subdirRepo();
+    const process = fakeRunProcess({ gitStatus: ["", " M svc/main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: losingTheServiceDir(process.run, () => {
+        rmSync(join(dir, "svc"), { recursive: true, force: true });
+        writeFileSync(join(dir, "svc"), "a file where the service used to be\n");
+      }),
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
+    expect(result.error?.message).toContain("svc is not a directory");
+    expect(result.error?.message).not.toContain("ENOTDIR");
+    expect(result.error?.remedy).toContain("rerun");
+  });
+
   it("fails when no trace arrives before the timeout", async () => {
     pythonRepo();
     const deps = makeDeps({
@@ -2027,19 +2185,17 @@ describe("a suite that was already failing", () => {
     expect(ctx.checkpoint.applicationBaseline).toMatchObject({ ran: true, exitCode: 0 });
   });
 
-  it("says nothing about the suite when the baseline could not run", async () => {
+  it("pauses and names a check that could not be started", async () => {
     // An un-run baseline has `exitCode: null`, and `null !== 0`. Warning on the
     // code alone announced that the project's suite does not pass whenever the
     // measurement simply did not happen — a false claim about the user's code,
     // made on every run where the command could not be spawned.
     //
-    // Silence about the suite is right here, but it is not the whole answer:
-    // a command that cannot spawn cannot be baselined either, so this branch
-    // also swallows a spawn failure, and the one thing the user could act on —
-    // that `pytest` was never found — does not reach them. Distinguishing the
-    // two needs the spawn-failure fields on the verification failure, which
-    // arrive with the branch that adds them rather than here, so that is where
-    // the distinction is made and tested.
+    // Silence about the suite is right; silence about the command is not. This
+    // branch is where the two are finally told apart: a command that cannot
+    // spawn cannot be baselined, so it arrives as inconclusive, and until the
+    // spawn-failure fields existed the inconclusive path swallowed it along
+    // with the one thing the user could act on.
     pythonRepo();
     initGit();
     const process = fakeRunProcess({
@@ -2063,10 +2219,12 @@ describe("a suite that was already failing", () => {
     // The run carries on rather than failing: nothing was measured, so there is
     // nothing to fail on. What it does not yet do is say that the command could
     // not be started.
-    expect(result.error).toBeNull();
-    // And it does not claim the suite passes either — only that nothing here
-    // established it.
-    expect(plain(err.data)).toContain("could not establish whether");
+    // The outcome is still inconclusive. What changed is the handling: a
+    // command that could not be started is reported, not warned about and
+    // walked past.
+    expect(ctx.application?.outcome).toBe("inconclusive");
+    expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
+    expect(result.error?.message).toContain("could not be run");
   });
 
   it("does not retake the baseline on a resumed instrumentation", async () => {
@@ -2407,6 +2565,33 @@ describe("proving the agent installed the SDK", () => {
 
     expect(result.error).toBeNull();
     expect(importChecks(inner.runs).map((run) => run.program)).toEqual([venvPython]);
+  });
+
+  it("verifies a Poetry project through Poetry, not a bare pytest", async () => {
+    // Poetry's default environment is a hashed directory under its own cache,
+    // which `detectPythonEnvironment` does not look at — so putting a
+    // virtualenv on PATH cannot help here and a bare `pytest` fails to spawn.
+    // Reported naively that reads as "pytest was not found. Install it", about
+    // a pytest that is installed.
+    pythonRepo();
+    writeFileSync(join(dir, "poetry.lock"), "");
+    initGit();
+    const inner = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const seen: string[] = [];
+    const runProcess: SetupDeps["runProcess"] = async (o) => {
+      seen.push([o.program, ...o.args].join(" "));
+      return inner.run(o);
+    };
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    expect(seen).toContain("poetry run pytest");
+    expect(seen).not.toContain("pytest");
   });
 
   it("asks Poetry for its own environment instead of probing the system python", async () => {

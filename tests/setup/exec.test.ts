@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -365,6 +365,48 @@ describe("a survivor that ignored SIGTERM", () => {
     },
     19000,
   );
+});
+
+describe("why a program could not be started", () => {
+  it("reports ENOENT for a program that is not on PATH", async () => {
+    // The flag alone cannot distinguish this from a program that exists and
+    // cannot be executed, and the two need different remedies.
+    const result = await runProcess({
+      program: "traceroot-no-such-program-xyz",
+      args: [],
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "capture",
+    });
+
+    expect(result.spawnFailed).toBe(true);
+    expect(result.spawnErrorCode).toBe("ENOENT");
+    expect(result.exitCode).toBe(127);
+  });
+
+  // Skipped on Windows, which has no execute bit: libuv resolves only
+  // PATHEXT-style executables there, so this file yields ENOENT rather than
+  // EACCES and the test would be asserting a different platform's behaviour.
+  it.skipIf(WINDOWS)("reports EACCES for a file that exists but is not executable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tr-exec-"));
+    try {
+      const target = join(dir, "not-executable");
+      await writeFile(target, "#!/bin/sh\necho hi\n", { mode: 0o644 });
+
+      const result = await runProcess({
+        program: target,
+        args: [],
+        cwd: dir,
+        env: process.env,
+        stdio: "capture",
+      });
+
+      expect(result.spawnFailed).toBe(true);
+      expect(result.spawnErrorCode).toBe("EACCES");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("a cancelled run whose binary is missing", () => {

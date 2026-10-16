@@ -98,7 +98,22 @@ export interface VerifyApplicationInput {
  */
 export interface VerifyApplicationResult {
   verification: ApplicationVerification;
-  failure: { phase: "with" | "without"; output: string } | null;
+  failure: {
+    phase: "with" | "without";
+    output: string;
+    /**
+     * The program as spawned, whether it could be started at all, and why not.
+     * A command that never ran produces no output to report, so without these
+     * the caller can only say that it failed and show an empty log.
+     *
+     * The code matters as much as the flag: `spawnFailed` covers every spawn
+     * failure, so reading it alone would report a command that exists but is
+     * not executable as one that could not be found.
+     */
+    program: string;
+    spawnFailed: boolean;
+    spawnErrorCode?: string;
+  } | null;
   /**
    * Files the credential was taken out of for the credential-free run, so what
    * "without the credential" meant is a fact the caller can report rather than
@@ -392,12 +407,15 @@ export async function verifyApplication(
         passed: false,
         skippedReason: null,
       },
-      // Output only where it is worth reading. A suite known to have been
-      // failing beforehand has already explained itself, and its output is the
-      // project's own business rather than something setup puts in front of the
-      // user. An unmeasured one has explained nothing, so the caller is handed
-      // the output to show — it is the only diagnostic that run has.
-      failure: alreadyBroken ? null : { phase: "with", output: first.output },
+      failure: alreadyBroken
+        ? null
+        : {
+            phase: "with",
+            output: first.output,
+            program: parsed.program,
+            spawnFailed: first.spawnFailed,
+            spawnErrorCode: first.spawnErrorCode,
+          },
       withheld: [],
       ranAt,
     };
@@ -432,7 +450,16 @@ export async function verifyApplication(
       passed,
       skippedReason: null,
     },
-    failure: passed ? null : { phase: "without", output: second.result.output },
+    failure:
+      second.result.exitCode === 0
+        ? null
+        : {
+            phase: "without",
+            output: second.result.output,
+            program: parsed.program,
+            spawnFailed: second.result.spawnFailed,
+            spawnErrorCode: second.result.spawnErrorCode,
+          },
     withheld: second.withheld,
     ranAt,
   };

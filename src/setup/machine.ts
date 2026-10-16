@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
@@ -2853,6 +2853,23 @@ function applicationCredentialFiles(ctx: SetupContext): string[] {
   return files;
 }
 
+/**
+ * Whether a path can be a child's working directory.
+ *
+ * Existence is not the question `cwd` asks: `spawn` refuses a file with
+ * ENOTDIR as surely as it refuses a missing path with ENOENT. Anything
+ * `statSync` will not answer — EACCES on a parent, a symlink loop — is
+ * reported as missing, which is what the `existsSync` this replaced said about
+ * those too, and `cwd` will refuse them all the same.
+ */
+function workingDirectoryState(path: string): "usable" | "missing" | "not-a-directory" {
+  try {
+    return statSync(path).isDirectory() ? "usable" : "not-a-directory";
+  } catch {
+    return "missing";
+  }
+}
+
 const verifyApplicationStage: StageDefinition = {
   stage: "verify_application",
   // An inconclusive result is settled, not pending. Re-running a suite that was
@@ -2889,6 +2906,27 @@ const verifyApplicationStage: StageDefinition = {
       // `skippedReason` above rides into the JSON result, and the trace-wait
       // failure path below says it in the one place it explains something.
       return "skipped";
+    }
+
+    // libuv answers a nonexistent `cwd` with ENOENT, the same code as a program
+    // that is not on PATH, so without this a renamed or deleted service
+    // directory on `--resume` is reported as a missing test runner and the user
+    // is told to install something they already have. A path that exists but is
+    // not a directory is the same confusion one step on: `spawn` refuses it
+    // with ENOTDIR, a code this run has nothing specific to say about, so the
+    // user is told their command "could not be started (ENOTDIR)" — which names
+    // neither the path at fault nor what is wrong with it.
+    const serviceDir = service.path === "." ? ctx.root : join(ctx.root, service.path);
+    const serviceDirState = workingDirectoryState(serviceDir);
+    if (serviceDirState !== "usable") {
+      const wrong = serviceDirState === "missing" ? "no longer exists" : "is not a directory";
+      throw new SetupError({
+        stage: "verify_application",
+        code: "APP_VERIFICATION_FAILED",
+        message: `\`${command}\` could not be run: ${relative(ctx.root, serviceDir) || "."} ${wrong}.`,
+        remedy:
+          "Nothing was reverted. The service moved, was deleted or was replaced since the last run — rerun `traceroot setup` from it to start again.",
+      });
     }
 
     wizardProgress(ctx, `Verifying the application: ${command}`);
@@ -2952,7 +2990,13 @@ const verifyApplicationStage: StageDefinition = {
     // The fix for *that* is the branch below, and it swallowed a command that
     // could not be started. All three conflated "did not run" with "ran and
     // failed"; a fourth will too unless the distinction is made here.
-    if (verification.outcome === "inconclusive") {
+    // A command that could not be started cannot have been baselined either, so
+    // it arrives here as "inconclusive" and this branch would swallow it — and
+    // with it the one thing the user can act on, that the command was never
+    // found. Three fixes in a row conflated "did not run" with "ran and
+    // failed"; the spawn-failure fields this change adds are what finally let
+    // the two be told apart, so the distinction is made here.
+    if (verification.outcome === "inconclusive" && failure?.spawnFailed !== true) {
       // Not a failure of this run, by one of two routes, and the sentence has
       // to say which. Measured and already red is a finding about the project.
       // Never measured is the absence of one, and it carries the failing output
@@ -2969,18 +3013,40 @@ const verifyApplicationStage: StageDefinition = {
     }
 
     if (!verification.passed) {
-      const tail = failure === null ? "" : `\n\n${outputTail(failure.output)}`;
-      // Only one of these three is a claim this run can support. "Failed after
+      // Only the tail of the failing run's output: enough to see the error,
+      // little enough that a chatty test suite does not bury the remedy.
+      const tail =
+        failure === null ? "" : `\n\n${failure.output.split("\n").slice(-25).join("\n").trim()}`;
+      // A command that is not installed never ran, so it has no output to
+      // show and nothing about the instrumentation to blame. Saying it
+      // "failed after instrumentation" sends the user looking through code
+      // that is fine, and the empty log gives them nothing to go on.
+      // `spawnFailed` is every spawn failure, not just a missing program, so
+      // the code decides the wording: a command that exists but cannot be
+      // executed is a different problem with a different remedy, and telling
+      // that user it "was not found" sends them looking for a file they have.
+      const unstartable = failure?.spawnFailed === true ? failure : null;
+      const reason =
+        unstartable === null
+          ? null
+          : unstartable.spawnErrorCode === "ENOENT"
+            ? `\`${unstartable.program}\` was not found`
+            : unstartable.spawnErrorCode === "EACCES"
+              ? `\`${unstartable.program}\` is not executable`
+              : `\`${unstartable.program}\` could not be started${unstartable.spawnErrorCode === undefined ? "" : ` (${unstartable.spawnErrorCode})`}`;
+      // Of the rest, only one is a claim this run can support. "Failed after
       // instrumentation" was printed whether or not anything had established
       // that it passed before — which on a suite that was already red sent the
       // user looking for a fault in work that had just been done correctly.
       const measuredBefore = verification.baseline?.ran === true;
       const message =
-        failure?.phase === "without"
-          ? `\`${command}\` passed with TraceRoot configured but failed with ${KEY_ENV} removed. The application must keep working when TraceRoot is absent.${tail}`
-          : measuredBefore
-            ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
-            : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
+        reason !== null
+          ? `\`${command}\` could not be run: ${reason}.`
+          : failure?.phase === "without"
+            ? `\`${command}\` passed with TraceRoot configured but failed with ${KEY_ENV} removed. The application must keep working when TraceRoot is absent.${tail}`
+            : measuredBefore
+              ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
+              : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
       // Paused, which is what this remedy has always promised and what the
       // rollback used to contradict: the run revoked the key and took the
       // credential back out of the env file, and then told the user to resume
@@ -2990,7 +3056,18 @@ const verifyApplicationStage: StageDefinition = {
         code: "APP_VERIFICATION_FAILED",
         message,
         remedy:
-          "Nothing was reverted. Fix the failure, then rerun `traceroot setup --resume` to finish verification.",
+          reason === null
+            ? "Nothing was reverted. Fix the failure, then rerun `traceroot setup --resume` to finish verification."
+            : [
+                unstartable?.spawnErrorCode === "ENOENT"
+                  ? "Nothing was reverted. Install it, or run setup from the environment that has it,"
+                  : unstartable?.spawnErrorCode === "EACCES"
+                    ? "Nothing was reverted. Make it executable,"
+                    : // ENOTDIR, E2BIG, EPERM and the rest: naming a remedy for
+                      // a cause this has not identified would be guessing.
+                      "Nothing was reverted. Fix the cause,",
+                "then rerun `traceroot setup --resume` to finish verification.",
+              ].join("\n"),
       });
     }
 

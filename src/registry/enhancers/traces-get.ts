@@ -1,4 +1,3 @@
-import { sanitizeFindingId } from "./finding-id.js";
 import type { Command } from "commander";
 import type { FindingDetail, TraceDetail } from "../../api/client.js";
 import { type Writers, colorEnabled, writeJson } from "../../output.js";
@@ -7,6 +6,7 @@ import { renderTree } from "../../render/tree.js";
 import { elapsedMs, formatDuration, formatTimestamp } from "../../util/index.js";
 import { rejectExtras } from "../flags.js";
 import { onceOption } from "../flags.js";
+import { sanitizeFindingId } from "./finding-id.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 /** Max width for the single-line RCA preview shown inline in `traces get`. */
