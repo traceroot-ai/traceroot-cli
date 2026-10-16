@@ -7,7 +7,8 @@ export type DoctorCategory =
   | "traceroot_files"
   | "agent_skills"
   | "repo"
-  | "runtime_env";
+  | "runtime_env"
+  | "setup";
 
 /** A single diagnostic result. */
 export interface DoctorCheck {
