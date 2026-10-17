@@ -1,7 +1,9 @@
 import type { Sink, Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
+import { setupCommand } from "./invocation.js";
 import {
   DOCS_URL,
+  settleAcknowledgement,
   wizardAcknowledgement,
   wizardAside,
   wizardEmphasis,
@@ -9,7 +11,6 @@ import {
   wizardMutedLink,
   wizardNote,
 } from "./wizard.js";
-import { settleAcknowledgement } from "./wizard.js";
 
 /**
  * The first of the two blocks that close a successful run.
@@ -143,6 +144,6 @@ export function skippedTraceNotice(
     wizardAside("  traceroot traces list --limit 5", sink),
     "",
     wizardAside("To have setup wait for it again:", sink),
-    wizardAside("  traceroot setup --resume", sink),
+    wizardAside(`  ${setupCommand()} --resume`, sink),
   ];
 }

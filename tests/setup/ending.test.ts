@@ -126,7 +126,14 @@ describe("the block for a wait the user ended", () => {
   });
 
   it("writes each sentence as one line and lets the terminal wrap it", () => {
-    for (const line of skippedTraceNotice({ uiBaseUrl: UI }).map(plain)) {
+    const lines = skippedTraceNotice({ uiBaseUrl: UI }).map(plain);
+    // The sentences themselves, as whole entries. A length cap alone would pass
+    // a sentence this block had hard-wrapped across two of them, which is the
+    // thing the terminal is supposed to be left to do.
+    expect(lines).toContain("Setup is done — your first trace just has not been seen yet.");
+    expect(lines).toContain("Or from the terminal, once your application has run:");
+    expect(lines).toContain("To have setup wait for it again:");
+    for (const line of lines) {
       expect(line.length).toBeLessThan(80);
     }
   });

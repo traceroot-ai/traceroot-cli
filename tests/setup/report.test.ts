@@ -192,7 +192,8 @@ describe("what the report says about the trace it found", () => {
    */
   function verdict(text: string): string {
     const lines = text.split("\n");
-    return lines[lines.indexOf("# TraceRoot setup report") + 1] as string;
+    // The title, the blank line that ends it, then the verdict.
+    return lines[lines.indexOf("# TraceRoot setup report") + 2] as string;
   }
 
   function firstTrace(text: string): string {
@@ -291,6 +292,32 @@ describe("what the report says production still needs", () => {
     expect(section(text)).not.toContain("The value is in");
   });
 
+  it("points at the project's own file when the run wrote none itself", () => {
+    // The run that wrote no file is not always the run with nowhere to point: a
+    // key already in the project's `.env` skips `configure_repository`
+    // entirely, so `credentialEnvFile` stays unset over the very file the
+    // application loads. The location is what knows the difference, and the
+    // report has to say where the value is.
+    const text = renderSetupReport(hosted(), NOW, { kind: "file", path: ".env" });
+
+    expect(section(text)).toContain("The value is in `.env`, which stays on this machine");
+    expect(section(text)).not.toContain("wrote the value to no file");
+    // Still not in the files-touched table, because this run touched no file.
+    expect(text).not.toContain("| `.env` |");
+  });
+
+  it("points at no file when the key reached none, refusal included", () => {
+    for (const location of [
+      { kind: "environment" } as const,
+      { kind: "refused", path: ".env" } as const,
+    ]) {
+      const text = renderSetupReport(hosted(), NOW, location);
+
+      expect(section(text)).toContain("This run wrote the value to no file in the project");
+      expect(section(text)).not.toContain("The value is in");
+    }
+  });
+
   it("names the variable and never a value", () => {
     // Same rule as the key row, and worth pinning here because this section is
     // about carrying a secret somewhere: the hint is the only key-shaped string
@@ -302,6 +329,81 @@ describe("what the report says production still needs", () => {
     expect(text).toContain("tr-…abcd");
     expect(section(text)).not.toContain("tr-…abcd");
     expect(section(text)).not.toContain("TRACEROOT_API_KEY=");
+  });
+});
+
+describe("the report as Markdown", () => {
+  /**
+   * The report's blocks as Markdown reads them: runs of lines between blank
+   * lines. A paragraph or a table ends only at a blank line, so the blank lines
+   * are the report's structure rather than its spacing.
+   */
+  function blocks(text: string): string[][] {
+    return text
+      .trimEnd()
+      .split(/\n{2,}/)
+      .map((block) => block.split("\n"));
+  }
+
+  const CLOSING = [
+    "Application files changed by the agent are not listed here — `git diff` is the",
+    "authority on those, and duplicating it would only go stale.",
+  ];
+
+  // Both ends of what the report can hold, because each optional entry is a
+  // place a blank line can be lost or doubled.
+  describe.each([
+    ["with nothing optional", ctx(), "TraceRoot is configured, but no trace has been seen yet."],
+    [
+      "with every optional entry",
+      ctx({
+        method: "agent",
+        agent: { id: "claude" },
+        application: { command: "pytest", passed: true },
+        trace: { traceId: "t_1", traceUrl: "https://app.example.test/trace/t_1" },
+      }),
+      "TraceRoot is connected and a trace has been received.",
+    ],
+  ])("%s", (_name, context, verdict) => {
+    it("keeps every table whole", () => {
+      // GFM continues a table until a blank line: without the one above it, the
+      // closing note rendered as a row of the last table. A blank line inside a
+      // table ends it instead, and the rows below it render as bare text.
+      const tables = blocks(renderSetupReport(context, NOW)).filter((block) =>
+        block.some((l) => l.startsWith("|")),
+      );
+
+      expect(tables).toHaveLength(3);
+      for (const table of tables) {
+        expect(table.every((l) => l.startsWith("|"))).toBe(true);
+        expect(table[1]).toBe("|---|---|");
+      }
+    });
+
+    it("sets each paragraph apart by exactly one blank line", () => {
+      // The verdict is the line a reader skims and the one pasted into a pull
+      // request; it ran into the "Generated" line below it as one paragraph, and
+      // the checks, the command and the first trace read as one sentence.
+      const text = renderSetupReport(context, NOW);
+      const paragraphs = blocks(text).filter((block) => !block[0]?.startsWith("|"));
+
+      expect(paragraphs.slice(0, 3)).toEqual([
+        ["# TraceRoot setup report"],
+        [verdict],
+        ["Generated 2026-07-26T12:00:00.000Z by traceroot-cli 0.6.0."],
+      ]);
+      // Every heading and finding is one line of its own; only the closing note
+      // wraps. The production section follows it, so it is no longer last.
+      const closing = paragraphs.findIndex((block) => block.join("\n") === CLOSING.join("\n"));
+      expect(closing).toBeGreaterThan(0);
+      for (const [i, paragraph] of paragraphs.entries()) {
+        if (i !== closing) {
+          expect(paragraph).toHaveLength(1);
+        }
+      }
+      expect(text).not.toContain("\n\n\n");
+      expect(text).toMatch(/[^\n]\n$/);
+    });
   });
 });
 

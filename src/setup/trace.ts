@@ -24,13 +24,13 @@ export interface TraceLister {
 }
 import type { TraceVerification } from "./types.js";
 
+/** The schedule's last step, held for every attempt past the end of it. */
+const STEADY_INTERVAL_MS = 5000;
 /**
  * Poll cadence: tight at first, because a trace usually lands within seconds of
  * the app running, then relaxed so a long wait does not hammer the API.
  */
-const POLL_SCHEDULE_MS = [2000, 2000, 3000, 5000] as const;
-/** The schedule's last step, held for every attempt past the end of it. */
-const STEADY_INTERVAL_MS = 5000;
+const POLL_SCHEDULE_MS = [2000, 2000, 3000, STEADY_INTERVAL_MS] as const;
 
 /**
  * How long the run's own window keeps the poll to itself after it has closed.
@@ -66,9 +66,6 @@ export const WINDOW_GRACE_MS = POLL_SCHEDULE_MS.reduce((total, ms) => total + ms
  * not wide enough.
  */
 const PAGE_LIMIT = 200;
-
-/** Row shape used from the trace list; kept minimal so the poll is schema-tolerant. */
-type TraceRow = TraceList extends readonly (infer Row)[] ? Row : never;
 
 /** When the instrumented application ran, by the clock that ran it. */
 export interface RunWindow {
@@ -365,7 +362,7 @@ async function earliestIn(
     endBefore: window.to === null ? undefined : new Date(window.to.getTime() + 1).toISOString(),
   });
 
-  const rows = rowsOf(response as unknown as TraceRow[]);
+  const rows = rowsOf(response);
   const fromMs = window.from.getTime();
   const toMs = window.to === null ? Number.POSITIVE_INFINITY : window.to.getTime();
   let earliest: { row: Row; at: number } | null = null;
@@ -472,13 +469,19 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
       spanCount: row.spanCount,
     },
   });
+  const notFound = (error: string | null): PollForTraceResult => ({
+    found: false,
+    waitedMs: now() - began,
+    attempts,
+    lastError: error,
+  });
 
   /** Everything since setup started: what this poll could claim before. */
   const wholeRun = { from: input.startedAt, to: null };
 
   for (;;) {
     if (input.signal?.aborted === true) {
-      return { found: false, waitedMs: now() - began, attempts, lastError };
+      return notFound(lastError);
     }
 
     attempts += 1;
@@ -518,7 +521,7 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
       // generated client, with the text kept as a fallback.
       const exitCode = (err as { exitCode?: unknown } | null | undefined)?.exitCode;
       if (exitCode === ExitCode.auth || /401|403|unauthor|forbidden/i.test(message)) {
-        return { found: false, waitedMs: now() - began, attempts, lastError: message };
+        return notFound(message);
       }
       lastError = message;
     }
@@ -539,7 +542,7 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
           lastError = err instanceof Error ? err.message : String(err);
         }
       }
-      return { found: false, waitedMs: now() - began, attempts, lastError };
+      return notFound(lastError);
     }
 
     // Past the end of the schedule the last step repeats. There was a 10s cap

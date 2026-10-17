@@ -59,7 +59,14 @@ describe("writeAgentOutput", () => {
     // file in a 0700 directory.
     writeAgentOutput({ root, output: "something\n", secrets: [] });
 
-    expect(statSync(join(root, AGENT_OUTPUT_PATH)).mode & 0o777).toBe(0o600);
+    // Hard-assert the mode on POSIX only, as the config and credential tests
+    // do: the bits are best-effort on win32 and `writeFileSecure` swallows the
+    // failure, so the file's existence is all that can be claimed there.
+    if (process.platform !== "win32") {
+      expect(statSync(join(root, AGENT_OUTPUT_PATH)).mode & 0o777).toBe(0o600);
+    } else {
+      expect(statSync(join(root, AGENT_OUTPUT_PATH)).isFile()).toBe(true);
+    }
   });
 
   it("redacts every secret it is given", () => {

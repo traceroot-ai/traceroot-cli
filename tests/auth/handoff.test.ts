@@ -78,6 +78,31 @@ describe("redeemHandoff", () => {
     expect(await run()).toEqual({ kind: "rejected" });
   });
 
+  it("releases the body it never reads on a status-only refusal", async () => {
+    // An unread body keeps its stream, and the socket under it, until the
+    // server gives up — a CLI that has printed its answer and will not exit.
+    // Asserted on the stream itself, because that is the thing being released.
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"error":"invalid"}'));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fake = createFakeFetch(() => new Response(body, { status: 401 }));
+
+    const outcome = await redeemHandoff({
+      authHost: "https://ui",
+      code: CODE,
+      fetchImpl: fake.fetchImpl,
+    });
+
+    expect(outcome).toEqual({ kind: "rejected" });
+    expect(cancelled).toBe(true);
+  });
+
   it("maps 429 to a network error, not a rejected code", async () => {
     const err = await caught(redeemWith(() => jsonResponse({ error: "slow down" }, 429)).run);
     expect(err).toBeInstanceOf(CliError);
@@ -110,17 +135,21 @@ describe("redeemHandoff", () => {
   });
 
   it("reports a timeout as a network timeout", async () => {
-    const err = await caught(
-      redeemWith(
-        () => {
-          throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
-        },
-        { timeoutMs: 30_000 },
-      ).run,
+    const attempt = redeemWith(
+      () => {
+        throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+      },
+      { timeoutMs: 30_000 },
     );
+    const err = await caught(attempt.run);
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).exitCode).toBe(ExitCode.network);
     expect((err as CliError).message).toContain("timed out");
+    // The timeout itself is simulated, so the wiring that makes a real one
+    // possible is asserted rather than assumed: without the signal on the
+    // request there is nothing to abort, and a CLI that hangs forever would
+    // leave this suite green.
+    expect(attempt.calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("reports a body-phase timeout as a network timeout, not an unreadable response", async () => {
@@ -142,6 +171,36 @@ describe("redeemHandoff", () => {
     );
     expect((err as CliError).exitCode).toBe(ExitCode.network);
     expect((err as CliError).message).not.toContain("unreadable");
+    expect(fake.calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("reports a dropped connection mid-body as a network error, not an internal one", async () => {
+    // Undici fails a half-read body with a plain TypeError, which is not the
+    // server answering badly — it is the connection going away, and a retry is
+    // the right advice. Malformed JSON stays internal, below.
+    const fake = createFakeFetch(
+      () =>
+        ({
+          status: 200,
+          ok: true,
+          json: () => Promise.reject(new TypeError("terminated")),
+        }) as unknown as Response,
+    );
+    const err = await caught(() =>
+      redeemHandoff({ authHost: "https://ui", code: CODE, fetchImpl: fake.fetchImpl }),
+    );
+    expect((err as CliError).exitCode).toBe(ExitCode.network);
+  });
+
+  it("keeps malformed JSON an internal error", async () => {
+    const fake = createFakeFetch(
+      () => new Response("{not json", { status: 200, headers: { "content-type": "text/plain" } }),
+    );
+    const err = await caught(() =>
+      redeemHandoff({ authHost: "https://ui", code: CODE, fetchImpl: fake.fetchImpl }),
+    );
+    expect((err as CliError).exitCode).toBe(ExitCode.internal);
+    expect((err as CliError).message).toContain("unreadable");
   });
 
   it("treats a 200 with no session token as an internal error", async () => {
@@ -156,10 +215,19 @@ describe("redeemHandoff", () => {
     expect((err as CliError).message).toContain("malformed");
   });
 
-  it("rejects a malformed auth host as a usage error", async () => {
-    const err = await caught(() => redeemHandoff({ authHost: "not a url", code: CODE }));
+  it("rejects a malformed auth host as a usage error before any request", async () => {
+    // The fake is injected and asserted unused, as the empty-code test below
+    // does. Without it this is the one test in the file that falls back to the
+    // real `globalThis.fetch`, and it stays off the network only because
+    // `normalizeBaseUrl` happens to throw first — a property of the code under
+    // test, which is the thing a test must not take for granted.
+    const fake = createFakeFetch(() => jsonResponse({ sessionToken: "sess-1" }));
+    const err = await caught(() =>
+      redeemHandoff({ authHost: "not a url", code: CODE, fetchImpl: fake.fetchImpl }),
+    );
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect(fake.calls).toHaveLength(0);
   });
 
   it("rejects an empty code as a usage error before any request", async () => {

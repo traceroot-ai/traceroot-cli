@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { detectStack } from "../../src/setup/stack.js";
+import { detectStack, findTraceRootInitialization } from "../../src/setup/stack.js";
 
 /** Every root this file makes, so none is left behind in the system tmpdir. */
 const roots: string[] = [];
@@ -170,5 +170,122 @@ describe("choosing a Node service's verification command", () => {
     const root = nodeRepo({ test: NPM_INIT_PLACEHOLDER, typecheck: "   " });
 
     expect(detectStack(root).selected?.testCommand).toBeNull();
+  });
+});
+
+describe("reading whether a service is wired up now", () => {
+  /** The detected service, which is what the real caller has in hand. */
+  function serviceIn(root: string) {
+    const service = detectStack(root).selected;
+    if (service === null) {
+      throw new Error("the fixture produced no service to read");
+    }
+    return service;
+  }
+
+  it("looks inside a directory git reported as one untracked entry", () => {
+    // `git status --porcelain` without `-uall` reports a wholly untracked
+    // directory as `telemetry/` rather than the files in it, so that is the
+    // spelling this is handed when an agent puts the initialization in a new
+    // module — and reading it as a file answers null however instrumented the
+    // module is, which failed runs that had worked.
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "import telemetry\n\nprint('hi')\n",
+      "telemetry/tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
+    });
+
+    expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toBe(
+      "telemetry/tracing.py",
+    );
+  });
+
+  it("does not certify a service from a compiled bundle in such a directory", () => {
+    // The exclusion survives the expansion: a bundle mentions everything it
+    // ever imported, so reading one reports instrumentation that is not in the
+    // source.
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "print('hi')\n",
+      "dist/bundle.js": "traceroot.initialize();\n",
+    });
+
+    expect(findTraceRootInitialization(root, serviceIn(root), ["dist/"])).toBeNull();
+  });
+
+  it("answers null for a directory that holds no initialization", () => {
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "print('hi')\n",
+      "telemetry/tracing.py": "def start():\n    pass\n",
+    });
+
+    expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toBeNull();
+  });
+
+  it("does not certify a service from a build artifact named as a file", () => {
+    // The directory spelling is covered above; this is the other one an agent
+    // writes, and it takes a different path through the reading — the
+    // build-artifact exclusion in the candidate loop rather than the one before
+    // the directory walk. A bundle mentions everything it ever imported, so
+    // reading it as evidence passes a service whose source holds nothing.
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "print('hi')\n",
+      "dist/app.js": "traceroot.initialize();\n",
+    });
+
+    expect(findTraceRootInitialization(root, serviceIn(root), ["dist/app.js"])).toBeNull();
+  });
+
+  it("refuses an absolute path outside the repository", () => {
+    // `alsoRead` carries the agent's own JSON, read as given. An installed copy
+    // of the SDK initializes TraceRoot in its own tests and examples, and it is
+    // not this service's instrumentation.
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "print('hi')\n",
+    });
+    const elsewhere = repo({ "app.py": "import traceroot\n\ntraceroot.initialize()\n" });
+
+    expect(
+      findTraceRootInitialization(root, serviceIn(root), [join(elsewhere, "app.py")]),
+    ).toBeNull();
+  });
+
+  it("refuses a relative path that climbs out of the repository", () => {
+    // The same thing without an absolute path: `join(root, "../x")` lands
+    // outside the tree the agent was given.
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "print('hi')\n",
+    });
+    const sibling = join(root, "..", "sibling-app.py");
+    writeFileSync(sibling, "import traceroot\n\ntraceroot.initialize()\n");
+    try {
+      expect(findTraceRootInitialization(root, serviceIn(root), ["../sibling-app.py"])).toBeNull();
+    } finally {
+      rmSync(sibling, { force: true });
+    }
+  });
+
+  it("still reads a module the service shares with the rest of the repository", () => {
+    // Contained means inside the repository, not inside the service directory.
+    // A monorepo service whose entry point imports a shared package is
+    // instrumented by a call in that package, and the two roots the candidates
+    // are resolved against exist precisely so that path can be found.
+    const root = repo({
+      "apps/api/pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "apps/api/main.py": "from shared import tracing\n\nprint('hi')\n",
+      "shared/tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
+    });
+    const service = detectStack(root).services.find((s) => s.path === "apps/api");
+    if (service === undefined) {
+      throw new Error("the fixture produced no apps/api service");
+    }
+
+    expect(findTraceRootInitialization(root, service, ["shared/tracing.py"])).toBe(
+      "shared/tracing.py",
+    );
   });
 });

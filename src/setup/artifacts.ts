@@ -96,7 +96,11 @@ export function serviceArtifactDir(input: ServiceArtifactDirInput): string {
  * that more than one does: this is the module that decides where setup's files
  * go, so the rule that keeps them out of a commit belongs beside it. Mirrors
  * the same net in `config/manager.ts`, which covers a directory this module
- * does not choose.
+ * does not choose, and that copy stays a copy: `src/config/` imports nothing
+ * from `src/setup/` — the dependency runs the other way, `setup/machine.ts` on
+ * `config/manager.ts` — and importing this would point the config module every
+ * command loads at a feature module and its `SetupError` and stack detection.
+ * Sharing it properly means a module neither of them owns.
  *
  * Only ever acts on a directory named `.traceroot` — one the CLI owns — so it
  * can never clobber an unrelated directory's tracking, never on an existing
@@ -110,8 +114,13 @@ export function ensureGitignore(dir: string): void {
   }
   try {
     const gitignore = join(dir, ".gitignore");
+    // `wx` as well as the check, because `existsSync` answers about the
+    // symlink's *target*: a `.gitignore` symlinked to somewhere else — dangling
+    // or not — reads as absent here, and a plain write would follow it and
+    // create or truncate that file instead. `wx` fails with EEXIST on the entry
+    // itself, which the catch below already absorbs.
     if (!existsSync(gitignore)) {
-      writeFileSync(gitignore, "*\n");
+      writeFileSync(gitignore, "*\n", { flag: "wx" });
     }
   } catch {
     // best-effort only

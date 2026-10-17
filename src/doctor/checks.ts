@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { ALL_AGENTS } from "../agents/index.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
+import { setupCommand } from "../setup/invocation.js";
 import type { SetupCheckpoint } from "../setup/types.js";
 import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
 
@@ -308,7 +309,7 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
             name: "setup_run",
             category: "setup",
             status: "warn",
-            message: "`traceroot setup` has not been run in this directory.",
+            message: `\`${setupCommand()}\` has not been run in this directory.`,
           },
         ]
       : [];
@@ -333,7 +334,7 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
     status: finished ? "pass" : failed ? "fail" : "warn",
     message: finished
       ? `Setup completed on ${checkpoint.updatedAt}`
-      : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`traceroot setup --resume\`.`,
+      : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`${setupCommand()} --resume\`.`,
   });
 
   if (checkpoint.lastError !== undefined && !finished) {
@@ -401,7 +402,7 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
     status: checkpoint.trace !== undefined ? "pass" : failed ? "fail" : "warn",
     message:
       checkpoint.trace === undefined
-        ? "No first trace has been observed. Run the instrumented application, then `traceroot setup --resume`."
+        ? `No first trace has been observed. Run the instrumented application, then \`${setupCommand()} --resume\`.`
         : `First trace: ${checkpoint.trace.traceUrl}`,
   });
 
