@@ -1,4 +1,5 @@
 import { join, relative, sep } from "node:path";
+import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import { writeFileSecure } from "../util/secureFile.js";
 import { isThinTrace, spanPhrase, thinTraceFinding } from "./trace.js";
 import type { SetupContext } from "./types.js";
@@ -45,6 +46,23 @@ export function slashPath(path: string, separator: string = sep): string {
 function line(label: string, value: string | null | undefined): string {
   const text = value === null || value === undefined || value === "" ? "—" : cell(value);
   return `| ${label} | ${text} |`;
+}
+
+/**
+ * The skill's row in the table of files the run touched, at the path the
+ * agent's own adapter installs it to.
+ *
+ * Not one fixed path: each agent reads skills from a directory of its own, and
+ * Codex's is in the user's home — outside the repository, where `git diff`
+ * cannot show the write. A row naming `.claude/` for every agent sent the
+ * reader to a directory the run never created, and left that write out.
+ */
+function skillRow(root: string, agentId: string): string {
+  const target = requireAgent(agentId).getSkillInstallPath(root, "traceroot-instrument-repo");
+  const path = `\`${cell(slashPath(displaySkillPath(root, target)))}/\``;
+  return isInsideDirectory(root, target)
+    ? `| ${path} | The instrumentation skill. |`
+    : `| ${path} | The instrumentation skill, outside this repository. |`;
 }
 
 /**
@@ -103,6 +121,11 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
             ? inconclusive
             : "Did not pass.";
 
+  // One entry per line, and `""` is a blank line: Markdown ends a paragraph or
+  // a table only at one, so they are the report's structure. An optional entry
+  // is spread in or left out rather than written as `""` and filtered, because
+  // that filter took every blank line with it — the verdict ran into the line
+  // below it, and the closing note was read as a row of the last table.
   const sections = [
     "# TraceRoot setup report",
     "",
@@ -139,8 +162,7 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     "",
     `**Your checks.** ${checks}`,
     "",
-    app?.command ? `Command: \`${app.command}\`` : "",
-    "",
+    ...(app?.command ? [`Command: \`${app.command}\``, ""] : []),
     // The count beside the id, for every trace and not only a small one. A
     // reviewer reading this over a healthy trace gets the number that the
     // qualified verdict would otherwise be the only way to see, and a reader who
@@ -160,21 +182,20 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     // run at all when the application already resolves the key. Printing the row
     // regardless claimed a file this run never touched, and "Git-ignored" went
     // from a thing setup arranged to a thing setup only checks.
-    ctx.credentialEnvFile !== undefined
-      ? `| \`${cell(slashPath(relative(ctx.root, ctx.credentialEnvFile)))}\` | \`TRACEROOT_API_KEY\` for the application. |`
-      : "",
+    ...(ctx.credentialEnvFile !== undefined
+      ? [
+          `| \`${cell(slashPath(relative(ctx.root, ctx.credentialEnvFile)))}\` | \`TRACEROOT_API_KEY\` for the application. |`,
+        ]
+      : []),
     "| `.traceroot/config.json` | The CLI's own credential. Git-ignored. |",
     "| `.traceroot/setup.json` | Checkpoint, so `--resume` can continue. |",
-    ctx.agent !== undefined
-      ? "| `.claude/skills/traceroot-instrument-repo/` | The instrumentation skill. |"
-      : "",
+    ...(ctx.agent !== undefined ? [skillRow(ctx.root, ctx.agent.id)] : []),
     "",
     "Application files changed by the agent are not listed here — `git diff` is the",
     "authority on those, and duplicating it would only go stale.",
-    "",
   ];
 
-  return `${sections.filter((section) => section !== "").join("\n")}\n`;
+  return `${sections.join("\n")}\n`;
 }
 
 /**

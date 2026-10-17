@@ -3,13 +3,13 @@ import type { Prompt } from "../prompt.js";
 import { HOST_ENV, KEY_ENV, applicationEnvKeys } from "./envWrite.js";
 import type { StackLanguage } from "./types.js";
 import {
+  settleAcknowledgement,
   wizardAcknowledgement,
   wizardAside,
   wizardEmphasis,
   wizardEnvVar,
   wizardNote,
 } from "./wizard.js";
-import { settleAcknowledgement } from "./wizard.js";
 
 /**
  * The last thing a run says, and the only part of it about somewhere other than
@@ -164,10 +164,6 @@ function localCaveat(
   file: string,
   keys: readonly string[],
 ): string {
-  // Every variable the file holds, not just the key. "Export the key" is the
-  // instruction that misroutes a non-default host, and it misroutes it here on
-  // the user's own machine exactly as it does on deploy.
-  //
   // Space-separated rather than through `nameList`: this list is pasted into a
   // shell, and `export A and B` exports a variable named `and` while leaving
   // both of TraceRoot's unset — the precise failure the sentence exists to

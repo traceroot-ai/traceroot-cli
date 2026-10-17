@@ -191,7 +191,8 @@ describe("what the report says about the trace it found", () => {
    */
   function verdict(text: string): string {
     const lines = text.split("\n");
-    return lines[lines.indexOf("# TraceRoot setup report") + 1] as string;
+    // The title, the blank line that ends it, then the verdict.
+    return lines[lines.indexOf("# TraceRoot setup report") + 2] as string;
   }
 
   function firstTrace(text: string): string {
@@ -238,6 +239,77 @@ describe("what the report says about the trace it found", () => {
     expect(firstTrace(text)).toBe(
       "**First trace.** None yet. Run the application, then `traceroot setup --resume`.",
     );
+  });
+});
+
+describe("the report as Markdown", () => {
+  /**
+   * The report's blocks as Markdown reads them: runs of lines between blank
+   * lines. A paragraph or a table ends only at a blank line, so the blank lines
+   * are the report's structure rather than its spacing.
+   */
+  function blocks(text: string): string[][] {
+    return text
+      .trimEnd()
+      .split(/\n{2,}/)
+      .map((block) => block.split("\n"));
+  }
+
+  const CLOSING = [
+    "Application files changed by the agent are not listed here — `git diff` is the",
+    "authority on those, and duplicating it would only go stale.",
+  ];
+
+  // Both ends of what the report can hold, because each optional entry is a
+  // place a blank line can be lost or doubled.
+  describe.each([
+    ["with nothing optional", ctx(), "TraceRoot is configured, but no trace has been seen yet."],
+    [
+      "with every optional entry",
+      ctx({
+        method: "agent",
+        agent: { id: "claude" },
+        application: { command: "pytest", passed: true },
+        trace: { traceId: "t_1", traceUrl: "https://app.example.test/trace/t_1" },
+      }),
+      "TraceRoot is connected and a trace has been received.",
+    ],
+  ])("%s", (_name, context, verdict) => {
+    it("keeps every table whole", () => {
+      // GFM continues a table until a blank line: without the one above it, the
+      // closing note rendered as a row of the last table. A blank line inside a
+      // table ends it instead, and the rows below it render as bare text.
+      const tables = blocks(renderSetupReport(context, NOW)).filter((block) =>
+        block.some((l) => l.startsWith("|")),
+      );
+
+      expect(tables).toHaveLength(3);
+      for (const table of tables) {
+        expect(table.every((l) => l.startsWith("|"))).toBe(true);
+        expect(table[1]).toBe("|---|---|");
+      }
+    });
+
+    it("sets each paragraph apart by exactly one blank line", () => {
+      // The verdict is the line a reader skims and the one pasted into a pull
+      // request; it ran into the "Generated" line below it as one paragraph, and
+      // the checks, the command and the first trace read as one sentence.
+      const text = renderSetupReport(context, NOW);
+      const paragraphs = blocks(text).filter((block) => !block[0]?.startsWith("|"));
+
+      expect(paragraphs.slice(0, 3)).toEqual([
+        ["# TraceRoot setup report"],
+        [verdict],
+        ["Generated 2026-07-26T12:00:00.000Z by traceroot-cli 0.6.0."],
+      ]);
+      // Every heading and finding is one line of its own; only the closing note wraps.
+      expect(paragraphs.at(-1)).toEqual(CLOSING);
+      for (const paragraph of paragraphs.slice(0, -1)) {
+        expect(paragraph).toHaveLength(1);
+      }
+      expect(text).not.toContain("\n\n\n");
+      expect(text.endsWith(`${CLOSING[1]}\n`)).toBe(true);
+    });
   });
 });
 
