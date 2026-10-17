@@ -26,13 +26,22 @@ import { PROJECT_ENV_FILES } from "./envWrite.js";
 const BIN_PATHS = ["bin/python", "Scripts/python.exe"] as const;
 const VENV_DIRS = [".venv", "venv", "env"] as const;
 
+/** The interpreter inside one virtualenv, whichever platform's layout it has. */
+function interpreterAt(venvDir: string): string | null {
+  for (const bin of BIN_PATHS) {
+    const candidate = join(venvDir, ...bin.split("/"));
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function interpreterIn(dir: string): string | null {
   for (const venv of VENV_DIRS) {
-    for (const bin of BIN_PATHS) {
-      const candidate = join(dir, venv, ...bin.split("/"));
-      if (existsSync(candidate)) {
-        return candidate;
-      }
+    const found = interpreterAt(join(dir, venv));
+    if (found !== null) {
+      return found;
     }
   }
   return null;
@@ -66,15 +75,7 @@ export function detectPythonEnvironment(
   }
 
   const active = env.VIRTUAL_ENV;
-  if (active !== undefined && active !== "") {
-    for (const bin of BIN_PATHS) {
-      const candidate = join(active, ...bin.split("/"));
-      if (existsSync(candidate)) {
-        return { interpreter: candidate };
-      }
-    }
-  }
-  return { interpreter: null };
+  return { interpreter: active === undefined || active === "" ? null : interpreterAt(active) };
 }
 
 /**

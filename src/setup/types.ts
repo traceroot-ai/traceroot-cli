@@ -111,6 +111,11 @@ export interface DetectedAgent {
   /** A configuration directory exists (project-local or in the home directory). */
   configured: boolean;
   evidence: string[];
+  /**
+   * Why a binary that does resolve on PATH still cannot be launched, as one
+   * line naming the remedy. Only ever set alongside `runnable: false`.
+   */
+  unlaunchable?: string;
 }
 
 /** What the instrumentation stage did, and what actually changed on disk. */

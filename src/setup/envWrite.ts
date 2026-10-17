@@ -1,10 +1,10 @@
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -14,8 +14,8 @@ import { join } from "node:path";
  *
  * The complement of `config/envFile.ts`, which only reads. The rules: replace
  * keys in place so comments and ordering survive, append new keys after a blank
- * line, `chmod 0600`, and diff before writing so an unchanged value is not a
- * write at all.
+ * line, `chmod 0600` a file this creates but never one the project had, and diff
+ * before writing so an unchanged value is not a write at all.
  *
  * The target is a file the project already loads — see
  * {@link chooseCredentialEnvFile}. This module used to invent `.env.traceroot`
@@ -199,34 +199,29 @@ export function upsertEnvContent(
 }
 
 /**
- * Applies an upsert to disk atomically with 0600 permissions. Returns the keys
- * that changed; an empty list means nothing was written.
+ * Applies an upsert to disk atomically. Returns the keys that changed; an empty
+ * list means nothing was written.
+ *
+ * A file this creates is 0600. A file that already existed keeps the mode it
+ * had: it is the project's own env file, and other things read it — a
+ * container running as another uid reads a 0644 `.env` and cannot read a 0600
+ * one, so tightening it took the application's whole configuration away, not
+ * only the key, and nothing put the mode back.
  */
 export function upsertEnvFile(path: string, updates: Record<string, string>): UpsertResult {
   const existed = existsSync(path);
   const existing = existed ? readFileSync(path, "utf8") : null;
   const { content, written } = upsertEnvContent(existing, updates);
 
-  // The mode is part of this function's contract, so it is enforced even when
-  // there is nothing to write: a file that already holds the right value can
-  // still be group- or world-readable, and it holds a live key. `lstatSync`
-  // because a symlink here should be left alone rather than have its target
-  // chmod-ed.
-  if (existed) {
-    try {
-      const stats = lstatSync(path);
-      if (stats.isFile() && (stats.mode & 0o177) !== 0) {
-        chmodSync(path, 0o600);
-      }
-    } catch {
-      // Best-effort: win32 and some filesystems do not support this.
-    }
-  }
-
   if (written.length === 0) {
     return { written: [], created: false };
   }
 
+  // Carried onto the replacement, because the rename below swaps in a new file
+  // and with it a new mode. `statSync` rather than `lstatSync`: through a
+  // symlink, the mode that matters is that of the file the project reads, and a
+  // link's own (0777 on Linux) would leave the key world-writable.
+  const mode = existed ? statSync(path).mode & 0o777 : 0o600;
   const tmp = `${path}.${process.pid}.tmp`;
   try {
     // Clear a temp file left behind by a crashed run with this pid, then create
@@ -234,9 +229,11 @@ export function upsertEnvFile(path: string, updates: Record<string, string>): Up
     // that already exists, so a planted `<path>.<pid>.tmp` makes the write fail —
     // and fall into the cleanup below — instead of redirecting the credential.
     rmSync(tmp, { force: true });
-    writeFileSync(tmp, content, { mode: 0o600, flag: "wx" });
+    writeFileSync(tmp, content, { mode, flag: "wx" });
     try {
-      chmodSync(tmp, 0o600);
+      // Again after the write, because the mode `writeFileSync` creates with is
+      // narrowed by the umask.
+      chmodSync(tmp, mode);
     } catch {
       // Best-effort: win32 and some filesystems do not support this.
     }
