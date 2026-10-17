@@ -5,6 +5,23 @@ import { buildSetupTask, taskInterpreters } from "../../src/setup/task.js";
 import type { DetectedService } from "../../src/setup/types.js";
 import { fakeRunProcess } from "./helpers.js";
 
+/**
+ * The rules `--allowedTools` carries, as argv presents them.
+ *
+ * The flag is variadic, so its value is every token up to the next flag — which
+ * is also the reason the tests below read it as a slice rather than looking for
+ * a single argument.
+ */
+function allowRules(args: readonly string[]): string[] {
+  const at = args.indexOf("--allowedTools");
+  if (at === -1) {
+    return [];
+  }
+  const rest = args.slice(at + 1);
+  const end = rest.findIndex((arg) => arg.startsWith("-"));
+  return end === -1 ? [...rest] : rest.slice(0, end);
+}
+
 describe("reaching a skill that lives outside the working directory", () => {
   it("passes each readable directory as its own --add-dir", () => {
     const invocation = buildInvocation({
@@ -209,9 +226,74 @@ describe("letting the agent run what it was told to run", () => {
     expect(args.indexOf("--allowedTools")).toBeLessThan(args.indexOf("--disallowedTools"));
   });
 
-  it("adds no allowlist flag when there is nothing to allow", () => {
+  it("still allows the file tools when there is no program to allow", () => {
+    // The flag used to be dropped entirely here, which tied the agent's ability
+    // to edit the service to whether that service happened to come with an
+    // interpreter worth naming.
     const { args } = buildInvocation({ agentId: "claude", task: "t", interactive: false });
-    expect(args).not.toContain("--allowedTools");
+    expect(args).toContain("--allowedTools");
+    expect(allowRules(args)).toEqual(["Read(**)", "Edit(**)"]);
+  });
+});
+
+describe("letting the agent edit the service it was pointed at", () => {
+  it("permits the file tools, not only the named programs", () => {
+    // Regression. Two consecutive live runs ended identically: `Claude Code
+    // finished.`, exit 0, the SDK installed into the service's `.venv`, and
+    // `main.py` untouched — an agent that had run Bash and never changed a
+    // file. Every command it needed was pinned by a rule; the one capability
+    // the whole stage exists for was the only thing in the argv that nothing
+    // stated, and it held only while `--permission-mode acceptEdits` did.
+    //
+    // Asserting that the `Bash(...)` rules are present is what let that
+    // through, so this asserts the part whose absence was the failure — and
+    // asserts the programs in the same breath, so the fix cannot be read as
+    // trading one for the other.
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: ["./.venv/bin/python", "python3"],
+    });
+    const rules = allowRules(args);
+    // `Edit(path)` is the matcher that covers Edit, Write and NotebookEdit.
+    // There is no `Write(path)` rule to write: one written for `Write` is
+    // accepted and never consulted.
+    expect(rules).toContain("Edit(**)");
+    expect(rules).toContain("Read(**)");
+    expect(rules).toContain("Bash(./.venv/bin/python:*)");
+    expect(rules).toContain("Bash(python3:*)");
+  });
+
+  it("permits them in an interactive run too", () => {
+    const rules = allowRules(
+      buildInvocation({
+        agentId: "claude",
+        task: "t",
+        interactive: true,
+        allowedPrograms: ["python3"],
+      }).args,
+    );
+    expect(rules).toContain("Edit(**)");
+    expect(rules).toContain("Read(**)");
+  });
+
+  it("keeps the file rules scoped to the service and never restricts the toolset", () => {
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: ["python3"],
+    });
+    // `**` anchors at the working directory, which is the service. A bare
+    // `Edit` or `Write` would pre-approve a write anywhere on the disk —
+    // wider than the `acceptEdits` mode these rules exist to back up.
+    expect(args).not.toContain("Edit");
+    expect(args).not.toContain("Write");
+    expect(args).not.toContain("NotebookEdit");
+    // `--allowedTools` pre-approves and takes nothing away. `--tools` is the
+    // flag that would cut the agent down to a list, and it is never passed.
+    expect(args).not.toContain("--tools");
   });
 });
 
