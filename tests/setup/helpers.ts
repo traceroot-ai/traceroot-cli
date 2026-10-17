@@ -1,3 +1,5 @@
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { type ApiClient, type ApiClientOptions, DEFAULT_TIMEOUT_MS } from "../../src/api/client.js";
 import type { SetupApi } from "../../src/api/setup.js";
@@ -37,6 +39,65 @@ export interface FakeProcessOptions {
    * `status` is still served by `gitStatus` above.
    */
   git?: (args: readonly string[]) => Partial<RunProcessResult>;
+  /**
+   * Whether the fake coding agent instruments the service it is launched in.
+   *
+   * On by default, because that is what a real one does, and a suite whose
+   * agent never wires anything up cannot tell a working run from the one bug
+   * that matters most here: an agent that exits 0 having done nothing. It
+   * appends the initialization `detectStack` looks for to the entry point in
+   * the directory the agent was launched in — the smallest edit that makes the
+   * service genuinely instrumented.
+   *
+   * `false` is for the tests about an agent that did not do its job.
+   */
+  instrument?: boolean;
+}
+
+/** The agents setup can actually launch; see `LAUNCHABLE_AGENT_IDS`. */
+const AGENT_PROGRAMS = new Set(["claude", "codex"]);
+
+/** Where an entry point is looked for, mirroring `stack.ts`'s own lists. */
+const ENTRY_POINTS = [
+  "main.py",
+  "app.py",
+  "src/main.py",
+  "src/app.py",
+  "manage.py",
+  "index.ts",
+  "index.js",
+  "src/index.ts",
+  "src/index.js",
+  "server.ts",
+  "server.js",
+  "app.ts",
+  "app.js",
+];
+
+/**
+ * The one edit the fake agent makes: a real `initialize()` call in the entry
+ * point, in the form the detector recognizes for that language.
+ *
+ * Appended rather than written over, so a fixture that already carries
+ * instrumentation (or any other content a test asserts on) keeps it.
+ */
+function instrumentEntryPoint(cwd: string): void {
+  const entry = ENTRY_POINTS.find((candidate) => existsSync(join(cwd, candidate)));
+  if (entry === undefined) {
+    return;
+  }
+  const path = join(cwd, entry);
+  const source = readFileSync(path, "utf8");
+  if (source.includes("traceroot.initialize(")) {
+    return;
+  }
+  appendFileSync(
+    path,
+    entry.endsWith(".py")
+      ? "\nimport traceroot\n\ntraceroot.initialize()\n"
+      : '\nimport * as traceroot from "traceroot";\n\ntraceroot.initialize();\n',
+    "utf8",
+  );
 }
 
 /**
@@ -65,6 +126,10 @@ export function fakeRunProcess(options: FakeProcessOptions = {}): {
       const value = statuses[Math.min(gitCalls, statuses.length - 1)] ?? "";
       gitCalls += 1;
       return { exitCode: 0, output: value, durationMs: 1, timedOut: false, spawnFailed: false };
+    }
+
+    if (AGENT_PROGRAMS.has(o.program) && options.instrument !== false) {
+      instrumentEntryPoint(o.cwd);
     }
 
     const override =
