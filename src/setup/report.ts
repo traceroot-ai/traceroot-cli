@@ -1,5 +1,6 @@
 import { join, relative, sep } from "node:path";
 import { writeFileSecure } from "../util/secureFile.js";
+import { applicationEnvKeys } from "./envWrite.js";
 import { isThinTrace, spanPhrase, thinTraceFinding } from "./trace.js";
 import type { SetupContext } from "./types.js";
 
@@ -40,6 +41,22 @@ function cell(value: string): string {
  */
 export function slashPath(path: string, separator: string = sep): string {
   return path.split(separator).join("/");
+}
+
+/**
+ * The variables a deployment needs, as code spans in a sentence.
+ *
+ * Asked of {@link applicationEnvKeys} rather than written out, which is what
+ * keeps this in step with the file the run wrote and the notice it printed: off
+ * the default host the application needs `TRACEROOT_HOST_URL` as well, and a
+ * report that named the key alone would reproduce exactly the omission that
+ * silently sends a self-hosted user's traces to the wrong instance.
+ */
+function productionKeys(host: string | undefined): string {
+  const names = applicationEnvKeys(host).map((name) => `\`${name}\``);
+  return names.length === 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 function line(label: string, value: string | null | undefined): string {
@@ -171,6 +188,31 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     "",
     "Application files changed by the agent are not listed here — `git diff` is the",
     "authority on those, and duplicating it would only go stale.",
+    "",
+    // The one thing the run did not do, said in the file that outlives the run.
+    //
+    // The terminal block that asks for this is seen once, by one person, at the
+    // end of a long wizard. This report is what a reviewer reads when the diff
+    // arrives as a pull request, and what the author reads a week later — and
+    // the gap it has to close is the same one: everything above is about a
+    // laptop, nothing in the repository carries the key, and a deployment of
+    // this diff emits nothing until someone sets the variables. A report whose
+    // last word is "a trace has been received" lets that be discovered in
+    // production.
+    //
+    // Variables, never the value. Same rule as the key row above, and the same
+    // source of truth as the closing notice, so a non-default host's second
+    // variable is named here too.
+    "## What production still needs",
+    "",
+    `${productionKeys(cp.host)} in your deployment's own environment.`,
+    "",
+    // Where to copy it from, and only when there is somewhere. A run that wrote
+    // no file has nothing to point at, and pointing anyway is what sends a
+    // reader looking for a file the repository does not contain.
+    ctx.credentialEnvFile !== undefined
+      ? `The value is in \`${cell(slashPath(relative(ctx.root, ctx.credentialEnvFile)))}\`, which stays on this machine — nothing in the repository carries it.`
+      : "This run wrote the value to no file in the project, so nothing here carries it.",
     "",
   ];
 

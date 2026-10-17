@@ -29,6 +29,7 @@ import {
   writeCheckpoint,
 } from "../../setup/checkpoint.js";
 import { acknowledgeTraces } from "../../setup/ending.js";
+import { applicationEnvKeys } from "../../setup/envWrite.js";
 import type { SetupError } from "../../setup/errors.js";
 import {
   STAGE_LABELS,
@@ -36,8 +37,13 @@ import {
   jsonEmitter,
   stageLineEmitter,
 } from "../../setup/events.js";
-import { type SetupDeps, defaultSetupDeps, runSetupMachine } from "../../setup/machine.js";
-import { acknowledgeProduction } from "../../setup/production.js";
+import {
+  type SetupDeps,
+  applicationKeyLocation,
+  defaultSetupDeps,
+  runSetupMachine,
+} from "../../setup/machine.js";
+import { acknowledgeProduction, nameList } from "../../setup/production.js";
 import type { SelectInput } from "../../setup/select.js";
 import type { SetupCheckpoint, SetupContext, SetupFlags, SetupResult } from "../../setup/types.js";
 import { wizardIntro, wizardLine, wizardOutro, wizardProgress } from "../../setup/wizard.js";
@@ -86,7 +92,13 @@ export function closingLine(result: SetupResult): string {
   }
   return result.trace === null
     ? "Setup paused — rerun `traceroot setup --resume` to finish."
-    : "TraceRoot setup complete.";
+    : // Scoped, because what finished is scoped. This said "TraceRoot setup
+      // complete." one line under a block that had just told the user their
+      // production environment still needs the key — a line that claims the
+      // whole job is done directly above the half that is not. The run
+      // configured this machine; that is the thing to claim, and naming it as
+      // local is also what makes the sentence below it legible as the rest.
+      "TraceRoot local setup complete.";
 }
 
 /**
@@ -99,7 +111,20 @@ export function closingLine(result: SetupResult): string {
  * the kind. Returning null is how "there is nothing to add" is expressed.
  */
 export function closingSentence(result: SetupResult): string | null {
-  return result.ok && result.trace !== null ? "You can now use TraceRoot in production." : null;
+  if (!result.ok || result.trace === null) {
+    return null;
+  }
+  // "You can now use TraceRoot in production." is what this said, and it was
+  // not true of any run that printed it: the block immediately above it asks
+  // the user to go and put the key in their production environment, and an
+  // unattended run has nobody to even read that. The condition is the whole
+  // content of the sentence, so the sentence carries it.
+  //
+  // The variables come from `applicationEnvKeys`, like every other place the
+  // run names them, so a non-default host's second variable is named here too
+  // rather than this becoming the one line that forgets it.
+  const keys = applicationEnvKeys(result.checkpoint.host);
+  return `You can use TraceRoot in production once ${nameList(keys)} ${keys.length === 1 ? "is" : "are"} in its environment.`;
 }
 
 /**
@@ -328,17 +353,13 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
     await acknowledgeProduction({
       writers,
       language: result.checkpoint.service?.language ?? null,
-      // The credential file as the run actually chose it, not a directory
-      // joined to a constant name. It follows the service, so the notice has to
-      // name where it landed rather than always saying `./`; and the *name* is
-      // now whichever of the project's own env files was picked, which is
-      // `.env.local` as readily as `.env`. Undefined when nothing was written —
-      // a tracked file is refused, and a key the application already resolves is
-      // never written to one — where the notice falls back to `./.env`.
-      credentialEnvFile:
-        ctx.credentialEnvFile === undefined
-          ? undefined
-          : relativeToRoot(root, ctx.credentialEnvFile),
+      // Where the key actually is, asked of the machine rather than assembled
+      // here. This was the credential file or nothing, and nothing fell back to
+      // `./.env` inside the notice — so the two runs that write no file at all,
+      // one because the user's own environment already held the key and one
+      // because git tracks the file it would have gone in, both ended on an
+      // instruction to open a file that in the second case holds nothing.
+      keyLocation: applicationKeyLocation(ctx, deps.setupDeps),
       // The host, because it decides how many variables the user has to carry.
       // Off the default host the credential file holds `TRACEROOT_HOST_URL` as
       // well, and the notice used to name only the key — so a user who followed

@@ -298,6 +298,35 @@ export interface SetupFlags {
   traceTimeoutSec: number;
 }
 
+/**
+ * Where the key an instrumented application reads sits on this machine, once
+ * the run is over.
+ *
+ * Three cases rather than a filename with a default behind it, because the
+ * default is a guess and the whole job of the closing production block is to
+ * send the user to the value they actually have. A run that names `./.env` to
+ * someone who has no `.env` has not told them anything; it has given them a
+ * file to go and fail to find.
+ *
+ * - `file`: the ordinary run. A project env file holds the key, and `path` is
+ *   that file as the user should see it — relative to the repository root,
+ *   because the file follows the service and a monorepo's is not at the root.
+ * - `environment`: nothing was written, because the key was already resolving
+ *   from the user's own environment. There is a value to copy; it is just not
+ *   in a file.
+ * - `refused`: the key exists and is written down nowhere, because git tracks
+ *   the file it would have gone in (`path`). This is the only case where the
+ *   user cannot copy the value from anywhere, and the only one where the
+ *   honest instruction is to use a different key for the deployment.
+ *
+ * Derived by `applicationKeyLocation` in `machine.ts`, which is where the two
+ * facts behind it live.
+ */
+export type ApplicationKeyLocation =
+  | { kind: "file"; path: string }
+  | { kind: "environment" }
+  | { kind: "refused"; path: string };
+
 /** Shared state threaded through every stage. */
 export interface SetupContext {
   cwd: string;
@@ -327,6 +356,21 @@ export interface SetupContext {
    * file the user actually has rather than one this tool would have invented.
    */
   credentialEnvFile?: string;
+  /**
+   * The project env file this run would have written and did not, absolute.
+   *
+   * Set by the one refusal `configure_repository` has: git tracks the file, so
+   * writing a live key into it would put the key one `git commit -a` from a
+   * public repository. The run carries on — the child environment handoff still
+   * works, so the trace still arrives — and that is exactly why this is
+   * recorded. Without it, "no credential file" is one fact covering two
+   * situations the user has to be told apart: here the key was written down
+   * nowhere, while in the other the user's own environment already holds it.
+   *
+   * See {@link ApplicationKeyLocation}, which is the three-way answer the
+   * closing notice needs and the reason a second field is worth having.
+   */
+  refusedCredentialEnvFile?: string;
   json: boolean;
   /** True when the CLI may prompt: TTYs, not CI, not `--json`, not `--no-input`. */
   canPrompt: boolean;

@@ -27,6 +27,7 @@ import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
 import {
   SETUP_PIPELINE,
+  applicationKeyLocation,
   defaultSetupDeps,
   projectOptions,
   runSetupMachine,
@@ -1963,6 +1964,96 @@ describe("the credential the instrumented application will read", () => {
     // The stage used to append a rule here. It asks git and tells the user now;
     // the user's ignore file is theirs.
     expect(existsSync(join(dir, ".gitignore"))).toBe(false);
+  });
+});
+
+describe("where the application's key ended up", () => {
+  // The question the closing production block asks, and the one it used to
+  // answer with a constant. Three outcomes reach it with a trace in hand, and
+  // "the credential file, or `./.env` if there isn't one" collapsed two of them
+  // into an instruction to open a file the run deliberately did not write.
+  const KEY = "tr-located-key-value";
+
+  function authFrom(source: ResolvedAuth["credential"]["source"]): ResolvedAuth {
+    return {
+      credential: { kind: "api-key", value: KEY, source },
+      hostUrl: { value: "https://api.example.test", source: "config" },
+      authHost: { value: "https://api.example.test", source: "default" },
+      projectId: { value: undefined, source: "none" },
+    };
+  }
+
+  function depsFor(auth: ResolvedAuth, env?: NodeJS.ProcessEnv): SetupDeps {
+    return makeDeps({
+      auth,
+      env,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+  }
+
+  it("names the file, relative to the repository root, when one holds the key", async () => {
+    pythonRepo();
+    initGit();
+    const deps = depsFor(authFrom("config"));
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "file", path: ".env" });
+  });
+
+  it("names the file for an ambient key that is already in one", async () => {
+    // `auto-env-file` is the one ambient source that is a file — the `.env`
+    // beside where the command ran, which is what an application's own loader
+    // reads. Nothing was written, and there is still a path to send the user
+    // to, so it is a file case rather than a vague gesture at the environment.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), `TRACEROOT_API_KEY=${KEY}\n`);
+    const deps = depsFor(authFrom("auto-env-file"));
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(ctx.credentialEnvFile).toBeUndefined();
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "file", path: ".env" });
+  });
+
+  it("says the environment when the key was never in a file at all", async () => {
+    pythonRepo();
+    initGit();
+    const deps = depsFor(authFrom("env"), { PATH: "/usr/bin", TRACEROOT_API_KEY: KEY });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(existsSync(join(dir, ".env"))).toBe(false);
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "environment" });
+  });
+
+  it("records the file git made it refuse, so it is not read as the case above", async () => {
+    // The two no-file runs need different instructions: here the key was
+    // written down nowhere, and telling this user to copy it out of their
+    // environment would be as wrong as naming a file. The refusal is kept on
+    // the context for exactly that reason.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), "# committed by mistake\n");
+    const deps = depsFor(authFrom("config"));
+    deps.runProcess = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      // `git status` is answered above; `ls-files` is the only other git call,
+      // so this reports the file as tracked.
+      results: { git: { output: ".env\n" } },
+    }).run;
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(readFileSync(join(dir, ".env"), "utf8")).toBe("# committed by mistake\n");
+    expect(ctx.refusedCredentialEnvFile).toBe(join(dir, ".env"));
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "refused", path: ".env" });
   });
 });
 
