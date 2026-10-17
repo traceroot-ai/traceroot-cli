@@ -79,6 +79,7 @@ import {
 } from "./stack.js";
 import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters } from "./task.js";
 import { isThinTrace, pollForTrace, spanPhrase, thinTraceFinding } from "./trace.js";
+import { writeAgentOutput } from "./transcript.js";
 import { discardTypeAhead, waitForEnter } from "./tty.js";
 import type {
   ApplicationKeyLocation,
@@ -2672,6 +2673,47 @@ function oneLine(note: string, max = 200): string {
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
+/**
+ * Keeps the agent's output, and returns the line of remedy that sends the user
+ * to it — or no line at all, when there is no file to send them to.
+ *
+ * Called from the failure rather than from the launch, which is what makes the
+ * other half of the contract true: a run that worked leaves no transcript
+ * behind, because nothing on that path calls this. Its two callers are the two
+ * ways an agent can exit 0 having achieved nothing — it reported no edits, or
+ * the service still has no initialization in it — and they are the failures
+ * whose cause is in the agent's output and nowhere else. The activity feed is a
+ * window onto the last few tool calls and has been cleared by the time either
+ * check runs, and a `--json` run never had a feed at all.
+ *
+ * The line is built in one place so the two remedies cannot drift apart, and it
+ * says what the file is and not only where it is: a path with no reason
+ * attached is evidence nobody opens.
+ */
+function keepAgentOutput(input: {
+  root: string;
+  adapter: AgentAdapter;
+  /** The agent's captured output, exactly as `launchAgent` returned it. */
+  output: string;
+  /**
+   * The application credential. `runProcess` has already scrubbed it out of the
+   * capture; it is handed over again because this is the copy that lands on
+   * disk, and that is the one worth scrubbing twice.
+   */
+  credential: Secret;
+}): readonly string[] {
+  const path = writeAgentOutput({
+    root: input.root,
+    output: input.output,
+    secrets: [input.credential],
+  });
+  return path === null
+    ? []
+    : [
+        `What ${input.adapter.displayName} printed is in ${path} — the only record of what it tried, including anything it was refused.`,
+      ];
+}
+
 const instrument: StageDefinition = {
   stage: "instrument",
   isSatisfied: (ctx) => ctx.instrumentation !== undefined,
@@ -3018,6 +3060,14 @@ const instrument: StageDefinition = {
         // The transcript was progress, not a record: what changed is in `git
         // diff` and in the setup report, so the block collapses to the one line
         // that is still true afterwards.
+        //
+        // Cleared here even on the run that exits 0 having achieved nothing,
+        // which is a failure wearing a success's exit code. That is not an
+        // oversight: the checks that discover it are below this point, and the
+        // account they need is kept as a file by `keepAgentOutput` rather than
+        // held on screen — the feed is a fixed-size window onto the last few
+        // tool calls, and the failures this matters for are reported after the
+        // terminal has gone.
         feed?.stopAndClear(wizardStepLine(`${adapter.displayName} finished.`));
       }
 
@@ -3083,6 +3133,12 @@ const instrument: StageDefinition = {
         observedChangedFiles.length === 0 &&
         ctx.stack?.existingInstrumentation.present !== true;
       if (changedNothing) {
+        const evidence = keepAgentOutput({
+          root: ctx.root,
+          adapter,
+          output: result.output,
+          credential: credential.key,
+        });
         throw new PausedSetupError({
           stage: "instrument",
           code: "AGENT_FAILED",
@@ -3094,6 +3150,7 @@ const instrument: StageDefinition = {
             .join(" "),
           remedy: [
             "An agent that reports no edits was usually stopped from making them — a refused command, or a package install with nowhere writable to cache.",
+            ...evidence,
             "Clear what blocked it and rerun:",
             "  traceroot setup --resume",
             "Or write the task out and run it yourself:",
@@ -3138,6 +3195,12 @@ const instrument: StageDefinition = {
           ...observedChangedFiles,
         ]);
         if (wiredIn === null) {
+          const evidence = keepAgentOutput({
+            root: ctx.root,
+            adapter,
+            output: result.output,
+            credential: credential.key,
+          });
           throw new PausedSetupError({
             stage: "instrument",
             code: "AGENT_FAILED",
@@ -3151,6 +3214,7 @@ const instrument: StageDefinition = {
               .join(" "),
             remedy: [
               "Exit 0 is the agent saying it finished, not that it wired anything up — a refused command and an exhausted context both end that way.",
+              ...evidence,
               "Nothing was reverted, so a rerun picks up from whatever it did get done:",
               "  traceroot setup --resume",
               "Or write the task out and run it yourself:",
