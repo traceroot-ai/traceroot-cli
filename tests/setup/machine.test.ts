@@ -13,7 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 /** `git status --porcelain -z` record separator. */
 const NUL = String.fromCharCode(0);
+import type { ApiClientOptions } from "../../src/api/client.js";
 import { BackendUnavailableError, SetupApiError } from "../../src/api/setup.js";
+import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
@@ -24,18 +26,20 @@ import { SETUP_EXIT_CODES } from "../../src/setup/errors.js";
 import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
 import {
+  SETUP_PIPELINE,
   defaultSetupDeps,
   projectOptions,
   runSetupMachine,
   uniqueKeyName,
 } from "../../src/setup/machine.js";
 import { makeSecret } from "../../src/setup/secret.js";
-import type { SetupContext, SetupFlags } from "../../src/setup/types.js";
+import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import { sleep } from "../../src/util/sleep.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
 import {
+  type MakeDepsOptions,
   type RecordedRun,
   authEmpty,
   authWithKey,
@@ -1023,6 +1027,405 @@ describe("authentication", () => {
     expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.BACKEND_UNSUPPORTED);
     expect(result.error?.message).toContain("--no-browser");
+  });
+});
+
+describe("the handoff code from browser-first onboarding", () => {
+  /** Shaped like the real thing: `trh_` + 43 base64url characters. */
+  const CODE = `trh_${"A".repeat(43)}`;
+
+  /**
+   * Rendered output with the rail and its wrapping flattened, so a sentence can
+   * be asserted as a sentence rather than at whatever width it was drawn.
+   */
+  function said(data: string): string {
+    return plain(data)
+      .split("\n")
+      .map((line) => line.replace(/^[\u2502\u25c7\u25c6\u25b2\u25cf]/u, "").trim())
+      .join(" ")
+      .replace(/\s+/g, " ");
+  }
+
+  /** The account work a signed-in run does, so a handoff can reach the end. */
+  function projectApi() {
+    return fakeSetupApi({
+      listProjects: async () => [{ project_id: "p_1", project_name: "demo", workspace_id: "w_1" }],
+      createProjectApiKey: async (input) => ({
+        id: "ak_1",
+        name: input.name,
+        hint: "tr-4444-5555",
+        project_id: input.projectId,
+        scope: "admin",
+        expires_at: null,
+        key: "tr-handoff-minted-key-1234",
+      }),
+    });
+  }
+
+  interface HandoffRun {
+    redeem?: MakeDepsOptions["redeemHandoff"];
+    stored?: CredentialEntry | null;
+    auth?: ResolvedAuth;
+    deviceToken?: string;
+    flags?: Partial<SetupFlags>;
+    /** Makes the configured API key fail verification, as a dead key does. */
+    rejectKey?: boolean;
+  }
+
+  /**
+   * A whole run reached through `--handoff`, with everything the stage touches
+   * recorded: the credentials written, the session tokens handed to the token
+   * mint, the redemptions attempted, and whether the device flow was used.
+   */
+  function handoffRun(options: HandoffRun = {}) {
+    pythonRepo();
+    const written: CredentialEntry[] = [];
+    const minted: string[] = [];
+    const redeemed: Array<{ authHost: string; code: string }> = [];
+    const keysUsed: string[] = [];
+    let deviceFlows = 0;
+    const client = fakeApiClient({
+      whoamiResult: async () => {
+        // Only the *configured* key is dead. The project key this run mints is
+        // verified through `whoami` too, and rejecting that would fail the run
+        // for a reason this test is not about.
+        if (options.rejectKey === true && keysUsed.at(-1) === "tr-explicit-key") {
+          throw new SetupApiError("Invalid API key", 401);
+        }
+        return whoami();
+      },
+      traces: [traceRow()],
+    });
+    const deps = makeDeps({
+      auth: options.auth ?? authEmpty(),
+      setupApi: projectApi(),
+      client,
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      storedCredential: options.stored ?? null,
+      onWriteCredential: (_host, entry) => written.push(entry),
+      runDeviceFlow: async () => {
+        deviceFlows += 1;
+        return { sessionToken: options.deviceToken ?? "device-session-token-value" };
+      },
+      redeemHandoff:
+        options.redeem ??
+        (async (opts) => {
+          redeemed.push({ authHost: opts.authHost, code: opts.code });
+          return {
+            kind: "redeemed",
+            credential: { sessionToken: "handoff-session-token", email: "bob@new.example" },
+          };
+        }),
+    });
+    // `makeDeps` ignores the mint's options; which session token reaches it is
+    // exactly what "the handoff won" means, so record it.
+    deps.createTokenProvider = (opts) => {
+      minted.push(opts.sessionToken);
+      return { getAccessToken: async () => "access-jwt-value", invalidate: () => undefined };
+    };
+    // Which API key the run actually authenticates with. `whoami` alone cannot
+    // answer that: the project-key mint verifies its new key the same way.
+    deps.createClient = (opts: ApiClientOptions) => {
+      if (opts.auth.kind === "api-key") {
+        keysUsed.push(opts.auth.key);
+      }
+      return client;
+    };
+    const harness = makeCtx({
+      canPrompt: true,
+      flags: { browser: true, agent: "claude", handoff: CODE, ...options.flags },
+    });
+    return {
+      ...harness,
+      deps,
+      written,
+      minted,
+      redeemed,
+      keysUsed,
+      deviceFlows: () => deviceFlows,
+    };
+  }
+
+  /** Resolved auth holding an API key the user never asked this run to use. */
+  function ambientKey(source: "config" | "auto-env-file"): ResolvedAuth {
+    return {
+      credential: { kind: "api-key", value: "tr-stale-ambient-key", source },
+      hostUrl: { value: "https://api.example.test", source: "config" },
+      authHost: { value: "https://api.example.test", source: "default" },
+      projectId: { value: undefined, source: "none" },
+    };
+  }
+
+  /** Resolved auth holding an API key the user named on purpose. */
+  function explicitKey(source: "flag" | "env" | "env-file"): ResolvedAuth {
+    return {
+      credential: { kind: "api-key", value: "tr-explicit-key", source },
+      hostUrl: { value: "https://api.example.test", source: "config" },
+      authHost: { value: "https://api.example.test", source: "default" },
+      projectId: { value: undefined, source: "none" },
+    };
+  }
+
+  it("signs in from the code without opening a browser page", async () => {
+    const run = handoffRun();
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.deviceFlows()).toBe(0);
+    expect(run.redeemed).toEqual([{ authHost: "https://api.example.test", code: CODE }]);
+    expect(said(run.err.data)).toContain("Signed in as bob@new.example.");
+    expect(said(run.err.data)).toContain("no second page needed");
+  });
+
+  it("writes a credential indistinguishable from the one a device flow writes", async () => {
+    // The whole design rests on this: downstream there is no handoff session,
+    // only an ordinary `credentials-file` one.
+    const viaHandoff = handoffRun();
+    expect((await runSetupMachine(viaHandoff.ctx, viaHandoff.deps)).ok).toBe(true);
+
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    const viaDevice = handoffRun({
+      flags: { handoff: undefined },
+      deviceToken: "handoff-session-token",
+    });
+    // The browser path learns the email from the access token's claim; the
+    // handoff path is handed it. Same field, same value, two sources.
+    viaDevice.deps.createTokenProvider = () => ({
+      getAccessToken: async () => jwtWithClaims({ email: "bob@new.example" }),
+      invalidate: () => undefined,
+    });
+    expect((await runSetupMachine(viaDevice.ctx, viaDevice.deps)).ok).toBe(true);
+
+    expect(viaHandoff.written).toHaveLength(1);
+    expect(viaDevice.written).toHaveLength(1);
+    const [handoffEntry] = viaHandoff.written;
+    const [deviceEntry] = viaDevice.written;
+    // `created_at` is a clock reading, not an identity: the two paths make a
+    // different number of calls before the write.
+    expect(typeof handoffEntry?.created_at).toBe("string");
+    expect({ ...handoffEntry, created_at: "" }).toEqual({ ...deviceEntry, created_at: "" });
+    expect(handoffEntry?.session_token).toBe("handoff-session-token");
+  });
+
+  it("falls back to the device flow when the code is refused, and says why", async () => {
+    const run = handoffRun({ redeem: async () => ({ kind: "rejected" }) });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.deviceFlows()).toBe(1);
+    const text = said(run.err.data);
+    expect(text).toContain("the sign-in code from the browser is no longer valid");
+    expect(text).toContain("signing in the normal way");
+    // And the run ends up on the device flow's credential, not a half-written one.
+    expect(run.written.map((e) => e.session_token)).toEqual(["device-session-token-value"]);
+  });
+
+  it("does not fall back when redemption fails for a network reason", async () => {
+    // A reachability problem reported as a bad code sends the user hunting for
+    // a new one they do not need — and would quietly burn a live code.
+    for (const status of [429, 503]) {
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      const run = handoffRun({
+        redeem: async () => {
+          throw new CliError(`handoff sign-in failed with status ${status}`, ExitCode.network);
+        },
+      });
+      const result = await runSetupMachine(run.ctx, run.deps);
+
+      expect(result.ok, `status ${status} stops the run`).toBe(false);
+      expect(run.deviceFlows(), `status ${status} does not open a browser`).toBe(0);
+      expect(run.written, `status ${status} writes no credential`).toEqual([]);
+      expect(result.error?.message).toContain(String(status));
+    }
+  });
+
+  it("never prints the code, on the happy path or on any failure", async () => {
+    const ok = handoffRun();
+    await runSetupMachine(ok.ctx, ok.deps);
+    expect(ok.out.data).not.toContain(CODE);
+    expect(ok.err.data).not.toContain(CODE);
+
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    const refused = handoffRun({ redeem: async () => ({ kind: "rejected" }) });
+    await runSetupMachine(refused.ctx, refused.deps);
+    expect(refused.out.data).not.toContain(CODE);
+    expect(refused.err.data).not.toContain(CODE);
+
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    const broken = handoffRun({
+      // The one place a code could realistically escape: a runtime error that
+      // quotes the request body. `redeemHandoff` redacts it; this proves the
+      // wizard adds no second copy of its own.
+      redeem: async () => {
+        throw new CliError("request to https://ui failed: <redacted>", ExitCode.network);
+      },
+    });
+    const result = await runSetupMachine(broken.ctx, broken.deps);
+    expect(broken.out.data).not.toContain(CODE);
+    expect(broken.err.data).not.toContain(CODE);
+    expect(result.error?.message).not.toContain(CODE);
+  });
+
+  it("beats a stored credential and names both accounts when they differ", async () => {
+    const run = handoffRun({
+      stored: {
+        session_token: "saved-session-token",
+        email: "alice@old.example",
+        created_at: "2026-07-01T00:00:00.000Z",
+      },
+    });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    // The handoff is the credential the run actually used…
+    expect(run.minted).toEqual(["handoff-session-token"]);
+    expect(run.written.map((e) => e.session_token)).toEqual(["handoff-session-token"]);
+    // …and `writeCredential` replaced the stored entry, so the run says so.
+    expect(said(run.err.data)).toContain(
+      "Signed in as alice@old.example; this handoff is for bob@new.example — switching.",
+    );
+  });
+
+  it("says nothing about switching when the handoff is for the account already stored", async () => {
+    const run = handoffRun({
+      stored: {
+        session_token: "saved-session-token",
+        email: "bob@new.example",
+        created_at: "2026-07-01T00:00:00.000Z",
+      },
+    });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    const text = said(run.err.data);
+    expect(text).toContain("Signed in as bob@new.example.");
+    expect(text).not.toContain("switching");
+    expect(text).not.toContain("already saved on this machine");
+  });
+
+  it("still says a stored sign-in was replaced when it cannot prove the accounts match", async () => {
+    // Sameness is proved, never assumed: an entry saved before emails were
+    // recorded must not buy silence about being logged out.
+    const run = handoffRun({
+      stored: { session_token: "saved-session-token", created_at: "2026-07-01T00:00:00.000Z" },
+    });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(said(run.err.data)).toContain(
+      "Signed in as bob@new.example; this handoff replaced the TraceRoot sign-in already saved on this machine.",
+    );
+  });
+
+  it("redeems against the auth host, not the API host, when the two differ", async () => {
+    const split: ResolvedAuth = {
+      credential: { kind: "none", value: undefined, source: "none" },
+      hostUrl: { value: "http://localhost:8000", source: "flag" },
+      authHost: { value: "http://localhost:3000", source: "flag" },
+      projectId: { value: undefined, source: "none" },
+    };
+    const run = handoffRun({ auth: split });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.redeemed).toEqual([{ authHost: "http://localhost:3000", code: CODE }]);
+    // The credential remembers the split, exactly as the browser path's does.
+    expect(run.written[0]?.auth_host).toBe("http://localhost:3000");
+  });
+
+  it("beats a stale API key left in this directory's .env, and says it did", async () => {
+    // The failure this feature exists to remove. `setup` writes
+    // `TRACEROOT_API_KEY` into the working directory's `.env` when it succeeds,
+    // and the hand-back step tells the user to run it where the application
+    // lives — so the likeliest place to paste a handoff command already holds
+    // a key, very possibly for a different account.
+    const run = handoffRun({ auth: ambientKey("auto-env-file") });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    // The key was never even verified, let alone used…
+    expect(run.keysUsed).not.toContain("tr-stale-ambient-key");
+    // …the code was redeemed, and the run authenticated as its account.
+    expect(run.redeemed).toEqual([{ authHost: "https://api.example.test", code: CODE }]);
+    expect(run.minted).toEqual(["handoff-session-token"]);
+    expect(run.written.map((e) => e.email)).toEqual(["bob@new.example"]);
+    const text = said(run.err.data);
+    expect(text).toContain(
+      "A TraceRoot API key is configured in this directory's .env; the sign-in code from the browser takes precedence.",
+    );
+    expect(text).toContain("Signed in as bob@new.example.");
+  });
+
+  it("beats an API key left in the config file, and names that file instead", async () => {
+    const run = handoffRun({ auth: ambientKey("config") });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.keysUsed).not.toContain("tr-stale-ambient-key");
+    expect(run.minted).toEqual(["handoff-session-token"]);
+    expect(said(run.err.data)).toContain(
+      "A TraceRoot API key is configured in your TraceRoot config file; the sign-in code from the browser takes precedence.",
+    );
+  });
+
+  it("loses to an API key the user named on this command line", async () => {
+    // Ambient state must not defeat an explicit flag; one explicit instruction
+    // beating another is a different thing, and the user gets to mean it.
+    for (const source of ["flag", "env", "env-file"] as const) {
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      const run = handoffRun({ auth: explicitKey(source) });
+      const result = await runSetupMachine(run.ctx, run.deps);
+
+      expect(result.ok, `${source} key signs the run in`).toBe(true);
+      expect(run.keysUsed, `${source} key is the credential used`).toContain("tr-explicit-key");
+      expect(run.redeemed, `${source} key leaves the code unspent`).toEqual([]);
+      expect(said(run.err.data), `${source} key says nothing about precedence`).not.toContain(
+        "takes precedence",
+      );
+    }
+  });
+
+  it("falls back to the handoff when an explicit key is rejected", async () => {
+    // `whoami` is the configured-key path's own check, and this is it failing.
+    const run = handoffRun({ auth: explicitKey("flag"), rejectKey: true });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.redeemed).toHaveLength(1);
+    expect(run.minted).toEqual(["handoff-session-token"]);
+  });
+
+  it("uses the ambient key after all when the code turns out to be spent", async () => {
+    // "As if the flag had not been passed": the code had its turn, announced
+    // itself dead, and the ordinary ladder resumes from the top.
+    const run = handoffRun({
+      auth: ambientKey("auto-env-file"),
+      redeem: async () => ({ kind: "rejected" }),
+    });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.deviceFlows()).toBe(0);
+    expect(run.keysUsed).toContain("tr-stale-ambient-key");
+    const text = said(run.err.data);
+    expect(text).toContain("takes precedence");
+    expect(text).toContain("the sign-in code from the browser is no longer valid");
+    expect(text).toContain("Signed in with the TraceRoot credential already configured.");
+  });
+
+  it("redeems the code before any coding agent could read it", () => {
+    // A handoff code is live until it is redeemed, and `instrument` hands a
+    // coding agent a shell in the user's repository — one that can read shell
+    // history and run `ps`. That the code is already spent by then is a
+    // property of stage ORDER, which a later reshuffle could quietly break.
+    const order = SETUP_PIPELINE.map((definition) => definition.stage);
+    expect(order).toEqual([...SETUP_STAGES]);
+    expect(order.indexOf("authenticate")).toBeLessThan(order.indexOf("instrument"));
   });
 });
 

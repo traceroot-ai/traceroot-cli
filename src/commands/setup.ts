@@ -162,6 +162,10 @@ export function registerSetup(program: Command): void {
     .option("--language <language>", "language to instrument: python or typescript")
     .option("--service <path>", "path of the service to instrument (disambiguates a monorepo)")
     .option("--project <name-or-id>", "TraceRoot project to send traces to")
+    // On `setup`, never on the program. Program options are rendered in every
+    // subcommand's "Global Options" section, so a one-shot onboarding
+    // credential declared there would appear in `traceroot traces list --help`.
+    .option("--handoff <code>", "one-shot sign-in code printed by the TraceRoot web app")
     .option("--no-browser", "authenticate by pasting an API key instead of using a browser")
     .option("--no-instrument", "write the instrumentation task instead of running an agent")
     .option("--manual", "print manual instructions instead of running or writing a task")

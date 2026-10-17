@@ -133,6 +133,7 @@ describe("setup command registration", () => {
         "--language",
         "--service",
         "--project",
+        "--handoff",
         "--no-browser",
         "--no-instrument",
         "--resume",
@@ -149,6 +150,16 @@ describe("setup command registration", () => {
     // Deliberately absent: bypass-all-permissions and an arbitrary agent command.
     expect(flags).not.toContain("--yolo");
     expect(flags).not.toContain("--agent-cmd");
+  });
+
+  it("declares --handoff on `setup`, never on the program", () => {
+    // A program option is rendered in EVERY subcommand's "Global Options"
+    // section, and a one-shot onboarding credential has no business being
+    // offered by `traceroot traces list --help`.
+    const program = buildProgram();
+    const setup = program.commands.find((c) => c.name() === "setup");
+    expect((setup?.options ?? []).map((o) => o.long)).toContain("--handoff");
+    expect(program.options.map((o) => o.long)).not.toContain("--handoff");
   });
 });
 

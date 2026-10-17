@@ -3,6 +3,7 @@ import { type ApiClient, type ApiClientOptions, DEFAULT_TIMEOUT_MS } from "../..
 import type { SetupApi } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import type { DeviceFlowDeps, DeviceFlowResult } from "../../src/auth/deviceFlow.js";
+import type { HandoffOutcome, HandoffRedeemOptions } from "../../src/auth/handoff.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import type { Writers } from "../../src/output.js";
@@ -232,6 +233,12 @@ export interface MakeDepsOptions {
   onDeleteCredential?: (host: string) => boolean;
   /** Device-flow stubs. Default to a code that is approved on the first poll. */
   runDeviceFlow?: (deps: DeviceFlowDeps) => Promise<DeviceFlowResult>;
+  /**
+   * Handoff redemption. Unstubbed it throws, so a run that redeems without the
+   * test saying what the server answers fails loudly rather than reaching the
+   * network.
+   */
+  redeemHandoff?: (opts: HandoffRedeemOptions) => Promise<HandoffOutcome>;
 }
 
 /**
@@ -292,6 +299,11 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     writeCredential: options.onWriteCredential ?? (() => undefined),
     deleteCredential: options.onDeleteCredential ?? (() => true),
     runDeviceFlow: options.runDeviceFlow ?? (async () => ({ sessionToken: "session-token-value" })),
+    redeemHandoff:
+      options.redeemHandoff ??
+      (async () => {
+        throw new Error("unexpected handoff redemption");
+      }),
     createTokenProvider: () => ({
       getAccessToken: async () => "access-jwt-value",
       invalidate: () => undefined,
