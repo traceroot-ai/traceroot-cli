@@ -247,9 +247,7 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
         // passes `interactive: false` — and how Codex's TUI takes an initial
         // prompt is not something the documentation consulted for the headless
         // path established. Whoever turns interactive runs on reads that first.
-        throw new Error(
-          "agent 'codex' cannot be launched interactively: setup has only established its headless `codex exec` invocation",
-        );
+        throw new Error("agent 'codex' cannot be launched interactively");
       }
       return {
         program: "codex",

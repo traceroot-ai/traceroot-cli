@@ -99,13 +99,24 @@ describe("driving Codex headless", () => {
   it("turns the sandbox's network on, because the task starts with an install", () => {
     // Under `workspace-write` the sandbox has no network access by default. The
     // first thing this task asks for is `pip install` or `npm install`.
-    expect(codex().args).toContain("sandbox_workspace_write.network_access=true");
+    //
+    // Paired with its `-c`, not merely present: a dropped flag leaves the
+    // setting as a stray positional, which `codex exec` reads as part of the
+    // prompt — and since an unrecognised config key only warns, the run would
+    // go on with the sandbox's network off and still exit 0.
+    const { args } = codex();
+    const at = args.indexOf("sandbox_workspace_write.network_access=true");
+    expect(at).toBeGreaterThan(0);
+    expect(args[at - 1]).toBe("-c");
   });
 
   it("pins the approval policy rather than inheriting the user's config", () => {
     // A captured run has nobody to approve anything, and the policy otherwise
     // comes from `$CODEX_HOME/config.toml` — a file setup has never read.
-    expect(codex().args).toContain('approval_policy="never"');
+    const { args } = codex();
+    const at = args.indexOf('approval_policy="never"');
+    expect(at).toBeGreaterThan(0);
+    expect(args[at - 1]).toBe("-c");
   });
 
   it("keeps colour out of the output the completion block is parsed from", () => {

@@ -34,6 +34,7 @@ import {
   uniqueKeyName,
 } from "../../src/setup/machine.js";
 import { makeSecret } from "../../src/setup/secret.js";
+import type { TraceLister } from "../../src/setup/trace.js";
 import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import { sleep } from "../../src/util/sleep.js";
@@ -4628,17 +4629,32 @@ describe("letting the user stop waiting for the first trace", () => {
     // the read is already answered, and the poll has not looked at it yet.
     // Staging it any earlier would not be the race — it would be a user who
     // stopped waiting before the trace existed, which is the case above.
+    let pressedDuringRead = false;
     const createApi = deps.createSetupApi;
     deps.createSetupApi = (options) => {
       const api = createApi(options);
       return {
         ...api,
-        listTraces: async (params: Parameters<SetupApi["listTraces"]>[0]) => {
-          const rows = await api.listTraces(params);
-          if (rows.length > 0) {
+        // Typed as the poll calls it: `pollForTrace` reads through
+        // `TraceLister`, which carries the `endBefore` that `SetupApi` does
+        // not, and the window is what decides which read this is.
+        listTraces: async (params: Parameters<TraceLister["listTraces"]>[0]) => {
+          const response = await api.listTraces(params);
+          // The press has to land on the read that carries THIS run's trace.
+          // Two things used to stop that happening: `listTraces` answers with
+          // the real `{ data, meta }` envelope, so measuring the envelope's own
+          // `length` was `undefined > 0` — false on every call, the key never
+          // pressed, and the test quietly became the plain success path above;
+          // and the fixture's trace sits outside the application-run window, so
+          // the only read that can place it is the poll's open-ended look, the
+          // one that leaves `endBefore` off. Pressing on the windowed read
+          // instead aborts the poll an iteration before the trace is readable,
+          // which is the preceding test, not this one.
+          if (params.endBefore === undefined && response.data.length > 0) {
+            pressedDuringRead = true;
             press?.();
           }
-          return rows;
+          return response;
         },
       } as SetupApi;
     };
@@ -4649,6 +4665,10 @@ describe("letting the user stop waiting for the first trace", () => {
     });
     const result = await runSetupMachine(ctx, deps);
 
+    // First, that the race was staged at all: without this the assertions below
+    // are the ordinary "a trace arrived" path, and the precedence they are
+    // here for is never exercised.
+    expect(pressedDuringRead).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.trace).not.toBeNull();
     expect(ctx.traceWaitSkipped).toBeUndefined();

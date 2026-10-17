@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { waitForEnter } from "../../src/setup/tty.js";
 import { fakeInput } from "./helpers.js";
 
@@ -91,6 +91,35 @@ describe("letting the user end a wait with a keypress", () => {
     stop();
 
     expect(pressed).toBe(1);
+  });
+
+  it("never touches raw mode, which is what leaves Ctrl+C a signal", async () => {
+    // The claim the whole design rests on. Raw mode would take the terminal's
+    // own interrupt character with it: `Ctrl+C` stops being a signal and
+    // becomes a `0x03` byte this process has to recognise and re-raise, and a
+    // run that dies before restoring the mode leaves the user's shell with echo
+    // off. Line discipline costs a named key and buys the signal back untouched.
+    const input = fakeInput();
+    const setRawMode = vi.fn(() => input);
+    input.setRawMode = setRawMode;
+    let pressed = 0;
+    const stop = waitForEnter({
+      input,
+      onEnter: () => {
+        pressed += 1;
+      },
+    });
+
+    await settle();
+    input.write(CR);
+    await settle();
+    stop();
+
+    // Asserted first, so this is not a claim about a function nobody called
+    // because the wait never started: the listener attached and the keypress
+    // went through the ordinary path, and raw mode was still never asked for.
+    expect(pressed).toBe(1);
+    expect(setRawMode).not.toHaveBeenCalled();
   });
 
   it("hears nothing more, and leaves the stream paused, after it is stopped", async () => {
