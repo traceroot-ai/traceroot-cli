@@ -1,6 +1,7 @@
 import { existsSync, renameSync } from "node:fs";
 import { type RunProcess, splitCommand } from "./exec.js";
 import type { Secret } from "./secret.js";
+import type { RunWindow } from "./trace.js";
 import type { ApplicationVerification, VerificationRun } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -65,7 +66,7 @@ export interface VerifyApplicationResult {
    * ran. The window a trace has to fall inside to be this run's own, which is
    * the only thing that distinguishes it from the project's other traffic.
    */
-  ranAt: { from: Date; to: Date } | null;
+  ranAt: RunWindow | null;
 }
 
 const NOT_RUN: VerificationRun = { ran: false, exitCode: null, durationMs: 0 };
@@ -210,17 +211,22 @@ export async function verifyApplication(
   // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
   delete withoutEnv.TRACEROOT_API_KEY;
 
+  // One command line for both runs, so the environment is the only thing that
+  // can differ between them.
+  const run = (env: NodeJS.ProcessEnv) =>
+    input.runProcess({
+      program: parsed.program,
+      args: parsed.args,
+      cwd: input.cwd,
+      env,
+      stdio: "capture",
+      timeoutMs,
+      signal: input.signal,
+      secrets: [input.credential],
+    });
+
   const from = new Date(now());
-  const first = await input.runProcess({
-    program: parsed.program,
-    args: parsed.args,
-    cwd: input.cwd,
-    env: withEnv,
-    stdio: "capture",
-    timeoutMs,
-    signal: input.signal,
-    secrets: [input.credential],
-  });
+  const first = await run(withEnv);
   const ranAt = { from, to: new Date(now()) };
   const withCredentials: VerificationRun = {
     ran: true,
@@ -242,18 +248,7 @@ export async function verifyApplication(
     };
   }
 
-  const second = await withoutCredentialFiles(input.credentialFiles, () =>
-    input.runProcess({
-      program: parsed.program,
-      args: parsed.args,
-      cwd: input.cwd,
-      env: withoutEnv,
-      stdio: "capture",
-      timeoutMs,
-      signal: input.signal,
-      secrets: [input.credential],
-    }),
-  );
+  const second = await withoutCredentialFiles(input.credentialFiles, () => run(withoutEnv));
   const withoutCredentials: VerificationRun = {
     ran: true,
     exitCode: second.result.exitCode,

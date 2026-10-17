@@ -2,6 +2,7 @@ import type { Sink, Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import {
   DOCS_URL,
+  settleAcknowledgement,
   wizardAcknowledgement,
   wizardAside,
   wizardEmphasis,
@@ -9,7 +10,6 @@ import {
   wizardMutedLink,
   wizardNote,
 } from "./wizard.js";
-import { settleAcknowledgement } from "./wizard.js";
 
 /**
  * The first of the two blocks that close a successful run.

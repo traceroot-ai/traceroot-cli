@@ -57,6 +57,11 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
         ? "Passed both with and without `TRACEROOT_API_KEY`, so the application does not depend on TraceRoot being configured."
         : "Did not pass.";
 
+  // One entry per line, and `""` is a blank line: Markdown ends a paragraph or
+  // a table only at one, so they are the report's structure. An optional entry
+  // is spread in or left out rather than written as `""` and filtered, because
+  // that filter took every blank line with it — the verdict ran into the line
+  // below it, and the closing note was read as a row of the last table.
   const sections = [
     "# TraceRoot setup report",
     "",
@@ -93,8 +98,7 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     "",
     `**Your checks.** ${checks}`,
     "",
-    app?.command ? `Command: \`${app.command}\`` : "",
-    "",
+    ...(app?.command ? [`Command: \`${app.command}\``, ""] : []),
     trace !== undefined
       ? `**First trace.** \`${trace.traceId}\`\n\n${trace.traceUrl}`
       : "**First trace.** None yet. Run the application, then `traceroot setup --resume`.",
@@ -106,16 +110,15 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     "| `.env.traceroot` | `TRACEROOT_API_KEY` for the application. Git-ignored. |",
     "| `.traceroot/config.json` | The CLI's own credential. Git-ignored. |",
     "| `.traceroot/setup.json` | Checkpoint, so `--resume` can continue. |",
-    ctx.agent !== undefined
-      ? "| `.claude/skills/traceroot-instrument-repo/` | The instrumentation skill. |"
-      : "",
+    ...(ctx.agent !== undefined
+      ? ["| `.claude/skills/traceroot-instrument-repo/` | The instrumentation skill. |"]
+      : []),
     "",
     "Application files changed by the agent are not listed here — `git diff` is the",
     "authority on those, and duplicating it would only go stale.",
-    "",
   ];
 
-  return `${sections.filter((section) => section !== "").join("\n")}\n`;
+  return `${sections.join("\n")}\n`;
 }
 
 /**
