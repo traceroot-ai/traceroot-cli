@@ -304,6 +304,15 @@ export interface MakeDepsOptions {
    * network.
    */
   redeemHandoff?: (opts: HandoffRedeemOptions) => Promise<HandoffOutcome>;
+  /**
+   * Stands in for the user pressing Enter during the trace wait.
+   *
+   * `true` presses it as soon as the wait starts listening. Unset listens for a
+   * key that never comes, which is what every test that is not about skipping
+   * wants — and it must never reach `process.stdin`, which the real
+   * implementation resumes.
+   */
+  skipTraceWait?: boolean;
 }
 
 /**
@@ -350,6 +359,17 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
       }
       const index = Number.parseInt(answer, 10) - 1;
       return options[index]?.value ?? answer;
+    },
+    // Offered exactly as production offers it, and taken only when the test
+    // says so. Returning a no-op stop function matters as much as the press:
+    // the stage calls it in a `finally`, and a test that left a dangling
+    // listener would be hiding the bug where the real one eats the keystroke
+    // belonging to the closing acknowledgements.
+    watchForSkip: (onSkip) => {
+      if (options.skipTraceWait === true) {
+        onSkip();
+      }
+      return () => undefined;
     },
     prompt: async () => answers.shift() ?? "",
     promptHidden: async () => hidden.shift() ?? "",

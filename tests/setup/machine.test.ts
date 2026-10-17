@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 /** `git status --porcelain -z` record separator. */
 const NUL = String.fromCharCode(0);
 import type { ApiClientOptions } from "../../src/api/client.js";
-import { BackendUnavailableError, SetupApiError } from "../../src/api/setup.js";
+import { BackendUnavailableError, type SetupApi, SetupApiError } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
@@ -4484,6 +4484,196 @@ describe("why no trace arrived", () => {
     const message = plain(result.error?.message ?? "");
     expect(message).toContain("nothing has run your application");
     expect(message).not.toContain("this service is not instrumented");
+  });
+});
+
+describe("letting the user stop waiting for the first trace", () => {
+  /** A Python service with no test or health command for setup to run. */
+  function uninstrumentable(): void {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi"]\n');
+    writeFileSync(join(dir, "main.py"), "print('hi')\n");
+  }
+
+  /** A repository whose entry point is already instrumented, so a trace could arrive. */
+  function waitable(): void {
+    pythonRepo();
+    writeFileSync(
+      join(dir, "main.py"),
+      'import traceroot\n\nif __name__ == "__main__":\n    traceroot.initialize()\n',
+    );
+  }
+
+  /** A run where no trace ever turns up, so only the waiting is under test. */
+  function traceless(options: { skip?: boolean } = {}): SetupDeps {
+    return makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      skipTraceWait: options.skip,
+    });
+  }
+
+  it("finishes the run successfully when the user stops waiting", async () => {
+    // The point of the whole change: the browser page is already watching for
+    // this trace, so a blocked terminal adds nothing a user can act on — and
+    // stopping the wait must be a finished run, not a failed one.
+    waitable();
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.trace).toBeNull();
+    expect(ctx.traceWaitSkipped).toBe(true);
+    // Said as a stop, not as a timeout: nothing ran out.
+    const said = plain(err.data);
+    expect(said).toContain("Stopped waiting for your first trace.");
+    expect(said).not.toContain("No trace after");
+    // And none of the three diagnoses of a wait that *did* run out.
+    expect(said).not.toContain("this service is not instrumented");
+    expect(said).not.toContain("nothing has run your application");
+    expect(said).not.toContain("No trace arrived within");
+  });
+
+  it("leaves nothing on the checkpoint, so --resume waits again", async () => {
+    // A skip describes how this invocation ended. Persisting it would have to
+    // be cleared on the next run, and a run that inherited it would close with
+    // a sentence about a key nobody pressed.
+    waitable();
+    const { ctx } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    expect(result.checkpoint.trace).toBeUndefined();
+    expect(JSON.stringify(result.checkpoint)).not.toContain("traceWaitSkipped");
+  });
+
+  it("offers the skip on the waiting line, where there is somebody to press it", async () => {
+    waitable();
+    const { err } = await (async () => {
+      const made = makeCtx({
+        canPrompt: true,
+        flags: { instrument: false, traceTimeoutSec: 1 },
+      });
+      await runSetupMachine(made.ctx, traceless());
+      return made;
+    })();
+
+    expect(plain(err.data)).toContain("Enter to stop waiting");
+  });
+
+  it("says nothing about a key when there is nobody at a terminal", async () => {
+    // A CI job, a pipe, `--no-input`. The offer would be an instruction to
+    // press something that is not being listened for.
+    waitable();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    const said = plain(err.data);
+    expect(said).toContain("Waiting for your first trace");
+    expect(said).not.toContain("Enter to stop waiting");
+    // And the skip was never even offered, so the wait ran out as it always did.
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+  });
+
+  it("does not offer to skip a wait that is not happening", async () => {
+    // `couldArrive === false`: the service is not instrumented and nothing can
+    // arrive, so the poll takes one look and returns. Offering to stop a wait
+    // that is not running would be an instruction to press a key that does
+    // nothing — and the short-circuit itself must survive.
+    uninstrumentable();
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    const said = plain(err.data);
+    expect(said).not.toContain("Waiting for your first trace");
+    expect(said).not.toContain("Enter to stop waiting");
+    // The pre-existing diagnosis, unchanged: no two-minute spinner in front of
+    // an answer that was available immediately.
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(plain(result.error?.message ?? "")).toContain("this service is not instrumented");
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+  });
+
+  it("prefers a trace that landed while the key was being pressed", async () => {
+    // The press and the request in flight race, and the trace is the stronger
+    // answer: a run that saw one must report it rather than closing on "not
+    // seen yet" because the keystroke won by a millisecond.
+    waitable();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    let press: (() => void) | null = null;
+    deps.watchForSkip = (onSkip) => {
+      press = onSkip;
+      return () => undefined;
+    };
+    // The press lands while the response that carries the trace is in flight:
+    // the read is already answered, and the poll has not looked at it yet.
+    // Staging it any earlier would not be the race — it would be a user who
+    // stopped waiting before the trace existed, which is the case above.
+    const createApi = deps.createSetupApi;
+    deps.createSetupApi = (options) => {
+      const api = createApi(options);
+      return {
+        ...api,
+        listTraces: async (params: Parameters<SetupApi["listTraces"]>[0]) => {
+          const rows = await api.listTraces(params);
+          if (rows.length > 0) {
+            press?.();
+          }
+          return rows;
+        },
+      } as SetupApi;
+    };
+
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(result.trace).not.toBeNull();
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+    expect(plain(err.data)).toContain("First trace received");
+  });
+
+  it("neither offers nor mentions a skip in --json", async () => {
+    // stdout belongs to the event stream there, and a machine consumer has
+    // nobody to ask. The run has to behave exactly as it did before this
+    // existed, down to the absence of a frame for the waiting line to sit in.
+    waitable();
+    const { ctx, out, err } = makeCtx({
+      json: true,
+      flags: { instrument: false, traceTimeoutSec: 1 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    for (const stream of [out.data, err.data]) {
+      expect(stream).not.toContain("Enter to stop waiting");
+      expect(stream).not.toContain("Stopped waiting");
+      expect(stream).not.toContain("Waiting for your first trace");
+    }
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
   });
 });
 
