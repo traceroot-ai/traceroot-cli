@@ -168,15 +168,29 @@ describe("the Node floor setup checks for itself", () => {
 });
 
 describe("the package's own engines floor", () => {
-  it("is the floor every command shares, not setup's", () => {
-    // `engines` only makes npm warn, so it is a claim about the package, not a
-    // check. Claiming setup's 20.12 for the whole CLI turned away installs that
-    // work; the one real package-wide floor is the registry client's
-    // `AbortSignal.any`, added in Node 20.3.
-    const pkg = JSON.parse(
-      readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
-    ) as { engines: { node: string } };
-    expect(pkg.engines.node).toBe(">=20.3");
-    expect(meetsNodeFloor(MIN_SETUP_NODE, pkg.engines.node.replace(/[^\d.]/g, ""))).toBe(true);
+  const pkg = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+  ) as { engines?: { node?: string } };
+
+  it("is a plain lower bound that setup's own floor clears", () => {
+    // Not `toBe(">=20.3")`, which restated the file under test and so could
+    // never disagree with it. What holds whatever the number is: the value is a
+    // `>=` bound on one version — the only shape `meetsNodeFloor` can compare,
+    // and the only one that means "this and newer" — and setup's floor is not
+    // below it. The two may differ (`engines` only makes npm warn, and claiming
+    // setup's 20.12 for the whole CLI turned away installs that work) but not
+    // contradict each other.
+    const declared = pkg.engines?.node ?? "";
+    expect(declared).toMatch(/^>=\d+(\.\d+){0,2}$/);
+    expect(meetsNodeFloor(MIN_SETUP_NODE, declared.replace(/[^\d.]/g, ""))).toBe(true);
   });
+
+  // Blocked on a decision, not on code: walking the runtime `dependencies` in
+  // `package-lock.json` finds `@traceroot-ai/tools@0.5.0` declaring `>=24`
+  // against this package's `>=20.3` (`@clack/prompts`' `>= 20.12.0` is setup's
+  // alone: loaded lazily, behind `MIN_SETUP_NODE`). The assertion fails until
+  // the supported Node range is chosen, so it is not written as one.
+  it.todo(
+    "is at least the floor every runtime dependency declares (fails today: @traceroot-ai/tools@0.5.0 declares >=24; the supported Node range is the product's call)",
+  );
 });

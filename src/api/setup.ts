@@ -1,5 +1,10 @@
 import { CliError } from "../output.js";
-import { normalizeBaseUrl } from "./client.js";
+import {
+  normalizeBaseUrl,
+  redactSecret,
+  statusFallbackMessage,
+  transportFailureMessage,
+} from "./client.js";
 import type { TraceList } from "./client.js";
 
 /**
@@ -143,16 +148,20 @@ export interface SetupApi {
     expiresInDays: number | null;
   }): Promise<CreatedApiKey>;
   revokeApiKey(keyId: string): Promise<void>;
+  /**
+   * Revokes a key in a project the *user* can reach, authenticated by a CLI
+   * token like {@link createProjectApiKey}.
+   *
+   * `revokeApiKey` cannot do this for a key minted on a sign-in: its route
+   * accepts only an admin API key, which a user's own credential is not.
+   */
+  revokeProjectApiKey(projectId: string, keyId: string): Promise<void>;
 }
 
 interface RequestOptions {
   method: "GET" | "POST" | "DELETE";
   path: string;
   body?: unknown;
-  /** Overrides the client's own credential for this one call. */
-  bearer?: string;
-  /** Sends no Authorization header at all. */
-  anonymous?: boolean;
 }
 
 function errorDetail(body: unknown): string | undefined {
@@ -203,17 +212,14 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
   async function request<T>(options: RequestOptions): Promise<T> {
     const url = `${base}${options.path}`;
     const headers: Record<string, string> = { accept: "application/json" };
-    if (options.anonymous !== true) {
-      // Minted per request, because an access JWT lives ten minutes and a
-      // wizard run outlasts that. `bearer` and a project key are both fixed
-      // strings and take precedence when present.
-      const token =
-        options.bearer ??
-        opts.apiKey ??
-        (opts.tokenProvider === undefined ? undefined : await opts.tokenProvider.getAccessToken());
-      if (token !== undefined) {
-        headers.authorization = `Bearer ${token}`;
-      }
+    // Minted per request, because an access JWT lives ten minutes and a wizard
+    // run outlasts that. A project key is a fixed string and takes precedence
+    // when present.
+    const token =
+      opts.apiKey ??
+      (opts.tokenProvider === undefined ? undefined : await opts.tokenProvider.getAccessToken());
+    if (token !== undefined) {
+      headers.authorization = `Bearer ${token}`;
     }
     const init: RequestInit = { method: options.method, headers };
     if (options.body !== undefined) {
@@ -233,9 +239,8 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
       // Never interpolate the raw error: it can echo request contents, which
       // for these endpoints includes credentials.
       const message = err instanceof Error ? err.message : String(err);
-      const safe =
-        opts.apiKey === undefined ? message : message.split(opts.apiKey).join("<redacted>");
-      throw new SetupApiError(`request to ${base} failed: ${safe}`, 0);
+      const safe = opts.apiKey === undefined ? message : redactSecret(message, opts.apiKey);
+      throw new SetupApiError(transportFailureMessage(base, safe), 0);
     }
 
     // 501 is unambiguous — the route exists and declines to do the work — so it
@@ -259,7 +264,7 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
       if (res.status === 404 && !describesMissingResource(detail)) {
         throw new BackendUnavailableError(options.path, res.status);
       }
-      throw new SetupApiError(detail ?? `request failed with status ${res.status}`, res.status);
+      throw new SetupApiError(detail ?? statusFallbackMessage(res.status), res.status);
     }
 
     if (res.status === 204) {
@@ -371,6 +376,12 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
       await request<void>({
         method: "DELETE",
         path: `/api/v1/public/api-keys/${encodeURIComponent(keyId)}`,
+      });
+    },
+    async revokeProjectApiKey(projectId, keyId) {
+      await request<void>({
+        method: "DELETE",
+        path: `/api/v1/public/projects/${encodeURIComponent(projectId)}/api-keys/${encodeURIComponent(keyId)}`,
       });
     },
   };

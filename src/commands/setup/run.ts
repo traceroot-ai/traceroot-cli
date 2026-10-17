@@ -323,7 +323,12 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   // actually got a trace — telling someone how to deploy an instrumentation
   // that has not been shown to work yet is premature.
   if (!json && result.ok && result.trace !== null) {
-    const prompt = deps.canPrompt ? deps.setupDeps.prompt : null;
+    // Named a stage so that Ctrl+C here ends the run with 130, as it does at
+    // every question before it. With none, readline closed on the keypress, the
+    // question never settled, and the process exited 0.
+    const prompt = deps.canPrompt
+      ? (question: string) => deps.setupDeps.prompt(question, "complete")
+      : null;
     await acknowledgeTraces({ writers, traceUrl: result.trace.traceUrl, prompt });
     await acknowledgeProduction({
       writers,

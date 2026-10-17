@@ -422,3 +422,54 @@ describe("creating a project", () => {
     expect(created.workspace_id).toBe("w_1");
   });
 });
+
+describe("revoking a key on the user's own credential", () => {
+  const tokenProvider = { getAccessToken: async () => "access-jwt-value" };
+
+  it("deletes it from the project it names, with the user's token", async () => {
+    // The key-authenticated route accepts only an admin API key, so a key
+    // minted on a sign-in can only go back through the route that names its
+    // project, on the same credential that minted it.
+    const { fetchImpl, calls } = stubFetch([{ status: 204 }]);
+    const api = createSetupApi({ host: "https://api.example.test", tokenProvider, fetchImpl });
+
+    await expect(api.revokeProjectApiKey("p_1", "ak_1")).resolves.toBeUndefined();
+
+    expect(calls[0]?.url).toBe("https://api.example.test/api/v1/public/projects/p_1/api-keys/ak_1");
+    expect(calls[0]?.init?.method).toBe("DELETE");
+    const headers = calls[0]?.init?.headers as Record<string, string> | undefined;
+    expect(headers?.authorization).toBe("Bearer access-jwt-value");
+  });
+
+  it("calls a deployment without the route unavailable, as for every other setup route", async () => {
+    for (const reply of [
+      { status: 404 },
+      { status: 404, body: { detail: "Not Found" } },
+      { status: 501 },
+    ]) {
+      const { fetchImpl } = stubFetch([reply]);
+      const api = createSetupApi({ host: "https://api.example.test", tokenProvider, fetchImpl });
+      await expect(api.revokeProjectApiKey("p_1", "ak_1")).rejects.toBeInstanceOf(
+        BackendUnavailableError,
+      );
+    }
+  });
+
+  it("reports a refusal, and a key the project does not have, with the server's status", async () => {
+    for (const [status, detail] of [
+      [403, "Your role cannot revoke this project's keys"],
+      [404, "API key not found"],
+      [401, "Not authenticated"],
+    ] as const) {
+      const { fetchImpl } = stubFetch([{ status, body: { detail } }]);
+      const api = createSetupApi({ host: "https://api.example.test", tokenProvider, fetchImpl });
+      await expect(api.revokeProjectApiKey("p_1", "ak_1")).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(SetupApiError);
+        expect(err).not.toBeInstanceOf(BackendUnavailableError);
+        expect((err as SetupApiError).status).toBe(status);
+        expect((err as Error).message).toBe(detail);
+        return true;
+      });
+    }
+  });
+});

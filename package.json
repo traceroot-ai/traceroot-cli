@@ -2,7 +2,7 @@
   "name": "traceroot-cli",
   "version": "0.6.0",
   "type": "module",
-  "description": "Read your TraceRoot traces from the terminal — list, inspect, and export traces from the TraceRoot public API.",
+  "description": "Set up TraceRoot in your repository, then work with your traces, findings, detectors and evaluations from the terminal.",
   "license": "Apache-2.0",
   "author": "TraceRoot (https://traceroot.ai)",
   "homepage": "https://github.com/traceroot-ai/traceroot-cli#readme",

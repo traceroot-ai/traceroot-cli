@@ -223,6 +223,8 @@ export interface MakeDepsOptions {
   hiddenAnswers?: string[];
   sdk?: ResolvedSdk;
   onWriteConfig?: (config: { api_key: string; host_url: string }) => void;
+  /** The CLI's config as an earlier run left it; none by default, as on a first run. */
+  config?: { api_key?: string; host_url?: string } | null;
   tempDir?: string;
   /** Whether a local TraceRoot API answers, for the missing-endpoint hint. */
   localHostResponds?: boolean;
@@ -283,6 +285,10 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     promptHidden: async () => hidden.shift() ?? "",
     resolveSdk: async () => options.sdk ?? TEST_SDK,
     writeConfig: options.onWriteConfig ?? (() => undefined),
+    readConfig: () => options.config ?? null,
+    // No file behind the config by default, so a rollback finds nothing to put back.
+    readConfigText: () => null,
+    restoreConfigText: () => undefined,
     sleep: async () => undefined,
     makeTempDir: () => options.tempDir ?? "/tmp/traceroot-setup-test",
     probeHost: async () => options.localHostResponds ?? false,
@@ -292,10 +298,22 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     writeCredential: options.onWriteCredential ?? (() => undefined),
     deleteCredential: options.onDeleteCredential ?? (() => true),
     runDeviceFlow: options.runDeviceFlow ?? (async () => ({ sessionToken: "session-token-value" })),
-    createTokenProvider: () => ({
-      getAccessToken: async () => "access-jwt-value",
-      invalidate: () => undefined,
-    }),
+    // Refuses a missing token, because the real one sends it as the bearer and a
+    // provider built from nothing can never sign anyone in. Accepting it let
+    // every saved-sign-in test pass with the token `undefined`: their fixtures
+    // spelled the field `sessionToken`, which `CredentialEntry` does not have,
+    // and nothing noticed because `tsconfig.json` excludes `tests`.
+    createTokenProvider: ({ sessionToken }) => {
+      if (typeof sessionToken !== "string" || sessionToken === "") {
+        throw new Error(
+          `createTokenProvider was handed no session token (${String(sessionToken)})`,
+        );
+      }
+      return {
+        getAccessToken: async () => "access-jwt-value",
+        invalidate: () => undefined,
+      };
+    },
   };
 }
 
