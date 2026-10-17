@@ -87,8 +87,10 @@ export async function selectFrom(input: SelectInput, terminal: SelectTerminal): 
     // while an interrupt has to be non-zero or `traceroot setup && <next step>`
     // carries straight on through the keypress that was meant to stop it.
     // An explicit decline never reaches here; it comes back as a value and is
-    // checked by the caller.
-    cancel("Setup interrupted.");
+    // checked by the caller. On the question's own terminal, because clack's
+    // default is stdout: the frame's closing glyph would land in the stream the
+    // `--json` events own, away from the frame it closes.
+    cancel("Setup interrupted.", { output: terminal.output });
     throw new SetupError({
       stage: input.stage,
       code: "INTERRUPTED",
@@ -98,6 +100,13 @@ export async function selectFrom(input: SelectInput, terminal: SelectTerminal): 
   return String(choice);
 }
 
-/** The selector the machine is wired to: {@link selectFrom} on the real terminal. */
+/**
+ * The selector the machine is wired to: {@link selectFrom} on the real terminal.
+ *
+ * Drawn on stderr, with the rest of the frame. stdout belongs to results and to
+ * the `--json` event stream, and a question asked there went into
+ * `traceroot setup > setup.log` while the frame stayed on screen — so the first
+ * keypress answered a question the user could not see.
+ */
 export const interactiveSelect: SelectFn = (input) =>
-  selectFrom(input, { input: process.stdin, output: process.stdout });
+  selectFrom(input, { input: process.stdin, output: process.stderr });

@@ -1,8 +1,23 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { configPath, loadConfigOrThrow, readConfig, writeConfig } from "../src/config/manager.js";
+import {
+  configPath,
+  loadConfigOrThrow,
+  readConfig,
+  readConfigText,
+  restoreConfigText,
+  writeConfig,
+} from "../src/config/manager.js";
 import { ConfigError } from "../src/config/schema.js";
 import { CliError, ExitCode } from "../src/output.js";
 
@@ -223,5 +238,36 @@ describe("loadConfigOrThrow", () => {
     const p = join(dir, "config.json");
     writeFileSync(p, JSON.stringify({ api_key: 123 }));
     expect(() => loadConfigOrThrow(p)).toThrow(CliError);
+  });
+});
+
+describe("the config's text, for a rollback that puts it back", () => {
+  it("reads the bytes exactly as they are, and null for no file", () => {
+    const p = join(dir, "config.json");
+    expect(readConfigText(p)).toBeNull();
+    const raw = '{"api_key":"k","host_url":"https://h","project_id":"p"}';
+    writeFileSync(p, raw);
+    expect(readConfigText(p)).toBe(raw);
+  });
+
+  it("throws for a config that is there and cannot be read, rather than calling it absent", () => {
+    // Read as absent, it would be removed by a rollback that thought it had
+    // created it.
+    const p = join(dir, "config.json");
+    mkdirSync(p);
+    expect(() => readConfigText(p)).toThrow();
+  });
+
+  it("writes text back byte for byte, 0600, and removes the file for null", () => {
+    const p = join(dir, "config.json");
+    const raw = '{"api_key":"k"}';
+    restoreConfigText(raw, p);
+    expect(readFileSync(p, "utf8")).toBe(raw);
+    if (process.platform !== "win32") {
+      expect(statSync(p).mode & 0o777).toBe(0o600);
+    }
+    restoreConfigText(null, p);
+    expect(existsSync(p)).toBe(false);
+    expect(() => restoreConfigText(null, p)).not.toThrow();
   });
 });

@@ -1,4 +1,12 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -60,25 +68,71 @@ describe("rewriting a key that appears more than once", () => {
 });
 
 describe("the file's permissions", () => {
-  it("tightens a loose mode even when the value is already correct", () => {
-    // Nothing to write is not nothing to fix: the file holds a live key, and the
-    // mode is part of what this function promises.
+  // POSIX only, as the config and credential tests are: win32 has no mode bits
+  // for these assertions to be about.
+  const posix = process.platform !== "win32";
+
+  /** Runs `body` under `mask`, so a mode that only a permissive umask lets through is caught. */
+  function underUmask<T>(mask: number, body: () => T): T {
+    const previous = process.umask(mask);
+    try {
+      return body();
+    } finally {
+      process.umask(previous);
+    }
+  }
+
+  it.runIf(posix)("creates a new file 0600", () => {
+    // Nothing else has a claim on a file this run invented, and it holds a live key.
+    const path = join(dir(), ".env");
+
+    const result = upsertEnvFile(path, { TRACEROOT_API_KEY: "fresh" });
+
+    expect(result).toEqual({ written: ["TRACEROOT_API_KEY"], created: true });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it.runIf(posix)("keeps the mode of the project's own file when it writes the key", () => {
+    // A Compose service running as another uid reads `./.env` because git
+    // checked it out readable. Tightening it to 0600 took every variable in it
+    // away from that container, not only the key. Under a umask that would
+    // narrow the replacement as well, so the mode has to be carried, not asked for.
+    const path = join(dir(), ".env");
+    writeFileSync(path, "DATABASE_URL=postgres://db\n", "utf8");
+    chmodSync(path, 0o640);
+
+    const result = underUmask(0o077, () => upsertEnvFile(path, { TRACEROOT_API_KEY: "fresh" }));
+
+    expect(result).toEqual({ written: ["TRACEROOT_API_KEY"], created: false });
+    expect(readFileSync(path, "utf8")).toContain("DATABASE_URL=postgres://db");
+    expect(statSync(path).mode & 0o777).toBe(0o640);
+  });
+
+  it.runIf(posix)("takes the mode through a symlink from the file it points at", () => {
+    // A link's own mode (0777 on Linux, 0755 on macOS) says nothing about who
+    // may read the file; carried onto the replacement, it would leave the key
+    // readable by everyone.
     const root = dir();
+    const shared = join(root, "shared.env");
+    writeFileSync(shared, "APP=1\n", "utf8");
+    chmodSync(shared, 0o640);
     const path = join(root, ".env");
+    symlinkSync(shared, path);
+
+    upsertEnvFile(path, { TRACEROOT_API_KEY: "fresh" });
+
+    expect(statSync(path).mode & 0o777).toBe(0o640);
+  });
+
+  it.runIf(posix)("leaves an existing file's mode alone when there is nothing to write", () => {
+    const path = join(dir(), ".env");
     writeFileSync(path, "TRACEROOT_API_KEY=same\n", "utf8");
     chmodSync(path, 0o644);
 
     const result = upsertEnvFile(path, { TRACEROOT_API_KEY: "same" });
 
     expect(result.written).toEqual([]);
-    // Hard-assert the mode on POSIX only, as the config and credential tests do:
-    // `chmodSync` is best-effort on win32 and `upsertEnvFile` swallows its errors,
-    // so the file's existence is all that can be claimed there.
-    if (process.platform !== "win32") {
-      expect(statSync(path).mode & 0o777).toBe(0o600);
-    } else {
-      expect(statSync(path).isFile()).toBe(true);
-    }
+    expect(statSync(path).mode & 0o777).toBe(0o644);
   });
 });
 

@@ -18,6 +18,7 @@ import type { Command } from "commander";
 import { createApiClient } from "../api/client.js";
 import { createTokenProvider } from "../auth/token.js";
 import { configPath } from "../config/manager.js";
+import { MAX_TIMEOUT_MS } from "../context.js";
 import { CliError, ExitCode, defaultWriters } from "../output.js";
 import { runDoctor } from "./doctor.js";
 import { contextFromCommand } from "./shared.js";
@@ -34,7 +35,7 @@ const DEFAULT_TRACE_TIMEOUT_SEC = 120;
  * `--timeout`'s ceiling (Node's timer range) expressed in seconds, so the CLI
  * has one answer to "how long may a duration be".
  */
-const MAX_TRACE_TIMEOUT_SEC = 2_147_483;
+const MAX_TRACE_TIMEOUT_SEC = Math.floor(MAX_TIMEOUT_MS / 1000);
 
 /**
  * Resolves `--trace-timeout`, in seconds.
@@ -154,7 +155,14 @@ export function requireSetupNode(version: string = process.versions.node): void 
 export function registerSetup(program: Command): void {
   const setup = program
     .command("setup")
-    .description("Connect this repository to TraceRoot and verify your first trace")
+    .description("Connect this repository to TraceRoot and see your first trace")
+    // A stray operand is a usage error, not a run. commander 12 allows excess
+    // arguments by default, so `traceroot setup doctr` matched no subcommand
+    // and reached this action with `doctr` ignored: unattended, a typo of
+    // `doctor` minted a project key, wrote it into the repository and handed a
+    // task to a coding agent. Rejected at the parse, before the action runs.
+    // Set before `doctor` is added, which inherits it.
+    .allowExcessArguments(false)
     .option(
       "--agent <agent>",
       "coding agent to run: claude; for any other agent use --no-instrument",
