@@ -376,6 +376,7 @@ export async function runSetupCommand(command: Command, traceTimeoutSec: number)
     language: opts.language as string | undefined,
     service: opts.service as string | undefined,
     project: opts.project as string | undefined,
+    handoff: opts.handoff as string | undefined,
     // commander maps `--no-x` to `x: false`, defaulting to true.
     // An explicit route wins over the prompt. Without one, an interactive run
     // asks and an unattended run writes the task file.
