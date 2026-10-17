@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import type { PackageManager } from "../repo/detect.js";
 import type { DetectedService, DetectedStack, StackLanguage } from "./types.js";
 
@@ -538,6 +538,73 @@ function detectExistingInstrumentation(
   // depends on TraceRoot for other reasons, or one named after it. Only an
   // actual initialization call means there is nothing to do.
   return { present: wired, evidence };
+}
+
+/** The service's entry point as a path from the repository root, if it has one. */
+export function serviceEntryPath(service: DetectedService): string | null {
+  const entry = service.entryPoint;
+  if (entry === null) {
+    return null;
+  }
+  return service.path === "." ? entry : `${service.path}/${entry}`;
+}
+
+/**
+ * Reads whether a service is wired up to TraceRoot *now*, naming the file that
+ * proves it.
+ *
+ * {@link detectStack} asks this once, before anything has been edited, and
+ * stores the answer as `existingInstrumentation`. This is that same reading —
+ * an actual `initialize()` call in hand-written source, by the rules in
+ * {@link initializesTraceRoot} — made available on its own so a caller can ask
+ * again after a coding agent has had the repository. Asking directly is what
+ * separates "nothing was edited" from "something was edited that instrumented
+ * nothing", and unlike a diff it needs no git repository to answer.
+ *
+ * The entry point is read first: it is where the task tells the agent to put
+ * the call, and it is the file worth naming when the answer is no. `alsoRead`
+ * is for files the agent claims to have changed, or that git saw change — a
+ * call wired into a module the entry point imports is still instrumentation,
+ * and refusing to look there would fail a run that worked. Each of those is
+ * tried against the repository root and the service directory, because a
+ * reported path may be relative to either.
+ *
+ * Returns the first file found to start TraceRoot, spelled as it was given, or
+ * `null` when none of them does.
+ */
+export function findTraceRootInitialization(
+  root: string,
+  service: DetectedService,
+  alsoRead: readonly string[] = [],
+): string | null {
+  const dir = service.path === "." ? root : join(root, service.path);
+  const candidates: Array<{ display: string; path: string }> = [];
+  const entry = serviceEntryPath(service);
+  if (entry !== null && service.entryPoint !== null) {
+    candidates.push({ display: entry, path: join(dir, service.entryPoint) });
+  }
+  for (const file of alsoRead) {
+    if (isAbsolute(file)) {
+      candidates.push({ display: file, path: file });
+      continue;
+    }
+    candidates.push({ display: file, path: join(root, file) });
+    candidates.push({ display: file, path: join(dir, file) });
+  }
+
+  for (const candidate of candidates) {
+    // The same exclusion detection makes: a compiled bundle mentions
+    // everything it ever imported, so reading one reports instrumentation that
+    // is not in the source.
+    if (isBuildArtifact(candidate.display)) {
+      continue;
+    }
+    const source = readIfPresent(candidate.path);
+    if (source !== null && initializesTraceRoot(source)) {
+      return candidate.display;
+    }
+  }
+  return null;
 }
 
 /** Languages present in the repo that the CLI cannot instrument. */

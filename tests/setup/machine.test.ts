@@ -2958,6 +2958,10 @@ describe("proving the agent did something", () => {
     const process = fakeRunProcess({
       // Clean before and after: nothing was touched.
       gitStatus: ["", ""],
+      // And the fake agent makes none of its usual edits, so the report is the
+      // only thing this fires on — the wording below is the one for an agent
+      // that said so itself.
+      instrument: false,
       results: {
         claude: {
           output: completion({
@@ -2996,7 +3000,9 @@ describe("proving the agent did something", () => {
   it("accepts a report of edits the worktree did not see", async () => {
     // `observedChangedFiles` is empty outside a git repository and whenever
     // `git status` could not be read, so the observation alone would fail runs
-    // that worked. The agent's claim has to agree before the stage fails.
+    // that worked. The agent's claim has to agree before the stage fails — and
+    // here the agent did instrument the entry point, which is what the stage's
+    // own reading of it finds.
     pythonRepo();
     const process = fakeRunProcess({
       results: { claude: { output: completion({ files_changed: ["main.py"], trace_id: null }) } },
@@ -3025,6 +3031,10 @@ describe("proving the agent did something", () => {
     initGit();
     const process = fakeRunProcess({
       gitStatus: ["", ""],
+      // Nothing edits anything: the service arrived instrumented and leaves
+      // instrumented, which both the exclusion and the reading of the entry
+      // point have to let through.
+      instrument: false,
       results: { claude: { output: completion({ files_changed: [], trace_id: null }) } },
     });
     const deps = makeDeps({
@@ -3038,6 +3048,104 @@ describe("proving the agent did something", () => {
 
     expect(ctx.stack?.existingInstrumentation.present).toBe(true);
     expect(result.error).toBeNull();
+  });
+
+  it("fails the stage when the agent leaves the service uninstrumented", async () => {
+    // The run this comes from: the agent exited 0 having installed the SDK into
+    // `.venv` and edited no source file at all, and emitted no completion block
+    // to parse — so the guard above, which cannot fire without the agent's own
+    // report, was skipped entirely. The run recorded the stage as done, passed
+    // `verify_application` on untouched code, and spent the whole trace timeout
+    // before blaming the instrumented path for never running.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      // Exit 0 and prose only: nothing `parseCompletion` can read.
+      results: { claude: { output: "I have finished instrumenting the service.\n" } },
+      // The only thing git saw: the agent's own directory, which is not a
+      // source file and does not instrument anything.
+      gitStatus: ["", "?? .claude/"],
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.stage).toBe("instrument");
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    const message = plain(result.error?.message ?? "");
+    expect(message).toContain("still not instrumented");
+    // The file it looked in, named so the user can check it themselves.
+    expect(message).toContain("main.py");
+    // Not the other wording: this agent reported nothing, rather than reporting
+    // that it changed nothing.
+    expect(message).not.toContain("without changing any files");
+    expect(result.error?.remedy).toContain("--resume");
+    expect(result.checkpoint.completedStages).not.toContain("instrument");
+    expect(result.checkpoint.completedStages).not.toContain("verify_application");
+    // And the point of failing here: no two-minute wait for a trace that this
+    // service cannot emit.
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("catches an uninstrumented service outside a git repository", async () => {
+    // No `.git`, so `observedChangedFiles` is empty however much the agent did
+    // or did not do, and an inference from file counts is blind here. Reading
+    // the entry point is not.
+    pythonRepo();
+    const process = fakeRunProcess({ instrument: false });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.stage).toBe("instrument");
+    expect(plain(result.error?.message ?? "")).toContain("still not instrumented");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("accepts an initialization wired into a module rather than the entry point", async () => {
+    // The entry point is where the task tells the agent to put the call, but a
+    // call in a module the entry point imports is instrumentation too — so the
+    // check reads what the agent reported changing as well, and a run that
+    // worked is not failed for putting the call one import away.
+    //
+    // Written up front because the fake agent only ever edits the entry point.
+    // Nothing read this file before the stage did: `detect_stack` looks at the
+    // entry point alone, which is why the run starts out "not instrumented".
+    pythonRepo();
+    writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
+    const process = fakeRunProcess({
+      instrument: false,
+      results: {
+        claude: {
+          output: completion({ files_changed: ["tracing.py", "main.py"], trace_id: null }),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.existingInstrumentation.present).toBe(false);
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
   });
 });
 
@@ -4139,6 +4247,23 @@ describe("why no trace arrived", () => {
     // It really did wait for it, rather than giving up on a verdict it has no
     // grounds for.
     expect(plain(err.data)).toContain("Waiting for your first trace");
+  });
+
+  it("keeps a blank line above the wait", async () => {
+    // The wait is the one line left moving for up to two minutes, and it sat
+    // flush against the verification lines above it — reading as one more of
+    // them rather than as the state of the whole run. A rail-only line first,
+    // the same way the agent block gets one.
+    pythonRepo();
+    alreadyInstrumented();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    await runSetupMachine(ctx, traceless());
+
+    const lines = plain(err.data).split("\n");
+    const spinner = lines.findIndex((line) => line.includes("Waiting for your first trace"));
+    expect(spinner).toBeGreaterThan(0);
+    expect(lines[spinner - 1]?.trim()).toBe("\u2502");
   });
 
   it("still blames the unrun application when an agent did the instrumenting", async () => {
