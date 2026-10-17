@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { waitForEnter } from "../../src/setup/tty.js";
+import { type WatchableInput, waitForEnter } from "../../src/setup/tty.js";
 import { fakeInput } from "./helpers.js";
 
 /** Written out rather than embedded, so no control character reaches source. */
@@ -11,16 +11,28 @@ function settle(ms = 40): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * A wait on `input`, with the press count the assertions read.
+ *
+ * Every case below needs the same three things — a counter, the call, and the
+ * stop function it hands back — and differs only in what it does to the stream
+ * in between.
+ */
+function watch(input: WatchableInput): { stop: () => void; presses: () => number } {
+  let pressed = 0;
+  const stop = waitForEnter({
+    input,
+    onEnter: () => {
+      pressed += 1;
+    },
+  });
+  return { stop, presses: () => pressed };
+}
+
 describe("letting the user end a wait with a keypress", () => {
   it("calls back when a line is entered", async () => {
     const input = fakeInput();
-    let pressed = 0;
-    const stop = waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    });
+    const { stop, presses } = watch(input);
 
     // After the drain has run, which is the window the next test is about.
     await settle();
@@ -28,7 +40,7 @@ describe("letting the user end a wait with a keypress", () => {
     await settle();
     stop();
 
-    expect(pressed).toBe(1);
+    expect(presses()).toBe(1);
   });
 
   it("does not count a keystroke typed before the wait began", async () => {
@@ -40,17 +52,11 @@ describe("letting the user end a wait with a keypress", () => {
     input.write(CR);
     input.write(CR);
 
-    let pressed = 0;
-    const stop = waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    });
+    const { stop, presses } = watch(input);
     await settle();
     stop();
 
-    expect(pressed).toBe(0);
+    expect(presses()).toBe(0);
   });
 
   it("still hears the keypress that comes after the backlog was dropped", async () => {
@@ -59,30 +65,18 @@ describe("letting the user end a wait with a keypress", () => {
     const input = fakeInput();
     input.write(CR);
 
-    let pressed = 0;
-    const stop = waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    });
+    const { stop, presses } = watch(input);
     await settle();
     input.write(CR);
     await settle();
     stop();
 
-    expect(pressed).toBe(1);
+    expect(presses()).toBe(1);
   });
 
   it("fires once however much is typed", async () => {
     const input = fakeInput();
-    let pressed = 0;
-    const stop = waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    });
+    const { stop, presses } = watch(input);
 
     await settle();
     input.write(`yes${CR}`);
@@ -90,7 +84,7 @@ describe("letting the user end a wait with a keypress", () => {
     await settle();
     stop();
 
-    expect(pressed).toBe(1);
+    expect(presses()).toBe(1);
   });
 
   it("never touches raw mode, which is what leaves Ctrl+C a signal", async () => {
@@ -102,13 +96,7 @@ describe("letting the user end a wait with a keypress", () => {
     const input = fakeInput();
     const setRawMode = vi.fn(() => input);
     input.setRawMode = setRawMode;
-    let pressed = 0;
-    const stop = waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    });
+    const { stop, presses } = watch(input);
 
     await settle();
     input.write(CR);
@@ -118,7 +106,7 @@ describe("letting the user end a wait with a keypress", () => {
     // Asserted first, so this is not a claim about a function nobody called
     // because the wait never started: the listener attached and the keypress
     // went through the ordinary path, and raw mode was still never asked for.
-    expect(pressed).toBe(1);
+    expect(presses()).toBe(1);
     expect(setRawMode).not.toHaveBeenCalled();
   });
 
@@ -127,20 +115,14 @@ describe("letting the user end a wait with a keypress", () => {
     // resumed stdin eats the keystrokes belonging to the two acknowledgements
     // that close the run.
     const input = fakeInput();
-    let pressed = 0;
-    const stop = waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    });
+    const { stop, presses } = watch(input);
 
     await settle();
     stop();
     input.write(CR);
     await settle();
 
-    expect(pressed).toBe(0);
+    expect(presses()).toBe(0);
     expect(input.isPaused()).toBe(true);
     expect(input.listenerCount("data")).toBe(0);
   });
@@ -150,20 +132,14 @@ describe("letting the user end a wait with a keypress", () => {
     // and resuming the stream would consume input belonging to whatever is on
     // the other end of it.
     const input = new PassThrough() as PassThrough & { isTTY?: boolean };
-    let pressed = 0;
-    const stop = waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    });
+    const { stop, presses } = watch(input);
 
     await settle();
     input.write(CR);
     await settle();
     stop();
 
-    expect(pressed).toBe(0);
+    expect(presses()).toBe(0);
     expect(input.listenerCount("data")).toBe(0);
   });
 
@@ -171,18 +147,13 @@ describe("letting the user end a wait with a keypress", () => {
     // Stopped inside the window the drain is still open in: the listener must
     // never attach at all, rather than attaching behind the stop.
     const input = fakeInput();
-    let pressed = 0;
-    waitForEnter({
-      input,
-      onEnter: () => {
-        pressed += 1;
-      },
-    })();
+    const { stop, presses } = watch(input);
+    stop();
 
     await settle();
     input.write(CR);
     await settle();
 
-    expect(pressed).toBe(0);
+    expect(presses()).toBe(0);
   });
 });

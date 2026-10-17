@@ -3544,9 +3544,10 @@ const verifyTrace: StageDefinition = {
       wizardLine(ctx, "");
       waiting = startLineSpinner({
         sink: ctx.writers.err,
-        message: canSkip
-          ? `Waiting for your first trace (up to ${ctx.flags.traceTimeoutSec}s — Enter to stop waiting)`
-          : `Waiting for your first trace (up to ${ctx.flags.traceTimeoutSec}s)`,
+        // One sentence with the offer appended, not two sentences that happen
+        // to share a prefix: the timeout and the wording belong to every run,
+        // and only the clause about the key is conditional.
+        message: `Waiting for your first trace (up to ${ctx.flags.traceTimeoutSec}s${canSkip ? " — Enter to stop waiting" : ""})`,
       });
     }
 

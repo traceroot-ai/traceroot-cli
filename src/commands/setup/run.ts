@@ -365,26 +365,29 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   const result = await runSetupMachine(ctx, deps.setupDeps);
   writeCheckpoint(ctx.artifactDir, result.checkpoint);
 
-  if (!json && result.ok && result.trace === null && ctx.traceWaitSkipped !== true) {
-    // A run that ended without a trace but without an error: `--no-instrument`
-    // stopped the flow early. Say what happens next rather than implying success.
-    wizardLine(
-      { writers, json },
-      "\nSetup did not reach a first trace yet. Finish the instrumentation task, then run `traceroot setup --resume`.",
-    );
-  }
-
-  // The other way to end without a trace: the user stopped the wait. The
-  // sentence above is the wrong one for it twice over — it says setup "did not
-  // reach" something it was told to stop reaching for, and it sends somebody
-  // who just watched an agent instrument their service off to finish an
-  // instrumentation task that is already done.
-  if (!json && result.ok && result.trace === null && ctx.traceWaitSkipped === true) {
-    wizardNote(
-      writers,
-      skippedTraceNotice({ uiBaseUrl: result.checkpoint.uiBaseUrl ?? null }, writers.err),
-      { settled: true },
-    );
+  // The two ways a run ends ok with no trace, as one decision: they are
+  // mutually exclusive answers to the same question, and the block each one
+  // prints is the wrong one for the other.
+  if (!json && result.ok && result.trace === null) {
+    if (ctx.traceWaitSkipped !== true) {
+      // A run that ended without a trace but without an error: `--no-instrument`
+      // stopped the flow early. Say what happens next rather than implying success.
+      wizardLine(
+        { writers, json },
+        "\nSetup did not reach a first trace yet. Finish the instrumentation task, then run `traceroot setup --resume`.",
+      );
+    } else {
+      // The other way to end without a trace: the user stopped the wait. The
+      // sentence above is the wrong one for it twice over — it says setup "did
+      // not reach" something it was told to stop reaching for, and it sends
+      // somebody who just watched an agent instrument their service off to
+      // finish an instrumentation task that is already done.
+      wizardNote(
+        writers,
+        skippedTraceNotice({ uiBaseUrl: result.checkpoint.uiBaseUrl ?? null }, writers.err),
+        { settled: true },
+      );
+    }
   }
 
   // The two blocks that close a successful run, in the order a user acts on
