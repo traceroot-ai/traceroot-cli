@@ -58,14 +58,44 @@ export function resolveOnPath(
  * headless through install, edit, run and report asks for a writable workspace,
  * network access, a package-manager cache the agent is allowed to write, and an
  * environment this CLI controls rather than one the user's shell profile
- * re-exports over the top of. A place here is earned by a recorded run of this
- * pipeline that reached a trace, for each package manager the language has —
- * not by the agent being installable.
+ * re-exports over the top of.
+ *
+ * The two entries are not on this list on the same evidence, and the comment
+ * that used to stand here claimed otherwise. It said a place was "earned by a
+ * recorded run of this pipeline that reached a trace, for each package manager
+ * the language has". That is still the bar Claude Code cleared, and it is not
+ * the bar Codex cleared:
+ *
+ * - `claude` — recorded runs of this pipeline, through to a trace, per package
+ *   manager. The strong case, and the one the sentence above described.
+ * - `codex` — its headless interface read off OpenAI's published Codex
+ *   documentation (`codex exec`, a prompt on stdin via `-`, the
+ *   `workspace-write` sandbox, and the config overrides for approvals and
+ *   sandbox network access; see `buildInvocation` in ./launch.ts). No run of this
+ *   pipeline has driven Codex to a trace, on any package manager. What is
+ *   established is that the invocation is spelled out of documented flags
+ *   rather than guessed at; what is not established is that a Codex run of
+ *   *this* task installs an SDK, edits an entry point and emits a trace. The
+ *   documentation is the whole of the evidence: no `codex` binary was present
+ *   to probe, so not even `codex exec --help` has confirmed the spellings.
+ *
+ * It is here anyway because the alternative is worse for the user it is about.
+ * A wizard that finds `codex` on PATH and offers nothing but "run it yourself"
+ * is not being careful on their behalf — it is declining to try the thing they
+ * installed, on a machine where the one agent it does offer is absent. The run
+ * stays safe to attempt rather than certain to work: the sandbox is explicit,
+ * no bypass switch is ever passed, a failure pauses the run without reverting
+ * the user's worktree, and `--no-instrument` still writes the task out for
+ * whichever agent they prefer.
+ *
+ * So the rule going forward is that an entry here carries its own basis in this
+ * comment. Promoting Codex's to the first kind takes recorded runs, not a
+ * second reading of the same documentation.
  *
  * An agent that is not on this list is still a first-class skill target, and
  * `--no-instrument` still writes the instrumentation task out for it.
  */
-const LAUNCHABLE_AGENT_IDS: readonly AgentId[] = ["claude"];
+const LAUNCHABLE_AGENT_IDS: readonly AgentId[] = ["claude", "codex"];
 
 /** {@link LAUNCHABLE_AGENT_IDS} as adapters, in the registry's stable order. */
 export const LAUNCHABLE_AGENTS: readonly AgentAdapter[] = ALL_AGENTS.filter((adapter) =>

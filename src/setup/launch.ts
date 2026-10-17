@@ -19,6 +19,21 @@ export interface AgentInvocation {
    */
   promptVia: "stdin" | "argv";
   interactive: boolean;
+  /**
+   * What this agent's captured stdout can be parsed into for the activity feed.
+   *
+   * `claude-stream-json` is Claude Code's `--output-format stream-json`, which
+   * `createActivityParser` reads. `none` means the run shows a spinner and an
+   * elapsed counter and no per-tool lines — which is the honest rendering for
+   * an agent whose event schema this CLI has not verified, and strictly better
+   * than feeding one parser somebody else's format and narrating whatever
+   * happens to match.
+   *
+   * It is on the invocation rather than keyed off the agent id at the call
+   * site, because it is a property of the argv built here: the format is a
+   * consequence of the flags, so the two cannot drift apart.
+   */
+  activityFormat: "claude-stream-json" | "none";
 }
 
 export interface BuildInvocationInput {
@@ -61,6 +76,13 @@ export interface BuildInvocationInput {
  * would end the run without doing the work). Setup never offers a
  * bypass-all-permissions switch — asking a user to disable their agent's safety
  * rails during a first-run install teaches exactly the wrong habit.
+ *
+ * Each case is built from that agent's own documented interface rather than
+ * translated out of the one above it. The paragraphs so far describe a tool
+ * whose permissions are a list of named tools; the next agent's are a sandbox,
+ * and the two express "edit files, ask nobody" in nothing like the same way.
+ * Where an intent has no mechanism on the other side, the case says so in
+ * place of reaching for the nearest-looking flag.
  */
 export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
   const { agentId, interactive } = input;
@@ -108,6 +130,7 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
             ],
             promptVia: "argv",
             interactive: true,
+            activityFormat: "none",
           }
         : {
             program: "claude",
@@ -130,7 +153,127 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
             ],
             promptVia: "stdin",
             interactive: false,
+            activityFormat: "claude-stream-json",
           };
+    case "codex":
+      // Every flag here is one OpenAI's published Codex documentation spells
+      // out for `codex exec`. None of it was arrived at by analogy with Claude
+      // Code above, because the two agents do not share a permission model:
+      // Claude's is a per-tool allow/deny list, Codex's is a sandbox. A flag
+      // guessed from the wrong model fails at the moment a user is watching, on
+      // their repository, so what could not be established is left out and said
+      // out loud rather than approximated.
+      //
+      // What "documented" does and does not mean here: every flag, subcommand
+      // and config key below is named in OpenAI's own Codex reference, and none
+      // of it has been run against an installed `codex` — there was no binary on
+      // the machine this was written on to run `codex exec --help` against. So
+      // the spellings are sourced, and the combination is unproven. The two `-c`
+      // overrides are the weakest link: the flag takes `key=value` and the keys
+      // exist, but that this CLI's dotted spelling of them parses is an
+      // inference. It fails loudly if it is wrong — a usage error at startup,
+      // before the agent has touched a file — which is the failure mode to
+      // prefer when something has to be inferred at all.
+      //
+      // `exec` is the non-interactive subcommand. The prompt is the positional
+      // argument, and `-` is documented as "read it from stdin" — which is the
+      // channel this launch already uses for Claude, for the same reason: a
+      // multi-kilobyte task in argv is visible in `ps` and subject to the
+      // platform's argv limit.
+      //
+      // `--sandbox workspace-write` is the equivalent of Claude's
+      // `--permission-mode acceptEdits`, and it is not optional: `codex exec`
+      // defaults to a *read-only* sandbox, so without it the agent reads the
+      // task, cannot write a line of the instrumentation, and exits having
+      // reported that it could not. It is also what OpenAI's own documentation
+      // recommends for a non-interactive run. `--full-auto` is deliberately not
+      // used: the current documentation says it is no longer supported, and
+      // `--dangerously-bypass-approvals-and-sandbox` (`--yolo`) is exactly the
+      // bypass-all-permissions switch this function's contract refuses to offer.
+      //
+      // The two `-c` overrides are documented config keys set through the
+      // documented inline-override flag, and both are load-bearing:
+      //
+      //   `sandbox_workspace_write.network_access=true` — under
+      //   `workspace-write` the sandbox has network access turned off by
+      //   default. The first thing this task asks for is `pip install` or
+      //   `npm install`, so the default turns the whole run into a long way of
+      //   discovering that the SDK could not be fetched.
+      //
+      //   `approval_policy="never"` — a non-interactive run has nobody to
+      //   approve anything, and the policy otherwise comes from the user's own
+      //   `$CODEX_HOME/config.toml`. Pinned so this launch does not inherit an
+      //   `on-request` policy from a file setup has never read. Quoted so the
+      //   value is unambiguously a TOML string.
+      //
+      // `--color never` keeps ANSI escapes out of the captured stdout. The
+      // completion block is recovered from that text by a fenced-block regex
+      // (see `parseCompletion`), and that parse is what the "agent exited 0
+      // having changed nothing" check depends on — so a user with `FORCE_COLOR`
+      // exported must not be able to break it.
+      //
+      // `--skip-git-repo-check` because setup supports a repository that is not
+      // a git repository and `codex exec` otherwise refuses to start in one.
+      //
+      // NOT mirrored, because the mechanism does not exist on this side:
+      //
+      //   `allowedPrograms` — Codex has no per-program allow list. Claude needs
+      //   one because `acceptEdits` accepts edits and refuses execution; under
+      //   `workspace-write` Codex runs commands inside the sandbox instead, so
+      //   the thing those rules buy is already the default here.
+      //
+      //   `readableDirs` — Claude's `--add-dir` exists because Claude Code
+      //   scopes file *reads* to the working directory and the skill installs
+      //   at the repository root. Codex's sandbox governs writes, execution and
+      //   network, not read scope, so the skill above the service is readable
+      //   with no flag at all. (A service in a monorepo subdirectory that needs
+      //   to *write* above itself — a root lockfile, say — is the open question
+      //   the first recorded Codex run should answer;
+      //   `sandbox_workspace_write.writable_roots` is the documented key for
+      //   it, and it is not set here on a guess.)
+      //
+      //   The deny list — `EnterPlanMode`, `Task`, `Agent` exist to stop a
+      //   plan-mode exit ending the run without doing the work, and to stop
+      //   subagents spending minutes on access they cannot gain. `codex exec`
+      //   has neither a plan mode to exit nor a subagent tool to spawn, so the
+      //   intent holds without a flag. Web search is the one tool worth keeping
+      //   off, and it is off unless `--search` is passed — so it is withheld by
+      //   omission rather than denied by name.
+      if (interactive) {
+        // Not a limitation worth hiding behind an invented flag. Nothing in
+        // this pipeline builds an interactive invocation — the instrument stage
+        // passes `interactive: false` — and how Codex's TUI takes an initial
+        // prompt is not something the documentation consulted for the headless
+        // path established. Whoever turns interactive runs on reads that first.
+        throw new Error(
+          "agent 'codex' cannot be launched interactively: setup has only established its headless `codex exec` invocation",
+        );
+      }
+      return {
+        program: "codex",
+        args: [
+          "exec",
+          "--skip-git-repo-check",
+          "--sandbox",
+          "workspace-write",
+          "--color",
+          "never",
+          "-c",
+          "sandbox_workspace_write.network_access=true",
+          "-c",
+          'approval_policy="never"',
+          // The positional prompt argument, and therefore last.
+          "-",
+        ],
+        promptVia: "stdin",
+        interactive: false,
+        // `codex exec --json` emits newline-delimited events, but the field
+        // names differ between releases and nothing here has been run against
+        // the binary to settle which. A feed built on a guessed schema either
+        // shows nothing or narrates the wrong thing; the spinner and its
+        // elapsed counter say the true part either way.
+        activityFormat: "none",
+      };
     default:
       // Only the agents in `LAUNCHABLE_AGENTS` reach here with a case of their
       // own. `generic` has no launchable binary at all, and the machine routes

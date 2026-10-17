@@ -3729,30 +3729,44 @@ describe("how to instrument", () => {
     expect(ctx.instrumentation?.promptPath).not.toBeNull();
   });
 
+  /** A PATH carrying real, statable agent binaries, so detection finds them. */
+  function withAgentsInstalled(...names: string[]): NodeJS.ProcessEnv {
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    for (const name of names) {
+      const binary = join(dir, "bin", name);
+      writeFileSync(binary, "#!/bin/sh\n");
+      // Executable, because that is what "installed" means: resolution checks
+      // the execute bit, so a plain file here is not an agent anyone could run.
+      chmodSync(binary, 0o755);
+    }
+    return { PATH: join(dir, "bin") };
+  }
+
   /** A PATH with a real, statable `claude` on it, so detection finds one. */
   function withClaudeInstalled(): NodeJS.ProcessEnv {
-    mkdirSync(join(dir, "bin"), { recursive: true });
-    const binary = join(dir, "bin", "claude");
-    writeFileSync(binary, "#!/bin/sh\n");
-    // Executable, because that is what "installed" means: resolution checks the
-    // execute bit, so a plain file here is not an agent anyone could run.
-    chmodSync(binary, 0o755);
-    return { PATH: join(dir, "bin") };
+    return withAgentsInstalled("claude");
   }
 
   /** Records every question, so the *number* of them can be asserted. */
   function recordingSelect(deps: SetupDeps): {
     deps: SetupDeps;
-    asked: Array<{ message: string; options: string[] }>;
+    asked: Array<{ message: string; options: string[]; labels: string[] }>;
   } {
-    const asked: Array<{ message: string; options: string[] }> = [];
+    const asked: Array<{ message: string; options: string[]; labels: string[] }> = [];
     const inner = deps.select;
     return {
       asked,
       deps: {
         ...deps,
         select: async (input) => {
-          asked.push({ message: input.message, options: input.options.map((o) => o.value) });
+          asked.push({
+            message: input.message,
+            options: input.options.map((o) => o.value),
+            // The labels as well, because with two runnable agents the value is
+            // no longer the whole of what the user reads: the option has to name
+            // which agent it means.
+            labels: input.options.map((o) => o.label),
+          });
           return inner(input);
         },
       },
@@ -3809,6 +3823,106 @@ describe("how to instrument", () => {
     expect(result.ok).toBe(true);
     const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
     expect(how?.options).toEqual(["task-file", "manual"]);
+  });
+
+  it("names each installed agent in the one question, and launches the one chosen", async () => {
+    // Two launchable agents, so the run option cannot say "a coding agent" and
+    // leave the user to find out which. One option each, each naming itself,
+    // and still no second question about which — that split is the thing this
+    // question exists to avoid.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const { deps, asked } = recordingSelect(
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: process.run,
+        env: withAgentsInstalled("claude", "codex"),
+        answers: ["agent:codex"],
+      }),
+    );
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: undefined } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    // The registry's order, so it is the same on every machine rather than a
+    // function of which binary happened to resolve first.
+    expect(how?.options).toEqual(["agent:claude", "agent:codex", "task-file", "manual"]);
+    expect(how?.labels).toEqual([
+      "Run Claude Code for me",
+      "Run Codex for me",
+      "Write the task — I'll run my own agent",
+      "Show me manual instructions",
+    ]);
+    expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
+    expect(ctx.agent?.id).toBe("codex");
+    expect(ctx.method).toBe("agent");
+
+    // Launched with Codex's own invocation, not Claude's: the headless
+    // subcommand, the sandbox that can write, and the task on stdin.
+    const launched = process.runs.find((r) => r.program === "codex");
+    expect(launched).toBeDefined();
+    expect(launched?.args[0]).toBe("exec");
+    expect(launched?.args).toContain("workspace-write");
+    expect(launched?.args.at(-1)).toBe("-");
+    expect(launched?.stdin).toContain("Instrument this service with TraceRoot");
+    expect(launched?.args.join(" ")).not.toContain("--permission-mode");
+    // And Claude Code, which is equally installed here, was never started.
+    expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+  });
+
+  it("offers only the installed one when just Codex is there", async () => {
+    // One launchable agent means one run option and no follow-up question —
+    // the same shape the single-Claude machine gets, with the other name.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const { deps, asked } = recordingSelect(
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: process.run,
+        env: withAgentsInstalled("codex"),
+        answers: ["agent:codex"],
+      }),
+    );
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: undefined } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    expect(how?.options).toEqual(["agent:codex", "task-file", "manual"]);
+    expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
+    expect(process.runs.filter((r) => r.program === "codex")).toHaveLength(1);
+  });
+
+  it("launches Codex on --agent codex without asking anything", async () => {
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const { deps, asked } = recordingSelect(
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: process.run,
+        env: withAgentsInstalled("claude", "codex"),
+      }),
+    );
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "codex" } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(asked.filter((q) => q.message.includes("How should TraceRoot be added"))).toEqual([]);
+    expect(process.runs.filter((r) => r.program === "codex")).toHaveLength(1);
+    expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+    // The suite's fake agent instruments the entry point of whichever agent
+    // program is launched, and the instrument stage fails the run when the
+    // entry point still has no `initialize()` in it. So reaching `ok` already
+    // proves the fake ran for `codex`; this says it in one line rather than
+    // leaving it to be inferred from the absence of a failure.
+    expect(readFileSync(join(dir, "main.py"), "utf8")).toContain("traceroot.initialize(");
   });
 
   it("still launches exactly what --agent names", async () => {

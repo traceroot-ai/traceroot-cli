@@ -2461,9 +2461,26 @@ function runTaskSentence(ctx: SetupContext, subject: string): string {
  * because none is on PATH — an option that was never available presented as
  * though it were.
  *
- * So the runnable agents *are* the run options. One installed agent means one
- * such option and no follow-up question; none installed means the option is
- * simply not there, which is the honest rendering of that machine.
+ * So the runnable agents *are* the run options, one option each, and the three
+ * cases fall out of that rather than being special-cased:
+ *
+ * - none runnable — there is no run option, which is the honest rendering of
+ *   that machine. The question is still worth asking: the remaining two answers
+ *   are genuinely different, and neither edits any code.
+ * - one runnable — one option, and it names the agent ("Run Claude Code for
+ *   me"), so answering it is answering both halves of the decision at once.
+ * - two or more runnable — one option each, still named. The alternative is a
+ *   single "use a locally installed coding agent" option followed by a second
+ *   question about which one, which is the split this function exists to avoid:
+ *   the names are two words each, they fit on the line, and a user who came
+ *   here to have Codex do it should not have to pick a category first. The
+ *   agents' own registry order decides the order, so it is stable across runs
+ *   rather than a function of which binary resolved first.
+ *
+ * `--method agent` is the one route that reaches the "or ask" form, because a
+ * flag that says to run *an* agent has not said which: there `selectAgent`'s
+ * own ladder asks, auto-selects a single agent, or names `--agent` when nobody
+ * can be asked.
  *
  * The default when nobody can be asked is deliberately NOT "run an agent". A CI
  * job, a `--json` consumer, or a piped invocation must never discover after the
@@ -2891,43 +2908,49 @@ const instrument: StageDefinition = {
       // "Starting agent..." was always the first line written.
       const parseActivity = createActivityParser();
 
+      // Built before the launch rather than inline in it, because the launch
+      // now has to ask the invocation a question: not every agent's captured
+      // stdout is a stream this CLI can read, and the one that answers that is
+      // the argv.
+      const invocation = buildInvocation({
+        agentId: agent.id,
+        task,
+        interactive: false,
+        // The repository root, whenever the agent is standing somewhere
+        // else. That is where the skill and its reference files live.
+        readableDirs: agentCwd === ctx.root ? [] : [ctx.root],
+        // Exactly the programs this task names, plus the manifest tools
+        // it will reach for. An interpreter it cannot execute leaves it
+        // able to write instrumentation and unable to prove any of it.
+        allowedPrograms: [
+          // Every spelling the task names, not only the absolute one.
+          //
+          // The task names a service-local interpreter relatively in the
+          // command it tells the agent to run, because an absolute path
+          // under a directory with spaces and parentheses is a quoting
+          // problem the agent has to solve on the first try. A permission
+          // rule matches the start of a command literally, so allowing only
+          // the absolute path refuses exactly the command the task gave.
+          ...taskInterpreters(pythonInterpreter, ctx.root, service.path),
+          "python3",
+          "python",
+          "uv",
+          "npm",
+          "pnpm",
+          "yarn",
+          "node",
+          "ls",
+          "cat",
+          "grep",
+        ],
+      });
+
       let result: Awaited<ReturnType<typeof launchAgent>>;
       let observedChangedFiles: string[];
       try {
         result = await launchAgent({
           credentialFiles: applicationCredentialFiles(ctx),
-          invocation: buildInvocation({
-            agentId: agent.id,
-            task,
-            interactive: false,
-            // The repository root, whenever the agent is standing somewhere
-            // else. That is where the skill and its reference files live.
-            readableDirs: agentCwd === ctx.root ? [] : [ctx.root],
-            // Exactly the programs this task names, plus the manifest tools
-            // it will reach for. An interpreter it cannot execute leaves it
-            // able to write instrumentation and unable to prove any of it.
-            allowedPrograms: [
-              // Every spelling the task names, not only the absolute one.
-              //
-              // The task names a service-local interpreter relatively in the
-              // command it tells the agent to run, because an absolute path
-              // under a directory with spaces and parentheses is a quoting
-              // problem the agent has to solve on the first try. A permission
-              // rule matches the start of a command literally, so allowing only
-              // the absolute path refuses exactly the command the task gave.
-              ...taskInterpreters(pythonInterpreter, ctx.root, service.path),
-              "python3",
-              "python",
-              "uv",
-              "npm",
-              "pnpm",
-              "yarn",
-              "node",
-              "ls",
-              "cat",
-              "grep",
-            ],
-          }),
+          invocation,
           task,
           // The service, not the repository root.
           //
@@ -2947,8 +2970,13 @@ const instrument: StageDefinition = {
           signal: ctx.signal,
           host: session.host,
           runProcess: deps.runProcess,
+          // Only for an agent whose output format this parser was written
+          // against. Handing it another agent's stdout would render whichever
+          // fragments happened to match its shape — a feed that is wrong is
+          // worse than a spinner that is quiet, because it reads as a record
+          // of what the agent did.
           onData:
-            feed === null
+            feed === null || invocation.activityFormat !== "claude-stream-json"
               ? undefined
               : (chunk) => {
                   for (const line of parseActivity(chunk)) {
