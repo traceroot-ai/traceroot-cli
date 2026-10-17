@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { applicationEnvKeys } from "../../src/setup/envWrite.js";
 import { acknowledgeProduction, productionNotice } from "../../src/setup/production.js";
+import type { ApplicationKeyLocation } from "../../src/setup/types.js";
 import { plain } from "./colour.js";
 import { makeWriters } from "./helpers.js";
 
+/** The ordinary run: one of the project's own env files holds the key. */
+const IN_ENV_FILE: ApplicationKeyLocation = { kind: "file", path: "./.env" };
+
 const text = (language: Parameters<typeof productionNotice>[0]["language"]) =>
-  productionNotice({ language }).map(plain).join("\n");
+  productionNotice({ language, keyLocation: IN_ENV_FILE }).map(plain).join("\n");
 
 describe("what the notice says", () => {
   it("names the variable and the file, and never the key at all", () => {
@@ -67,17 +71,12 @@ describe("what the notice says", () => {
     // went to `apps/api/.env.local` sends the user to a file they do not have.
     const notice = productionNotice({
       language: "python",
-      credentialEnvFile: "apps/api/.env.local",
+      keyLocation: { kind: "file", path: "apps/api/.env.local" },
     })
       .map(plain)
       .join("\n");
     expect(notice).toContain("apps/api/.env.local");
     expect(notice).not.toContain("./.env ");
-  });
-
-  it("falls back to ./.env when the caller names no file", () => {
-    const notice = productionNotice({ language: "python" }).map(plain).join("\n");
-    expect(notice).toContain("./.env");
   });
 
   it("opens on the verb, with no heading in front of it", () => {
@@ -86,7 +85,7 @@ describe("what the notice says", () => {
     // marker already does, and pushing the verb far enough right that the line
     // wrapped mid-instruction on an ordinary window.
     for (const language of ["python", "typescript", null] as const) {
-      const notice = productionNotice({ language }).map(plain);
+      const notice = productionNotice({ language, keyLocation: IN_ENV_FILE }).map(plain);
       expect(notice[0]).toContain("Add the TRACEROOT_API_KEY token");
       expect(notice[0]).toContain("./.env");
       expect(notice[0]).toContain("to your production environment.");
@@ -95,10 +94,71 @@ describe("what the notice says", () => {
   });
 });
 
+describe("the runs where no file holds the key", () => {
+  // Two of them, and they were one. The notice took an optional filename that
+  // fell back to `./.env`, so a run that wrote no file still signed off by
+  // telling the user to open one — in the tracked case, one that holds nothing
+  // at all. Both reach this block with a trace, which is what makes them worth
+  // a sentence each rather than a default.
+  const lines = (keyLocation: ApplicationKeyLocation) =>
+    productionNotice({ language: "python", keyLocation }).map(plain);
+
+  it("names no file when the key came from the user's own environment", () => {
+    const notice = lines({ kind: "environment" });
+
+    // The instruction survives whole: production still needs the variable, and
+    // that is the point of the block.
+    expect(notice[0]).toBe("Add the TRACEROOT_API_KEY token to your production environment.");
+    // And it does not send them to a file that was never written.
+    expect(notice.join("\n")).not.toContain(".env");
+    // What it says instead: where the value they are copying actually is.
+    expect(notice[1]).toContain("read TRACEROOT_API_KEY from your own environment");
+    expect(notice[1]).toContain("the value to copy is the one already set on this machine");
+    // The dotenv caveat goes with the file. The key is already in the
+    // environment the application starts in — there is nothing to load.
+    expect(notice.join("\n")).not.toContain("load_dotenv");
+  });
+
+  it("says outright that nothing holds the key when a tracked file was refused", () => {
+    const notice = lines({ kind: "refused", path: "apps/api/.env" });
+
+    expect(notice[0]).toBe("Add the TRACEROOT_API_KEY token to your production environment.");
+    // The file is named, because it is the reason — and it is named as the file
+    // this run would not write, never as somewhere to go and look.
+    expect(notice[1]).toBe(
+      "Nothing on this machine holds TRACEROOT_API_KEY: apps/api/.env is tracked by git, so this run did not write the key into it. Give your deployment a key of its own.",
+    );
+    expect(notice[1]).not.toContain("from your local");
+  });
+
+  it("still names the host variable off the default host", () => {
+    // The variable list is derived from the host and the instruction is derived
+    // from the location, and these are the cases where the second one no longer
+    // carries a filename. A run on a self-hosted instance that wrote no file
+    // needs both variables named as much as any other.
+    for (const keyLocation of [
+      { kind: "environment" },
+      { kind: "refused", path: ".env" },
+    ] as const) {
+      const notice = productionNotice({
+        language: "python",
+        host: "https://staging.traceroot.ai",
+        keyLocation,
+      }).map(plain);
+      expect(notice[0]).toBe(
+        "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables to your production environment.",
+      );
+      expect(notice.join("\n")).toContain(
+        "Exporting only TRACEROOT_API_KEY leaves the SDK on its default host",
+      );
+    }
+  });
+});
+
 describe("which variables it tells you to carry", () => {
   const STAGING = "https://staging.traceroot.ai";
   const notice = (host?: string) =>
-    productionNotice({ language: "python", host }).map(plain).join("\n");
+    productionNotice({ language: "python", host, keyLocation: IN_ENV_FILE }).map(plain).join("\n");
 
   it("names every variable the file holds, not just the key", () => {
     // The bug this closes. `configure_repository` writes `TRACEROOT_HOST_URL`
@@ -149,7 +209,7 @@ describe("which variables it tells you to carry", () => {
     const text = productionNotice({
       language: "python",
       host: STAGING,
-      credentialEnvFile: "apps/api/.env.local",
+      keyLocation: { kind: "file", path: "apps/api/.env.local" },
     })
       .map(plain)
       .join("\n");
@@ -189,6 +249,7 @@ describe("acknowledging it", () => {
     return acknowledgeProduction({
       writers,
       language: "python",
+      keyLocation: IN_ENV_FILE,
       prompt: async (question) => {
         asked.push(question);
         return "anything at all";
@@ -211,6 +272,7 @@ describe("acknowledging it", () => {
     await acknowledgeProduction({
       writers,
       language: "typescript",
+      keyLocation: IN_ENV_FILE,
       prompt: null,
     });
     expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY token");
@@ -226,6 +288,7 @@ describe("acknowledging it", () => {
       writers,
       language: "python",
       host: "https://staging.traceroot.ai",
+      keyLocation: IN_ENV_FILE,
       prompt: async (question) => {
         asked.push(question);
         return "";

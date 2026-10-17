@@ -1,7 +1,7 @@
 import type { Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import { HOST_ENV, KEY_ENV, applicationEnvKeys } from "./envWrite.js";
-import type { StackLanguage } from "./types.js";
+import type { ApplicationKeyLocation, StackLanguage } from "./types.js";
 import {
   wizardAcknowledgement,
   wizardAside,
@@ -36,29 +36,26 @@ import { settleAcknowledgement } from "./wizard.js";
  * says the SDK does not, and names what would.
  */
 
-/**
- * Where the credential lands when the caller does not say.
- *
- * A default rather than a constant filename: the run chooses between the
- * project's own env files, so the notice is told which one it picked. `KEY_ENV`
- * and `HOST_ENV` come from `envWrite.ts`, which is the one place that decides
- * which variables the file holds.
- */
-const DEFAULT_ENV_FILE = "./.env";
-
 export interface ProductionNoticeInput {
   /** The instrumented service's language; null when the run never settled one. */
   language: StackLanguage | null;
   /**
-   * The file the credential actually landed in, as the user should see it:
-   * relative to the repository root, `./`-prefixed at the root.
+   * Where the key is on this machine, which is what the user is being asked to
+   * copy from — see {@link ApplicationKeyLocation}.
    *
-   * Both halves vary now. The file follows the service, so a run that
-   * instrumented `apps/api` wrote it there; and the *name* is whichever of the
-   * project's own env files the run chose, which is `.env.local` as readily as
-   * `.env`. Naming the wrong one sends the user to a file they do not have.
+   * Required, and deliberately not a filename with a default behind it. It was
+   * an optional path that fell back to `./.env`, which is right for almost
+   * every run and a fabrication for the rest: a run whose key came from the
+   * user's own environment wrote no file at all, and a run that refused a
+   * tracked env file wrote the key down nowhere. Both of those reach this block,
+   * both were told to open `./.env`, and in the second there is nothing in any
+   * file to find. A caller that has to state the case cannot reintroduce that.
+   *
+   * The file case varies on both halves: it follows the service, so a run that
+   * instrumented `apps/api` wrote it there, and the name is whichever of the
+   * project's own env files the run chose — `.env.local` as readily as `.env`.
    */
-  credentialEnvFile?: string;
+  keyLocation: ApplicationKeyLocation;
   /**
    * The host this run authenticated against, which is what decides how many
    * variables the user has to carry.
@@ -78,7 +75,7 @@ export interface ProductionNoticeInput {
  *
  * No Oxford comma, matching the rest of the wizard's copy.
  */
-function nameList(names: readonly string[]): string {
+export function nameList(names: readonly string[]): string {
   if (names.length <= 1) {
     return names[0] ?? "";
   }
@@ -102,11 +99,7 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
   // list they are not all tokens. The singular sentence is unchanged, which is
   // the sentence almost every run prints.
   const noun = keys.length === 1 ? "token" : "variables";
-  // The file as the caller named it, whole. It used to be a directory joined to
-  // a constant filename; the name is now whichever of the project's own env
-  // files the run chose, so the caller passes the path and this does not guess.
-  const path = input.credentialEnvFile ?? DEFAULT_ENV_FILE;
-  const file = wizardEmphasis(path);
+  const location = input.keyLocation;
 
   return [
     // One sentence, unwrapped, and nothing parenthetical inside it. This was
@@ -119,12 +112,20 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
     // marker already does — and it pushed the verb far enough right that the
     // line wrapped in the middle of the instruction on an ordinary window.
     // What is left starts with the thing to do.
-    `Add the ${named} ${noun} from your local ${file} file to your production environment.`,
-    // The caveat, compressed to a line, because it is true and it bites
-    // locally rather than only on deploy: neither SDK carries a dotenv
-    // dependency, so the file reaches the process environment only if the
-    // project loads it.
-    wizardAside(localCaveat(input.language, path, keys)),
+    //
+    // The "from your local <file>" clause is there only when a file is. Naming
+    // one anyway is how this block came to tell a user whose key never reached
+    // a file to go and open one, which is worse than saying less: the
+    // instruction is still followable without the clause, and with a wrong
+    // filename in it the user's first move is to look for something that is
+    // not there.
+    location.kind === "file"
+      ? `Add the ${named} ${noun} from your local ${wizardEmphasis(location.path)} file to your production environment.`
+      : `Add the ${named} ${noun} to your production environment.`,
+    // The footnote, one line, and a different one per case — because what the
+    // user needs to know next genuinely differs. With a file it is whether the
+    // file reaches the process; without one it is where the value is at all.
+    wizardAside(footnote(location, input.language, keys)),
     // And the clause that would have saved the user who found this.
     //
     // A sentence of its own rather than another dependent clause on the line
@@ -139,6 +140,38 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
         ]
       : []),
   ];
+}
+
+/**
+ * The one line under the instruction, chosen by where the key actually is.
+ *
+ * Three answers, because the user's next question is not the same one in each.
+ * With a file it is "will my app read that file" — see {@link localCaveat},
+ * which is the answer and the only one of the three that was ever written. The
+ * other two exist because the run reaches this block without a file more often
+ * than it looks: a key already in the user's environment, or a tracked env file
+ * this run refused to write a live key into.
+ */
+function footnote(
+  location: ApplicationKeyLocation,
+  language: StackLanguage | null,
+  keys: readonly string[],
+): string {
+  if (location.kind === "file") {
+    return localCaveat(language, location.path, keys);
+  }
+  if (location.kind === "environment") {
+    // Nothing to warn about locally: the key is already in the environment the
+    // application will start in, which is the whole reason no file was written.
+    // What the user needs is where to copy it from, and the answer is "here".
+    return `This run read ${KEY_ENV} from your own environment rather than writing it to a file, so the value to copy is the one already set on this machine.`;
+  }
+  // The refusal, and the only case where there is nothing anywhere to copy. The
+  // key was never printed — it goes into the child's environment and into a
+  // file, and this run got neither — so sending the user to look for it would
+  // be sending them after a value that no longer exists. A key of its own for
+  // the deployment is the honest instruction, and it is also the better one.
+  return `Nothing on this machine holds ${KEY_ENV}: ${wizardEmphasis(location.path)} is tracked by git, so this run did not write the key into it. Give your deployment a key of its own.`;
 }
 
 /**
