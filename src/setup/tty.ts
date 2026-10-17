@@ -12,8 +12,11 @@ import type { Sink } from "../output.js";
  * neither. Two copies of this predicate would eventually disagree.
  */
 export function canRedraw(sink: Sink, env: NodeJS.ProcessEnv): boolean {
-  const tty = (sink as unknown as { isTTY?: boolean }).isTTY === true;
-  return tty && env.TERM !== "dumb" && (env.NO_COLOR === undefined || env.NO_COLOR === "");
+  return (
+    sink.isTTY === true &&
+    env.TERM !== "dumb" &&
+    (env.NO_COLOR === undefined || env.NO_COLOR === "")
+  );
 }
 
 /** The input side of the terminal, narrowed to what discarding type-ahead needs. */

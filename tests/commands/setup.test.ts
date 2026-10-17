@@ -1,7 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { Command } from "commander";
+import { delimiter, join } from "node:path";
+import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
+import { type Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
 import { runDoctor } from "../../src/commands/doctor.js";
@@ -10,16 +15,21 @@ import {
   resolveServiceOption,
   resolveTraceTimeoutSec,
 } from "../../src/commands/setup.js";
+import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import {
+  type SetupContextDeps,
   canPrompt,
   closingLine,
   closingSentence,
   resumeQuestion,
   runSetup,
+  runSetupCommand,
+  setupContext,
   setupFailureExit,
 } from "../../src/commands/setup/run.js";
+import { loadOptionalEnvFileFromDisk } from "../../src/config/envFile.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
-import type { Context } from "../../src/context.js";
+import { type Context, buildContext } from "../../src/context.js";
 import type { DoctorCheck } from "../../src/doctor/types.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
@@ -27,6 +37,7 @@ import { ExitCode, isCliError, reportError } from "../../src/output.js";
 import { ALL_AGENTS } from "../../src/agents/index.js";
 import { LAUNCHABLE_AGENTS } from "../../src/setup/agents.js";
 import { SetupError } from "../../src/setup/errors.js";
+import { readAnswer } from "../../src/setup/machine.js";
 import { SETUP_STAGES } from "../../src/setup/types.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -36,19 +47,38 @@ import {
   authWithKey,
   defaultFlags,
   fakeApiClient,
+  fakeInput,
   fakeRunProcess,
+  fakeSetupApi,
   makeDeps,
   makeWriters,
   traceRow,
 } from "../setup/helpers.js";
 
 let dir: string;
+let prevCodexHome: string | undefined;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "tr-setup-cmd-"));
+  // Codex's skills directory is global, not project-local: it is read from
+  // `$CODEX_HOME`, falling back to the real `~/.codex`. This file drives the
+  // whole of `runSetup`, and the hand-over route reaches `detectConfiguredAgents`
+  // and then installs the skill wherever the chosen adapter points — so a test
+  // here that does not pass `agent: "claude"` would write into the home
+  // directory of whoever is running the suite. That has happened once already,
+  // and it had to be undone by hand. Pointed at the fixture, the same way
+  // `machine`, `doctor` and `skills` already do.
+  prevCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = join(dir, "codex-home");
 });
 
 afterEach(() => {
+  if (prevCodexHome === undefined) {
+    // biome-ignore lint/performance/noDelete: restoring an env var; assigning undefined would stringify it
+    delete process.env.CODEX_HOME;
+  } else {
+    process.env.CODEX_HOME = prevCodexHome;
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -162,6 +192,118 @@ describe("setup command registration", () => {
     expect((setup?.options ?? []).map((o) => o.long)).toContain("--handoff");
     expect(program.options.map((o) => o.long)).not.toContain("--handoff");
   });
+
+  it("refuses a stray operand at the parse, before any action runs", async () => {
+    // `traceroot setup doctr` used to run the whole wizard: commander 12 allows
+    // excess arguments by default, so the typo reached `setup`'s own action as
+    // an ignored operand. Both actions are swapped for recorders, and what is
+    // asserted is that neither was entered — every effect setup has (the mint,
+    // the env write, the agent launch) happens inside one, and the wizard is not
+    // even loaded until the action runs. `doctor` takes no operand either, and
+    // inherits the rule from `setup` rather than declaring it.
+    for (const argv of [
+      ["setup", "doctr"],
+      ["setup", "doctor", "api"],
+    ]) {
+      const program = buildProgram();
+      const setup = program.commands.find((c) => c.name() === "setup");
+      const doctor = setup?.commands.find((c) => c.name() === "doctor");
+      expect(doctor).toBeDefined();
+      let entered = 0;
+      setup?.action(() => {
+        entered += 1;
+      });
+      doctor?.action(() => {
+        entered += 1;
+      });
+
+      let thrown: unknown;
+      try {
+        await program.parseAsync(["node", "traceroot", ...argv]);
+      } catch (err) {
+        thrown = err;
+      }
+
+      const named = `\`${argv.join(" ")}\``;
+      expect(thrown, named).toBeInstanceOf(CommanderError);
+      expect((thrown as CommanderError).code, named).toBe("commander.excessArguments");
+      expect(entered, named).toBe(0);
+    }
+  });
+
+  // The shim is a shell script, so not on Windows.
+  it.skipIf(process.platform === "win32")(
+    "exits 2 on the typo having called, launched and written nothing (spawned)",
+    async () => {
+      // The exit code is decided in `run()`, so it can only be read from a real
+      // process. Each effect the wizard has gets a recorder, so its absence is
+      // observed rather than inferred: the credential points at a local server
+      // that counts requests (a key is minted over the API, after the key in
+      // hand has been checked there); a `git` shim first on PATH logs a launch
+      // (in a repository, `git` is the first program the wizard runs); and the
+      // directory is where the checkpoint, the env file and the agent's task
+      // file would land.
+      mkdirSync(join(dir, ".git"), { recursive: true });
+      const requests: string[] = [];
+      const server = createServer((req, res) => {
+        requests.push(`${req.method} ${req.url}`);
+        res.writeHead(401).end();
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const shims = mkdtempSync(join(tmpdir(), "tr-setup-shims-"));
+      const launches = join(shims, "launches.log");
+      writeFileSync(join(shims, "git"), `#!/bin/sh\necho "git $*" >> '${launches}'\nexit 1\n`, {
+        mode: 0o755,
+      });
+
+      try {
+        const { port } = server.address() as AddressInfo;
+        const bin = fileURLToPath(new URL("../../bin/traceroot.mjs", import.meta.url));
+        const child = spawn(process.execPath, [bin, "setup", "doctr"], {
+          cwd: dir,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            CI: "true",
+            PATH: `${shims}${delimiter}${process.env.PATH ?? ""}`,
+            TRACEROOT_CONFIG_PATH: join(dir, "no-such-config", "config.json"),
+            TRACEROOT_CREDENTIALS_PATH: join(dir, "no-such-creds", "credentials.json"),
+            TRACEROOT_API_KEY: "tr-not-a-real-key",
+            TRACEROOT_HOST_URL: `http://127.0.0.1:${port}`,
+            TRACEROOT_TOKEN: "",
+            TRACEROOT_AUTH_URL: "",
+            TRACEROOT_PROJECT_ID: "",
+          },
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        const status = await new Promise<number | null>((resolve, reject) => {
+          child.on("error", reject);
+          child.on("close", resolve);
+        });
+
+        expect(status).toBe(ExitCode.usage);
+        expect(stdout).toBe("");
+        const said = plain(stderr);
+        expect(said).toContain("too many arguments");
+        // The frame's first line: with the operand ignored the wizard opened,
+        // printed this, and went on to do the rest of it.
+        expect(said).not.toContain(WIZARD_TITLE);
+        expect(requests).toEqual([]);
+        expect(existsSync(launches)).toBe(false);
+        expect(readdirSync(dir, { recursive: true })).toEqual([".git"]);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+        rmSync(shims, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("the line that closes the wizard", () => {
@@ -529,6 +671,58 @@ describe("runSetup", () => {
     }
   });
 
+  for (const [at, which] of [
+    [0, "the traces one"],
+    [1, "the production one"],
+  ] as const) {
+    it(`ends with 130, not 0, on Ctrl+C at ${which} of the closing acknowledgements`, async () => {
+      // Readline closed on the keypress and the question never settled, so the
+      // event loop drained and `traceroot setup && <next step>` carried on.
+      writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+      writeFileSync(join(dir, "main.py"), "x = 1\n");
+      const input = fakeInput();
+      const output = new PassThrough();
+      let screen = "";
+      output.on("data", (chunk) => {
+        screen += String(chunk);
+      });
+      const shown = async (count: number): Promise<void> => {
+        while (screen.split("(Press Enter to continue)").length - 1 < count) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      };
+      const setupDeps = makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      });
+      // The production prompt, against a terminal this test types into.
+      setupDeps.prompt = (question, stage) => readAnswer({ input, output }, question, { stage });
+
+      const run = runSetup({
+        ctx: ctxWith(),
+        cwd: dir,
+        flags: defaultFlags({ agent: "claude" }),
+        writers: makeWriters().writers,
+        canPrompt: true,
+        setupDeps,
+      });
+      for (let i = 0; i < at; i += 1) {
+        await shown(i + 1);
+        input.write("\r");
+      }
+      await shown(at + 1);
+      input.write("\x03");
+
+      await expect(run).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(SetupError);
+        expect((err as SetupError).code).toBe("INTERRUPTED");
+        expect((err as SetupError).exitCode).toBe(130);
+        return true;
+      });
+    });
+  }
+
   it("notes when there is no checkpoint to resume", async () => {
     writeFileSync(join(dir, "go.mod"), "module x\n");
     const { writers, err } = makeWriters();
@@ -541,6 +735,236 @@ describe("runSetup", () => {
       setupDeps: makeDeps({ auth: authWithKey(), client: fakeApiClient() }),
     });
     expect(err.data).toContain("No previous setup to resume");
+  });
+});
+
+describe("the hosts a --handoff run resolves", () => {
+  const CODE = `trh_${"A".repeat(43)}`;
+  /** A host only the repository names: what a cloned `.env` would point at. */
+  const REPO = "https://repo-chosen.example.test";
+  /** A self-hosted deployment, named the way the hand-back command names one. */
+  const SELF = "https://traceroot.self.example.test";
+  const REMEDY = "the hand-back command names its deployment with --host";
+
+  const hermetic: SetupContextDeps = {
+    env: {},
+    readConfig: () => null,
+    loadEnvFile: () => ({}),
+    loadAutoEnvFile: () => ({}),
+    readCredential: () => null,
+    configIsLocal: true,
+  };
+  const withEnv = (vars: Record<string, string>): SetupContextDeps => ({
+    ...hermetic,
+    loadAutoEnvFile: () => vars,
+  });
+
+  it("leaves a run without a code resolving exactly as every other command does", () => {
+    const deps = withEnv({ TRACEROOT_HOST_URL: REPO, TRACEROOT_AUTH_URL: REPO });
+    const run = setupContext({}, deps);
+
+    expect(run.context).toEqual(buildContext({}, deps));
+    expect(run.context.auth.hostUrl).toEqual({ value: REPO, source: "auto-env-file" });
+    expect(run.hostsSetAside).toBeUndefined();
+  });
+
+  it("resolves the two approved hand-backs exactly as before, and says nothing", () => {
+    // Cloud: the page omits --host, because the hosted product is the default.
+    const cloud = setupContext({ handoff: CODE }, hermetic);
+    expect(cloud.context).toEqual(buildContext({}, hermetic));
+    expect(cloud.context.auth.authHost).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(cloud.hostsSetAside).toBeUndefined();
+
+    // Self-hosted: the page passes --host.
+    const self = setupContext({ handoff: CODE, host: SELF }, hermetic);
+    expect(self.context).toEqual(buildContext({ host: SELF }, hermetic));
+    expect(self.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(self.hostsSetAside).toBeUndefined();
+  });
+
+  it("sends the code to the default host, not to a TRACEROOT_HOST_URL in this directory's .env", () => {
+    const run = setupContext({ handoff: CODE }, withEnv({ TRACEROOT_HOST_URL: REPO }));
+
+    expect(run.context.auth.hostUrl).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.context.auth.authHost).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.hostsSetAside).toBe(`ignored TRACEROOT_HOST_URL in ./.env for --handoff; ${REMEDY}`);
+  });
+
+  it("sends the code to the default host, not to a TRACEROOT_AUTH_URL in this directory's .env", () => {
+    const run = setupContext({ handoff: CODE }, withEnv({ TRACEROOT_AUTH_URL: REPO }));
+
+    expect(run.context.auth.hostUrl).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.context.auth.authHost).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.hostsSetAside).toBe(`ignored TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`);
+  });
+
+  it("names both in one line when the .env set both", () => {
+    const run = setupContext(
+      { handoff: CODE },
+      withEnv({ TRACEROOT_HOST_URL: REPO, TRACEROOT_AUTH_URL: `${REPO}:3000` }),
+    );
+
+    expect(run.context.auth.authHost.value).toBe(DEFAULT_HOST);
+    expect(run.hostsSetAside).toBe(
+      `ignored TRACEROOT_HOST_URL in ./.env and TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`,
+    );
+  });
+
+  it("ignores a host_url in this directory's ./.traceroot/config.json, and only the host", () => {
+    const run = setupContext(
+      { handoff: CODE },
+      { ...hermetic, readConfig: () => ({ host_url: REPO, api_key: "tr-config-key" }) },
+    );
+
+    expect(run.context.auth.hostUrl).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.context.auth.authHost.value).toBe(DEFAULT_HOST);
+    // The key is still there for the ladder's ambient-key rung to set aside.
+    expect(run.context.auth.credential).toEqual({
+      kind: "api-key",
+      value: "tr-config-key",
+      source: "config",
+    });
+    expect(run.hostsSetAside).toBe(
+      `ignored host_url in ./.traceroot/config.json for --handoff; ${REMEDY}`,
+    );
+  });
+
+  it("honours a config file that TRACEROOT_CONFIG_PATH names", () => {
+    // Named by the process environment, which is an explicit source.
+    const run = setupContext(
+      { handoff: CODE },
+      { ...hermetic, configIsLocal: false, readConfig: () => ({ host_url: SELF }) },
+    );
+
+    expect(run.context.auth.hostUrl).toEqual({ value: SELF, source: "config" });
+    expect(run.hostsSetAside).toBeUndefined();
+  });
+
+  it("still lets an explicit --host win, and is quiet when the repository's host lost anyway", () => {
+    const run = setupContext({ handoff: CODE, host: SELF }, withEnv({ TRACEROOT_HOST_URL: REPO }));
+
+    expect(run.context.auth.hostUrl).toEqual({ value: SELF, source: "flag" });
+    expect(run.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(run.hostsSetAside).toBeUndefined();
+  });
+
+  it("does not let the .env's auth URL split a --host hand-back", () => {
+    const run = setupContext({ handoff: CODE, host: SELF }, withEnv({ TRACEROOT_AUTH_URL: REPO }));
+
+    expect(run.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(run.hostsSetAside).toBe(`ignored TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`);
+  });
+
+  it("keeps the hosts named by --auth-host, the process environment and --env-file", () => {
+    const repoEnv = { TRACEROOT_HOST_URL: REPO, TRACEROOT_AUTH_URL: REPO };
+
+    const authFlag = setupContext(
+      { handoff: CODE, host: SELF, authHost: `${SELF}:3000` },
+      withEnv(repoEnv),
+    );
+    expect(authFlag.context.auth.authHost).toEqual({ value: `${SELF}:3000`, source: "flag" });
+    expect(authFlag.hostsSetAside).toBeUndefined();
+
+    const fromEnv = setupContext(
+      { handoff: CODE },
+      {
+        ...withEnv(repoEnv),
+        env: { TRACEROOT_HOST_URL: SELF, TRACEROOT_AUTH_URL: `${SELF}:3000` },
+      },
+    );
+    expect(fromEnv.context.auth.hostUrl).toEqual({ value: SELF, source: "env" });
+    expect(fromEnv.context.auth.authHost).toEqual({ value: `${SELF}:3000`, source: "env" });
+    expect(fromEnv.hostsSetAside).toBeUndefined();
+
+    const fromFile = setupContext(
+      { handoff: CODE, envFile: "deploy.env" },
+      { ...withEnv(repoEnv), loadEnvFile: () => ({ TRACEROOT_HOST_URL: SELF }) },
+    );
+    expect(fromFile.context.auth.hostUrl).toEqual({ value: SELF, source: "env-file" });
+    // The .env's auth URL still loses: the file named only the API host.
+    expect(fromFile.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(fromFile.hostsSetAside).toBe(
+      `ignored TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`,
+    );
+  });
+
+  it("looks up the saved sign-in under the host it will redeem at, not the repository's", () => {
+    // The whole run reads this resolution, so a session saved for the
+    // repository's host must not ride along to the default one.
+    const looked: string[] = [];
+    const run = setupContext(
+      { handoff: CODE },
+      {
+        ...withEnv({ TRACEROOT_HOST_URL: REPO }),
+        readCredential: (host) => {
+          looked.push(host);
+          return host === REPO
+            ? { session_token: "repo-session", created_at: "2026-10-01T00:00:00.000Z" }
+            : null;
+        },
+      },
+    );
+
+    expect(looked.at(-1)).toBe(DEFAULT_HOST);
+    expect(run.context.auth.credential.kind).toBe("none");
+  });
+
+  it("reaches the run through the setup command itself, warning included", async () => {
+    // Everything above holds only if `runSetupCommand` hands the run
+    // `setupContext`'s hosts and its warning. Drop either and a repository
+    // `.env` chooses where the code goes again, or does so without a word.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    writeFileSync(join(dir, ".env"), `TRACEROOT_HOST_URL=${REPO}\n`);
+
+    // The real `setup` command, its flags parsed by commander as on a command line.
+    const setup = buildProgram().commands.find((c) => c.name() === "setup");
+    if (setup === undefined) {
+      throw new Error("setup is not registered");
+    }
+    setup.parseOptions(["--handoff", CODE, "--no-input", "--agent", "claude"]);
+
+    const redeemedAt: string[] = [];
+    const { writers, err } = makeWriters();
+    await runSetupCommand(setup, 5, {
+      cwd: dir,
+      writers,
+      context: {
+        ...hermetic,
+        loadAutoEnvFile: () => loadOptionalEnvFileFromDisk(join(dir, ".env")),
+      },
+      setupDeps: (auth) =>
+        makeDeps({
+          auth,
+          client: fakeApiClient({ traces: [traceRow()] }),
+          setupApi: fakeSetupApi({
+            listProjects: async () => [
+              { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+            ],
+            createProjectApiKey: async (input) => ({
+              id: "ak_1",
+              name: input.name,
+              hint: "tr-4444-5555",
+              project_id: input.projectId,
+              scope: input.scope,
+              expires_at: null,
+              key: "tr-handoff-minted-key-1234",
+            }),
+          }),
+          runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+          redeemHandoff: async ({ authHost }) => {
+            redeemedAt.push(authHost);
+            return {
+              kind: "redeemed",
+              credential: { sessionToken: "handoff-session-token", email: "bob@new.example" },
+            };
+          },
+        }),
+    });
+
+    expect(redeemedAt).toEqual([DEFAULT_HOST]);
+    const warning = `warning: ignored TRACEROOT_HOST_URL in ./.env for --handoff; ${REMEDY}`;
+    expect(plain(err.data).split(warning)).toHaveLength(2);
   });
 });
 
@@ -1240,7 +1664,15 @@ describe("the production block that closes a run", () => {
     // The block names the variable and the file. The value goes into the env
     // file and the child's environment and nowhere a terminal, a CI log or a
     // scrollback buffer can keep it.
-    const { out, err } = await run({ canPrompt: true });
+    const { result, out, err } = await run({ canPrompt: true });
+
+    // Both assertions below are negative, and this is the only test guarding
+    // the key against the terminal — so the run has to be pinned as having
+    // succeeded and having printed the block. Without these two, a run that
+    // died at `precheck`, or a block that stopped printing altogether, would
+    // satisfy the test by printing nothing at all.
+    expect(result.ok).toBe(true);
+    expect(flat(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
 
     expect(err.data).not.toContain(KEY);
     expect(out.data).not.toContain(KEY);

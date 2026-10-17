@@ -119,16 +119,21 @@ describe("the runs where no file holds the key", () => {
     expect(notice.join("\n")).not.toContain("load_dotenv");
   });
 
-  it("says outright that nothing holds the key when a tracked file was refused", () => {
+  it("says the key reached no file when a tracked file was refused", () => {
     const notice = lines({ kind: "refused", path: "apps/api/.env" });
 
     expect(notice[0]).toBe("Add the TRACEROOT_API_KEY token to your production environment.");
     // The file is named, because it is the reason — and it is named as the file
     // this run would not write, never as somewhere to go and look.
     expect(notice[1]).toBe(
-      "Nothing on this machine holds TRACEROOT_API_KEY: apps/api/.env is tracked by git, so this run did not write the key into it. Give your deployment a key of its own.",
+      "This run wrote TRACEROOT_API_KEY to no file in the project: apps/api/.env is tracked by git, so the key was not written into it. Give your deployment a key of its own.",
     );
     expect(notice[1]).not.toContain("from your local");
+    // Claims the file and not the machine. A run reaches this branch with the
+    // key in the CLI's own config, or with a stale one exported in the user's
+    // shell, and a sentence the reader can see is false is one they stop
+    // reading.
+    expect(notice[1]).not.toContain("Nothing on this machine");
   });
 
   it("still names the host variable off the default host", () => {
