@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runProcess } from "../../src/setup/exec.js";
+import { resolveSpawnTarget, runProcess } from "../../src/setup/exec.js";
 import { makeSecret } from "../../src/setup/secret.js";
 
 const NODE = process.execPath;
@@ -430,4 +430,203 @@ describe("a cancelled run whose binary is missing", () => {
     expect(reported.spawnFailed).toBe(true);
     expect(reported.exitCode).toBe(127);
   }, 15000);
+});
+
+describe("resolving what to spawn on Windows", () => {
+  const NODEJS = "C:\\Program Files\\nodejs";
+  const SHIM = `${NODEJS}\\npm.cmd`;
+  const COMSPEC = "C:\\Windows\\system32\\cmd.exe";
+
+  /**
+   * The win32 branch with the platform injected, so the shape it produces is
+   * pinned from a POSIX host. `isFile` is case-insensitive because NTFS is, and
+   * the candidate spellings come from PATHEXT's own casing.
+   */
+  const onWindows = (
+    program: string,
+    args: readonly string[],
+    files: readonly string[],
+    env: NodeJS.ProcessEnv = {},
+  ) =>
+    resolveSpawnTarget(program, args, {
+      platform: "win32",
+      env: {
+        Path: `${NODEJS};C:\\Windows\\system32`,
+        PATHEXT: ".exe;.cmd",
+        ComSpec: COMSPEC,
+        ...env,
+      },
+      isFile: (path) => files.some((candidate) => candidate.toLowerCase() === path.toLowerCase()),
+    });
+
+  it("runs a package manager's batch shim through cmd.exe, which is the only way to run one", () => {
+    // `npm`, `pnpm` and `yarn` are `.cmd` shims on Windows, and a shell-less
+    // spawn of one is refused by Node outright — so `npm test` could not be run
+    // at all, and the report blamed the project's own check for it.
+    expect(onWindows("npm", ["test"], [SHIM])).toEqual({
+      program: COMSPEC,
+      args: ["/d", "/s", "/c", `""${SHIM}" "test""`],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("prefers an executable PATHEXT entry, and spawns that one without a shell", () => {
+    // The shell is for shims only. Anything `CreateProcess` can start is still
+    // started directly, so the no-shell guarantee covers every ordinary case.
+    const target = onWindows(
+      "python",
+      ["-m", "pytest"],
+      [`${NODEJS}\\python.exe`, `${NODEJS}\\python.cmd`],
+    );
+
+    expect(target?.program.toLowerCase()).toBe(`${NODEJS}\\python.exe`.toLowerCase());
+    expect(target?.args).toEqual(["-m", "pytest"]);
+    expect(target?.windowsVerbatimArguments).toBe(false);
+  });
+
+  it("refuses a command line cmd.exe would re-interpret rather than escaping it", () => {
+    // The point of `splitCommand` is that a manifest field never reaches a
+    // shell. Quoting does not undo that on its own: cmd.exe expands `%VAR%`
+    // inside quotes and a `"` ends the quoted run. Refused, so a value out of
+    // the customer's repository cannot become part of the command.
+    expect(onWindows("npm", ["run", "test & whoami"], [SHIM])).toBe(null);
+    expect(onWindows("npm", ["run", "%USERPROFILE%"], [SHIM])).toBe(null);
+    expect(onWindows("npm", ["run", 'say"hi'], [SHIM])).toBe(null);
+    expect(onWindows("npm", ["run", "out\\"], [SHIM])).toBe(null);
+    expect(onWindows("npm", ["run", "(x)"], [SHIM])).toBe(null);
+  });
+
+  it("ignores a shim sitting in the repository rather than on the child's PATH", () => {
+    // `CreateProcess` searches the current directory, which here is the
+    // customer's repository: an `npm.cmd` checked into it must never be run in
+    // preference to the real one. Nothing on PATH answers, so the name is
+    // passed through and the spawn reports the ENOENT it always did.
+    expect(onWindows("npm", ["test"], ["C:\\repo\\npm.cmd"])).toEqual({
+      program: "npm",
+      args: ["test"],
+      windowsVerbatimArguments: false,
+    });
+  });
+
+  it("searches the child's own PATH, not this process's", () => {
+    // A caller composes the child's environment to decide what resolves — a
+    // virtualenv prepended so `pytest` is the one inside it. Resolving against
+    // `process.env` instead would spawn a different program than the one the
+    // run was set up to measure.
+    const venv = "C:\\repo\\.venv\\Scripts";
+    const target = onWindows("pytest", [], [`${venv}\\pytest.exe`], { Path: venv });
+
+    expect(target?.program).toBe(`${venv}\\pytest.exe`);
+  });
+
+  it("quotes the program's own path rather than refusing the usual install location", () => {
+    // `C:\Program Files (x86)\…` is where a great many Windows installs put
+    // it, and parentheses are literal inside a quoted run. A rule strict enough
+    // for an argument out of a manifest would refuse the program itself.
+    const shim = "C:\\Program Files (x86)\\nodejs\\npm.cmd";
+    const target = onWindows("npm", ["test"], [shim], { Path: "C:\\Program Files (x86)\\nodejs" });
+
+    expect(target).toEqual({
+      program: COMSPEC,
+      args: ["/d", "/s", "/c", `""${shim}" "test""`],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("takes an explicit path to a shim without searching PATH for it", () => {
+    const target = onWindows("C:\\tools\\check.cmd", ["--ci"], ["C:\\tools\\check.cmd"]);
+
+    expect(target).toEqual({
+      program: COMSPEC,
+      args: ["/d", "/s", "/c", '""C:\\tools\\check.cmd" "--ci""'],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("finds a relative program from the child's working directory, not this process's", () => {
+    // The spawn runs it from `cwd`, so that is where it has to be looked for:
+    // checking this process's own directory would find a different file, or
+    // miss the shim and hand the spawn a batch file it refuses.
+    const target = resolveSpawnTarget("scripts\\check.cmd", [], {
+      platform: "win32",
+      env: { ComSpec: COMSPEC },
+      cwd: "C:\\repo\\api",
+      isFile: (path) => path === "C:\\repo\\api\\scripts\\check.cmd",
+    });
+
+    expect(target?.args).toEqual(["/d", "/s", "/c", '""C:\\repo\\api\\scripts\\check.cmd""']);
+  });
+
+  it("leaves a POSIX spawn exactly as it was handed over", () => {
+    // No shims, and `execvp` does the lookup: resolving here would only add a
+    // way for the two to disagree.
+    expect(
+      resolveSpawnTarget("npm", ["test"], {
+        platform: "linux",
+        env: { PATH: "/usr/bin" },
+        isFile: () => true,
+      }),
+    ).toEqual({ program: "npm", args: ["test"], windowsVerbatimArguments: false });
+  });
+});
+
+describe("spawning a batch shim on Windows", () => {
+  // The resolution above is only half of the fix: these pin that `runProcess`
+  // spawns what it resolved to, and spawns nothing when the line was refused.
+  // The platform is stubbed and `ComSpec` is a script that prints its own
+  // arguments, so the spawn Windows would make is observed from a POSIX host.
+  const asWindows = async <T>(body: () => Promise<T>): Promise<T> => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor;
+    Object.defineProperty(process, "platform", { ...real, value: "win32" });
+    try {
+      return await body();
+    } finally {
+      Object.defineProperty(process, "platform", real);
+    }
+  };
+
+  const fixture = async () => {
+    const dir = await workspace();
+    const shim = join(dir, "npm.cmd");
+    const comspec = join(dir, "comspec");
+    await writeFile(shim, "");
+    await writeFile(comspec, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { mode: 0o755 });
+    return { dir, shim, comspec };
+  };
+
+  it.skipIf(WINDOWS)("runs the shim through ComSpec, on the line built for it", async () => {
+    const { dir, shim, comspec } = await fixture();
+
+    const result = await asWindows(() =>
+      runProcess({
+        program: shim,
+        args: ["test"],
+        cwd: dir,
+        env: { ComSpec: comspec },
+        stdio: "capture",
+      }),
+    );
+
+    expect(result.spawnFailed).toBe(false);
+    expect(result.output).toBe(`/d\n/s\n/c\n""${shim}" "test""\n`);
+  });
+
+  it.skipIf(WINDOWS)("starts nothing when the command line was refused", async () => {
+    // Reported as a failed spawn, because that is what it is: the command was
+    // never run. The same fixture spawns in the test above, so an empty output
+    // here means the shell was never started, not that it could not be.
+    const { dir, shim, comspec } = await fixture();
+
+    const result = await asWindows(() =>
+      runProcess({
+        program: shim,
+        args: ["run", "test & whoami"],
+        cwd: dir,
+        env: { ComSpec: comspec },
+        stdio: "capture",
+      }),
+    );
+
+    expect(result).toMatchObject({ exitCode: 127, output: "", spawnFailed: true });
+  });
 });

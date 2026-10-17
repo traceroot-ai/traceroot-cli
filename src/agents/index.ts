@@ -28,15 +28,23 @@ export function requireAgent(id: string): AgentAdapter {
 }
 
 /**
+ * Whether `target` lies inside `dir` — the same test {@link displaySkillPath}
+ * uses to decide whether a path can be shown relative to it.
+ */
+export function isInsideDirectory(dir: string, target: string): boolean {
+  const rel = relative(dir, target);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
  * Renders a skill install path for display: relative to `cwd` when it lives
  * inside the project (e.g. `.claude/skills/<name>`), otherwise an absolute path
  * with the home directory abbreviated to `~` (e.g. `~/.codex/skills/<name>` for
  * Codex's global location).
  */
 export function displaySkillPath(cwd: string, target: string): string {
-  const rel = relative(cwd, target);
-  if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
-    return rel;
+  if (isInsideDirectory(cwd, target)) {
+    return relative(cwd, target);
   }
   const home = homedir();
   if (target === home) {
