@@ -241,3 +241,25 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
   }
   return chosen;
 }
+
+/**
+ * Every agent the CLI knows that is already set up on this machine, in the
+ * registry's stable order.
+ *
+ * Deliberately not {@link LAUNCHABLE_AGENTS}. That list answers "which agent may
+ * setup drive headless", and a route that writes a markdown task out for the
+ * user drives nothing: there is no controlled environment to earn, because the
+ * user starts the agent themselves. Narrowing this to the launchable list is
+ * how a machine with both Codex and Claude Code came to be told to run the task
+ * in Claude Code, with Codex never mentioned.
+ *
+ * Presence, not runnability. A hand-over is opened in whatever the user already
+ * runs — an IDE, a wrapper, an agent with no CLI binary at all — so a binary on
+ * PATH is the wrong question here, and each adapter's own `detect` is the right
+ * one: Codex reports `$CODEX_HOME` in the home directory while Claude Code
+ * reports a project-local `.claude`, and collapsing the two would install the
+ * skill where that agent will never look for it.
+ */
+export function detectConfiguredAgents(cwd: string): AgentAdapter[] {
+  return ALL_AGENTS.filter((adapter) => adapter.detect(cwd).present);
+}
