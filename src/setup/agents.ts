@@ -75,9 +75,9 @@ export function resolveOnPath(
  *   pipeline has driven Codex to a trace, on any package manager. What is
  *   established is that the invocation is spelled out of documented flags
  *   rather than guessed at; what is not established is that a Codex run of
- *   *this* task installs an SDK, edits an entry point and emits a trace. The
- *   documentation is the whole of the evidence: no `codex` binary was present
- *   to probe, so not even `codex exec --help` has confirmed the spellings.
+ *   *this* task installs an SDK, edits an entry point and emits a trace.
+ *   `codex exec --help` on codex-cli 0.163.0 confirms the spellings, and that
+ *   is the whole of what a binary has confirmed.
  *
  * It is here anyway because the alternative is worse for the user it is about.
  * A wizard that finds `codex` on PATH and offers nothing but "run it yourself"
@@ -116,8 +116,11 @@ export interface DetectAgentsOptions {
  * it only checks directories — would let setup select an agent it cannot start.
  *
  * {@link LAUNCHABLE_AGENTS} rather than every adapter the CLI knows: an agent
- * reported here becomes a run option, and offering one whose headless run has
- * not been established is the same error one step earlier.
+ * reported here becomes a run option, which is a different thing from an agent
+ * the CLI merely installs a skill for. What earns a place on that list is
+ * recorded with the list itself, entry by entry, because the two entries are
+ * not there on the same evidence and a single sentence here would have to
+ * misdescribe one of them.
  *
  * Each signal carries a human-readable reason so `setup doctor` can explain
  * itself rather than printing a bare boolean.

@@ -165,12 +165,14 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       // out loud rather than approximated.
       //
       // What "documented" does and does not mean here: every flag, subcommand
-      // and config key below is named in OpenAI's own Codex reference, and none
-      // of it has been run against an installed `codex` — there was no binary on
-      // the machine this was written on to run `codex exec --help` against. So
-      // the spellings are sourced, and the combination is unproven. The two `-c`
-      // overrides are the weakest link: the flag takes `key=value` and the keys
-      // exist, but that this CLI's dotted spelling of them parses is an
+      // and config key below is named in OpenAI's own Codex reference, and the
+      // flag spellings are confirmed by `codex exec --help` on codex-cli
+      // 0.163.0 — which lists no config keys, so those are reference-only.
+      // What has not happened is a run: no `codex` has been handed this task, so
+      // the spellings are sourced and the combination is still unproven. The two
+      // `-c` overrides are the weakest link: `-c` is documented as `key=value`
+      // with a dotted path and a TOML value, which is the spelling used below,
+      // but that these two keys do what the reference says they do is an
       // inference. It fails loudly if it is wrong — a usage error at startup,
       // before the agent has touched a file — which is the failure mode to
       // prefer when something has to be inferred at all.

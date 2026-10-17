@@ -238,10 +238,15 @@ describe("the line that closes the wizard", () => {
     expect(line).toContain("no trace seen yet");
   });
 
-  it("keeps the production sentence for a trace that actually arrived", () => {
+  it("ties the production sentence to the trace, not to how the wait ended", () => {
     // The sentence below the frame is earned by an observed trace. A skipped
     // wait has not established that the instrumentation works, which is the
-    // whole of what that sentence would be claiming.
+    // whole of what that sentence would be claiming — so unlike `closingLine`
+    // above, `closingSentence` takes no ending at all, and the pair below is
+    // what says the skip cannot reach it.
+    expect(closingSentence({ ...base, ok: true, trace })).toBe(
+      "You can use TraceRoot in production once TRACEROOT_API_KEY is in its environment.",
+    );
     expect(closingSentence({ ...base, ok: true, trace: null })).toBeNull();
   });
 
