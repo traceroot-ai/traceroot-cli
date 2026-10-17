@@ -136,6 +136,9 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 const OSC8_PATTERN = `${ESC}\\]8;;[^${BEL}]*${BEL}`;
 /** One whole line wrapped in a single SGR pair, and nothing else. */
 const WHOLE_LINE_SGR = new RegExp(`^(${SGR_PATTERN})([^${ESC}]*)(${SGR_PATTERN})$`);
+/** Every SGR and every OSC 8 escape in a string, for measuring what is left. */
+const ALL_SGR = new RegExp(SGR_PATTERN, "gu");
+const ALL_OSC8 = new RegExp(OSC8_PATTERN, "gu");
 
 /**
  * Terminals known to render OSC 8, by their own self-identification.
@@ -256,7 +259,7 @@ export function wizardMutedLink(url: string, sink: Sink = process.stderr): strin
   return greyText(url.replace(CONTROL_CHARS, ""), sink);
 }
 
-/** The OSC 8 wrapper, once, so the two link roles cannot drift apart. */
+/** A URL with its control characters stripped, painted, and wrapped in OSC 8 when asked. */
 function paintedLink(url: string, paint: (text: string) => string, hyperlinks: boolean): string {
   // These URLs arrive from the backend, so they are third-party text: ESC, BEL
   // and the C1 string terminator each close an OSC 8 sequence early or open a
@@ -421,14 +424,6 @@ export function settleAcknowledgement(writers: Writers, text: string): void {
 }
 
 /**
- * A block of prose inside the frame, each line on the rail.
- *
- * The first line takes a clack step marker, so a block that needs reading — a
- * sign-in link, a verification code, the two blocks that close a run — is
- * visibly a step rather than incidental logging. Everything after it continues
- * on the rail.
- */
-/**
  * Splits a line so it fits beside the rail instead of wrapping under it.
  *
  * A terminal wrapping a line on its own puts the overflow in column zero, where
@@ -467,10 +462,7 @@ export function wrapForRail(line: string, width: number): string[] {
 
 /** Visible columns, ignoring SGR and OSC 8, which occupy no cells. */
 function visibleLength(text: string): number {
-  const bare = text
-    .replace(new RegExp(SGR_PATTERN, "gu"), "")
-    .replace(new RegExp(OSC8_PATTERN, "gu"), "");
-  return bare.length;
+  return text.replace(ALL_SGR, "").replace(ALL_OSC8, "").length;
 }
 
 /** Greedy word wrap on visible width. A word longer than `width` overflows. */
@@ -503,6 +495,14 @@ function railWidth(): number {
   return Math.max(1, total - 3);
 }
 
+/**
+ * A block of prose inside the frame, each line on the rail.
+ *
+ * The first line takes a clack step marker, so a block that needs reading — a
+ * sign-in link, a verification code, the two blocks that close a run — is
+ * visibly a step rather than incidental logging. Everything after it continues
+ * on the rail.
+ */
 export function wizardNote(
   writers: Writers,
   lines: readonly string[],
@@ -529,7 +529,7 @@ export function wizardNote(
     }
     // Only the block's very first row takes the step glyph; a wrapped
     // continuation of it is still the same row and takes the rail.
-    for (const [piece, at] of wrapForRail(text, width).map((p, i) => [p, i] as const)) {
+    for (const [at, piece] of wrapForRail(text, width).entries()) {
       const prefix = index === 0 && at === 0 ? color.cyan(glyph) : rail;
       rendered.push(`${prefix}  ${piece}`);
     }
