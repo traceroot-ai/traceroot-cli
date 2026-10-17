@@ -129,12 +129,7 @@ export function startLineSpinner(input: LineSpinnerInput): LineSpinner {
   // left a terminal frame unpainted whenever stdout was the stream being
   // redirected.
   const color = createColors(redraw);
-  const rail = redraw ? color.dim(S_BAR) : S_BAR;
-  // Magenta rather than cyan for the spinning glyph. Cyan is what clack uses
-  // for an active prompt, so the two were the same colour and a spinner read
-  // as a question waiting on the user. There is no orange in picocolors'
-  // 16-colour set; magenta is the nearest thing that is unmistakably not a
-  // prompt, not an error, and not the dim transcript.
+  const rail = color.dim(S_BAR);
 
   if (!redraw) {
     // A pipe, a CI log or a file. One plain line per change of state, no
@@ -209,6 +204,11 @@ export function startLineSpinner(input: LineSpinnerInput): LineSpinner {
     // a hang — and dimming it hid the one part of the wizard that answers the
     // question a stalled user is actually asking.
     const elapsed = label === "" ? "" : ` [${label}]`;
+    // Magenta rather than cyan for the spinning glyph. Cyan is what clack uses
+    // for an active prompt, so the two were the same colour and a spinner read
+    // as a question waiting on the user. There is no orange in picocolors'
+    // 16-colour set; magenta is the nearest thing that is unmistakably not a
+    // prompt, not an error, and not the dim transcript.
     const glyph = FRAMES[frame % FRAMES.length] ?? FRAMES[0];
     // The message keeps the terminal's default colour while the transcript
     // above it is dimmed. Both were dim, which made the live line — the only
