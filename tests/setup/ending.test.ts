@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acknowledgeTraces, tracesNotice } from "../../src/setup/ending.js";
+import { acknowledgeTraces, skippedTraceNotice, tracesNotice } from "../../src/setup/ending.js";
 import { plain } from "./colour.js";
 import { makeWriters } from "./helpers.js";
 
@@ -85,5 +85,49 @@ describe("acknowledging it", () => {
     const { writers, err } = makeWriters();
     await acknowledgeTraces({ writers, traceUrl: TRACE_URL, prompt: null });
     expect(plain(err.data)).toContain(TRACE_URL);
+  });
+});
+
+describe("the block for a wait the user ended", () => {
+  const UI = "https://app.example.test";
+
+  it("says the run is done and names both places the trace will show up", () => {
+    const lines = skippedTraceNotice({ uiBaseUrl: UI }).map(plain);
+    const text = lines.join("\n");
+    // "Done", because it is: the only unobserved fact is a trace arriving, and
+    // the user said they would watch for it somewhere else.
+    expect(text).toContain("Setup is done");
+    expect(text).toContain("has not been seen yet");
+    expect(text).toContain("It will appear here:");
+    expect(text).toContain(UI);
+    // The terminal as well as the browser, for somebody who has demonstrably
+    // chosen not to sit and watch.
+    expect(text).toContain("traceroot traces list --limit 5");
+    expect(text).toContain("traceroot setup --resume");
+  });
+
+  it("asks nobody to finish anything, because nothing is outstanding", () => {
+    const text = skippedTraceNotice({ uiBaseUrl: UI }).map(plain).join("\n");
+    expect(text).not.toContain("Finish the instrumentation task");
+    expect(text).not.toContain("did not reach");
+    // And it does not invent a permalink for a trace nobody has seen: a
+    // constructed trace URL 404s at the moment it is first clicked.
+    expect(text).not.toContain("/trace/");
+  });
+
+  it("falls back to the terminal when the run never learned the UI", () => {
+    // Nothing to link to, so there is no heading for a link either — a
+    // "It will appear here:" with nothing under it reads as a broken render.
+    const lines = skippedTraceNotice({ uiBaseUrl: null }).map(plain);
+    const text = lines.join("\n");
+    expect(text).not.toContain("It will appear here:");
+    expect(text).toContain("traceroot traces list --limit 5");
+    expect(lines.filter((line) => line === "").length).toBeLessThan(lines.length);
+  });
+
+  it("writes each sentence as one line and lets the terminal wrap it", () => {
+    for (const line of skippedTraceNotice({ uiBaseUrl: UI }).map(plain)) {
+      expect(line.length).toBeLessThan(80);
+    }
   });
 });

@@ -99,3 +99,50 @@ export async function acknowledgeTraces(input: AcknowledgeTracesInput): Promise<
   await input.prompt(`${wizardAcknowledgement(TRACES_ACK, input.writers.err)} `);
   settleAcknowledgement(input.writers, TRACES_ACK);
 }
+
+export interface SkippedTraceNoticeInput {
+  /**
+   * The TraceRoot UI this session belongs to, when the run got far enough to
+   * learn it. Null falls back to the terminal, which needs no URL at all.
+   */
+  uiBaseUrl: string | null;
+}
+
+/**
+ * The block that closes a run whose trace wait the user ended themselves.
+ *
+ * Not {@link tracesNotice} with a caveat bolted on. That block's whole subject
+ * is a trace this run saw, and its permalink is the thing it exists to hand
+ * over — there is no permalink here, and inventing a "where it would have
+ * been" link produces a URL that 404s at the exact moment a user first clicks
+ * anything.
+ *
+ * What this block has to get right is that nothing is outstanding. The run that
+ * reaches here instrumented the service and verified it; the only unobserved
+ * fact is a trace arriving, and the user already said they would watch for it
+ * somewhere else. So the first line says what is true rather than what is
+ * missing, and the rest is the two places it will show up. No instruction to
+ * "finish" anything, because there is nothing left to finish.
+ */
+export function skippedTraceNotice(
+  input: SkippedTraceNoticeInput,
+  sink: Sink = process.stderr,
+): string[] {
+  const where =
+    input.uiBaseUrl === null
+      ? []
+      : ["", "It will appear here:", wizardLink(input.uiBaseUrl, undefined, sink)];
+  return [
+    wizardEmphasis("Setup is done — your first trace just has not been seen yet.", sink),
+    ...where,
+    "",
+    // The terminal as well as the browser, because this is a user who has
+    // demonstrably chosen not to sit and watch: the command is something they
+    // can run later, from where they already are.
+    wizardAside("Or from the terminal, once your application has run:", sink),
+    wizardAside("  traceroot traces list --limit 5", sink),
+    "",
+    wizardAside("To have setup wait for it again:", sink),
+    wizardAside("  traceroot setup --resume", sink),
+  ];
+}
