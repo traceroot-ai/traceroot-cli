@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeFileSecure } from "../util/secureFile.js";
 import { getVersion } from "../version.js";
+import { ensureGitignore } from "./artifacts.js";
 import { SETUP_EXIT_CODES, type SetupErrorCode } from "./errors.js";
 import { findGitRoot } from "./git.js";
 import {
@@ -311,20 +312,4 @@ export function markComplete(checkpoint: SetupCheckpoint, stage: SetupStage): vo
 /** True when `stage` completed in a previous run. */
 export function hasCompleted(checkpoint: SetupCheckpoint, stage: SetupStage): boolean {
   return checkpoint.completedStages.includes(stage);
-}
-
-/**
- * Mirrors `config/manager.ts`'s safety net: a `.gitignore` containing `*` in our
- * own directory, so a checkpoint (or a config) can never be committed. Only ever
- * acts on a directory named `.traceroot`, and never on an existing file.
- */
-function ensureGitignore(dir: string): void {
-  try {
-    const gitignore = join(dir, ".gitignore");
-    if (dir.endsWith(".traceroot") && !existsSync(gitignore)) {
-      writeFileSync(gitignore, "*\n");
-    }
-  } catch {
-    // best-effort only
-  }
 }

@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { SetupError } from "./errors.js";
 import { detectStack } from "./stack.js";
 
@@ -82,6 +83,39 @@ export function serviceArtifactDir(input: ServiceArtifactDirInput): string {
   }
 
   return detectStack(root, { service: here }).selected === null ? root : resolve(root, here);
+}
+
+/**
+ * Best-effort safety net: a `.gitignore` containing `*` in the CLI's own
+ * `.traceroot` directory, so nothing setup leaves there can be committed by
+ * accident — not the credential config, not the checkpoint, and not the
+ * agent transcript, which is the only one of them that quotes arbitrary
+ * repository content back.
+ *
+ * Lives here rather than in whichever module happened to need it first, now
+ * that more than one does: this is the module that decides where setup's files
+ * go, so the rule that keeps them out of a commit belongs beside it. Mirrors
+ * the same net in `config/manager.ts`, which covers a directory this module
+ * does not choose.
+ *
+ * Only ever acts on a directory named `.traceroot` — one the CLI owns — so it
+ * can never clobber an unrelated directory's tracking, never on an existing
+ * file, and never throws: it is a convenience, not a correctness requirement.
+ * The caller creates the directory first; a net that silently did nothing
+ * because the directory was not there yet would be worse than none.
+ */
+export function ensureGitignore(dir: string): void {
+  if (basename(dir) !== ".traceroot") {
+    return;
+  }
+  try {
+    const gitignore = join(dir, ".gitignore");
+    if (!existsSync(gitignore)) {
+      writeFileSync(gitignore, "*\n");
+    }
+  } catch {
+    // best-effort only
+  }
 }
 
 /**
