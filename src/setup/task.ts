@@ -276,11 +276,12 @@ function relativeInterpreter(interpreter: string, root: string, servicePath: str
  * refusal there costs the whole run, because the code gets instrumented and
  * nothing is allowed to execute it.
  *
- * There are two because the task names the interpreter twice and the quoting
- * differs: absolutely in the install step, where the quotes are written for the
- * agent, and relatively in the run command, where they are not (see
- * `relativeInterpreter`). `null` is a service with no virtualenv at all, where
- * the task's own advice is to create one and use it from then on.
+ * There are two because the task names the interpreter twice: absolutely in
+ * the install step and relatively in the run command (see
+ * `relativeInterpreter`). The install step also single-quotes it for the shell;
+ * that spelling is read off the command itself, by {@link leadingProgram}, so
+ * the quoting is written in one place. `null` is a service with no virtualenv
+ * at all, where the task's own advice is to create one and use it from then on.
  */
 export function taskInterpreters(
   interpreter: string | null,
@@ -294,6 +295,98 @@ export function taskInterpreters(
   // One spelling for an interpreter outside the tree: there the task names the
   // absolute path in both places.
   return named === interpreter ? [interpreter] : [interpreter, named];
+}
+
+/**
+ * The command the task tells the agent to run the service with.
+ *
+ * Named rather than inlined because the launch has to allow the program it
+ * starts with — see {@link taskPrograms} — and a second copy of this expression
+ * is a second thing to keep in step.
+ */
+function serviceRunLine(
+  service: DetectedService,
+  root: string,
+  pythonInterpreter: string | null,
+): string {
+  const entry = service.entryPoint ?? "<entry point>";
+  // Per language: a Node service was being told to run its entry point with a
+  // Python interpreter.
+  return service.language === "python"
+    ? `${pythonInterpreter === null ? "python3" : relativeInterpreter(pythonInterpreter, root, service.path)} ${entry}`
+    : entry.endsWith(".ts")
+      ? `npx tsx ${entry}`
+      : `node ${entry}`;
+}
+
+/**
+ * The program a command starts with, as a permission rule has to name it, or
+ * null when there is nothing for a rule to name.
+ *
+ * Taken as written, quotes included, because a rule matches the start of a
+ * command literally. `installCommand`'s pip branch single-quotes an absolute
+ * interpreter, closing and re-opening around any `'` in the path, so that
+ * command starts with `'<path>'`, a prefix `Bash(<path>:*)` does not name. The
+ * word is kept whole rather than split on whitespace, which would cut a path
+ * with a space in two, and rather than un-escaped, which would be a second
+ * place that has to agree with how it was quoted.
+ */
+function leadingProgram(command: string): string | null {
+  const trimmed = command.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  if (trimmed.startsWith("'")) {
+    // One shell word: single-quoted runs, with an escaped `'` between them.
+    return /^(?:'[^']*'|\\')+/.exec(trimmed)?.[0] ?? null;
+  }
+  return trimmed.split(/\s+/)[0] ?? null;
+}
+
+/**
+ * Every program the rendered task tells the agent to execute.
+ *
+ * Derived from the functions that render the task, not listed again beside
+ * them. A program the task names and the launch does not allow is simply
+ * refused in a headless run — `buildInvocation` says what that costs — and the
+ * two lists drifted apart exactly once already: the task has told a TypeScript
+ * service to run `npx tsx <entry>`, a Poetry or Bun project to install with its
+ * own package manager, and a pip or Poetry project to check itself with
+ * `pytest`, since before any of them were allowed.
+ *
+ * All three commands, because all three are commands the task hands over in
+ * full and expects to be run on the first attempt: step 2 installs, step 5
+ * checks, and the service facts say how to run it. The check is no wider a
+ * permission than the other two — the run line already executes the project's
+ * own code, and what this list scopes is which programs may be started, not
+ * whether the project's code may run at all.
+ *
+ * Scoped to this run's own commands rather than to every command any run could
+ * name, so a Python service does not hand the agent a rule for `bun`.
+ */
+export function taskPrograms(
+  input: Pick<
+    BuildSetupTaskInput,
+    "service" | "root" | "sdk" | "pythonInterpreter" | "verifyCommand"
+  >,
+): string[] {
+  const { service } = input;
+  const python = input.pythonInterpreter ?? null;
+  const programs = new Set(taskInterpreters(python, input.root, service.path));
+  for (const command of [
+    serviceRunLine(service, input.root, python),
+    installCommand(input.sdk, service, service.language, python),
+    // Null when no check was detected, where the task tells the agent to find
+    // the project's own — which is a command nobody here can name, so there is
+    // nothing to allow and `leadingProgram` is never asked.
+    input.verifyCommand,
+  ]) {
+    const program = command === null ? null : leadingProgram(command);
+    if (program !== null) {
+      programs.add(program);
+    }
+  }
+  return [...programs];
 }
 
 export function buildSetupTask(input: BuildSetupTaskInput): string {
@@ -358,15 +451,7 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // `relative()` gives `../.venv/bin/python` from `<root>/svc`, which has no
   // quoting hazard at all. Absolute is kept only when the interpreter lives
   // outside the tree, where a relative path would be worse.
-  const entry = service.entryPoint ?? "<entry point>";
-  // Per language: a Node service was being told to run its entry point with a
-  // Python interpreter.
-  const runLine =
-    service.language === "python"
-      ? `${python === null ? "python3" : relativeInterpreter(python, input.root, service.path)} ${entry}`
-      : entry.endsWith(".ts")
-        ? `npx tsx ${entry}`
-        : `node ${entry}`;
+  const runLine = serviceRunLine(service, input.root, python);
 
   const serviceFacts = bullet([
     `path: \`${service.path}\``,

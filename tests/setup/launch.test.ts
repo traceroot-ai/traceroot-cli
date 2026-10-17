@@ -1,7 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { buildAgentEnv, buildInvocation, launchAgent } from "../../src/setup/launch.js";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RunProcessResult } from "../../src/setup/exec.js";
+import {
+  buildAgentEnv,
+  buildInvocation,
+  launchAgent,
+  prepareWritableDir,
+  resolveNpmCacheDir,
+} from "../../src/setup/launch.js";
 import { makeSecret } from "../../src/setup/secret.js";
-import { buildSetupTask, taskInterpreters } from "../../src/setup/task.js";
+import { buildSetupTask, taskPrograms } from "../../src/setup/task.js";
 import type { DetectedService } from "../../src/setup/types.js";
 import { fakeRunProcess } from "./helpers.js";
 
@@ -116,13 +136,24 @@ describe("driving Codex headless", () => {
   it("turns the sandbox's network on, because the task starts with an install", () => {
     // Under `workspace-write` the sandbox has no network access by default. The
     // first thing this task asks for is `pip install` or `npm install`.
-    expect(codex().args).toContain("sandbox_workspace_write.network_access=true");
+    //
+    // Paired with its `-c`, not merely present: a dropped flag leaves the
+    // setting as a stray positional, which `codex exec` reads as part of the
+    // prompt — and since an unrecognised config key only warns, the run would
+    // go on with the sandbox's network off and still exit 0.
+    const { args } = codex();
+    const at = args.indexOf("sandbox_workspace_write.network_access=true");
+    expect(at).toBeGreaterThan(0);
+    expect(args[at - 1]).toBe("-c");
   });
 
   it("pins the approval policy rather than inheriting the user's config", () => {
     // A captured run has nobody to approve anything, and the policy otherwise
     // comes from `$CODEX_HOME/config.toml` — a file setup has never read.
-    expect(codex().args).toContain('approval_policy="never"');
+    const { args } = codex();
+    const at = args.indexOf('approval_policy="never"');
+    expect(at).toBeGreaterThan(0);
+    expect(args[at - 1]).toBe("-c");
   });
 
   it("keeps colour out of the output the completion block is parsed from", () => {
@@ -137,10 +168,56 @@ describe("driving Codex headless", () => {
     expect(codex().args).toContain("--skip-git-repo-check");
   });
 
+  it("turns the shell snapshot off, so the user's profile cannot replace the key", () => {
+    // The snapshot re-applies the user's shell-profile exports to every command
+    // Codex runs. In a recorded run that put a production key over the staging
+    // one setup had injected, and the application got a 401.
+    //
+    // Paired with its `-c` for the same reason as the network setting above.
+    const { args } = codex();
+    const at = args.indexOf("features.shell_snapshot=false");
+    expect(at).toBeGreaterThan(0);
+    expect(args[at - 1]).toBe("-c");
+  });
+
+  it("passes each writable directory as its own --add-dir, ahead of the prompt", () => {
+    // Two, because with one the argv is identical whether the flag repeats or
+    // is emitted once with a list.
+    const { args } = codex({ writableDirs: ["/home/u/.npm", "/other"] });
+    expect(args.slice(-5)).toEqual(["--add-dir", "/home/u/.npm", "--add-dir", "/other", "-"]);
+  });
+
+  it("adds no --add-dir when nothing outside the workspace has to be written", () => {
+    expect(codex().args).not.toContain("--add-dir");
+    expect(codex({ writableDirs: [] }).args).not.toContain("--add-dir");
+  });
+
+  it("builds one argv, in one order", () => {
+    // The whole list, so a setting cannot move, repeat or go missing without
+    // this saying so.
+    expect(codex({ writableDirs: ["/home/u/.npm"] }).args).toEqual([
+      "exec",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "--color",
+      "never",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+      "-c",
+      'approval_policy="never"',
+      "-c",
+      "features.shell_snapshot=false",
+      "--add-dir",
+      "/home/u/.npm",
+      "-",
+    ]);
+  });
+
   it("claims no activity format, so no parser is pointed at its output", () => {
-    // Codex's `--json` event names differ between releases and nothing here has
-    // been run against the binary to settle which. A feed built on a guessed
-    // schema reads as a record of what the agent did.
+    // Codex's `--json` event names differ between releases, and the recorded
+    // runs did not pass `--json`, so nothing has settled which. A feed built on
+    // a guessed schema reads as a record of what the agent did.
     expect(codex().activityFormat).toBe("none");
     expect(codex().args).not.toContain("--json");
     // And Claude's, which this parser *was* written against, still declares it.
@@ -150,9 +227,11 @@ describe("driving Codex headless", () => {
   });
 
   it("silently drops the Claude-shaped options it has no mechanism for", () => {
-    // `--add-dir` answers a read scope Codex does not have, and there is no
-    // per-program allow list to translate `Bash(prog:*)` into. Leaving the
-    // flags off is the decision; emitting a nearest-looking one is not.
+    // Claude's `--add-dir` answers a read scope Codex does not have (Codex's
+    // flag of that name grants writes, and only `writableDirs` drives it), and
+    // there is no per-program allow list to translate `Bash(prog:*)` into.
+    // Leaving the flags off is the decision; emitting a nearest-looking one is
+    // not.
     const { args } = codex({ readableDirs: ["/repo"], allowedPrograms: ["python3"] });
     expect(args).not.toContain("--add-dir");
     expect(args).not.toContain("--allowedTools");
@@ -183,6 +262,150 @@ describe("driving Codex headless", () => {
     // the prompt reaches the process at all.
     expect(launched?.args.at(-1)).toBe("-");
     expect(launched?.env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
+  });
+});
+
+describe("Claude Code, which the writable directories do not reach", () => {
+  const base = {
+    agentId: "claude" as const,
+    task: "t",
+    readableDirs: ["/repo"],
+    allowedPrograms: ["python3"],
+  };
+
+  it("builds the same invocation with them as without, in both modes", () => {
+    // Its recorded npm runs wrote the cache with nothing named, so nothing here
+    // is allowed to change what it is launched with.
+    for (const interactive of [true, false]) {
+      expect(buildInvocation({ ...base, interactive, writableDirs: ["/home/u/.npm"] })).toEqual(
+        buildInvocation({ ...base, interactive }),
+      );
+    }
+  });
+
+  it("keeps the headless argv it had", () => {
+    expect(
+      buildInvocation({ ...base, interactive: false, writableDirs: ["/home/u/.npm"] }).args,
+    ).toEqual([
+      "--add-dir",
+      "/repo",
+      "--allowedTools",
+      "Read(**)",
+      "Edit(**)",
+      "Bash(python3:*)",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--disallowedTools",
+      "EnterPlanMode",
+      "Task",
+      "Agent",
+      "--permission-mode",
+      "acceptEdits",
+    ]);
+  });
+});
+
+describe("finding the npm cache a sandboxed agent has to write", () => {
+  /** Resolves against an npm that answers `npm`, from the agent's cwd. */
+  function resolveWith(npm: Partial<RunProcessResult>, env: NodeJS.ProcessEnv = {}) {
+    const { run, runs } = fakeRunProcess({ results: { npm } });
+    return {
+      runs,
+      resolved: resolveNpmCacheDir({ cwd: "/repo/app", env, runProcess: run, homeDir: "/home/u" }),
+    };
+  }
+
+  it("takes npm's own answer, asked where the agent will stand", async () => {
+    // An `.npmrc` can move the cache anywhere, and npm is the one that knows.
+    const { runs, resolved } = resolveWith({ output: "/Volumes/fast/npm-cache\n" });
+    expect(await resolved).toBe("/Volumes/fast/npm-cache");
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.program).toBe("npm");
+    expect(runs[0]?.args).toEqual([
+      "config",
+      "get",
+      "cache",
+      "--loglevel=silent",
+      "--no-update-notifier",
+    ]);
+    expect(runs[0]?.cwd).toBe("/repo/app");
+  });
+
+  it("falls back to npm_config_cache when npm cannot answer", async () => {
+    const failures = [
+      { spawnFailed: true, exitCode: 127 },
+      // What npm 10 says when a project `.npmrc` sets a relative cache.
+      { exitCode: 1, output: "npm error The cache option is protected" },
+      { timedOut: true, exitCode: 143 },
+    ];
+    for (const failure of failures) {
+      const { resolved } = resolveWith(failure, { npm_config_cache: "/env/npm-cache" });
+      expect(await resolved).toBe("/env/npm-cache");
+    }
+  });
+
+  it("falls back to ~/.npm when neither npm nor the environment says", async () => {
+    const { resolved } = resolveWith({ spawnFailed: true, exitCode: 127 });
+    expect(await resolved).toBe(join("/home/u", ".npm"));
+  });
+
+  it("does not take a warning, a relative path or nothing as the answer", async () => {
+    // The runner hands back stdout and stderr as one string.
+    for (const output of ["npm warn something\n/Users/u/.npm\n", "relcache\n", ""]) {
+      const { resolved } = resolveWith({ output });
+      expect(await resolved).toBe(join("/home/u", ".npm"));
+    }
+  });
+});
+
+describe("making the npm cache exist before the sandbox needs it", () => {
+  let base: string;
+  beforeEach(() => {
+    // Real, because `/var` on macOS is itself a link and the answer is a real path.
+    base = realpathSync(mkdtempSync(join(tmpdir(), "tr-writable-dir-")));
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("creates a cache that is not there yet, parents included", () => {
+    // A fresh machine has no `~/.npm` until npm's first run, and that run is
+    // the sandboxed one, which cannot create it.
+    const dir = join(base, "home", ".npm");
+    expect(prepareWritableDir(dir)).toBe(dir);
+    expect(statSync(dir).isDirectory()).toBe(true);
+  });
+
+  it("leaves an existing cache as it is", () => {
+    const dir = join(base, ".npm");
+    mkdirSync(join(dir, "_cacache"), { recursive: true });
+    writeFileSync(join(dir, "_cacache", "index"), "kept");
+    const before = statSync(dir);
+
+    expect(prepareWritableDir(dir)).toBe(dir);
+    expect(readdirSync(dir)).toEqual(["_cacache"]);
+    expect(readFileSync(join(dir, "_cacache", "index"), "utf8")).toBe("kept");
+    expect(statSync(dir).mtimeMs).toBe(before.mtimeMs);
+    expect(statSync(dir).mode).toBe(before.mode);
+  });
+
+  it("names a linked cache by its target, which Codex's sandbox accepts", () => {
+    // Codex's macOS sandbox refuses a writable root with a symlink in it, and
+    // refuses it for every command.
+    const target = join(base, "other-disk", "npm-cache");
+    mkdirSync(target, { recursive: true });
+    const link = join(base, ".npm");
+    symlinkSync(target, link);
+    expect(prepareWritableDir(link)).toBe(target);
+  });
+
+  it("returns null when the directory cannot be made", () => {
+    // A file where the cache, or one of its parents, would have to be.
+    writeFileSync(join(base, "blocker"), "");
+    expect(prepareWritableDir(join(base, "blocker"))).toBeNull();
+    expect(prepareWritableDir(join(base, "blocker", ".npm"))).toBeNull();
   });
 });
 
@@ -300,22 +523,35 @@ describe("letting the agent edit the service it was pointed at", () => {
 describe("the interpreter the task recommends and the one the agent may run", () => {
   const ROOT = "/repo";
   const SERVICE_PATH = "api";
+  const SDK = { package: "traceroot", version: "1.2.3", source: "registry" } as const;
 
-  function task(pythonInterpreter: string | null): string {
+  /** A Python service on pip unless a case says otherwise. */
+  function service(overrides: Partial<DetectedService> = {}): DetectedService {
+    return {
+      path: SERVICE_PATH,
+      language: "python",
+      framework: null,
+      entryPoint: "main.py",
+      packageManager: "pip",
+      testCommand: null,
+      evidence: [],
+      ...overrides,
+    } as unknown as DetectedService;
+  }
+
+  function task(
+    pythonInterpreter: string | null,
+    overrides: Partial<DetectedService> = {},
+  ): string {
+    const detected = service(overrides);
     return buildSetupTask({
-      service: {
-        path: SERVICE_PATH,
-        language: "python",
-        framework: null,
-        entryPoint: "main.py",
-        packageManager: "pip",
-        testCommand: null,
-        evidence: [],
-      } as unknown as DetectedService,
+      service: detected,
       root: ROOT,
-      sdk: { package: "traceroot", version: "1.2.3", source: "registry" },
+      sdk: SDK,
       skillPath: ".claude/skills/traceroot-instrument-repo",
-      verifyCommand: null,
+      // From the service, as the instrument stage takes it, so a fixture's
+      // check reaches the task and the rules by the same route.
+      verifyCommand: detected.testCommand,
       interactive: false,
       existingInstrumentation: [],
       pythonInterpreter,
@@ -323,12 +559,24 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     });
   }
 
-  function rules(pythonInterpreter: string | null): string[] {
+  function rules(
+    pythonInterpreter: string | null,
+    overrides: Partial<DetectedService> = {},
+  ): string[] {
+    const detected = service(overrides);
     return buildInvocation({
       agentId: "claude",
       task: "t",
       interactive: false,
-      allowedPrograms: taskInterpreters(pythonInterpreter, ROOT, SERVICE_PATH),
+      // The call the instrument stage makes, so a program the task names is
+      // asserted against the rules the launched agent is actually given.
+      allowedPrograms: taskPrograms({
+        service: detected,
+        root: ROOT,
+        sdk: SDK,
+        pythonInterpreter,
+        verifyCommand: detected.testCommand,
+      }),
     }).args;
   }
 
@@ -344,6 +592,31 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     return (command as string).split(" ")[0];
   }
 
+  /** The same, for the one command step 2 of the task hands over in full. */
+  function programInInstallCommand(text: string): string {
+    const command = /### 2\. Install the SDK[\s\S]*?```bash\n([^\n]+)\n```/.exec(text)?.[1];
+    expect(command).toBeDefined();
+    return (command as string).split(" ")[0];
+  }
+
+  /**
+   * The interpreter word step 2's pip command starts with, as written — quotes,
+   * escapes and any space in the path included, which `split(" ")` would cut.
+   */
+  function interpreterInPipInstall(text: string): string {
+    const command = /### 2\. Install the SDK[\s\S]*?```bash\n([^\n]+)\n```/.exec(text)?.[1] ?? "";
+    const at = command.indexOf(" -m pip install ");
+    expect(at, "step 2 is a pip install through a named interpreter").toBeGreaterThan(0);
+    return command.slice(0, at);
+  }
+
+  /** And for the check the task tells the agent to run once, when one exists. */
+  function programInCheckCommand(text: string): string {
+    const command = /1\. Run `([^`]+)` once and confirm it passes\./.exec(text)?.[1];
+    expect(command).toBeDefined();
+    return (command as string).split(" ")[0];
+  }
+
   it("allows the relative spelling the run command uses for a virtualenv in the tree", () => {
     const interpreter = "/repo/api/.venv/bin/python";
     const named = programInRunCommand(task(interpreter));
@@ -351,9 +624,25 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     // the one a caller has in hand, and it is not the one the task gives.
     expect(named).not.toBe(interpreter);
     expect(rules(interpreter)).toContain(`Bash(${named}:*)`);
-    // And the absolute path as well: the install step names it that way,
-    // quotes included, because there the quoting is written for the agent.
+    // And the install step's spelling: absolute, and single-quoted for the
+    // shell. A rule matches the start of a command literally, so the quotes are
+    // part of what it has to name — the unquoted rule does not cover it.
+    const installed = interpreterInPipInstall(task(interpreter));
+    expect(installed).toBe(`'${interpreter}'`);
+    expect(rules(interpreter)).toContain(`Bash(${installed}:*)`);
+    // The unquoted absolute path stays allowed beside it.
     expect(rules(interpreter)).toContain(`Bash(${interpreter}:*)`);
+  });
+
+  it("allows the quoted interpreter whole when its path has a space or a quote", () => {
+    // A repository path routinely contains a space, and the pip command closes
+    // and re-opens its quoting around a `'`. Split on whitespace, the word is
+    // cut in two and the rule names a path that is not the interpreter.
+    const interpreter = "/opt/it's here/bin/python3";
+    const installed = interpreterInPipInstall(task(interpreter));
+    expect(installed).toContain(" ");
+    expect(installed).toContain("'\\''");
+    expect(rules(interpreter)).toContain(`Bash(${installed}:*)`);
   });
 
   it("allows the absolute spelling when the interpreter sits outside the repository", () => {
@@ -370,6 +659,75 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     const named = /run the application with `([^`]+)` throughout/.exec(task(null))?.[1];
     expect(named).toBeDefined();
     expect(rules(null)).toContain(`Bash(${named}:*)`);
+  });
+
+  it("allows the program the run command names for a TypeScript entry point", () => {
+    // `npx tsx <entry>`, which is the run line for 8 of the 13 entry points in
+    // `NODE_ENTRY_POINTS`. Unallowed, a headless run has nobody to ask, so the
+    // call is refused: the service is instrumented, never once executed, and
+    // the trace wait ends up reporting that the instrumented path never ran —
+    // true, and the symptom rather than the denial.
+    const ts: Partial<DetectedService> = {
+      language: "typescript",
+      entryPoint: "src/index.ts",
+      packageManager: "npm",
+    };
+    const named = programInRunCommand(task(null, ts));
+    expect(named).toBe("npx");
+    expect(rules(null, ts)).toContain("Bash(npx:*)");
+  });
+
+  it("allows the package manager the install step names", () => {
+    // Step 2 is the first command of the run and it is handed over in full,
+    // for whichever manager was detected. Two that no rule used to cover.
+    const poetry: Partial<DetectedService> = { packageManager: "poetry" };
+    expect(programInInstallCommand(task(null, poetry))).toBe("poetry");
+    expect(rules(null, poetry)).toContain("Bash(poetry:*)");
+
+    const bun: Partial<DetectedService> = {
+      language: "typescript",
+      entryPoint: "index.js",
+      packageManager: "bun",
+    };
+    expect(programInInstallCommand(task(null, bun))).toBe("bun");
+    expect(rules(null, bun)).toContain("Bash(bun:*)");
+  });
+
+  it("allows the check the task tells the agent to run once", () => {
+    // Step 5 is handed over in full, like step 2, and `pytest` is the bare
+    // string `detectStack` produces for a Python project on pip or Poetry. A
+    // refused check costs the agent the single attempt the task is written to
+    // buy it, and its recovery — `./.venv/bin/python -m pytest` — only works
+    // where a virtualenv was found.
+    const pip: Partial<DetectedService> = { testCommand: "pytest" };
+    expect(programInCheckCommand(task(null, pip))).toBe("pytest");
+    expect(rules(null, pip)).toContain("Bash(pytest:*)");
+
+    // `uv` runs it through its own environment, which was already allowed —
+    // asserted so the two spellings cannot be mistaken for one case.
+    const uv: Partial<DetectedService> = { packageManager: "uv", testCommand: "uv run pytest" };
+    expect(programInCheckCommand(task(null, uv))).toBe("uv");
+    expect(rules(null, uv)).toContain("Bash(uv:*)");
+  });
+
+  it("allows no check when none was detected", () => {
+    // There the task tells the agent to find the project's own check, which is
+    // a command nobody here can name — so there is nothing to allow, and an
+    // empty rule would be a rule matching everything.
+    const named = rules(null);
+    expect(named).not.toContain("Bash(:*)");
+    expect(named).not.toContain("Bash(pytest:*)");
+  });
+
+  it("names no program the task did not, and never widens to every command", () => {
+    // Scoped per run: a Python service's rules must not carry the Node
+    // manager's program, and the whole point of an allow list is lost if a
+    // bare `Bash(*)` ever reaches the argv.
+    const python = rules("/repo/api/.venv/bin/python");
+    expect(python).not.toContain("Bash(bun:*)");
+    expect(python).not.toContain("Bash(npx:*)");
+    expect(python).not.toContain("Bash(*)");
+    expect(python).not.toContain("Bash");
   });
 });
 

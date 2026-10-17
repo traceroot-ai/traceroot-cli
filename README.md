@@ -20,7 +20,7 @@ coding agent, and waits for the first trace to arrive:
 npx -y traceroot-cli@latest setup
 ```
 
-Already instrumented, and here to read your data:
+Already instrumented? The rest of the CLI:
 
 ```sh
 traceroot login                       # sign in with your browser (device flow)
@@ -317,7 +317,8 @@ those from `10` up rather than overloading one of the five:
 | `16` | Writing would have overwritten something `setup` was not told it could replace. |
 | `130` | Ctrl+C or Escape at a prompt. The shell's own status for a run ended by `SIGINT`, not a number this table assigns, and the reason it cannot share the `0` above: `traceroot setup && <next step>` must not run the next step over an abandoned run. |
 
-The two numbers `setup` does take from the shared table it takes unchanged: an
+Besides that `0`, which is the shared success code doing its usual job, the two
+numbers `setup` does take from the shared table it takes unchanged: an
 unexpected failure is `1`, and a run with no usable credentials is the same `3`
 every other command reports, so a caller re-authenticating in response is right
 whichever one it came from.

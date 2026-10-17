@@ -1,5 +1,5 @@
 import { constants, accessSync, existsSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, join, win32 as windowsPath } from "node:path";
 import { ALL_AGENTS } from "../agents/index.js";
 import type { AgentAdapter, AgentId } from "../agents/types.js";
 import { SetupError } from "./errors.js";
@@ -50,6 +50,36 @@ export function resolveOnPath(
   return null;
 }
 
+/** The extensions of a Windows batch file, which only cmd.exe can run. */
+const BATCH_EXTENSIONS: ReadonlySet<string> = new Set([".cmd", ".bat"]);
+
+/**
+ * Why the binary an agent resolved to cannot be launched, or undefined when it
+ * can.
+ *
+ * `npm i -g` installs an agent on Windows as a batch shim, `claude.cmd`, and a
+ * batch file is something only cmd.exe can run. An agent's launch cannot go
+ * through cmd.exe: its arguments carry characters cmd.exe re-interprets — every
+ * `Bash(prog:*)` allow rule Claude Code is given has parentheses — and the
+ * process runner refuses those rather than trust an escape to survive both
+ * cmd.exe and the shim's own `%*`. So a shim that resolves first on PATH is an
+ * option that can only ever fail to start, on this run and on every resume,
+ * with a message telling the user to install what they already have.
+ *
+ * First on PATH because that is the one the launch would find: a native build
+ * later on PATH does not help, which is what the remedy says.
+ */
+function launchRefusal(
+  adapter: AgentAdapter,
+  resolved: string,
+  platform: NodeJS.Platform,
+): string | undefined {
+  if (platform !== "win32" || !BATCH_EXTENSIONS.has(windowsPath.extname(resolved).toLowerCase())) {
+    return undefined;
+  }
+  return `${adapter.displayName} is on PATH as a batch shim, ${resolved}, which setup cannot launch on Windows. Put the native ${adapter.binary}.exe ahead of it on PATH for setup to run it.`;
+}
+
 /**
  * The agents setup will run on the user's behalf.
  *
@@ -68,16 +98,16 @@ export function resolveOnPath(
  *
  * - `claude` — recorded runs of this pipeline, through to a trace, per package
  *   manager. The strong case, and the one the sentence above described.
- * - `codex` — its headless interface read off OpenAI's published Codex
- *   documentation (`codex exec`, a prompt on stdin via `-`, the
- *   `workspace-write` sandbox, and the config overrides for approvals and
- *   sandbox network access; see `buildInvocation` in ./launch.ts). No run of this
- *   pipeline has driven Codex to a trace, on any package manager. What is
- *   established is that the invocation is spelled out of documented flags
- *   rather than guessed at; what is not established is that a Codex run of
- *   *this* task installs an SDK, edits an entry point and emits a trace. The
- *   documentation is the whole of the evidence: no `codex` binary was present
- *   to probe, so not even `codex exec --help` has confirmed the spellings.
+ * - `codex` — recorded runs of this pipeline on codex-cli 0.162.1, through to a
+ *   trace, for two package managers: pip into a venv for Python, and npm for
+ *   JavaScript. Each needed a setting the first invocation lacked: shell
+ *   snapshots off, so a key exported in the user's shell profile cannot replace
+ *   the one setup injects, and on the npm run a writable npm cache. Both are in
+ *   `buildInvocation` (./launch.ts), with what each fixed. Not yet run: pnpm,
+ *   yarn, bun, uv and poetry; a directory that is not a git repository; and the
+ *   browser sign-in path, which writes the key into a `.env`. Those runs also
+ *   passed `--ignore-user-config`, which setup does not, so a user's own
+ *   `config.toml` is untested as well.
  *
  * It is here anyway because the alternative is worse for the user it is about.
  * A wizard that finds `codex` on PATH and offers nothing but "run it yourself"
@@ -89,8 +119,9 @@ export function resolveOnPath(
  * whichever agent they prefer.
  *
  * So the rule going forward is that an entry here carries its own basis in this
- * comment. Promoting Codex's to the first kind takes recorded runs, not a
- * second reading of the same documentation.
+ * comment. Promoting Codex's to the first kind takes recorded runs on the
+ * package managers still missing, not a second reading of the same
+ * documentation.
  *
  * An agent that is not on this list is still a first-class skill target, and
  * `--no-instrument` still writes the instrumentation task out for it.
@@ -111,13 +142,17 @@ export interface DetectAgentsOptions {
 /**
  * Probes each agent setup can run for two independent facts: whether it is
  * *configured* (a skills/config directory exists) and whether it is *runnable*
- * (its binary resolves on PATH). Only a runnable agent can be launched, so
+ * (its binary resolves on PATH, to something setup can launch — see
+ * {@link launchRefusal}). Only a runnable agent can be launched, so
  * conflating the two — as the CLI's existing `AgentAdapter.detect` does, since
  * it only checks directories — would let setup select an agent it cannot start.
  *
  * {@link LAUNCHABLE_AGENTS} rather than every adapter the CLI knows: an agent
- * reported here becomes a run option, and offering one whose headless run has
- * not been established is the same error one step earlier.
+ * reported here becomes a run option, which is a different thing from an agent
+ * the CLI merely installs a skill for. What earns a place on that list is
+ * recorded with the list itself, entry by entry, because the two entries are
+ * not there on the same evidence and a single sentence here would have to
+ * misdescribe one of them.
  *
  * Each signal carries a human-readable reason so `setup doctor` can explain
  * itself rather than printing a bare boolean.
@@ -139,9 +174,11 @@ export function detectAgents(options: DetectAgentsOptions): DetectedAgent[] {
     }
 
     let runnable = false;
+    let unlaunchable: string | undefined;
     if (adapter.binary !== undefined) {
       const resolved = resolveOnPath(adapter.binary, env, platform);
-      runnable = resolved !== null;
+      unlaunchable = resolved === null ? undefined : launchRefusal(adapter, resolved, platform);
+      runnable = resolved !== null && unlaunchable === undefined;
       if (runnable) {
         evidence.push(`\`${adapter.binary}\` found on PATH`);
       }
@@ -153,6 +190,7 @@ export function detectAgents(options: DetectAgentsOptions): DetectedAgent[] {
       runnable,
       configured,
       evidence,
+      ...(unlaunchable === undefined ? {} : { unlaunchable }),
     };
   });
 }
@@ -191,6 +229,19 @@ function requireLaunchableAgent(id: string): AgentAdapter {
   return adapter;
 }
 
+/** The refusal for an agent that is installed but cannot be launched. */
+function unlaunchableError(message: string): SetupError {
+  return new SetupError({
+    stage: "select_agent",
+    code: "UNSUPPORTED",
+    message,
+    remedy: [
+      "Or generate the instrumentation prompt and run it yourself:",
+      "  traceroot setup --no-instrument",
+    ].join("\n"),
+  });
+}
+
 /**
  * Resolution ladder, in the shape the CLI already uses for skills and agents
  * elsewhere: an explicit flag always wins; exactly one runnable agent
@@ -202,6 +253,8 @@ function requireLaunchableAgent(id: string): AgentAdapter {
  * An explicitly requested agent is honoured even when its binary is not on
  * PATH — with a warning. The user may be running a wrapper, an alias, or an
  * agent installed after this shell started, and refusing would be presumptuous.
+ * One whose binary is on PATH and cannot be launched is refused instead, with
+ * the reason: the launch would find that same binary.
  */
 export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgent> {
   const { detected, requested, canPrompt } = input;
@@ -211,6 +264,11 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
     // fails here with the names it can rather than inside that agent later.
     const adapter: AgentAdapter = requireLaunchableAgent(requested);
     const match = detected.find((d) => d.id === adapter.id);
+    if (match?.unlaunchable !== undefined) {
+      // Not the wrapper or alias the warning below allows for: the launch
+      // would find this same binary and refuse it.
+      throw unlaunchableError(match.unlaunchable);
+    }
     const resolved: DetectedAgent = match ?? {
       id: adapter.id,
       displayName: adapter.displayName,
@@ -234,6 +292,14 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
   }
 
   if (runnable.length === 0 || only === undefined) {
+    // "Not found on PATH" would be false for these, and "install it" is
+    // advice the user has already taken.
+    const refusals = detected.flatMap((d) =>
+      d.unlaunchable === undefined ? [] : [d.unlaunchable],
+    );
+    if (refusals.length > 0) {
+      throw unlaunchableError(refusals.join("\n"));
+    }
     throw new SetupError({
       stage: "select_agent",
       code: "UNSUPPORTED",
@@ -289,7 +355,14 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
  * one: Codex reports `$CODEX_HOME` in the home directory while Claude Code
  * reports a project-local `.claude`, and collapsing the two would install the
  * skill where that agent will never look for it.
+ *
+ * `generic` is excluded. It is the fallback for "no particular agent", so there
+ * is nowhere to send a user who picks it — and its `detect` answers for
+ * `.agents/`, the directory this very route creates when it falls back to it.
+ * Left in, every repository that has taken a generic hand-over once is asked
+ * from then on to choose between a real agent and a category, and the run that
+ * answers "Agent (generic)" then says no coding agent is set up here.
  */
 export function detectConfiguredAgents(cwd: string): AgentAdapter[] {
-  return ALL_AGENTS.filter((adapter) => adapter.detect(cwd).present);
+  return ALL_AGENTS.filter((adapter) => adapter.id !== "generic" && adapter.detect(cwd).present);
 }

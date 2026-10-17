@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { type ApiClient, type ApiClientOptions, DEFAULT_TIMEOUT_MS } from "../../src/api/client.js";
@@ -13,6 +14,7 @@ import type { RunProcessOptions, RunProcessResult } from "../../src/setup/exec.j
 import type { SetupDeps } from "../../src/setup/machine.js";
 import type { ResolvedSdk } from "../../src/setup/sdk.js";
 import { makeSecret } from "../../src/setup/secret.js";
+import { detectStack, findTraceRootInitialization } from "../../src/setup/stack.js";
 import type { SetupFlags } from "../../src/setup/types.js";
 import { StringSink } from "../helpers/stringSink.js";
 
@@ -57,43 +59,36 @@ export interface FakeProcessOptions {
 /** The agents setup can actually launch; see `LAUNCHABLE_AGENT_IDS`. */
 const AGENT_PROGRAMS = new Set(["claude", "codex"]);
 
-/** Where an entry point is looked for, mirroring `stack.ts`'s own lists. */
-const ENTRY_POINTS = [
-  "main.py",
-  "app.py",
-  "src/main.py",
-  "src/app.py",
-  "manage.py",
-  "index.ts",
-  "index.js",
-  "src/index.ts",
-  "src/index.js",
-  "server.ts",
-  "server.js",
-  "app.ts",
-  "app.js",
-];
-
 /**
  * The one edit the fake agent makes: a real `initialize()` call in the entry
  * point, in the form the detector recognizes for that language.
+ *
+ * Which file that is, and whether it is already instrumented, are both asked of
+ * the production detector rather than answered by a copy of its rules here. A
+ * copy drifts in two directions and both produce a lying fixture: a different
+ * entry point from the one `detect_stack` reads leaves the service the run
+ * checks untouched, and a narrower idea of what counts as instrumentation (an
+ * exact `traceroot.initialize(` and nothing else) appends a second
+ * initialization to a fixture that was wired up with `traceroot.init()` or an
+ * imported bare `initialize()`.
  *
  * Appended rather than written over, so a fixture that already carries
  * instrumentation (or any other content a test asserts on) keeps it.
  */
 function instrumentEntryPoint(cwd: string): void {
-  const entry = ENTRY_POINTS.find((candidate) => existsSync(join(cwd, candidate)));
-  if (entry === undefined) {
+  // The agent is launched in the service directory, so that is the root the
+  // detector is asked about and the service is the one at `.`.
+  const service = detectStack(cwd).selected;
+  if (service === null || service.entryPoint === null) {
     return;
   }
-  const path = join(cwd, entry);
-  const source = readFileSync(path, "utf8");
-  if (source.includes("traceroot.initialize(")) {
+  // By the detector's own rules, not a substring of one of them.
+  if (findTraceRootInitialization(cwd, service) !== null) {
     return;
   }
   appendFileSync(
-    path,
-    entry.endsWith(".py")
+    join(cwd, service.entryPoint),
+    service.language === "python"
       ? "\nimport traceroot\n\ntraceroot.initialize()\n"
       : '\nimport * as traceroot from "traceroot";\n\ntraceroot.initialize();\n',
     "utf8",
@@ -289,6 +284,8 @@ export interface MakeDepsOptions {
   hiddenAnswers?: string[];
   sdk?: ResolvedSdk;
   onWriteConfig?: (config: { api_key: string; host_url: string }) => void;
+  /** The CLI's config as an earlier run left it; none by default, as on a first run. */
+  config?: { api_key?: string; host_url?: string } | null;
   tempDir?: string;
   /** Whether a local TraceRoot API answers, for the missing-endpoint hint. */
   localHostResponds?: boolean;
@@ -375,8 +372,18 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     promptHidden: async () => hidden.shift() ?? "",
     resolveSdk: async () => options.sdk ?? TEST_SDK,
     writeConfig: options.onWriteConfig ?? (() => undefined),
+    readConfig: () => options.config ?? null,
+    // No file behind the config by default, so a rollback finds nothing to put back.
+    readConfigText: () => null,
+    restoreConfigText: () => undefined,
     sleep: async () => undefined,
-    makeTempDir: () => options.tempDir ?? "/tmp/traceroot-setup-test",
+    // A fresh directory per call, not a fixed path in the real `/tmp`. The
+    // instrument stage deletes whatever this returns (`rmSync(tempDir,
+    // { recursive: true, force: true })`), so one shared name means every
+    // agent-launch test in the suite recursively deletes the same real
+    // directory — a developer's own `/tmp/traceroot-setup-test` among them, and
+    // each other's under a parallel run.
+    makeTempDir: () => options.tempDir ?? mkdtempSync(join(tmpdir(), "traceroot-setup-test-")),
     probeHost: async () => options.localHostResponds ?? false,
     // Default: nothing stored, so tests exercise the browser/paste paths unless
     // they explicitly opt into a saved sign-in. Never touches a real home dir.
@@ -389,10 +396,22 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
       (async () => {
         throw new Error("unexpected handoff redemption");
       }),
-    createTokenProvider: () => ({
-      getAccessToken: async () => "access-jwt-value",
-      invalidate: () => undefined,
-    }),
+    // Refuses a missing token, because the real one sends it as the bearer and a
+    // provider built from nothing can never sign anyone in. Accepting it let
+    // every saved-sign-in test pass with the token `undefined`: their fixtures
+    // spelled the field `sessionToken`, which `CredentialEntry` does not have,
+    // and nothing noticed because `tsconfig.json` excludes `tests`.
+    createTokenProvider: ({ sessionToken }) => {
+      if (typeof sessionToken !== "string" || sessionToken === "") {
+        throw new Error(
+          `createTokenProvider was handed no session token (${String(sessionToken)})`,
+        );
+      }
+      return {
+        getAccessToken: async () => "access-jwt-value",
+        invalidate: () => undefined,
+      };
+    },
   };
 }
 

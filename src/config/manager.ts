@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { CliError, ExitCode } from "../output.js";
 import { writeFileSecure } from "../util/secureFile.js";
@@ -165,4 +165,36 @@ function ensureGitignoreDir(target: string): void {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   ensureGitignore(dir);
+}
+
+/**
+ * The config file's text exactly as it is on disk, or null when there is none.
+ *
+ * For a caller that has to put the file back byte for byte, as `setup`'s
+ * rollback does; everything else reads it through {@link readConfig}. A file
+ * that is there and cannot be read throws, so that it is never mistaken for one
+ * that is absent and removed on that basis.
+ */
+export function readConfigText(path?: string): string | null {
+  try {
+    return readFileSync(configPath(path), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Puts the config file back to `text`, written as {@link writeConfig} writes
+ * (atomically, 0600), or removes it when `text` is null.
+ */
+export function restoreConfigText(text: string | null, path?: string): void {
+  const target = configPath(path);
+  if (text === null) {
+    rmSync(target, { force: true });
+    return;
+  }
+  writeFileSecure(target, text);
 }
