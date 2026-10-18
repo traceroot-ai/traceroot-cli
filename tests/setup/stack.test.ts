@@ -173,6 +173,22 @@ describe("choosing a Node service's verification command", () => {
   });
 });
 
+describe("choosing a Python service's verification command", () => {
+  it("runs pytest through Poetry in a Poetry project", () => {
+    // Poetry's default environment is a hashed directory under its own cache,
+    // which `detectPythonEnvironment` does not look at — so a bare `pytest` is
+    // not on PATH there, and fails as "pytest was not found" about a pytest
+    // that is installed.
+    const root = repo({
+      "pyproject.toml": "[tool.poetry.group.dev.dependencies]\npytest = '^8.0'\n",
+      "poetry.lock": "",
+      "main.py": "print(1)",
+    });
+
+    expect(detectStack(root).selected?.testCommand).toBe("poetry run pytest");
+  });
+});
+
 describe("reading whether a service is wired up now", () => {
   /** The detected service, which is what the real caller has in hand. */
   function serviceIn(root: string) {
