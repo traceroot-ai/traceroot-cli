@@ -5741,7 +5741,8 @@ describe("--no-instrument", () => {
     expect(err.data).toContain("--resume");
     // It did not reach a trace, so it must not print the completion sentence.
     expect(out.data).not.toContain("TraceRoot is connected");
-    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
   });
 });
 
@@ -6088,60 +6089,97 @@ describe("why no trace arrived", () => {
     });
   }
 
-  it("blames the missing instrumentation, not a program that never ran", async () => {
+  it("ends an un-run hand-over as a pause, not as a program that never ran", async () => {
     // The live failure. `main.py` held zero TraceRoot references and the SDK
     // was not installed, and the run said "nothing has run your application —
     // Run your application once". Running an uninstrumented application again
     // produces the same nothing, so that advice is a loop with no exit; what
-    // is outstanding is the instrumentation itself.
+    // is outstanding is the instrumentation itself. Nor is it a failure: the
+    // user chose to do that part, so the run ends normally and leaves the
+    // trace unrecorded for `--resume` to look for.
     pythonRepoWithoutTests();
     const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
 
     const result = await runSetupMachine(ctx, traceless());
 
-    expect(result.error?.code).toBe("TRACE_TIMEOUT");
-    const message = plain(result.error?.message ?? "");
-    expect(message).toContain("this service is not instrumented");
-    expect(message).toContain(".traceroot/prompts/setup-instrument.md");
-    expect(message).not.toContain("nothing has run your application");
-    // Named, not pronouned: the clause before it is the task file's path, so
-    // "no initialization in it" reads as a complaint about the task file.
-    expect(message).toContain("no TraceRoot initialization in the service");
-    // And the remedy is the one the wizard printed a few lines earlier.
-    const remedy = plain(result.error?.remedy ?? "");
-    expect(remedy).toContain(".traceroot/prompts/setup-instrument.md");
-    expect(remedy).toContain("traceroot setup --resume");
-    expect(remedy).not.toContain("Run your application once");
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.trace).toBeNull();
+    expect(result.stagesRun.find((s) => s.stage === "verify_trace")?.status).toBe("skipped");
+    expect(ctx.checkpoint.lastError).toBeUndefined();
+    expect(plain(err.data)).not.toContain("nothing has run your application");
     // Nothing can arrive, so nothing is waited for: no two-minute spinner in
     // front of an answer that was available immediately.
     expect(plain(err.data)).not.toContain("Waiting for your first trace");
   });
 
-  it("says the same thing when the project's own suite did run", async () => {
+  it("pauses the same way when the project's own suite did run", async () => {
     // A test command exercising uninstrumented code is still uninstrumented
     // code: "the instrumented code path never ran" would name the wrong one of
     // the two missing halves.
     pythonRepo();
-    const { ctx } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
 
     const result = await runSetupMachine(ctx, traceless());
 
     expect(ctx.application?.withCredentials.ran).toBe(true);
-    expect(plain(result.error?.message ?? "")).toContain("this service is not instrumented");
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(plain(err.data)).not.toContain("Waiting for your first trace");
   });
 
-  it("points at the printed steps rather than a file on the manual route", async () => {
+  it("pauses on the manual route too, with no task file to name", async () => {
     // `--manual` writes no task file, so there is no path to send anyone to.
     pythonRepoWithoutTests();
     const { ctx } = makeCtx({ flags: { method: "manual", traceTimeoutSec: 120 } });
 
     const result = await runSetupMachine(ctx, traceless());
 
-    const message = plain(result.error?.message ?? "");
-    expect(message).toContain("this service is not instrumented");
-    expect(message).toContain("printed the manual instructions");
-    expect(message).not.toContain(".traceroot/prompts");
-    expect(plain(result.error?.remedy ?? "")).toContain("Apply the steps above");
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(ctx.instrumentation?.mode).toBe("prompt-only");
+    expect(ctx.instrumentation?.promptPath).toBeNull();
+  });
+
+  it("keeps the key it installed, which the resume needs", async () => {
+    // The pause it replaced kept the key and the env file, and so must this:
+    // the next step is the user's application sending a trace with them.
+    pythonRepo();
+    let revoked = 0;
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({
+        whoamiResult: async () => whoami({ project_id: "p_other" }),
+        traces: [],
+      }),
+      setupApi: fakeSetupApi({
+        listProjects: async () => [
+          { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+        ],
+        listApiKeys: async () => [],
+        createApiKey: async ({ name }) => ({
+          id: "ak_1",
+          name,
+          hint: "tr-…9999",
+          project_id: "p_1",
+          scope: "ingest",
+          expires_at: null,
+          key: "tr-minted-secret-value-42",
+        }),
+        revokeApiKey: async () => {
+          revoked += 1;
+        },
+      }),
+      runProcess: fakeRunProcess().run,
+    });
+    const { ctx } = makeCtx({ flags: { instrument: false, project: "demo", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(revoked).toBe(0);
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-minted-secret-value-42");
   });
 
   it("does not call a hand-picked repository uninstrumented", async () => {
@@ -6156,9 +6194,10 @@ describe("why no trace arrived", () => {
     const result = await runSetupMachine(ctx, traceless());
 
     expect(ctx.stack?.existingInstrumentation.present).toBe(true);
-    const message = plain(result.error?.message ?? "");
-    expect(message).not.toContain("this service is not instrumented");
-    expect(message).toContain("No trace arrived within");
+    // A real timeout, so it still fails rather than pausing like a hand-over.
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(plain(result.error?.message ?? "")).toContain("No trace arrived within");
     // It really did wait for it, rather than giving up on a verdict it has no
     // grounds for.
     expect(plain(err.data)).toContain("Waiting for your first trace");
@@ -6191,15 +6230,14 @@ describe("why no trace arrived", () => {
     const result = await runSetupMachine(ctx, traceless());
 
     expect(ctx.instrumentation?.mode).toBe("background");
-    const message = plain(result.error?.message ?? "");
-    expect(message).toContain("nothing has run your application");
-    expect(message).not.toContain("this service is not instrumented");
+    expect(result.ok).toBe(false);
+    expect(plain(result.error?.message ?? "")).toContain("nothing has run your application");
   });
 
-  it("says it again on the resume, where the user actually reads it", async () => {
+  it("pauses again on a resume that finds the hand-over still un-run", async () => {
     // The route a user is on: the first run writes the task and tells them to
-    // rerun with `--resume`, so the resumed run is where this diagnosis has to
-    // land. `--resume` restores the instrument stage from the checkpoint rather
+    // rerun with `--resume`, so the resumed run is where this has to hold.
+    // `--resume` restores the instrument stage from the checkpoint rather
     // than running it again — and a restored hand-over that claimed an agent
     // had edited the code is what sent them back to run an application with no
     // TraceRoot in it, which is the loop this whole route exists to break.
@@ -6215,11 +6253,41 @@ describe("why no trace arrived", () => {
 
     // Restored as what it was, not as an agent run.
     expect(ctx.instrumentation?.mode).toBe("prompt-only");
-    const message = plain(result.error?.message ?? "");
-    expect(message).toContain("this service is not instrumented");
-    expect(message).toContain(".traceroot/prompts/setup-instrument.md");
-    expect(message).not.toContain("nothing has run your application");
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(plain(err.data)).not.toContain("nothing has run your application");
     expect(plain(err.data)).not.toContain("Waiting for your first trace");
+  });
+
+  it("waits for the trace on the resume after the task is applied, and finishes", async () => {
+    // The pause records no trace, so the trace stage is unsatisfied on the
+    // resume and runs again — this time over code that has TraceRoot in it.
+    pythonRepo();
+    const first = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
+    const paused = await runSetupMachine(first.ctx, traceless());
+    expect(paused.ok).toBe(true);
+    expect(paused.trace).toBeNull();
+
+    // What the user's own agent did with the task.
+    alreadyInstrumented();
+    const { ctx, err } = makeCtx({
+      flags: { instrument: false, traceTimeoutSec: 120, resume: true },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: fakeRunProcess().run,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.trace?.traceUrl).toBe("https://app.example.test/trace/t_1");
+    expect(plain(err.data)).toContain("Waiting for your first trace");
+    expect(readCheckpoint(dir)?.trace?.traceId).toBe("t_1");
+    expect(existsSync(join(dir, ".traceroot", "setup-report.md"))).toBe(true);
   });
 
   it("does not read a checkpoint that predates the field as an agent run", async () => {
@@ -6240,7 +6308,7 @@ describe("why no trace arrived", () => {
       legacy.instrumentHandover = undefined;
     }
 
-    const { ctx } = makeCtx({
+    const { ctx, err } = makeCtx({
       flags: { instrument: false, traceTimeoutSec: 120, resume: true },
       resumeFrom: legacy ?? undefined,
     });
@@ -6248,9 +6316,8 @@ describe("why no trace arrived", () => {
 
     expect(ctx.instrumentation?.mode).toBe("prompt-only");
     expect(ctx.checkpoint.instrumentHandover).toBe("task-file");
-    const message = plain(result.error?.message ?? "");
-    expect(message).toContain("this service is not instrumented");
-    expect(message).not.toContain("nothing has run your application");
+    expect(result.ok).toBe(true);
+    expect(plain(err.data)).not.toContain("nothing has run your application");
   });
 });
 
