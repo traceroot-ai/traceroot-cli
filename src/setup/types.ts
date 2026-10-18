@@ -145,9 +145,12 @@ export interface VerificationRun {
 export interface ApplicationVerification {
   /** The command as run. Never contains a secret. */
   command: string | null;
-  withCredentials: VerificationRun;
-  /** Proves the app still behaves with `TRACEROOT_API_KEY` absent. */
-  withoutCredentials: VerificationRun;
+  /**
+   * The command, run once with TraceRoot switched off: `TRACEROOT_API_KEY`
+   * absent and `TRACEROOT_ENABLED=false`. A pass shows the application does not
+   * depend on TraceRoot being configured, and the run itself can send no trace.
+   */
+  run: VerificationRun;
   passed: boolean;
   skippedReason: string | null;
 }
