@@ -3,7 +3,6 @@ import { removeEnvContent } from "./envWrite.js";
 import { type RunProcess, splitCommand } from "./exec.js";
 import { withVenvOnPath } from "./python.js";
 import type { Secret } from "./secret.js";
-import type { RunWindow } from "./trace.js";
 import type { ApplicationVerification, VerificationRun } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -50,8 +49,8 @@ export interface VerifyApplicationInput {
   /**
    * The virtualenv interpreter the service runs on, or null when there is none.
    *
-   * Both runs below spawn the project's own check, and `detect_stack` names
-   * that check the way the project documents it — `pytest`, not
+   * The check below spawns the project's own command, and `detect_stack` names
+   * that command the way the project documents it — `pytest`, not
    * `.venv/bin/pytest` — because that is what a user types. It resolves for
    * them because their shell has the virtualenv activated; this process's
    * environment does not have it, so without this the spawn fails with ENOENT
@@ -65,30 +64,32 @@ export interface VerifyApplicationInput {
    * call site rather than an ENOENT in front of a user.
    */
   interpreter: string | null;
+  /**
+   * The application's key. Never handed to the check: it is here so the
+   * check's captured output is redacted, should the application print a key it
+   * found somewhere setup did not take it out of.
+   */
   credential: Secret;
-  host: string;
   /**
    * Absolute paths to every file the application could read this credential
    * out of: the dotenv file this run wrote it into, and the project's own file
    * when the key resolved from one that was already there. Empty when there is
    * no such file — a key exported in the user's shell reaches the application
-   * only through the environment, which the second run builds for itself.
+   * only through the environment, which the check builds for itself.
    *
    * Required rather than optional, and a list rather than one path, because
    * either omission silently empties the credential-free run of its meaning:
    * the instrumented entry point loads these files itself, so an environment
-   * with `TRACEROOT_API_KEY` removed and any one of them still on disk is a
-   * second run *with* the key. The run that writes nothing because the key is
-   * already in the project's `.env` is exactly that case, and it is the common
-   * one — nothing was written, so a single "the file this run wrote" is null
-   * and the file the application actually reads stays on disk.
+   * with `TRACEROOT_API_KEY` removed and any one of them still on disk is a run
+   * *with* the key. The run that writes nothing because the key is already in
+   * the project's `.env` is exactly that case, and it is the common one —
+   * nothing was written, so a single "the file this run wrote" is null and the
+   * file the application actually reads stays on disk.
    */
   credentialFiles: readonly string[];
   runProcess: RunProcess;
   timeoutMs?: number;
   signal?: AbortSignal;
-  /** Injected in tests; defaults to the real clock. */
-  now?: () => number;
 }
 
 /**
@@ -99,19 +100,13 @@ export interface VerifyApplicationInput {
  */
 export interface VerifyApplicationResult {
   verification: ApplicationVerification;
-  failure: { phase: "with" | "without"; output: string } | null;
+  failure: { output: string } | null;
   /**
    * Files the credential was taken out of for the credential-free run, so what
    * "without the credential" meant is a fact the caller can report rather than
    * a promise. Empty when there was no such file.
    */
   withheld: readonly string[];
-  /**
-   * When the application ran with the credential present, or null when it never
-   * ran. The window a trace has to fall inside to be this run's own, which is
-   * the only thing that distinguishes it from the project's other traffic.
-   */
-  ranAt: RunWindow | null;
 }
 
 const NOT_RUN: VerificationRun = { ran: false, exitCode: null, durationMs: 0 };
@@ -254,34 +249,61 @@ function unpark(entry: Parked | null): void {
 }
 
 /**
- * Runs the project's own check twice: once with the TraceRoot credential
- * present, once with it removed.
+ * The environment every run of the project's check gets: the caller's, with
+ * TraceRoot switched off.
  *
- * The second run is the part that cannot be delegated. Putting "the app must
- * still work without the key" in the agent's prompt only buys the agent's word
- * for it. Instrumentation that hard-fails on a missing key is a
- * production outage waiting for the day someone deploys without one, so setup
- * proves it here instead of asking.
+ * Switched off twice over, because each half closes a different door.
+ * `TRACEROOT_API_KEY` is *deleted* rather than set empty, because SDKs commonly
+ * treat an empty string as "configured but blank" and take a different path
+ * than "absent" — and absent is what the check is about. `TRACEROOT_ENABLED` is
+ * set to `false`, which both SDKs honour, because absent from this environment
+ * is not absent from the process: a key exported in a shell profile, or loaded
+ * from a file nobody moved aside, reaches an SDK that `@observe` starts on its
+ * own whenever `TRACEROOT_API_KEY` is set. dotenv does not override a variable
+ * that is already set, so the switch holds against every file the application
+ * loads for itself.
+ *
+ * A copy, never the caller's object: a variable is deleted from it, and the
+ * environment handed in is the CLI's own.
+ */
+function withTraceRootOff(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const off: NodeJS.ProcessEnv = { ...env, TRACEROOT_ENABLED: "false" };
+  // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
+  delete off.TRACEROOT_API_KEY;
+  return off;
+}
+
+/**
+ * Runs the project's own check once, with TraceRoot switched off.
+ *
+ * The run is the part that cannot be delegated. Putting "the app must still
+ * work without the key" in the agent's prompt only buys the agent's word for
+ * it. Instrumentation that hard-fails on a missing key is a production outage
+ * waiting for the day someone deploys without one, so setup proves it here
+ * instead of asking.
  *
  * Absent means absent from every place the application can read it. The
  * instrumented entry point loads its credential file itself, so deleting
  * `TRACEROOT_API_KEY` from the child environment and leaving that file on disk
- * hands the second run the same key back off disk, and the check passes for
- * free. So the key is taken out of every file that holds it for the duration,
- * and the files are restored in a `finally`: the key and not the file, because
- * the file is the project's own `.env` and the rest of it is the configuration
- * the application needs in order to start at all.
+ * hands the run the same key back off disk, and the check passes for free. So
+ * the key is taken out of every file that holds it for the duration, and the
+ * files are restored in a `finally`: the key and not the file, because the file
+ * is the project's own `.env` and the rest of it is the configuration the
+ * application needs in order to start at all.
  *
- * `TRACEROOT_API_KEY` is *deleted* from the child environment rather than set
- * empty, because SDKs commonly treat an empty string as "configured but blank"
- * and take a different path than "absent".
+ * Once, and never with the key. There used to be a first run with
+ * `TRACEROOT_API_KEY` set, and it was the one thing setup ran that could send a
+ * trace: a suite that never calls `initialize()` still exports when the key is
+ * in its environment, because `@observe` starts the SDK on its own. Its traces
+ * landed in the user's project beside the application's, and the trace poll
+ * then took a unit test's trace for the application's first. What it
+ * established, that the suite also passes with TraceRoot on, was paid for in
+ * test traces in somebody's project; TraceRoot being on is exercised by the
+ * application's own run instead, the one the first trace comes from.
  */
 export async function verifyApplication(
   input: VerifyApplicationInput,
 ): Promise<VerifyApplicationResult> {
-  const now = input.now ?? (() => Date.now());
-  const idle = { withheld: [] as readonly string[], ranAt: null };
-
   const baseline = input.baseline ?? null;
 
   if (input.command === null || input.command.trim() === "") {
@@ -289,14 +311,13 @@ export async function verifyApplication(
       verification: {
         command: null,
         baseline,
-        withCredentials: NOT_RUN,
-        withoutCredentials: NOT_RUN,
+        run: NOT_RUN,
         outcome: "skipped",
         passed: false,
         skippedReason: "no test or health command was detected",
       },
       failure: null,
-      ...idle,
+      withheld: [],
     };
   }
 
@@ -306,65 +327,40 @@ export async function verifyApplication(
       verification: {
         command: input.command,
         baseline,
-        withCredentials: NOT_RUN,
-        withoutCredentials: NOT_RUN,
+        run: NOT_RUN,
         outcome: "skipped",
         passed: false,
         skippedReason: `could not parse the verification command: ${input.command}`,
       },
       failure: null,
-      ...idle,
+      withheld: [],
     };
   }
 
-  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  // The virtualenv first, for both runs and not only the baseline. The command
+  // The virtualenv first, for the check and not only the baseline. The command
   // is `pytest` as the project documents it, and it lives inside the
-  // virtualenv; a baseline that could spawn it and two verification runs that
-  // could not is how this ended a real run on "`pytest` could not be run" with
-  // the instrumentation already in place and correct.
-  const onPath = withVenvOnPath(input.parentEnv, input.interpreter);
-
-  const withEnv: NodeJS.ProcessEnv = {
-    ...onPath,
-    TRACEROOT_API_KEY: input.credential.reveal(),
-    TRACEROOT_HOST_URL: input.host,
-  };
-  // Same host as the configured run, so the two only differ by the credential.
-  // Without this the credential-free run inherits whatever `TRACEROOT_HOST_URL`
-  // the parent environment happens to carry, and the comparison stops being
-  // about the key at all.
-  const withoutEnv: NodeJS.ProcessEnv = {
-    ...onPath,
-    TRACEROOT_HOST_URL: input.host,
-  };
-  // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
-  delete withoutEnv.TRACEROOT_API_KEY;
-
-  // One command line for both runs, so the environment is the only thing that
-  // can differ between them.
-  const run = (env: NodeJS.ProcessEnv) =>
+  // virtualenv; a baseline that could spawn it and a verification that could
+  // not is how this ended a real run on "`pytest` could not be run" with the
+  // instrumentation already in place and correct.
+  const env = withTraceRootOff(withVenvOnPath(input.parentEnv, input.interpreter));
+  const checked = await withoutCredentialFiles(input.credentialFiles, () =>
     input.runProcess({
       program: parsed.program,
       args: parsed.args,
       cwd: input.cwd,
       env,
       stdio: "capture",
-      timeoutMs,
+      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       signal: input.signal,
       secrets: [input.credential],
-    });
-
-  const from = new Date(now());
-  const first = await run(withEnv);
-  const ranAt = { from, to: new Date(now()) };
-  const withCredentials: VerificationRun = {
+    }),
+  );
+  const run: VerificationRun = {
     ran: true,
-    exitCode: first.exitCode,
-    durationMs: first.durationMs,
+    exitCode: checked.result.exitCode,
+    durationMs: checked.result.durationMs,
   };
-  if (first.exitCode !== 0) {
+  if (checked.result.exitCode !== 0) {
     // Two reasons this run cannot name a cause, and they are different claims.
     //
     // `alreadyBroken` is a measurement: the same command was run before
@@ -377,23 +373,16 @@ export async function verifyApplication(
     // function on a later resume. A baseline that could not be spawned lands
     // here too.
     //
-    // Neither is a finding, so neither is `failed`. On the with-credentials
-    // phase `failed` now means exactly one thing — it passed before this run
-    // and does not pass now — which is the only version of that sentence this
-    // function can support.
-    //
-    // The second, credential-free run is deliberately not attempted in either
-    // case: it exists to prove the application still works without TraceRoot,
-    // and a suite that does not pass with the credential cannot prove it.
-    // Attempting it would spend another full suite run to learn nothing.
+    // Neither is a finding, so neither is `failed`. `failed` means exactly one
+    // thing — it passed before this run and does not pass now — which is the
+    // only version of that sentence this function can support.
     const alreadyBroken = baseline?.ran === true && baseline.exitCode !== 0;
     const unmeasured = baseline === null || !baseline.ran;
     return {
       verification: {
         command: input.command,
         baseline,
-        withCredentials,
-        withoutCredentials: NOT_RUN,
+        run,
         outcome: alreadyBroken || unmeasured ? "inconclusive" : "failed",
         passed: false,
         skippedReason: null,
@@ -403,33 +392,22 @@ export async function verifyApplication(
       // project's own business rather than something setup puts in front of the
       // user. An unmeasured one has explained nothing, so the caller is handed
       // the output to show — it is the only diagnostic that run has.
-      failure: alreadyBroken ? null : { phase: "with", output: first.output },
-      withheld: [],
-      ranAt,
+      failure: alreadyBroken ? null : { output: checked.result.output },
+      withheld: checked.withheld,
     };
   }
 
-  const second = await withoutCredentialFiles(input.credentialFiles, () => run(withoutEnv));
-  const withoutCredentials: VerificationRun = {
-    ran: true,
-    exitCode: second.result.exitCode,
-    durationMs: second.result.durationMs,
-  };
-
-  const passed = second.result.exitCode === 0;
   return {
     verification: {
       command: input.command,
       baseline,
-      withCredentials,
-      withoutCredentials,
-      outcome: passed ? "passed" : "failed",
-      passed,
+      run,
+      outcome: "passed",
+      passed: true,
       skippedReason: null,
     },
-    failure: passed ? null : { phase: "without", output: second.result.output },
-    withheld: second.withheld,
-    ranAt,
+    failure: null,
+    withheld: checked.withheld,
   };
 }
 
@@ -463,15 +441,19 @@ export interface BaselineCheckInput {
  * second as the first, which sends the user looking for a fault in work that
  * was done correctly.
  *
- * No credential: nothing is instrumented yet, so `TRACEROOT_API_KEY` could not
- * reach any SDK even if it were set, and running with one would make this run
- * differ from the question being asked. Not adding one is not enough — an
- * ambient key from the user's shell is taken back out as well. Everything else
- * about the environment is the same, virtualenv included — a baseline that
- * cannot find `pytest` where the real check finds it is comparing two
- * different things. The output is not captured for reporting either: the exit
- * code is the whole of what a baseline is for, and a suite's pre-existing
- * failure output is not setup's to put in front of the user.
+ * TraceRoot switched off, exactly as the check has it: no `TRACEROOT_API_KEY`,
+ * an ambient one from the user's shell included, and `TRACEROOT_ENABLED=false`.
+ * Nothing this run instrumented exists yet, but a repository that already
+ * carries TraceRoot does, and its suite exports through `@observe` the moment a
+ * key is reachable — from the shell, or from a file the project loads for
+ * itself. A baseline must not put traces in the user's project any more than
+ * the check may, and one taken with TraceRoot in a different state than the
+ * check is not a baseline for it. Everything else about the environment is the
+ * same, virtualenv included — a baseline that cannot find `pytest` where the
+ * real check finds it is comparing two different things. The output is not
+ * captured for reporting either: the exit code is the whole of what a baseline
+ * is for, and a suite's pre-existing failure output is not setup's to put in
+ * front of the user.
  *
  * Never throws for a failing command: a non-zero exit is the answer, not an
  * error. A command that cannot be parsed returns an un-run result, which reads
@@ -483,20 +465,12 @@ export async function runBaselineCheck(input: BaselineCheckInput): Promise<Verif
   if (parsed === null) {
     return NOT_RUN;
   }
-  // The same environment the real check gets, minus the credential. A baseline
-  // run in a different environment than the run it is compared against is not a
-  // baseline — and a credential is not part of that environment, however it got
-  // there: a developer's shell exports `TRACEROOT_API_KEY` as a matter of
-  // course, and inheriting it here would silently make this run the thing it
-  // exists to be measured against.
-  //
-  // Copied before the key goes, because `withVenvOnPath` hands back the very
-  // object it was given when there is no virtualenv to add, and deleting in
-  // place would reach into the caller's own environment and take the credential
-  // out of the runs that need it.
-  const env: NodeJS.ProcessEnv = { ...withVenvOnPath(input.parentEnv, input.interpreter) };
-  // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
-  delete env.TRACEROOT_API_KEY;
+  // The same environment the real check gets, built by the same function, so
+  // the two cannot drift apart over whether TraceRoot is on. It copies before
+  // it deletes, which matters here: `withVenvOnPath` hands back the very object
+  // it was given when there is no virtualenv to add, and deleting in place
+  // would reach into the caller's own environment.
+  const env = withTraceRootOff(withVenvOnPath(input.parentEnv, input.interpreter));
   const result = await input.runProcess({
     program: parsed.program,
     args: parsed.args,
@@ -537,8 +511,8 @@ async function withoutCredentialFiles<T>(
 ): Promise<{ result: T; withheld: readonly string[] }> {
   const parked: Parked[] = [];
   // Deduplicated: the file this run wrote and the file the key resolved from
-  // are often one file, and parking a path twice would move the second run's
-  // own parked copy.
+  // are often one file, and parking a path twice would move the check's own
+  // parked copy.
   try {
     for (const file of new Set(files)) {
       const entry = park(file);

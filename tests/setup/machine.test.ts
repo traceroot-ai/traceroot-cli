@@ -194,7 +194,7 @@ describe("happy path", () => {
     expect(deps.env.TRACEROOT_API_KEY).toBeUndefined();
   });
 
-  it("runs the application check twice, the second time without the credential", async () => {
+  it("runs the application check once, without the credential", async () => {
     pythonRepo();
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
@@ -205,15 +205,15 @@ describe("happy path", () => {
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
     await runSetupMachine(ctx, deps);
 
-    // Three runs, not two: the first is the baseline taken before the agent
-    // edits anything, which is what lets a later failure be attributed. The
-    // verification is the pair after it.
+    // Two runs: the first is the baseline taken before the agent edits
+    // anything, which is what lets a later failure be attributed. The
+    // verification is the one after it.
     const checks = process.runs.filter((r) => r.program === "pytest");
-    expect(checks).toHaveLength(3);
-    const [, withKey, withoutKey] = checks;
-    expect(withKey?.env.TRACEROOT_API_KEY).toBeDefined();
+    expect(checks).toHaveLength(2);
     // Absent, not empty: an SDK treats "" as configured-but-blank.
-    expect("TRACEROOT_API_KEY" in (withoutKey?.env ?? {})).toBe(false);
+    for (const check of checks) {
+      expect("TRACEROOT_API_KEY" in check.env).toBe(false);
+    }
   });
 
   it("records a non-secret checkpoint", async () => {
@@ -3055,10 +3055,10 @@ describe("failure handling", () => {
     const wrapped: SetupDeps["runProcess"] = async (o) => {
       if (o.program === "pytest") {
         pytestCalls += 1;
-        // Three runs: the baseline before anything is instrumented, then the
-        // verification pair. Only the last one — the credential-free run — is
+        // Two runs: the baseline before anything is instrumented, then the
+        // verification. Only the verification — the credential-free run — is
         // meant to fail, which is the exact regression it exists to catch.
-        return pytestCalls < 3
+        return pytestCalls < 2
           ? { exitCode: 0, output: "", durationMs: 1, timedOut: false, spawnFailed: false }
           : {
               exitCode: 1,
@@ -3080,7 +3080,7 @@ describe("failure handling", () => {
 
     expect(result.error?.code).toBe("APP_VERIFICATION_FAILED");
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.APP_VERIFICATION_FAILED);
-    expect(result.error?.message).toContain("must keep working when TraceRoot is absent");
+    expect(result.error?.message).toContain("passed before this run instrumented anything");
     expect(result.error?.message).toContain("KeyError");
   });
 
@@ -3141,9 +3141,9 @@ describe("failure handling", () => {
     );
   });
 
-  it("still runs the project's own checks twice when it has one", async () => {
-    // The stage is not what was removed, and this is why it exists: the second
-    // run, with the key deleted from the environment, is the proof that the
+  it("still runs the project's own check when it has one", async () => {
+    // The stage is not what was removed, and this is why it exists: the run,
+    // with the key deleted from the environment, is the proof that the
     // instrumentation did not make the application depend on TraceRoot.
     pythonRepo();
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
@@ -3157,15 +3157,12 @@ describe("failure handling", () => {
 
     expect(result.ok).toBe(true);
     expect(ctx.application?.command).toBe("pytest");
-    expect(ctx.application?.withCredentials.ran).toBe(true);
-    expect(ctx.application?.withoutCredentials.ran).toBe(true);
-    // The baseline first, then the pair. The baseline carries no credential
-    // either, so the pair is identified by position rather than by env.
+    expect(ctx.application?.run.ran).toBe(true);
+    // The baseline first, then the check. Neither carries the credential.
     const checks = process.runs.filter((run) => run.program === "pytest");
-    expect(checks).toHaveLength(3);
+    expect(checks).toHaveLength(2);
     expect(checks[0]?.env.TRACEROOT_API_KEY).toBeUndefined();
-    expect(checks[1]?.env.TRACEROOT_API_KEY).toBeDefined();
-    expect(checks[2]?.env.TRACEROOT_API_KEY).toBeUndefined();
+    expect(checks[1]?.env.TRACEROOT_API_KEY).toBeUndefined();
   });
 });
 
@@ -3348,9 +3345,9 @@ describe("a suite that was already failing", () => {
 
     expect(result.ok).toBe(true);
     const checks = process.runs.filter((r) => r.program === "pytest");
-    expect(checks).toHaveLength(3);
-    // All three of them: the baseline, and the two verification runs after it.
-    // Asserted together because they are one claim — the comparison is only a
+    expect(checks).toHaveLength(2);
+    // Both of them: the baseline, and the verification after it. Asserted
+    // together because they are one claim — the comparison is only a
     // comparison if every run is made in the same environment — and because
     // pinning the baseline alone is what let this through the first time. The
     // baseline was handed the interpreter, the verification was not, and a run
@@ -5646,21 +5643,18 @@ describe("how much of the application the first trace covers", () => {
     return { harness, result: runSetupMachine(harness.ctx, deps) };
   }
 
-  it("says so when the trace it found holds a single span", async () => {
-    // The run this closes. The closing report said "TraceRoot is connected and a
-    // trace has been received" and named a trace of one span — one instrumented
-    // function — so the central claim was true and the user was told their
-    // instrumentation worked.
+  it("gives the size of a one-span trace and passes no judgement on it", async () => {
+    // The run this replaces warned over a trace of one span, and the trace it
+    // warned over was a unit test's, opened by mistake. One span is the whole
+    // truth for a single-function script, and nothing the run inspected says
+    // which case it is in: it states the count and leaves it there.
     const { harness, result } = run({ span_count: 1 });
     const outcome = await result;
 
-    // Said, not failed: the credential works and the trace is real.
     expect(outcome.ok).toBe(true);
     expect(outcome.trace?.traceUrl).toBe("https://app.example.test/trace/t_1");
-    expect(plain(harness.err.data)).toContain(
-      "warning: your first trace holds a single span: one instrumented function ran, and nothing instrumented ran inside it. That is enough to show the credential works, and not enough to show that the instrumentation reaches the code you care about — open the trace and check that the functions you expected to see are in it.",
-    );
-    // And the line the wait closes on carries the size, which is where a user
+    expect(plain(harness.err.data)).not.toContain("warning: your first trace");
+    // The line the wait closes on carries the size, which is where a user
     // watching the run sees it first.
     expect(plain(harness.err.data)).toContain("First trace received (a single span).");
     // On the checkpoint, because the report is rendered from it — including by a
@@ -5668,22 +5662,19 @@ describe("how much of the application the first trace covers", () => {
     expect(outcome.checkpoint.trace?.spanCount).toBe(1);
   });
 
-  it("says nothing of the kind about a trace that holds several", async () => {
+  it("gives the size of a trace that holds several", async () => {
     const { harness, result } = run({ span_count: 7 });
     const outcome = await result;
 
     expect(outcome.ok).toBe(true);
     expect(plain(harness.err.data)).not.toContain("warning: your first trace");
-    // The count is still reported. "Received" with no size to it is the claim
-    // that needed qualifying, and leaving it unqualified for the healthy case
-    // would leave a user no way to see the number at all.
     expect(plain(harness.err.data)).toContain("First trace received (7 spans).");
     expect(outcome.checkpoint.trace?.spanCount).toBe(7);
   });
 
   it("claims no size when the deployment did not report one", async () => {
-    // A row without `span_count`. Silence is not evidence of a small trace, so
-    // the run says what it always said and records no number.
+    // A row without `span_count`. Silence is not evidence of anything, so the
+    // run says what it always said and records no number.
     const { harness, result } = run({});
     const outcome = await result;
 
@@ -5693,10 +5684,9 @@ describe("how much of the application the first trace covers", () => {
     expect(outcome.checkpoint.trace?.spanCount).toBeUndefined();
   });
 
-  it("carries the count into the JSON envelope, and the remark with it", async () => {
-    // A machine consumer has only the fields. The sentence reaches it as a
-    // `warn` event, and the number behind the sentence is on the stage so
-    // nothing has to parse prose to act on it.
+  it("carries the count into the JSON envelope", async () => {
+    // A machine consumer has only the fields, so the number is on the stage
+    // and nothing has to parse prose to act on it.
     const { harness, result } = run({ span_count: 1 }, { json: true });
     await result;
 
@@ -5707,9 +5697,7 @@ describe("how much of the application the first trace covers", () => {
         e.status === "ok",
     ) as unknown as { data: { span_count: number | null } };
     expect(stage.data.span_count).toBe(1);
-    // The sentence itself still reaches stderr, unrailed, because stdout in this
-    // mode belongs to the event stream.
-    expect(harness.err.data).toContain("warning: your first trace holds a single span:");
+    expect(harness.err.data).not.toContain("warning: your first trace");
   });
 
   it("reports null rather than zero for a count the JSON consumer never got", async () => {

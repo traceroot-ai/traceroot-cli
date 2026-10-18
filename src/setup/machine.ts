@@ -69,7 +69,7 @@ import { type SelectFn, type SelectOption, interactiveSelect } from "./select.js
 import { startLineSpinner } from "./spinner.js";
 import { detectStack, normalizeLanguage } from "./stack.js";
 import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters } from "./task.js";
-import { isThinTrace, pollForTrace, spanPhrase, thinTraceFinding } from "./trace.js";
+import { pollForTrace, spanPhrase } from "./trace.js";
 import { discardTypeAhead } from "./tty.js";
 import type {
   DetectedAgent,
@@ -3430,15 +3430,13 @@ const verifyApplicationStage: StageDefinition = {
   async run(ctx, deps) {
     const service = requireService(ctx);
     const credential = requireCredential(ctx);
-    const session = requireSession(ctx);
     const command = service.testCommand;
 
     if (command === null) {
       ctx.application = {
         command: null,
         baseline: null,
-        withCredentials: { ran: false, exitCode: null, durationMs: 0 },
-        withoutCredentials: { ran: false, exitCode: null, durationMs: 0 },
+        run: { ran: false, exitCode: null, durationMs: 0 },
         outcome: "skipped",
         passed: false,
         skippedReason: "no test or health command was detected",
@@ -3454,7 +3452,7 @@ const verifyApplicationStage: StageDefinition = {
     }
 
     wizardProgress(ctx, `Verifying the application: ${command}`);
-    const { verification, failure, ranAt } = await verifyApplication({
+    const { verification, failure } = await verifyApplication({
       command,
       // What the same command did before anything was instrumented, or null on
       // a route that instrumented nothing. Absent is not "it passed": it is
@@ -3484,7 +3482,6 @@ const verifyApplicationStage: StageDefinition = {
           ? detectPythonEnvironment(ctx.root, service.path, deps.env).interpreter
           : null,
       credential: credential.key,
-      host: session.host,
       // The credential-free run is only credential-free if the key goes out of
       // every file the entry point loads for itself, not just the one this run
       // wrote — see {@link applicationCredentialFiles}. An empty list is an
@@ -3496,7 +3493,6 @@ const verifyApplicationStage: StageDefinition = {
       signal: ctx.signal,
     });
     ctx.application = verification;
-    ctx.applicationRanAt = ranAt;
     ctx.checkpoint.application = verification;
 
     // A command that never started is not "inconclusive" in the sense this
@@ -3537,12 +3533,9 @@ const verifyApplicationStage: StageDefinition = {
       // that it passed before — which on a suite that was already red sent the
       // user looking for a fault in work that had just been done correctly.
       const measuredBefore = verification.baseline?.ran === true;
-      const message =
-        failure?.phase === "without"
-          ? `\`${command}\` passed with TraceRoot configured but failed with ${KEY_ENV} removed. The application must keep working when TraceRoot is absent.${tail}`
-          : measuredBefore
-            ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
-            : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
+      const message = measuredBefore
+        ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
+        : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
       // Paused, which is what this remedy has always promised and what the
       // rollback used to contradict: the run revoked the key and took the
       // credential back out of the env file, and then told the user to resume
@@ -3595,7 +3588,7 @@ const verifyTrace: StageDefinition = {
     // then a timeout, when the answer was available immediately. The agent may
     // still have run the code itself while instrumenting, so this takes one
     // look before giving up rather than assuming.
-    const somethingRan = ctx.application?.withCredentials.ran === true;
+    const somethingRan = ctx.application?.run.ran === true;
     const timeoutMs = somethingRan ? ctx.flags.traceTimeoutSec * 1000 : 0;
     // The other long unattended wait. Nothing arrives to report on until the
     // trace does, so the elapsed counter is the whole of what a user can be
@@ -3613,7 +3606,6 @@ const verifyTrace: StageDefinition = {
       outcome = await pollForTrace({
         client,
         startedAt: new Date(ctx.checkpoint.startedAt),
-        ranAt: ctx.applicationRanAt ?? null,
         timeoutMs,
         signal: ctx.signal,
         sleep: deps.sleep,
@@ -3673,22 +3665,6 @@ const verifyTrace: StageDefinition = {
     const trace = spanCount === null ? outcome.trace : { ...outcome.trace, spanCount };
     ctx.trace = trace;
     ctx.checkpoint.trace = trace;
-
-    // Said, never fatal. The credential works, the backend has the trace, and a
-    // program that genuinely is one function has nothing more to show — failing
-    // a run over this would be worse than the sentence it qualifies. What it
-    // must not do is let the run close on "a trace has been received" and leave
-    // a user believing their application is covered when one function is.
-    //
-    // No judgement about the application's shape, because nothing this run
-    // inspected says what that shape is: it reports the count, says what the
-    // count means, and asks for a look.
-    if (isThinTrace(spanCount)) {
-      wizardWarn(
-        ctx,
-        `your first trace ${thinTraceFinding(spanCount)}. That is enough to show the credential works, and not enough to show that the instrumentation reaches the code you care about — open the trace and check that the functions you expected to see are in it.`,
-      );
-    }
     return "ok";
   },
 };
@@ -4206,7 +4182,7 @@ function stageData(ctx: SetupContext, stage: SetupStage): Record<string, unknown
             // second is a fact about this run.
             baseline_ran: ctx.application.baseline?.ran ?? false,
             baseline_exit_code: ctx.application.baseline?.exitCode ?? null,
-            ran_without_credentials: ctx.application.withoutCredentials.ran,
+            ran: ctx.application.run.ran,
             skipped_reason: ctx.application.skippedReason,
           };
     case "verify_trace":

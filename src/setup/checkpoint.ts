@@ -182,8 +182,7 @@ function isApplication(value: unknown): value is Record<string, unknown> {
   return (
     isRecord(value) &&
     (value.command === null || typeof value.command === "string") &&
-    isRun(value.withCredentials) &&
-    isRun(value.withoutCredentials) &&
+    isRun(value.run) &&
     typeof value.passed === "boolean" &&
     (value.skippedReason === null || typeof value.skippedReason === "string")
   );
@@ -220,8 +219,7 @@ function readApplication(value: unknown): NonNullable<SetupCheckpoint["applicati
   return {
     command: (value.command as string | null) ?? null,
     baseline: isRun(value.baseline) ? (value.baseline as VerificationRun) : null,
-    withCredentials: value.withCredentials as VerificationRun,
-    withoutCredentials: value.withoutCredentials as VerificationRun,
+    run: value.run as VerificationRun,
     outcome,
     passed: value.passed === true,
     skippedReason: typeof value.skippedReason === "string" ? value.skippedReason : null,
