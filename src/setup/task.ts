@@ -164,6 +164,15 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
  * exported a trace of its own, each indistinguishable from the application's.
  * Three extra lines put the pair inside the `__main__` guard, where it runs when
  * the application does.
+ *
+ * The guard keeps the load off the import path. It does not keep the tests
+ * quiet on its own: `observe` starts the SDK whenever `TRACEROOT_API_KEY` is in
+ * the environment, and the key gets there without the entry point's help — the
+ * agent's own environment, a shell export, an older `load_dotenv()` at module
+ * scope that the application already had. A real run's suite did exactly that
+ * with `initialize()` correctly under the guard. So the task also has the agent
+ * run the suite with `TRACEROOT_ENABLED=false`, which is what actually keeps it
+ * out of the user's project.
  */
 function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
   const [envFile] = envFiles;
@@ -185,7 +194,10 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     // exports a trace of its own. `observe(options, fn, ...args)` invokes rather
     // than wraps, auto-initializing at call time when `TRACEROOT_API_KEY` is
     // set, so there is no module-scope wrapper to arm either — with the load
-    // inside the function, an imported module exports nothing. And the claim
+    // inside the function, importing the module loads no credential. It can
+    // still export, whenever the key reaches the test process some other way,
+    // which is why the task runs the suite with `TRACEROOT_ENABLED=false`
+    // rather than trusting the placement to keep it quiet. And the claim
     // that `initialize()` must precede the provider's import was never true of
     // this SDK: the instrumentors patch the provider's class methods through
     // `wrapt`, which does not care whether it was imported first. What it has to
@@ -494,18 +506,29 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // (`env -u`, an empty assignment, `os.environ.pop`, a dotenv wrapper) because
   // there is no one obvious way to unset it. Each run is a full pass through
   // the user's application. The CLI already does this
-  // pass itself, in `verify_application`, with the key removed from the child
-  // environment; doing it in both places pays for it twice and only the CLI's
-  // answer is recorded.
+  // pass itself, in `verify_application`, with TraceRoot switched off in the
+  // child environment; doing it in both places pays for it twice and only the
+  // CLI's answer is recorded.
+  //
+  // The suite runs with `TRACEROOT_ENABLED=false`, said in the command itself
+  // rather than left to a sentence elsewhere. A plain `pytest` in the agent's
+  // environment, or under an entry point that loads its `.env` at module scope,
+  // has a key within reach, and `observe` starts the SDK on its own in every
+  // test that reaches an instrumented function. A real project's suite landed
+  // in the user's project that way, seconds after the application's own trace
+  // — which is the only trace this step is for, and the one setup looks for.
+  const disabled = "TRACEROOT_ENABLED=false";
+  const fromTheApp =
+    "2. Exercise the instrumented path once with TraceRoot enabled, by running the application itself as step 6 says, so at least one trace is actually emitted. The trace `traceroot setup` looks for is the application's own; the tests are not a way to produce it.";
   const verifySteps =
     verifyCommand !== null
       ? [
-          `1. Run \`${verifyCommand}\` once and confirm it passes.`,
-          "2. Exercise the instrumented path once with TraceRoot enabled so at least one trace is actually emitted. Running the tests is often not enough: run the app, or a script that calls into the traced code.",
+          `1. Run \`${disabled} ${verifyCommand}\` once and confirm it passes. The variable switches the SDK off, so the suite sends no traces of its own into the user's project.`,
+          fromTheApp,
         ].join("\n")
       : [
-          "1. No test command was detected. Find the project's own check (its test script, a health command, or a smoke script) and run it once.",
-          "2. Exercise the instrumented path once with TraceRoot enabled so at least one trace is actually emitted.",
+          `1. No test command was detected. Find the project's own check (its test script, a health command, or a smoke script) and run it once, with \`${disabled}\` in front of it so it sends no traces of its own.`,
+          fromTheApp,
         ].join("\n");
 
   return `# Instrument this service with TraceRoot
@@ -665,12 +688,17 @@ ${initSnippet(service, envFiles)}
 Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
 gunicorn, a queue worker — has no such place to put it, so initialize where the framework starts
 up instead. And an application that needs its own credentials while it is still being imported — a
-client constructed at module scope — has to keep the load there. In either case, run the project's
-own checks with \`TRACEROOT_ENABLED=false\` in the environment so that they do not export.
+client constructed at module scope — has to keep the load there.
+
+Whatever the shape, the run path does not on its own keep the project's tests from exporting.
+\`observe\` starts the SDK by itself whenever \`TRACEROOT_API_KEY\` is in the environment, and the key
+can get there without the entry point's help — your own environment, a shell export, a \`.env\`
+loaded at import by code that was there before you. What keeps a test run out of the user's project
+is \`TRACEROOT_ENABLED=false\` on the command that runs it, which is how step 5 runs the suite.
 
 None of this belongs in the project's test configuration — not a \`conftest.py\`, not a fixture, not
-a \`pytest.ini\`. Those are the user's files, and with the load on the run path the tests stop
-exporting without touching them.
+a \`pytest.ini\`. Those are the user's files, and the variable on the command line does the job
+without touching them.
 
 That is the whole API you need: \`initialize\`, \`observe\`, \`using_attributes\`, \`flush\`.
 
@@ -804,8 +832,8 @@ Never print, echo or cat the contents of these files.
 Instrumenting the code does not emit anything; **running** it does. Execute the application, or the
 narrowest thing that exercises an instrumented path — an entry point that calls it, one function
 call with the real client — so the SDK sends a trace before you finish. The project's test suite is
-not one of those things any more: after step 3 it loads no credential and starts no SDK, which is
-exactly what keeps its runs out of the UI.
+not one of those things: it runs with TraceRoot switched off, and the trace \`traceroot setup\` looks
+for is the one the application sends when it runs.
 
 Do not skip this because a check in the previous step passed. A check that never touches an
 instrumented path proves the app still works and proves nothing about tracing. If nothing here
@@ -841,7 +869,6 @@ End your final message with a fenced block in exactly this form:
   "service": "${service.path}",
   "trace_id": "the trace id you observed, or null",
   "tests_passed": true,
-  "tests_passed_without_credentials": true,
   "notes": "anything the user should know"
 }
 \`\`\`
@@ -924,6 +951,8 @@ export function manualInstructions(input: {
   skillPath: string;
 }): string {
   const { service, sdk, skillPath } = input;
+  // The project's own command when there is one, so the line can be copied.
+  const testRun = `TRACEROOT_ENABLED=false ${service.testCommand ?? "<your test command>"}`;
   // Inside the guard, not beside the import.
   //
   // A snippet showing `initialize()` at module scope is the instruction, and it
@@ -954,14 +983,19 @@ export function manualInstructions(input: {
       ? '     under its if __name__ == "__main__": guard rather than at module scope.'
       : "     inside the function it calls to start itself rather than at module scope.",
     "     Module scope runs on import, and your test suite imports your entry",
-    "     point, so each test would otherwise export a trace of its own:",
+    "     point, so initializing there starts the SDK in every test:",
     "",
     ...init.split("\n").map((line) => (line === "" ? "" : `       ${line}`)),
     "",
-    "  3. Read the skill for framework-specific integrations and manual spans:",
+    "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
+    "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",
+    "     sends every test's trace to your project:",
+    `       ${testRun}`,
+    "",
+    "  4. Read the skill for framework-specific integrations and manual spans:",
     `       ${skillPath}/SKILL.md`,
     "",
-    "  4. Run your application once so it emits a trace, then:",
+    "  5. Run your application once so it emits a trace, then:",
     "       traceroot setup --resume",
   ].join("\n");
 }

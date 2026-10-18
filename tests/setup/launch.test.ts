@@ -293,6 +293,7 @@ describe("Claude Code, which the writable directories do not reach", () => {
       "Read(**)",
       "Edit(**)",
       "Bash(python3:*)",
+      "Bash(TRACEROOT_ENABLED=false python3:*)",
       "-p",
       "--output-format",
       "stream-json",
@@ -447,6 +448,62 @@ describe("letting the agent run what it was told to run", () => {
     expect(args).toContain("Bash(/repo/.venv/bin/python:*)");
     expect(args).toContain("Bash(python3:*)");
     expect(args.indexOf("--allowedTools")).toBeLessThan(args.indexOf("--disallowedTools"));
+  });
+
+  it("allows each named program behind TRACEROOT_ENABLED=false as well", () => {
+    // The task tells the agent to run the project's checks as
+    // `TRACEROOT_ENABLED=false <command>`, so its own test runs send no traces.
+    // Claude Code matches a rule against the start of the command, and an
+    // environment assignment is the start: a headless run given only
+    // `Bash(python3:*)` refused the prefixed command as needing approval.
+    const programs = ["/repo/.venv/bin/python", "python3", "npm"];
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: programs,
+    });
+    for (const program of programs) {
+      expect(args).toContain(`Bash(${program}:*)`);
+      expect(args).toContain(`Bash(TRACEROOT_ENABLED=false ${program}:*)`);
+    }
+    // Two per program and no more: the assignment is never a rule on its own,
+    // which would let anything at all follow it.
+    expect(args).not.toContain("Bash(TRACEROOT_ENABLED=false:*)");
+    expect(args.filter((arg) => arg.startsWith("Bash(")).length).toBe(programs.length * 2);
+  });
+
+  it("allows the check exactly as the task hands it over", () => {
+    // Read back from the task rather than restated, so a change to how step 5
+    // spells the check moves this expectation with it.
+    const text = buildSetupTask({
+      service: {
+        path: ".",
+        language: "typescript",
+        framework: null,
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+        testCommand: "npm test",
+        evidence: [],
+      } as unknown as DetectedService,
+      root: "/repo",
+      sdk: { package: "@traceroot-ai/traceroot", version: "1.2.3", source: "registry" },
+      skillPath: ".claude/skills/traceroot-instrument-repo",
+      verifyCommand: "npm test",
+      interactive: false,
+      existingInstrumentation: [],
+      credentialFiles: [],
+    });
+    const command = /1\. Run `([^`]+)` once and confirm it passes\./.exec(text)?.[1];
+    expect(command).toBe("TRACEROOT_ENABLED=false npm test");
+    const [assignment, program] = (command as string).split(" ");
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: ["npm"],
+    });
+    expect(args).toContain(`Bash(${assignment} ${program}:*)`);
   });
 
   it("still allows the file tools when there is no program to allow", () => {
