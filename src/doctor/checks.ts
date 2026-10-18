@@ -389,8 +389,10 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
       name: "setup_application_verified",
       category: "setup",
       status: application.passed ? "pass" : application.skippedReason !== null ? "warn" : "fail",
+      // What ran, and nothing more. The check runs once, with TraceRoot switched
+      // off; there is no run with the credentials for this line to report.
       message: application.passed
-        ? `Application passes \`${application.command}\` with and without TraceRoot credentials`
+        ? `Application passes \`${application.command}\` with TraceRoot switched off`
         : (application.skippedReason ??
           `Application check \`${application.command}\` did not pass`),
     });
