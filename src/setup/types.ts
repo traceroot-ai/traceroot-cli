@@ -176,9 +176,14 @@ export interface ApplicationVerification {
    * fails" and "the suite still fails" are indistinguishable.
    */
   baseline: VerificationRun | null;
-  withCredentials: VerificationRun;
-  /** Proves the app still behaves with `TRACEROOT_API_KEY` absent. */
-  withoutCredentials: VerificationRun;
+  /**
+   * The command, run once with TraceRoot switched off: `TRACEROOT_API_KEY`
+   * absent and `TRACEROOT_ENABLED=false`. A pass shows the application does not
+   * depend on TraceRoot being configured, and the run itself can send no trace.
+   * The baseline runs with TraceRoot switched off too, so whether TraceRoot was
+   * on is never the difference between the two.
+   */
+  run: VerificationRun;
   outcome: VerificationOutcome;
   /**
    * Whether the instrumented application passed its own check.
@@ -202,11 +207,10 @@ export interface TraceVerification {
    * How many spans the trace holds; absent when the response did not say.
    *
    * The one thing a list row carries about how much of the application a trace
-   * covers, and the reason it is kept on the record rather than only remarked
-   * on: `--resume` rehydrates the trace from the checkpoint and renders the
+   * covers, and the reason it is kept on the record rather than only printed
+   * once: `--resume` rehydrates the trace from the checkpoint and renders the
    * report from it, so a count that lived only in the invocation that polled
-   * would let a resumed run print the unqualified verdict over the very trace
-   * the first run had qualified.
+   * would leave a resumed run's report without the number the first run had.
    *
    * Absent rather than null, because a response that did not carry the field
    * leaves exactly one thing to say and two spellings of it would both have to
