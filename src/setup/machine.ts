@@ -2979,10 +2979,10 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
  * agent", and its display name — "Agent (generic)" — is a category rather than
  * somewhere a user can go and open a file.
  *
- * Shared by the hand-over itself and by the trace stage that has to repeat it,
+ * Shared by the hand-over itself and by the closing block that has to repeat it,
  * so the two cannot come to disagree about where the task is supposed to run.
  */
-function runTaskSentence(ctx: SetupContext, subject: string): string {
+export function runTaskSentence(ctx: SetupContext, subject: string): string {
   const agent = ctx.agent;
   return agent === undefined || agent.id === "generic"
     ? `No coding agent is set up here, but the task is self-contained — run ${subject} in whichever agent you use`
@@ -4173,38 +4173,20 @@ const verifyTrace: StageDefinition = {
     );
 
     if (!outcome.found && unrunHandover !== null) {
-      // Named before "nothing ran it", because it is the cause underneath it.
+      // Named before "nothing ran it", because it is the cause underneath it —
+      // and ended as a pause, not a failure, because nothing has failed.
       //
       // This route reported a missing trace as "nothing has run your
       // application", which sent the user off to run an application that has
       // no TraceRoot in it — a loop that cannot terminate, since running it
-      // again produces the same nothing. The instrumentation itself is what is
-      // outstanding, and the instruction for it is the one this run printed a
-      // few lines earlier.
-      const task =
-        unrunHandover.promptPath === null
-          ? null
-          : displaySkillPath(ctx.root, unrunHandover.promptPath);
-      throw new PausedSetupError({
-        stage: "verify_trace",
-        code: "TRACE_TIMEOUT",
-        message: [
-          "No trace yet, and this service is not instrumented:",
-          task === null
-            ? "setup printed the manual instructions and changed no code itself,"
-            : `setup wrote the instrumentation task to ${task} and changed no code itself,`,
-          // "in the service", not "in it": the clause before this one names the
-          // task file, so a pronoun here binds to that and the sentence ends up
-          // reporting that the task file holds no initialization — true, beside
-          // the point, and the opposite of what the reader needs to know.
-          "and there is no TraceRoot initialization in the service yet.",
-          "An uninstrumented application emits nothing, however often it runs.",
-        ].join(" "),
-        remedy:
-          task === null
-            ? ["Apply the steps above, then:", "  traceroot setup --resume"].join("\n")
-            : [`${runTaskSentence(ctx, task)}, then:`, "  traceroot setup --resume"].join("\n"),
-      });
+      // again produces the same nothing. Then as a stopped run, which was no
+      // better: a red `error:` block and exit 14 over the very hand-over the
+      // user had just chosen, read as a crash. The instrumentation is simply
+      // the user's to do now, so the run ends normally and the closing block
+      // in `commands/setup/run.ts` says what is outstanding. Nothing is
+      // recorded as the trace, so `--resume` looks again; the key stays put,
+      // because the resume needs it.
+      return "skipped";
     }
 
     if (!outcome.found && !somethingRan) {
