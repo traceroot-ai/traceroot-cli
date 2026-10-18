@@ -5540,6 +5540,42 @@ describe("how long setup waits for the first trace", () => {
     expect(plain(err.data)).not.toMatch(/Application passes its checks[^\n]*TraceRoot/);
   });
 
+  it("says nothing has run the application on a resume with nothing to wait for", async () => {
+    // A hand-over that nothing has acted on ends as a pause of its own. What is
+    // left for this message is a resume after an agent run whose edits setup
+    // cannot see: no agent runs in this process, detection finds no
+    // `initialize()`, and setup's own check sends nothing — so one look, and a
+    // reason that names what runs the application rather than a test command.
+    pythonRepo();
+    const traceless = () =>
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [] }),
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      });
+    const first = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+    const firstResult = await runSetupMachine(first.ctx, traceless());
+    expect(firstResult.error?.message).toContain("No trace arrived within");
+
+    const { client, looks } = countingClient();
+    const { ctx, err } = makeCtx({
+      flags: { agent: "claude", traceTimeoutSec: 5, resume: true },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, {
+      ...traceless(),
+      createSetupApi: makeDeps({ client }).createSetupApi,
+    });
+
+    expect(looks()).toBe(1);
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(result.error?.message).toContain(
+      "No trace yet, and nothing has run your application: setup did not run it, and found no TraceRoot initialization in it, so nothing else could have sent a trace either.",
+    );
+    expect(result.error?.remedy).toContain("traceroot setup --resume");
+    expect(plain(err.data)).not.toContain("Waiting for your first trace");
+  });
+
   it("waits the full budget for a service that already carries TraceRoot", async () => {
     // Whoever runs an instrumented application next sends a trace — the user,
     // on a resume after instrumenting by hand, or here a repository that was
