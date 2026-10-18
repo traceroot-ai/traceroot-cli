@@ -38,7 +38,7 @@ export interface Context {
 }
 
 /** Node's max timer delay (2^31−1 ms, ~24.8 days) — the ceiling for --timeout. */
-const MAX_TIMEOUT_MS = 2_147_483_647;
+export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
  * Resolves the per-request timeout (ms) with precedence: `--timeout` flag >

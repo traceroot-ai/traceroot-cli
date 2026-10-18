@@ -1,4 +1,9 @@
-import { normalizeBaseUrl } from "../api/client.js";
+import {
+  normalizeBaseUrl,
+  redactSecret,
+  timeoutMessage,
+  transportFailureMessage,
+} from "../api/client.js";
 import { CliError, ExitCode } from "../output.js";
 import { getVersion } from "../version.js";
 import type { DeviceFlowResult } from "./deviceFlow.js";
@@ -82,13 +87,8 @@ export async function redeemHandoff(opts: HandoffRedeemOptions): Promise<Handoff
   const base = normalizeBaseUrl(opts.authHost);
   const code = opts.code.trim();
   if (code === "") {
-    throw new CliError("--handoff needs a handoff code", ExitCode.usage);
+    throw new CliError("--handoff needs a code", ExitCode.usage);
   }
-
-  // Never echo the code: a runtime error can quote the request it failed on,
-  // and the request body is the credential. Mirrors the bearer redaction in
-  // token.ts and the body redaction in deviceFlow.ts.
-  const redact = (text: string): string => text.split(code).join("<redacted>");
 
   const init: RequestInit = {
     method: "POST",
@@ -108,10 +108,7 @@ export async function redeemHandoff(opts: HandoffRedeemOptions): Promise<Handoff
   // cause into a network-class timeout wherever it surfaces.
   const throwIfTimeout = (err: unknown): void => {
     if (opts.timeoutMs !== undefined && err instanceof Error && err.name === "TimeoutError") {
-      throw new CliError(
-        `request to ${base} timed out after ${opts.timeoutMs / 1000}s`,
-        ExitCode.network,
-      );
+      throw new CliError(timeoutMessage(base, opts.timeoutMs), ExitCode.network);
     }
   };
 
@@ -121,33 +118,51 @@ export async function redeemHandoff(opts: HandoffRedeemOptions): Promise<Handoff
   } catch (err) {
     throwIfTimeout(err);
     const message = err instanceof Error ? err.message : String(err);
-    throw new CliError(`request to ${base} failed: ${redact(message)}`, ExitCode.network);
-  }
-
-  // One indistinguishable refusal for unknown / expired / already-redeemed.
-  // Recoverable by contract: the caller signs in the ordinary way instead.
-  if (res.status === 401 || res.status === 403) {
-    return { kind: "rejected" };
-  }
-  if (res.status === 429) {
+    // Never echo the code: a transport error quotes the request it failed on,
+    // and the request body is the credential. Same redaction the API client
+    // applies to a bearer token.
     throw new CliError(
-      "handoff sign-in rate limited — wait a moment and try again",
+      transportFailureMessage(base, redactSecret(message, code)),
       ExitCode.network,
     );
   }
-  if (res.status >= 500) {
-    throw new CliError(`handoff sign-in failed with status ${res.status}`, ExitCode.network);
-  }
-  if (res.status === 404) {
-    // A deployment that predates the route. Not a bad code, and not something
-    // a retry fixes — say where it was looked for.
-    throw new CliError(
-      `${base} does not support handoff sign-in (no /api/cli/handoff/redeem)`,
-      ExitCode.notFound,
-    );
-  }
+
+  // Nothing below this is decided on anything but the status, so the body is
+  // released once, here, rather than on each way out. An unread body holds its
+  // stream — and the socket under it — until the server gives up, which is a
+  // CLI that has printed its error and will not exit. Same discipline as
+  // `commands/logout.ts` and the client's 401 retry, and structural rather than
+  // repeated: a status branch added inside this block cannot forget it.
   if (!res.ok) {
-    throw new CliError(`handoff sign-in failed with status ${res.status}`, ExitCode.internal);
+    await res.body?.cancel().catch(() => {});
+
+    // One indistinguishable refusal for unknown / expired / already-redeemed.
+    // Recoverable by contract: the caller signs in the ordinary way instead.
+    if (res.status === 401 || res.status === 403) {
+      return { kind: "rejected" };
+    }
+    if (res.status === 429) {
+      throw new CliError(
+        "handoff sign-in rate limited — wait a moment and try again",
+        ExitCode.network,
+      );
+    }
+    if (res.status === 404) {
+      // A deployment that predates the route. Not a bad code, and not something
+      // a retry fixes — say where it was looked for.
+      throw new CliError(
+        `${base} does not support handoff sign-in (no /api/cli/handoff/redeem)`,
+        ExitCode.notFound,
+      );
+    }
+    // A 5xx is the server failing to answer, which a retry may well fix; any
+    // other status is an answer this CLI does not understand, which it will
+    // not. One sentence either way, because the status is the whole of what is
+    // known.
+    throw new CliError(
+      `handoff sign-in failed with status ${res.status}`,
+      res.status >= 500 ? ExitCode.network : ExitCode.internal,
+    );
   }
 
   let parsed: unknown;
@@ -157,7 +172,15 @@ export async function redeemHandoff(opts: HandoffRedeemOptions): Promise<Handoff
     // A stall streaming the body is a network timeout, not a malformed
     // response — match token.ts so the exit-code contract stays honest.
     throwIfTimeout(err);
-    throw new CliError("handoff sign-in returned an unreadable response", ExitCode.internal);
+    // The other two are not one failure either. Malformed JSON is the server's
+    // answer and no retry changes it; a transport fault part-way through the
+    // body is the opposite, and reporting it as an internal error sends the
+    // reader to look for a bug rather than to try again. `runDeviceFlow`'s
+    // `readBody` draws the line in the same place.
+    if (err instanceof SyntaxError) {
+      throw new CliError("handoff sign-in returned an unreadable response", ExitCode.internal);
+    }
+    throw new CliError(`request to ${base} failed while reading the response`, ExitCode.network);
   }
   // A JSON `null` or a non-object body is malformed — read fields only off a
   // real object so it never throws a raw TypeError.
