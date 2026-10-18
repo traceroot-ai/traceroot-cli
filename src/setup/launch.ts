@@ -3,6 +3,14 @@ import type { RunProcess, RunProcessResult } from "./exec.js";
 import type { Secret } from "./secret.js";
 
 /**
+ * The assignment the task puts in front of the project's own checks —
+ * `TRACEROOT_ENABLED=false pytest` — so the agent's test runs send no traces
+ * into the user's project. Named here because every allow rule is written twice
+ * over it; see {@link buildInvocation}.
+ */
+const TRACEROOT_OFF = "TRACEROOT_ENABLED=false";
+
+/**
  * An agent launch described as data rather than as an inline `spawn` call, so
  * the exact argv and stdin handling for each agent can be asserted in a test
  * without starting a process. The single most important property — that no
@@ -74,7 +82,8 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
   // recipe, comes back "requested permissions ... but you haven't granted it
   // yet" and the agent falls back to guessing from the summary.
   const extraDirs = (input.readableDirs ?? []).flatMap((dir) => ["--add-dir", dir]);
-  // `Bash(prog:*)` — one allow rule per program the agent has to execute.
+  // `Bash(prog:*)` — one allow rule per program the agent has to execute, and a
+  // second with `TRACEROOT_ENABLED=false` in front of it.
   //
   // Edit approval does not extend to execution. A shell builtin like `echo`
   // succeeds without a rule, which proves nothing: executing an interpreter at
@@ -82,9 +91,24 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
   // refused. That refusal costs the whole point of the run — the code gets
   // instrumented correctly, every attempt to run it is denied, and the run ends
   // having emitted no trace at all.
+  //
+  // The prefixed rule is there because the task tells the agent to run the
+  // project's checks as `TRACEROOT_ENABLED=false <command>`, and Claude Code
+  // matches a rule against the start of the command — an environment
+  // assignment is the start. A headless run given `Bash(python3:*)` refused
+  // `TRACEROOT_ENABLED=false python3 …` as needing approval and ran it once
+  // `Bash(TRACEROOT_ENABLED=false python3:*)` was added. The pair permits
+  // nothing the bare rule does not, beyond that one variable set to `false`:
+  // the program is still named after the assignment, and the assignment is
+  // never a rule on its own, which would let anything at all follow it.
   const allowed = input.allowedPrograms ?? [];
   const allowRules =
-    allowed.length > 0 ? ["--allowedTools", ...allowed.map((p) => `Bash(${p}:*)`)] : [];
+    allowed.length > 0
+      ? [
+          "--allowedTools",
+          ...allowed.flatMap((p) => [`Bash(${p}:*)`, `Bash(${TRACEROOT_OFF} ${p}:*)`]),
+        ]
+      : [];
 
   switch (agentId) {
     case "claude":
@@ -182,11 +206,12 @@ export interface LaunchAgentInput {
  * initializes from this variable unasked — `observe` starts it when nothing
  * else has — so an agent that runs the project's own test suite to check its
  * work exports a trace per instrumented call, into the user's project, under
- * the same key as the application's own traces. Those are the traces setup then
- * has to tell apart from the application's, and the task's claim that the suite
- * "loads no credential and starts no SDK" is only true once this variable is
- * gone. Withholding it leaves the credential reaching the application the way
- * production will deliver it: out of the file the entry point loads.
+ * the same key as the application's own traces. Nothing in a trace list tells
+ * those apart from the application's, so the task also has the agent run its
+ * checks with `TRACEROOT_ENABLED=false`; withholding the variable is the half
+ * that does not depend on the agent doing as it is told. It also leaves the
+ * credential reaching the application the way production will deliver it: out
+ * of the file the entry point loads.
  *
  * Which is also why the caller decides rather than this function: with no such
  * file, an agent that cannot authenticate cannot prove any of its own work.
