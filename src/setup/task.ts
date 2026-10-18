@@ -939,6 +939,19 @@ export function parseCompletion(output: string): ParsedCompletion | null {
 }
 
 /**
+ * What an agent's output says after the task it echoed, or all of it when the
+ * task is not in it verbatim.
+ *
+ * `codex exec` prints the prompt it was given before its reply, and the task's
+ * report template is itself a valid completion block. Parsed whole, a reply
+ * without a block read as the template's placeholders.
+ */
+export function afterEchoedTask(output: string, task: string): string {
+  const at = output.lastIndexOf(task);
+  return at === -1 ? output : output.slice(at + task.length);
+}
+
+/**
  * Instructions for adding the SDK by hand.
  *
  * The third route exists because "run an agent over my code" and "write me a

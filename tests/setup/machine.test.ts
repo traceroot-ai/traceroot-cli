@@ -47,6 +47,7 @@ import {
   type RecordedRun,
   authEmpty,
   authWithKey,
+  codexCapture,
   defaultFlags,
   fakeApiClient,
   fakeRunProcess,
@@ -4863,6 +4864,34 @@ describe("proving the agent did something", () => {
 
     expect(ctx.stack?.existingInstrumentation.present).toBe(false);
     expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("accepts that module when Codex's reply has no block, though it echoed the task's template", async () => {
+    // `codex exec` prints the task before its reply, and the task's report
+    // template is a valid block. Parsed whole, the output read as a report
+    // naming the template's placeholder files, so the reading skipped the
+    // service's own folder and failed this run.
+    pythonRepo();
+    writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
+    writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
+    const base = fakeRunProcess({ instrument: false });
+    const run: SetupDeps["runProcess"] = async (o) => {
+      const result = await base.run(o);
+      return o.program === "codex"
+        ? { ...result, output: codexCapture(o.stdin ?? "", "Added TraceRoot to the service.") }
+        : result;
+    };
+    const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: run });
+    const { ctx } = makeCtx({ flags: { agent: "codex" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(base.runs.find((r) => r.program === "codex")?.stdin).toContain(
+      '"notes": "anything the user should know"',
+    );
+    expect(result.error?.message).toBeUndefined();
+    expect(ctx.instrumentation?.reported).toBeNull();
     expect(result.checkpoint.completedStages).toContain("instrument");
   });
 

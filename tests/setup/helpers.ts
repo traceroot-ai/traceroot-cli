@@ -152,6 +152,29 @@ export function fakeRunProcess(options: FakeProcessOptions = {}): {
   return { run, runs };
 }
 
+/**
+ * What `codex exec` prints for a task, in the layout codex-cli 0.163.0 printed
+ * on a live run: a header, the task echoed under `user`, the reply under
+ * `codex`, the token count, and the final message again.
+ */
+export function codexCapture(task: string, reply: string): string {
+  return [
+    "OpenAI Codex v0.163.0",
+    "--------",
+    "workdir: /repo",
+    "approval: never",
+    "sandbox: workspace-write [workdir, /tmp, $TMPDIR] (network access enabled)",
+    "--------",
+    "user",
+    task,
+    "codex",
+    reply,
+    "tokens used",
+    "41,200",
+    reply,
+  ].join("\n");
+}
+
 /** Minimal `whoami` payload; overridable per field. */
 export function whoami(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

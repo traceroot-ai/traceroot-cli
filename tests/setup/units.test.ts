@@ -27,9 +27,9 @@ import { renderSetupReport } from "../../src/setup/report.js";
 import { installCommand, resolveSdkVersion, sdkPackageFor } from "../../src/setup/sdk.js";
 import { makeSecret, redact, secretHint } from "../../src/setup/secret.js";
 import { detectStack } from "../../src/setup/stack.js";
-import { buildSetupTask, parseCompletion } from "../../src/setup/task.js";
+import { afterEchoedTask, buildSetupTask, parseCompletion } from "../../src/setup/task.js";
 import type { DetectedService } from "../../src/setup/types.js";
-import { TEST_SDK } from "./helpers.js";
+import { TEST_SDK, codexCapture } from "./helpers.js";
 
 let dir: string;
 
@@ -583,6 +583,53 @@ describe("completion parsing", () => {
   it("returns null for malformed output instead of throwing", () => {
     expect(parseCompletion("```json traceroot-setup-result\nnot json\n```")).toBeNull();
     expect(parseCompletion("no block at all")).toBeNull();
+  });
+
+  describe("after the task Codex echoes", () => {
+    const task = buildSetupTask({
+      credentialFiles: [],
+      service: {
+        path: ".",
+        language: "python",
+        framework: null,
+        entryPoint: "main.py",
+        packageManager: "pip",
+        testCommand: null,
+        evidence: ["requirements.txt"],
+      },
+      root: "/repo",
+      sdk: TEST_SDK,
+      skillPath: "p",
+      verifyCommand: null,
+      interactive: false,
+      existingInstrumentation: [],
+    });
+
+    it("reads a reply with no block as no report, not as the task's template", () => {
+      const output = codexCapture(task, "I added initialize() to main.py and ran the app once.");
+      // The hazard: the template in the echoed task is a valid block.
+      expect(parseCompletion(output)?.notes).toBe("anything the user should know");
+      expect(parseCompletion(afterEchoedTask(output, task))).toBeNull();
+    });
+
+    it("still reads the block the reply carries", () => {
+      const reply = [
+        "Added initialize() to main.py.",
+        "```json traceroot-setup-result",
+        '{"files_changed":["main.py"],"sdk_version":"1.2.3","trace_id":null,"notes":"done"}',
+        "```",
+      ].join("\n");
+      expect(parseCompletion(afterEchoedTask(codexCapture(task, reply), task))).toEqual({
+        filesChanged: ["main.py"],
+        sdkVersion: "1.2.3",
+        traceId: null,
+        notes: "done",
+      });
+    });
+
+    it("leaves output that does not echo the task whole", () => {
+      expect(afterEchoedTask("some output", task)).toBe("some output");
+    });
   });
 });
 
