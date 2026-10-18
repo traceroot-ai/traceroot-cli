@@ -479,11 +479,13 @@ describe("agent task", () => {
     expect(task).toContain("exactly one");
     expect(task).toContain("apps/api");
     expect(task).toContain("version `1.2.3`");
-    // The two things the agent must NOT do, because the CLI does both itself
-    // and doing them twice is what made a run take five minutes: re-running the
-    // app with the key stripped, and querying the API for the trace.
+    // The two things the agent must NOT do, because doing them is what made a
+    // run take five minutes: re-running the app with the key stripped, which
+    // nothing reads, and querying the API for the trace, which the CLI does.
     expect(task).not.toContain("TRACEROOT_API_KEY` removed");
     expect(task).toContain("do not run the application with the key unset");
+    // And no promise that setup makes the keyless pass instead: it does not.
+    expect(task).not.toContain("makes that exact pass itself");
     expect(task).toContain("Do not query the API yourself");
     expect(task).toContain("`traceroot traces list`");
   });

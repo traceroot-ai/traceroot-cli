@@ -311,7 +311,7 @@ those from `10` up rather than overloading one of the five:
 | `10` | More than one candidate matched and nothing chose between them. |
 | `11` | The repository's language or framework is not one `setup` can instrument. |
 | `12` | The coding agent ran and exited non-zero. |
-| `13` | The application's own build, start or check command failed. |
+| `13` | Reserved. No run returns it, and no other outcome will be given it. |
 | `14` | Instrumentation landed, but no trace reached TraceRoot before the deadline. |
 | `15` | This TraceRoot deployment is missing an endpoint the step needs; the message names a manual fallback. |
 | `16` | Writing would have overwritten something `setup` was not told it could replace. |

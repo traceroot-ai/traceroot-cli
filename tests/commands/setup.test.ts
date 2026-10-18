@@ -1708,10 +1708,10 @@ describe("the question asked about a previous run", () => {
 
 describe("a checkpoint at the repository root that belongs to another service", () => {
   it("is not adopted by a run targeting a different service", async () => {
-    // The root lookup migrates checkpoints written there by an older version. A
-    // root checkpoint can legitimately describe a subdirectory, so without a
+    // The root lookup finds the checkpoint a run started at the root left there.
+    // A root checkpoint can legitimately describe a subdirectory, so without a
     // service comparison a `--service web` run could inherit `api`'s completed
-    // stages — and with them its application verification and its trace.
+    // stages — and with them its trace.
     const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
     checkpoint.completedStages.push("precheck", "authenticate", "verify_trace");
     checkpoint.service = { path: "api", language: "python", framework: null };

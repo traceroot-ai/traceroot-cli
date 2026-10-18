@@ -200,8 +200,8 @@ export function setupFailureExit(result: SetupResult, json: boolean): SetupFailu
  * The question a run asks when it finds a previous run's checkpoint.
  *
  * Two different situations, and they cannot share a sentence. A checkpoint that
- * stops part-way is unfinished work to continue; a checkpoint holding all twelve
- * stages is a run that *succeeded*, and the terminal stage's label is "Finish" —
+ * stops part-way is unfinished work to continue; a checkpoint holding every
+ * stage is a run that *succeeded*, and the terminal stage's label is "Finish" —
  * so the single wording told a user who had just watched setup complete that "a
  * previous setup for this service did not finish. It stopped after finish.
  * Continue from there?", which reads as the tool being broken.
@@ -210,7 +210,7 @@ export function setupFailureExit(result: SetupResult, json: boolean): SetupFailu
  * second API key and points a coding agent at code it has already edited, so it
  * is offered rather than taken on an unread keypress.
  *
- * Holding all twelve is not quite enough, though. A hand-over nothing has acted
+ * Holding every stage is not quite enough, though. A hand-over nothing has acted
  * on ends normally, so it records the last stage too, with no trace and the
  * instrumentation still outstanding — the opposite of finished.
  */
@@ -296,17 +296,17 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   }
   // Resume where you ran, with the repository root as a fallback.
   //
-  // The fallback is for one specific case and is worth the extra lookup: every
-  // checkpoint written by an older version of the CLI is at the root, and without it the
-  // first `--resume` after upgrading would look like a fresh run and mint a
-  // second API key. It reads the old location once; from then on the run writes
-  // to the new one.
+  // The fallback is for one specific case and is worth the extra lookup: a run
+  // started at the root writes its checkpoint there even when it instruments a
+  // service in a subdirectory, and without it a `--resume` from that service's
+  // directory would look like a fresh run and mint a second API key. It reads
+  // the root once; from then on the run writes beside the service.
   const here = readCheckpoint(artifactDir);
-  // The root is a migration path, not a second search location. A checkpoint there
+  // The root is that one case, not a second search location. A checkpoint there
   // may belong to a different service — `serviceArtifactDir` returns the root while
   // stack detection can still have selected a subdirectory — and adopting it would
-  // let this run inherit that service's application verification and its trace, and
-  // report a success it never earned.
+  // let this run inherit that service's trace, and report a success it never
+  // earned.
   const atRoot = here === null ? readCheckpoint(root) : null;
   const inherited =
     atRoot !== null &&

@@ -70,10 +70,10 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
   // which keeps tests offline and free of filesystem surprises.
   //
   // Looks where setup would have written it — the service directory implied by
-  // where you are standing — and falls back to the repository root, both for
-  // checkpoints written before they moved and for a user running `doctor` from
-  // somewhere other than the directory they ran setup in. Diagnosing a run is
-  // exactly when being strict about the location would be least helpful.
+  // where you are standing — and falls back to the repository root, for a user
+  // running `doctor` from somewhere other than the directory they ran setup in.
+  // Diagnosing a run is exactly when being strict about the location would be
+  // least helpful.
   const setupDir = setupRoot(cwd);
   const checkpoint =
     deps.checkpoint === undefined
