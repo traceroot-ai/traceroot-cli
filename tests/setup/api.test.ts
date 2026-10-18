@@ -327,14 +327,9 @@ describe("trace polling", () => {
     expect(result.found && result.trace.traceId).toBe("unreadable");
   });
 
-  it("stops immediately on an auth failure", async () => {
-    let calls = 0;
-    const client = {
-      listTraces: listTracesFrom(() => {
-        calls += 1;
-        throw new Error("401 unauthorized");
-      }),
-    };
+  it("stops immediately on an auth failure with no detail", async () => {
+    const { fetchImpl, calls } = stubFetch([{ status: 401 }]);
+    const client = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
     const result = await pollForTrace({
       client,
       startedAt,
@@ -342,7 +337,34 @@ describe("trace polling", () => {
       sleep: async () => undefined,
     });
     expect(result.found).toBe(false);
-    expect(calls).toBe(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps polling an unreachable host whose port contains 403", async () => {
+    // The transport failure's message names the host, and the auth check used
+    // to match "403" in `localhost:4030` and give up on the first attempt.
+    let calls = 0;
+    const client = createSetupApi({
+      host: "http://localhost:4030",
+      apiKey: "k",
+      fetchImpl: (async () => {
+        calls += 1;
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof globalThis.fetch,
+    });
+    let clock = 0;
+    const result = await pollForTrace({
+      client,
+      startedAt,
+      timeoutMs: 10_000,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+    });
+    expect(result.found).toBe(false);
+    expect(calls).toBeGreaterThan(1);
+    expect(result.found === false && result.lastError).toContain("localhost:4030");
   });
 
   it("keeps polling through a transient error", async () => {

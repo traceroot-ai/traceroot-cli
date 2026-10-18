@@ -343,13 +343,13 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
       const message = err instanceof Error ? err.message : String(err);
       // An auth failure will not fix itself by waiting; anything else might.
       //
-      // The classified status is the reliable signal: the client throws the
-      // backend's own `detail` as the message ("Invalid API key",
-      // "Authentication failed"), so no regex over the text can be trusted to
-      // recognise one. Read structurally so this stays uncoupled from the
-      // generated client, with the text kept as a fallback.
+      // The classified status is the only reliable signal: the client throws
+      // the backend's own `detail` as the message ("Invalid API key",
+      // "Authentication failed"), which no pattern recognises, and the one this
+      // used to fall back on matched a port such as `:4030` in a transport
+      // failure. Read structurally so this stays uncoupled from the client.
       const exitCode = (err as { exitCode?: unknown } | null | undefined)?.exitCode;
-      if (exitCode === ExitCode.auth || /401|403|unauthor|forbidden/i.test(message)) {
+      if (exitCode === ExitCode.auth) {
         return notFound(message);
       }
       lastError = message;

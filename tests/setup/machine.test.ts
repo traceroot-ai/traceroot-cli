@@ -428,6 +428,29 @@ describe("authentication", () => {
     expect(result.error?.message).toContain("rather than replacing it");
   });
 
+  it("refuses to replace a credential on an unreachable host whose port contains 403", async () => {
+    // The client's transport failure names the host. Matched against a
+    // pattern, `localhost:4030` read as a 403, and setup set out to replace a
+    // working key because the network was down.
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({
+        whoamiResult: async () => {
+          throw new CliError(
+            "request to http://localhost:4030 failed: fetch failed",
+            ExitCode.network,
+          );
+        },
+      }),
+    });
+    const { ctx, err } = makeCtx();
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
+    expect(plain(err.data)).not.toContain("credential was rejected");
+  });
+
   it("fails with a flag hint when there are no credentials and no way to ask", async () => {
     pythonRepo();
     const deps = makeDeps({ auth: authEmpty() });

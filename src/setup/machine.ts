@@ -390,15 +390,12 @@ function isAuthRejection(err: unknown): boolean {
   // So does the class the other clients assign. `whoami` throws the server's
   // own `detail` as the message — "API key has expired", "Project has been
   // deleted", "Authentication failed" — and the token provider refuses a dead
-  // session with "session expired or revoked", none of which the regex below
-  // recognises; both put the auth exit code on the error. Read structurally, as
-  // `trace.ts` does, with the text kept for errors that carry only a string.
+  // session with "session expired or revoked"; both put the auth exit code on
+  // the error. Read structurally, as `trace.ts` does, and never off the text: a
+  // pattern over it matched a port such as `:4030` in an unreachable host's
+  // message, and read the network being down as a credential to replace.
   const exitCode = (err as { exitCode?: unknown } | null | undefined)?.exitCode;
-  if (exitCode === ExitCode.auth) {
-    return true;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  return /401|403|unauthor|invalid api key|forbidden/i.test(message);
+  return exitCode === ExitCode.auth;
 }
 
 /** Whether the credential resolved from an explicit, user-controlled source. */

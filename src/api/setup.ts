@@ -1,5 +1,6 @@
 import { CliError } from "../output.js";
 import {
+  exitCodeForStatus,
   normalizeBaseUrl,
   redactSecret,
   statusFallbackMessage,
@@ -38,12 +39,18 @@ export class BackendUnavailableError extends Error {
   }
 }
 
-/** A non-2xx response that is not an "endpoint missing" signal. */
+/**
+ * A non-2xx response that is not an "endpoint missing" signal.
+ *
+ * Carries the exit-code class of its status, as the generated client's errors
+ * do: the message is the server's own `detail`, so the class is the only
+ * reliable way to tell a rejected credential from anything else.
+ */
 export class SetupApiError extends CliError {
   readonly status: number;
 
   constructor(message: string, status: number) {
-    super(message);
+    super(message, exitCodeForStatus(status));
     this.name = "SetupApiError";
     this.status = status;
   }
