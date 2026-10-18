@@ -90,20 +90,18 @@ describe("what the credential-free run can still read", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file],
       interpreter: null,
       runProcess: run,
     });
 
     expect(result.verification.passed).toBe(true);
-    // The run that is supposed to have the credential has it.
-    expect(seen[0]).toContain(`TRACEROOT_API_KEY=${KEY}`);
-    // The run that is supposed not to have it keeps everything else.
-    expect(seen[1]).not.toContain("TRACEROOT_API_KEY");
-    expect(seen[1]).toContain("DATABASE_URL=postgres:///app");
-    expect(seen[1]).toContain("RETRIES=3");
-    expect(seen[1]).toContain("# project");
+    // The one run there is keeps everything but the credential.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toContain("TRACEROOT_API_KEY");
+    expect(seen[0]).toContain("DATABASE_URL=postgres:///app");
+    expect(seen[0]).toContain("RETRIES=3");
+    expect(seen[0]).toContain("# project");
     expect(result.withheld).toEqual([file]);
   });
 
@@ -133,13 +131,12 @@ describe("what the credential-free run can still read", () => {
         cwd: "/repo",
         parentEnv: {},
         credential: makeSecret(KEY),
-        host: "https://api.example.test",
         credentialFiles: [file],
         interpreter: null,
         runProcess: run,
       });
 
-      expect(modes).toEqual([PROJECT_MODE, PROJECT_MODE]);
+      expect(modes).toEqual([PROJECT_MODE]);
       expect(statSync(file).mode & 0o777).toBe(PROJECT_MODE);
     },
   );
@@ -159,7 +156,6 @@ describe("what the credential-free run can still read", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file],
       interpreter: null,
       runProcess: run,
@@ -169,7 +165,7 @@ describe("what the credential-free run can still read", () => {
     // And while the credential was out, the lines that stayed kept their own
     // endings — a dotenv parser reads `KEY=value\r` and not `KEY=value` with a
     // stray carriage return somewhere else.
-    expect(seen[1]).toContain("DATABASE_URL=postgres:///app\r\n");
-    expect(seen[1]).not.toContain("TRACEROOT_API_KEY");
+    expect(seen[0]).toContain("DATABASE_URL=postgres:///app\r\n");
+    expect(seen[0]).not.toContain("TRACEROOT_API_KEY");
   });
 });

@@ -1174,6 +1174,38 @@ describe("doctor reports setup state", () => {
     expect(setupChecks.find((c) => c.name === "setup_last_error")?.status).toBe("warn");
   });
 
+  it("says what the application check ran with, and claims no run with the credentials", async () => {
+    // The check runs once, with TraceRoot switched off. "With and without
+    // TraceRoot credentials" described a run with the key that setup no longer
+    // makes, and that was the one run of the project's suite that could send
+    // traces into the user's project.
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.completedStages.push("precheck", "authenticate", "verify_application");
+    checkpoint.application = {
+      command: "pytest",
+      baseline: { ran: true, exitCode: 0, durationMs: 1 },
+      run: { ran: true, exitCode: 0, durationMs: 1 },
+      outcome: "passed",
+      passed: true,
+      skippedReason: null,
+    };
+    writeCheckpoint(dir, checkpoint);
+
+    const report = await runDoctor({
+      ctx: { auth: auth(), json: false },
+      cwd: dir,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out: new StringSink(), err: new StringSink() },
+      detection: detection(),
+      includeSetup: true,
+    });
+
+    const verified = report.checks.find((c) => c.name === "setup_application_verified");
+    expect(verified?.status).toBe("pass");
+    expect(verified?.message).toBe("Application passes `pytest` with TraceRoot switched off");
+  });
+
   it("reports an incomplete setup as a hard failure with the resume hint", async () => {
     const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
     checkpoint.completedStages.push("precheck", "authenticate", "instrument");

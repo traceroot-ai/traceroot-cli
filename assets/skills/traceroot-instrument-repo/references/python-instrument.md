@@ -37,9 +37,14 @@ if __name__ == "__main__":
 Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
 gunicorn, a queue worker — has no such block, so initialize at the framework's own startup hook
 instead. And an application that needs its own credentials while it is still being imported has to
-keep the load at module scope. In either case, run the project's own checks with
-`TRACEROOT_ENABLED=false` in the environment so that they do not export. None of this belongs in
-the project's test configuration — not a `conftest.py`, not a fixture, not a `pytest.ini`.
+keep the load at module scope.
+
+Whatever the shape, the `__main__` block does not on its own keep the tests from exporting.
+`@observe` starts the SDK by itself whenever `TRACEROOT_API_KEY` is in the environment, however it
+got there — a shell export, a CI secret, a `load_dotenv()` some other module runs on import — so
+run the project's own checks with `TRACEROOT_ENABLED=false` in the environment
+(`TRACEROOT_ENABLED=false pytest`) so that they do not export. None of this belongs in the
+project's test configuration — not a `conftest.py`, not a fixture, not a `pytest.ini`.
 
 `TRACEROOT_API_KEY` is read from the environment automatically. No need to pass it explicitly.
 

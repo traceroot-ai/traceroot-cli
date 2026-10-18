@@ -81,8 +81,7 @@ describe("what the report says the checks established", () => {
     return {
       command: "pytest",
       baseline: null,
-      withCredentials: { ran: true, exitCode: 0, durationMs: 1 },
-      withoutCredentials: { ran: true, exitCode: 0, durationMs: 1 },
+      run: { ran: true, exitCode: 0, durationMs: 1 },
       outcome: "passed",
       passed: true,
       skippedReason: null,
@@ -100,8 +99,7 @@ describe("what the report says the checks established", () => {
           outcome: "inconclusive",
           passed: false,
           baseline: { ran: true, exitCode: 1, durationMs: 9 },
-          withCredentials: { ran: true, exitCode: 1, durationMs: 9 },
-          withoutCredentials: { ran: false, exitCode: null, durationMs: 0 },
+          run: { ran: true, exitCode: 1, durationMs: 9 },
         }),
       }),
       NOW,
@@ -122,8 +120,7 @@ describe("what the report says the checks established", () => {
           outcome: "inconclusive",
           passed: false,
           baseline: null,
-          withCredentials: { ran: true, exitCode: 1, durationMs: 9 },
-          withoutCredentials: { ran: false, exitCode: null, durationMs: 0 },
+          run: { ran: true, exitCode: 1, durationMs: 9 },
         }),
       }),
       NOW,
@@ -151,6 +148,19 @@ describe("what the report says the checks established", () => {
     expect(text).not.toContain("Inconclusive.");
   });
 
+  it("does not credit instrumentation the check never saw", () => {
+    // A run that hands the task over edits nothing and takes no baseline, and
+    // its check ran on code setup had not touched. Anything said about
+    // TraceRoot there reads as a verdict on instrumentation nobody had written
+    // yet, so the sentence says nothing about it.
+    const text = renderSetupReport(ctx({ application: verification({ baseline: null }) }), NOW);
+
+    expect(text).toContain(
+      "**Your checks.** Passed. Setup made no edits itself, so this checked your code as it was when the check ran.",
+    );
+    expect(text).not.toMatch(/\*\*Your checks\.\*\*[^\n]*TraceRoot/);
+  });
+
   it("names the reason when there was no command to run", () => {
     const text = renderSetupReport(
       ctx({
@@ -159,8 +169,7 @@ describe("what the report says the checks established", () => {
           outcome: "skipped",
           passed: false,
           skippedReason: "no test or health command was detected",
-          withCredentials: { ran: false, exitCode: null, durationMs: 0 },
-          withoutCredentials: { ran: false, exitCode: null, durationMs: 0 },
+          run: { ran: false, exitCode: null, durationMs: 0 },
         }),
       }),
       NOW,
@@ -187,8 +196,7 @@ describe("what the report says about the trace it found", () => {
    * The headline, read off the line it occupies rather than searched for.
    *
    * A `toContain` over the whole report would pass on a verdict that had the
-   * old sentence buried in a longer one, which is the exact failure being
-   * fixed here.
+   * sentence buried in a longer one, qualified or not.
    */
   function verdict(text: string): string {
     const lines = text.split("\n");
@@ -202,31 +210,26 @@ describe("what the report says about the trace it found", () => {
 
   const RECEIVED = "TraceRoot is connected and a trace has been received.";
 
-  it("qualifies the verdict when the trace it found holds a single span", () => {
-    // A real run ended on the unqualified sentence over a one-span trace, which
-    // is one instrumented function. The verdict is the line a reader skims and
-    // the line that gets pasted into a pull request, so it is where the
-    // qualification has to be.
+  it("reports a one-span trace's size without passing judgement on it", () => {
+    // The verdict used to be qualified over a single span, and the one run that
+    // qualified it had opened a unit test's trace by mistake. One span is the
+    // whole truth for a single-function script, and nothing the report knows
+    // says which case it is in, so it prints the count and leaves it there.
     const text = renderSetupReport(ctx({ trace: trace({ spanCount: 1 }) }), NOW);
 
-    expect(verdict(text)).toBe(
-      "TraceRoot is connected and a trace has been received, but that trace holds a single span: one instrumented function ran, and nothing instrumented ran inside it. Check that the instrumentation covers the code you meant it to.",
-    );
+    expect(verdict(text)).toBe(RECEIVED);
     expect(firstTrace(text)).toBe("**First trace.** `t_1` — a single span");
   });
 
-  it("leaves the verdict alone for a trace with more than one span", () => {
+  it("reports the size of a trace with more than one span", () => {
     const text = renderSetupReport(ctx({ trace: trace({ spanCount: 7 }) }), NOW);
 
     expect(verdict(text)).toBe(RECEIVED);
-    // The count is still reported. A reviewer gets the number over a healthy
-    // trace too, rather than only over one the run chose to remark on.
     expect(firstTrace(text)).toBe("**First trace.** `t_1` — 7 spans");
   });
 
   it("claims no size at all when the deployment did not report one", () => {
-    // Silence is not evidence of a small trace, so nothing is qualified and
-    // nothing is said about the size.
+    // Silence is not evidence of anything, so nothing is said about the size.
     const text = renderSetupReport(ctx({ trace: trace() }), NOW);
 
     expect(verdict(text)).toBe(RECEIVED);
@@ -329,6 +332,32 @@ describe("what the report says production still needs", () => {
     expect(text).toContain("tr-…abcd");
     expect(section(text)).not.toContain("tr-…abcd");
     expect(section(text)).not.toContain("TRACEROOT_API_KEY=");
+  });
+});
+
+describe("what the report says the check ran with", () => {
+  it("says it ran with TraceRoot switched off, and claims no run with it on", () => {
+    // The check runs once, with the key absent and `TRACEROOT_ENABLED=false`.
+    // "Passed both with and without" described a run with the key that setup
+    // no longer makes, and that was the one run that could send traces.
+    const text = renderSetupReport(
+      ctx({
+        application: {
+          command: "pytest",
+          baseline: { ran: true, exitCode: 0, durationMs: 1 },
+          run: { ran: true, exitCode: 0, durationMs: 1 },
+          outcome: "passed",
+          passed: true,
+          skippedReason: null,
+        },
+      }),
+      NOW,
+    );
+
+    expect(text).toContain(
+      "**Your checks.** Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured.",
+    );
+    expect(text).not.toContain("with and without");
   });
 });
 

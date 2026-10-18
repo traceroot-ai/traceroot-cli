@@ -39,9 +39,12 @@ async function main() {
 ```
 
 A module another process imports in order to run it — a server started by a process manager, a
-queue worker — has no such function, so initialize at the framework's own startup hook instead. In
-that case run the project's own checks with `TRACEROOT_ENABLED=false` in the environment so that
-they do not export.
+queue worker — has no such function, so initialize at the framework's own startup hook instead.
+
+Whatever the shape, keeping `initialize()` off module scope does not on its own keep the tests from
+exporting: `observe()` starts the SDK at call time whenever `TRACEROOT_API_KEY` is in the
+environment, however it got there. Run the project's own checks with `TRACEROOT_ENABLED=false` in
+the environment (`TRACEROOT_ENABLED=false npm test`) so that they do not export.
 
 `TRACEROOT_API_KEY` is read from the environment automatically. No need to pass it explicitly.
 
