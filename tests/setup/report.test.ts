@@ -58,6 +58,23 @@ describe("the report table", () => {
   });
 });
 
+describe("what the report says the check ran with", () => {
+  it("says it ran with TraceRoot switched off, and claims no run with it on", () => {
+    // The check runs once, with the key absent and `TRACEROOT_ENABLED=false`.
+    // "Passed both with and without" described a run with the key that setup
+    // no longer makes, and that was the one run that could send traces.
+    const text = renderSetupReport(
+      ctx({ application: { command: "pytest", passed: true, skippedReason: null } }),
+      NOW,
+    );
+
+    expect(text).toContain(
+      "**Your checks.** Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured.",
+    );
+    expect(text).not.toContain("with and without");
+  });
+});
+
 describe("the report as Markdown", () => {
   /**
    * The report's blocks as Markdown reads them: runs of lines between blank
