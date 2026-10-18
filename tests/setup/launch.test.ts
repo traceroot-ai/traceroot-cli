@@ -293,6 +293,7 @@ describe("Claude Code, which the writable directories do not reach", () => {
       "Read(**)",
       "Edit(**)",
       "Bash(python3:*)",
+      "Bash(TRACEROOT_ENABLED=false python3:*)",
       "-p",
       "--output-format",
       "stream-json",
@@ -447,6 +448,62 @@ describe("letting the agent run what it was told to run", () => {
     expect(args).toContain("Bash(/repo/.venv/bin/python:*)");
     expect(args).toContain("Bash(python3:*)");
     expect(args.indexOf("--allowedTools")).toBeLessThan(args.indexOf("--disallowedTools"));
+  });
+
+  it("allows each named program behind TRACEROOT_ENABLED=false as well", () => {
+    // The task tells the agent to run the project's checks as
+    // `TRACEROOT_ENABLED=false <command>`, so its own test runs send no traces.
+    // Claude Code matches a rule against the start of the command, and an
+    // environment assignment is the start: a headless run given only
+    // `Bash(python3:*)` refused the prefixed command as needing approval.
+    const programs = ["/repo/.venv/bin/python", "python3", "npm"];
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: programs,
+    });
+    for (const program of programs) {
+      expect(args).toContain(`Bash(${program}:*)`);
+      expect(args).toContain(`Bash(TRACEROOT_ENABLED=false ${program}:*)`);
+    }
+    // Two per program and no more: the assignment is never a rule on its own,
+    // which would let anything at all follow it.
+    expect(args).not.toContain("Bash(TRACEROOT_ENABLED=false:*)");
+    expect(args.filter((arg) => arg.startsWith("Bash(")).length).toBe(programs.length * 2);
+  });
+
+  it("allows the check exactly as the task hands it over", () => {
+    // Read back from the task rather than restated, so a change to how step 5
+    // spells the check moves this expectation with it.
+    const text = buildSetupTask({
+      service: {
+        path: ".",
+        language: "typescript",
+        framework: null,
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+        testCommand: "npm test",
+        evidence: [],
+      } as unknown as DetectedService,
+      root: "/repo",
+      sdk: { package: "@traceroot-ai/traceroot", version: "1.2.3", source: "registry" },
+      skillPath: ".claude/skills/traceroot-instrument-repo",
+      verifyCommand: "npm test",
+      interactive: false,
+      existingInstrumentation: [],
+      credentialFiles: [],
+    });
+    const command = /1\. Run `([^`]+)` once and confirm it passes\./.exec(text)?.[1];
+    expect(command).toBe("TRACEROOT_ENABLED=false npm test");
+    const [assignment, program] = (command as string).split(" ");
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: ["npm"],
+    });
+    expect(args).toContain(`Bash(${assignment} ${program}:*)`);
   });
 
   it("still allows the file tools when there is no program to allow", () => {
@@ -611,10 +668,16 @@ describe("the interpreter the task recommends and the one the agent may run", ()
   }
 
   /** And for the check the task tells the agent to run once, when one exists. */
+  /**
+   * How the check in step 5 starts, as a rule has to name it: the
+   * `TRACEROOT_ENABLED=false` the task puts in front of it, then the program.
+   */
   function programInCheckCommand(text: string): string {
     const command = /1\. Run `([^`]+)` once and confirm it passes\./.exec(text)?.[1];
     expect(command).toBeDefined();
-    return (command as string).split(" ")[0] ?? "";
+    const [assignment, program] = (command as string).split(" ");
+    expect(assignment).toBe("TRACEROOT_ENABLED=false");
+    return `${assignment} ${program}`;
   }
 
   it("allows the relative spelling the run command uses for a virtualenv in the tree", () => {
@@ -699,15 +762,22 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     // refused check costs the agent the single attempt the task is written to
     // buy it, and its recovery — `./.venv/bin/python -m pytest` — only works
     // where a virtualenv was found.
+    //
+    // The task hands it over behind `TRACEROOT_ENABLED=false`, so the suite
+    // sends no traces of its own, and the prefixed rule `buildInvocation`
+    // writes for every program is the one that matches — beside the file rules
+    // this pull request adds, not instead of them.
     const pip: Partial<DetectedService> = { testCommand: "pytest" };
-    expect(programInCheckCommand(task(null, pip))).toBe("pytest");
+    expect(programInCheckCommand(task(null, pip))).toBe("TRACEROOT_ENABLED=false pytest");
+    expect(rules(null, pip)).toContain("Bash(TRACEROOT_ENABLED=false pytest:*)");
     expect(rules(null, pip)).toContain("Bash(pytest:*)");
+    expect(rules(null, pip)).toContain("Edit(**)");
 
     // `uv` runs it through its own environment, which was already allowed —
     // asserted so the two spellings cannot be mistaken for one case.
     const uv: Partial<DetectedService> = { packageManager: "uv", testCommand: "uv run pytest" };
-    expect(programInCheckCommand(task(null, uv))).toBe("uv");
-    expect(rules(null, uv)).toContain("Bash(uv:*)");
+    expect(programInCheckCommand(task(null, uv))).toBe("TRACEROOT_ENABLED=false uv");
+    expect(rules(null, uv)).toContain("Bash(TRACEROOT_ENABLED=false uv:*)");
   });
 
   it("allows no check when none was detected", () => {
