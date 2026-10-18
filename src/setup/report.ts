@@ -54,7 +54,7 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     app === undefined
       ? "Not run."
       : app.passed
-        ? "Passed both with and without `TRACEROOT_API_KEY`, so the application does not depend on TraceRoot being configured."
+        ? "Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured."
         : "Did not pass.";
 
   // One entry per line, and `""` is a blank line: Markdown ends a paragraph or
