@@ -383,21 +383,6 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
     });
   }
 
-  const application = checkpoint.application;
-  if (application !== undefined) {
-    checks.push({
-      name: "setup_application_verified",
-      category: "setup",
-      status: application.passed ? "pass" : application.skippedReason !== null ? "warn" : "fail",
-      // What ran, and nothing more. The check runs once, with TraceRoot switched
-      // off; there is no run with the credentials for this line to report.
-      message: application.passed
-        ? `Application passes \`${application.command}\` with TraceRoot switched off`
-        : (application.skippedReason ??
-          `Application check \`${application.command}\` did not pass`),
-    });
-  }
-
   checks.push({
     name: "setup_first_trace",
     category: "setup",

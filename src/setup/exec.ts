@@ -14,8 +14,8 @@ const POSIX = process.platform !== "win32";
  *
  * `close` fires only after every holder of those pipes has closed them, and a
  * grandchild inherits them: `sh -c "sleep 8 & sleep 8"` holds them for the full
- * eight seconds, long past any timeout. So a test command that starts a server
- * or a watcher made the ten-minute verification timeout never fire at all.
+ * eight seconds, long past any timeout. So a child that left a server or a
+ * watcher running made its timeout never fire at all.
  * Settling on `exit` instead needs this grace period, because the pipe can
  * still hold bytes the child wrote just before exiting; whatever has not
  * arrived by then is being written by a survivor this run has given up on.
@@ -163,9 +163,8 @@ const DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD";
  * `npm`, `pnpm`, `yarn` and `npx` are batch shims on Windows. A shell-less
  * spawn of the bare name never finds one, and since the CVE-2024-27980 fix
  * (Node 18.20.2 / 20.12.2) spawning one by its full name without a shell is
- * refused outright. Without the branch below, every Node project on Windows got
- * a verification that could not be run at all and a report that blamed the
- * project's own check for it.
+ * refused outright. Without the branch below, none of them could be run on
+ * Windows at all.
  */
 const BATCH_EXTENSIONS: ReadonlySet<string> = new Set([".cmd", ".bat"]);
 
@@ -189,7 +188,7 @@ const CMD_UNSAFE_PATH = /["%!\r\n]/;
  * out of the customer's repository and because a shim is a batch file: its own
  * `%*` is a second pass over this line, so "safe inside quotes" has to hold
  * through two parsers rather than one. Refusing every character either of them
- * acts on keeps the guarantee {@link splitCommand} exists for — no value from a
+ * acts on keeps the guarantee a shell-less spawn exists for — no value from a
  * manifest is ever re-interpreted by a shell — and costs nothing, because what
  * reaches this is a package manager's subcommand.
  */
@@ -607,51 +606,3 @@ export const runProcess: RunProcess = (options) =>
     });
     child.on("close", (code, signalName) => finish(statusFor(code, signalName)));
   });
-
-/**
- * Splits a user-supplied command string into program + args without a shell.
- *
- * Verification commands come out of `package.json`, so they must not be handed
- * to `bash -lc`: that turns a manifest field into arbitrary code execution.
- * Quoted segments are respected; shell metacharacters are not interpreted.
- */
-export function splitCommand(command: string): { program: string; args: string[] } | null {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-  let hasToken = false;
-
-  for (const char of command.trim()) {
-    if (quote !== null) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      hasToken = true;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (hasToken || current !== "") {
-        tokens.push(current);
-        current = "";
-        hasToken = false;
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (hasToken || current !== "") {
-    tokens.push(current);
-  }
-
-  const program = tokens[0];
-  if (program === undefined || program === "") {
-    return null;
-  }
-  return { program, args: tokens.slice(1) };
-}

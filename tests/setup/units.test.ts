@@ -20,7 +20,6 @@ import {
 } from "../../src/setup/checkpoint.js";
 import { removeEnvKeys, upsertEnvContent, upsertEnvFile } from "../../src/setup/envWrite.js";
 import { SETUP_EXIT_CODES, SetupError } from "../../src/setup/errors.js";
-import { splitCommand } from "../../src/setup/exec.js";
 import { changedSince, parsePorcelain } from "../../src/setup/git.js";
 import { buildAgentEnv, buildInvocation } from "../../src/setup/launch.js";
 import { renderSetupReport } from "../../src/setup/report.js";
@@ -199,31 +198,6 @@ describe("env file writing", () => {
     upsertEnvFile(join(dir, ".env"), { TRACEROOT_API_KEY: "k" });
 
     expect(existsSync(join(dir, ".gitignore"))).toBe(false);
-  });
-});
-
-describe("splitCommand", () => {
-  it("splits without invoking a shell", () => {
-    expect(splitCommand("npm test")).toEqual({ program: "npm", args: ["test"] });
-  });
-
-  it("respects quoted segments", () => {
-    expect(splitCommand('pytest -k "my test"')).toEqual({
-      program: "pytest",
-      args: ["-k", "my test"],
-    });
-  });
-
-  it("does not interpret shell metacharacters", () => {
-    // A metacharacter becomes a literal argument rather than a second command.
-    expect(splitCommand("npm test && rm -rf /")).toEqual({
-      program: "npm",
-      args: ["test", "&&", "rm", "-rf", "/"],
-    });
-  });
-
-  it("returns null for an empty command", () => {
-    expect(splitCommand("   ")).toBeNull();
   });
 });
 
@@ -678,13 +652,6 @@ describe("setup report", () => {
         sdkVersion: "0.1.11",
         service: { path: "apps/api", language: "python" as const, framework: "fastapi" },
       },
-      application: {
-        command: "pytest",
-        baseline: { ran: true, exitCode: 0, durationMs: 1 },
-        run: { ran: true, exitCode: 0, durationMs: 1 },
-        outcome: "passed",
-        passed: true,
-      },
       trace: { traceId: "abc123", traceUrl: "https://ui.example.test/t/abc123" },
       method: "agent",
     }) as unknown as Parameters<typeof renderSetupReport>[0];
@@ -697,7 +664,6 @@ describe("setup report", () => {
     expect(md).toContain("apps/api");
     expect(md).toContain("0.1.11");
     expect(md).toContain("https://ui.example.test/t/abc123");
-    expect(md).toContain("Passed with TraceRoot switched off");
   });
 
   it("never contains a credential", () => {
@@ -708,13 +674,11 @@ describe("setup report", () => {
     expect(md).not.toMatch(/tr[_-][a-z0-9]{8,}/i);
   });
 
-  it("does not claim checks passed when they never ran", () => {
-    const ctx = baseCtx() as unknown as { application?: unknown };
-    ctx.application = undefined;
-    const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date());
+  it("makes no claim about the project's own tests, which setup never runs", () => {
+    const md = renderSetupReport(baseCtx(), new Date());
 
-    expect(md).toContain("Not run.");
-    expect(md).not.toContain("Passed with TraceRoot switched off");
+    expect(md).not.toContain("Your checks");
+    expect(md).not.toContain("TraceRoot switched off");
   });
 
   it("says what to do next when no trace arrived", () => {
@@ -1161,66 +1125,10 @@ describe("reading a checkpoint that cannot be trusted", () => {
     expect(readCheckpoint(root)).toBeNull();
   });
 
-  it("drops a stage result whose shape is wrong rather than adopting it", async () => {
-    // `{passed: true}` with `verify_application` already completed would satisfy
-    // the stage on a resumed run without the verification ever having happened.
-    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
-    // The shared `dir`, which `afterEach` removes — a private `mkdtempSync` here
-    // leaked a directory into the system tmpdir on every run.
-    const root = dir;
-    mkdirSync(join(root, ".traceroot"), { recursive: true });
-    writeFileSync(
-      join(root, ".traceroot", "setup.json"),
-      JSON.stringify({
-        version: 1,
-        startedAt: "2026-07-26T12:00:00.000Z",
-        completedStages: ["verify_application"],
-        application: { passed: true },
-      }),
-      "utf8",
-    );
-
-    const checkpoint = readCheckpoint(root);
-    expect(checkpoint).not.toBeNull();
-    expect(checkpoint?.application).toBeUndefined();
-  });
-
-  it("reads a verification written before outcomes existed", async () => {
-    // Requiring the new fields would drop the whole verification out of every
-    // checkpoint a previous version wrote, turning a `--resume` into a second
-    // full run of the user's test suite. `passed` and `skippedReason` already
-    // distinguish the three outcomes that existed, and `inconclusive` is not
-    // among them, so nothing can be mistaken for it.
-    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
-    const root = dir;
-    const ran = { ran: true, exitCode: 0, durationMs: 1 };
-    mkdirSync(join(root, ".traceroot"), { recursive: true });
-    writeFileSync(
-      join(root, ".traceroot", "setup.json"),
-      JSON.stringify({
-        version: 1,
-        startedAt: "2026-07-26T12:00:00.000Z",
-        completedStages: ["verify_application"],
-        application: {
-          command: "pytest",
-          run: ran,
-          passed: true,
-          skippedReason: null,
-        },
-      }),
-      "utf8",
-    );
-
-    const checkpoint = readCheckpoint(root);
-    expect(checkpoint?.application?.outcome).toBe("passed");
-    expect(checkpoint?.application?.baseline).toBeNull();
-    expect(checkpoint?.applicationBaseline).toBeUndefined();
-  });
-
-  it("keeps the pre-instrumentation measurement, verification or not", async () => {
-    // A run that instrumented and then died before verifying has a baseline and
-    // no verification, and that baseline is the only thing that lets the
-    // resumed verification attribute a failure.
+  it("drops a stage and fields it does not know rather than the whole checkpoint", async () => {
+    // A stage name this version has no stage for is filtered, and a field it
+    // has no reader for is left behind, so a checkpoint from a build with a
+    // different pipeline still resumes from the stages both of them share.
     const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
     const root = dir;
     mkdirSync(join(root, ".traceroot"), { recursive: true });
@@ -1229,13 +1137,14 @@ describe("reading a checkpoint that cannot be trusted", () => {
       JSON.stringify({
         version: 1,
         startedAt: "2026-07-26T12:00:00.000Z",
-        applicationBaseline: { ran: true, exitCode: 1, durationMs: 9 },
+        completedStages: ["instrument", "verify_application"],
+        application: { command: "pytest", passed: true },
       }),
       "utf8",
     );
 
     const checkpoint = readCheckpoint(root);
-    expect(checkpoint?.applicationBaseline).toMatchObject({ ran: true, exitCode: 1 });
-    expect(checkpoint?.application).toBeUndefined();
+    expect(checkpoint?.completedStages).toEqual(["instrument"]);
+    expect(checkpoint).not.toHaveProperty("application");
   });
 });

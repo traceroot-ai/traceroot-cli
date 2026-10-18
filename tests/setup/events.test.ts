@@ -89,20 +89,13 @@ describe("the human stage renderer", () => {
   });
 
   it("says nothing at all for a step that is not a section", () => {
-    // Installing the skill, running the agent, running the checks, waiting for
-    // the trace, finishing. All five happen; none of them is a thing to attend
-    // to while it does, and a heading over each was five promises the run did
-    // not keep.
+    // Installing the skill, running the agent, waiting for the trace,
+    // finishing. All four happen; none of them is a thing to attend to while it
+    // does, and a heading over each was four promises the run did not keep.
     const { writers: w, err } = writers();
     const emit = stageLineEmitter(w);
 
-    for (const stage of [
-      "install_agent_context",
-      "instrument",
-      "verify_application",
-      "verify_trace",
-      "complete",
-    ]) {
+    for (const stage of ["install_agent_context", "instrument", "verify_trace", "complete"]) {
       emit(start(stage));
       emit(settled(stage));
     }

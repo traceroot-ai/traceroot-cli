@@ -75,111 +75,6 @@ describe("the report table", () => {
   });
 });
 
-describe("what the report says the checks established", () => {
-  /** An application verification in one of its four outcomes. */
-  function verification(over: Record<string, unknown>) {
-    return {
-      command: "pytest",
-      baseline: null,
-      run: { ran: true, exitCode: 0, durationMs: 1 },
-      outcome: "passed",
-      passed: true,
-      skippedReason: null,
-      ...over,
-    };
-  }
-
-  it("does not call a suite that was already red a failure", () => {
-    // A real run ended on "pytest failed after instrumentation" for a suite
-    // that was failing before setup started, which sent the user looking for a
-    // fault in work that had just been done correctly.
-    const text = renderSetupReport(
-      ctx({
-        application: verification({
-          outcome: "inconclusive",
-          passed: false,
-          baseline: { ran: true, exitCode: 1, durationMs: 9 },
-          run: { ran: true, exitCode: 1, durationMs: 9 },
-        }),
-      }),
-      NOW,
-    );
-
-    expect(text).toContain("Inconclusive.");
-    expect(text).toContain("already failing before anything was instrumented (exit 1)");
-    expect(text).not.toContain("Did not pass.");
-  });
-
-  it("does not claim a prior failure nobody observed", () => {
-    // The other way to be inconclusive: no baseline at all, which is what the
-    // routes that hand the instrumentation task over leave behind. Printing the
-    // measured wording here would assert a prior failure nothing ever saw.
-    const text = renderSetupReport(
-      ctx({
-        application: verification({
-          outcome: "inconclusive",
-          passed: false,
-          baseline: null,
-          run: { ran: true, exitCode: 1, durationMs: 9 },
-        }),
-      }),
-      NOW,
-    );
-
-    expect(text).toContain("Inconclusive.");
-    expect(text).toContain("nothing ran it before the code was instrumented");
-    expect(text).not.toContain("already failing before anything was instrumented");
-    expect(text).not.toContain("Did not pass.");
-  });
-
-  it("still says so plainly when instrumentation broke a passing suite", () => {
-    const text = renderSetupReport(
-      ctx({
-        application: verification({
-          outcome: "failed",
-          passed: false,
-          baseline: { ran: true, exitCode: 0, durationMs: 9 },
-        }),
-      }),
-      NOW,
-    );
-
-    expect(text).toContain("Did not pass.");
-    expect(text).not.toContain("Inconclusive.");
-  });
-
-  it("does not credit instrumentation the check never saw", () => {
-    // A run that hands the task over edits nothing and takes no baseline, and
-    // its check ran on code setup had not touched. Anything said about
-    // TraceRoot there reads as a verdict on instrumentation nobody had written
-    // yet, so the sentence says nothing about it.
-    const text = renderSetupReport(ctx({ application: verification({ baseline: null }) }), NOW);
-
-    expect(text).toContain(
-      "**Your checks.** Passed. Setup made no edits itself, so this checked your code as it was when the check ran.",
-    );
-    expect(text).not.toMatch(/\*\*Your checks\.\*\*[^\n]*TraceRoot/);
-  });
-
-  it("names the reason when there was no command to run", () => {
-    const text = renderSetupReport(
-      ctx({
-        application: verification({
-          command: null,
-          outcome: "skipped",
-          passed: false,
-          skippedReason: "no test or health command was detected",
-          run: { ran: false, exitCode: null, durationMs: 0 },
-        }),
-      }),
-      NOW,
-    );
-
-    expect(text).toContain("Not run — no test or health command was detected.");
-    expect(text).not.toContain("Did not pass.");
-  });
-});
-
 describe("what the report says about the trace it found", () => {
   /** The trace record the run writes, as the checkpoint carries it. */
   function trace(over: Record<string, unknown> = {}) {
@@ -335,32 +230,6 @@ describe("what the report says production still needs", () => {
   });
 });
 
-describe("what the report says the check ran with", () => {
-  it("says it ran with TraceRoot switched off, and claims no run with it on", () => {
-    // The check runs once, with the key absent and `TRACEROOT_ENABLED=false`.
-    // "Passed both with and without" described a run with the key that setup
-    // no longer makes, and that was the one run that could send traces.
-    const text = renderSetupReport(
-      ctx({
-        application: {
-          command: "pytest",
-          baseline: { ran: true, exitCode: 0, durationMs: 1 },
-          run: { ran: true, exitCode: 0, durationMs: 1 },
-          outcome: "passed",
-          passed: true,
-          skippedReason: null,
-        },
-      }),
-      NOW,
-    );
-
-    expect(text).toContain(
-      "**Your checks.** Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured.",
-    );
-    expect(text).not.toContain("with and without");
-  });
-});
-
 describe("the report as Markdown", () => {
   /**
    * The report's blocks as Markdown reads them: runs of lines between blank
@@ -388,7 +257,6 @@ describe("the report as Markdown", () => {
       ctx({
         method: "agent",
         agent: { id: "claude" },
-        application: { command: "pytest", passed: true },
         trace: { traceId: "t_1", traceUrl: "https://app.example.test/trace/t_1" },
       }),
       "TraceRoot is connected and a trace has been received.",
