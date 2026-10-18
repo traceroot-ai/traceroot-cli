@@ -6729,21 +6729,17 @@ describe("letting the user stop waiting for the first trace", () => {
       return {
         ...api,
         // Typed as the poll calls it: `pollForTrace` reads through
-        // `TraceLister`, which carries the `endBefore` that `SetupApi` does
-        // not, and the window is what decides which read this is.
+        // `TraceLister`.
         listTraces: async (params: Parameters<TraceLister["listTraces"]>[0]) => {
           const response = await api.listTraces(params);
           // The press has to land on the read that carries THIS run's trace.
-          // Two things used to stop that happening: `listTraces` answers with
-          // the real `{ data, meta }` envelope, so measuring the envelope's own
-          // `length` was `undefined > 0` — false on every call, the key never
-          // pressed, and the test quietly became the plain success path above;
-          // and the fixture's trace sits outside the application-run window, so
-          // the only read that can place it is the poll's open-ended look, the
-          // one that leaves `endBefore` off. Pressing on the windowed read
-          // instead aborts the poll an iteration before the trace is readable,
-          // which is the preceding test, not this one.
-          if (params.endBefore === undefined && response.data.length > 0) {
+          // `listTraces` answers with the real `{ data, meta }` envelope, so
+          // measuring the envelope's own `length` was `undefined > 0` — false
+          // on every call, the key never pressed, and the test quietly became
+          // the plain success path above. Every read is the same look at the
+          // traces since setup started, so the first one that returns the
+          // trace is the read to press on.
+          if (response.data.length > 0) {
             pressedDuringRead = true;
             press?.();
           }
