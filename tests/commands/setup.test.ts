@@ -939,6 +939,90 @@ describe("the hosts a --handoff run resolves", () => {
   });
 });
 
+describe("a hand-over nothing has acted on yet", () => {
+  async function handover(
+    flags: Parameters<typeof defaultFlags>[0],
+    json = false,
+  ): Promise<{ result: Awaited<ReturnType<typeof runSetup>>; out: StringSink; err: StringSink }> {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, out, err } = makeWriters();
+    const result = await runSetup({
+      ctx: ctxWith(json),
+      cwd: dir,
+      flags: defaultFlags(flags),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [] }),
+        runProcess: fakeRunProcess().run,
+      }),
+    });
+    return { result, out, err };
+  }
+
+  it("ends the task-file route normally, saying once what is outstanding", async () => {
+    // It used to stop with exit 14 under a red `error:` block, which read as a
+    // crash over the route the user had just picked.
+    const { result, err } = await handover({ agent: "claude", instrument: false });
+    const said = plain(err.data);
+
+    expect(result.ok).toBe(true);
+    expect(setupFailureExit(result, false)).toEqual({ kind: "none" });
+    expect(said).toContain(
+      "│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Run .traceroot/prompts/setup-instrument.md in Claude Code.\n",
+    );
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+    expect(said).not.toContain("Setup stopped at");
+    expect(said).not.toContain("▲  Wait for the first trace");
+    // Twice: the hand-over's own instruction, and the closing line.
+    expect(said.split("setup --resume").length - 1).toBe(2);
+  });
+
+  it("points the manual route at the printed steps instead", async () => {
+    const { result, err } = await handover({ agent: "claude", method: "manual" });
+    const said = plain(err.data);
+
+    expect(result.ok).toBe(true);
+    expect(said).toContain(
+      "│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Apply the steps above.\n",
+    );
+    expect(said).not.toContain(".traceroot/prompts");
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+    expect(said.split("setup --resume").length - 1).toBe(2);
+  });
+
+  it("reports it under --json as a run that ended without a trace", async () => {
+    const { result, out } = await handover({ agent: "claude", instrument: false }, true);
+    const events = out.data
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const settled = (stage: string) =>
+      events.find((e) => e.event === "stage" && e.stage === stage && e.status !== "start");
+
+    expect(events.at(-1)).toMatchObject({
+      event: "result",
+      ok: true,
+      data: { trace_id: null, trace_url: null },
+    });
+    expect(settled("instrument")).toMatchObject({ data: { mode: "prompt-only" } });
+    expect(settled("verify_trace")?.status).toBe("skipped");
+    expect(setupFailureExit(result, true)).toEqual({ kind: "none" });
+  });
+
+  it("is offered as unfinished work to the next run, not as a finished one", async () => {
+    await handover({ agent: "claude", instrument: false });
+    const found = readCheckpoint(dir);
+
+    expect(found?.completedStages).toContain("complete");
+    expect(found && resumeQuestion(found).message).toBe(
+      "A previous setup for this service did not finish. It is waiting for the instrumentation it handed over. Continue from there?",
+    );
+  });
+});
+
 describe("doctor reports setup state", () => {
   function detection(): RepoDetection {
     return {
