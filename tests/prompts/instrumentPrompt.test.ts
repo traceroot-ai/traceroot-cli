@@ -112,6 +112,19 @@ describe("every surface that says where to initialize", () => {
     });
   }
 
+  for (const [name, text] of surfaces) {
+    it(`${name} — runs the tests with TraceRoot switched off`, () => {
+      // The placement keeps `initialize()` off the import path, and that is all
+      // it does. `observe` starts the SDK whenever `TRACEROOT_API_KEY` is in the
+      // environment, so a surface that promised the guard alone kept the tests
+      // quiet sent its reader's suite into their project.
+      expect(text).toContain("TRACEROOT_ENABLED=false");
+      expect(text).not.toMatch(/tests stop\s+exporting without touching them/);
+      expect(text).not.toMatch(/each test would\s+otherwise export/);
+      expect(text).not.toMatch(/loads no credential and starts no SDK/);
+    });
+  }
+
   // Not the hand instructions, which hand the whole of what to cover to the
   // skill rather than summarising it.
   for (const [name, text] of surfaces.slice(0, 2)) {

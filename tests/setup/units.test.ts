@@ -681,8 +681,7 @@ describe("setup report", () => {
       application: {
         command: "pytest",
         baseline: { ran: true, exitCode: 0, durationMs: 1 },
-        withCredentials: { passed: true },
-        withoutCredentials: { passed: true },
+        run: { ran: true, exitCode: 0, durationMs: 1 },
         outcome: "passed",
         passed: true,
       },
@@ -698,7 +697,7 @@ describe("setup report", () => {
     expect(md).toContain("apps/api");
     expect(md).toContain("0.1.11");
     expect(md).toContain("https://ui.example.test/t/abc123");
-    expect(md).toContain("with and without");
+    expect(md).toContain("Passed with TraceRoot switched off");
   });
 
   it("never contains a credential", () => {
@@ -715,7 +714,7 @@ describe("setup report", () => {
     const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date());
 
     expect(md).toContain("Not run.");
-    expect(md).not.toContain("with and without");
+    expect(md).not.toContain("Passed with TraceRoot switched off");
   });
 
   it("says what to do next when no trace arrived", () => {
@@ -1204,8 +1203,7 @@ describe("reading a checkpoint that cannot be trusted", () => {
         completedStages: ["verify_application"],
         application: {
           command: "pytest",
-          withCredentials: ran,
-          withoutCredentials: ran,
+          run: ran,
           passed: true,
           skippedReason: null,
         },
