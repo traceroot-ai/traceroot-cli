@@ -1,5 +1,25 @@
-import { describe, expect, it } from "vitest";
-import { buildAgentEnv, buildInvocation, launchAgent } from "../../src/setup/launch.js";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RunProcessResult } from "../../src/setup/exec.js";
+import {
+  buildAgentEnv,
+  buildInvocation,
+  launchAgent,
+  prepareWritableDir,
+  resolveNpmCacheDir,
+} from "../../src/setup/launch.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import { buildSetupTask, taskInterpreters } from "../../src/setup/task.js";
 import type { DetectedService } from "../../src/setup/types.js";
@@ -131,10 +151,56 @@ describe("driving Codex headless", () => {
     expect(codex().args).toContain("--skip-git-repo-check");
   });
 
+  it("turns the shell snapshot off, so the user's profile cannot replace the key", () => {
+    // The snapshot re-applies the user's shell-profile exports to every command
+    // Codex runs. In a recorded run that put a production key over the staging
+    // one setup had injected, and the application got a 401.
+    //
+    // Paired with its `-c` for the same reason as the network setting above.
+    const { args } = codex();
+    const at = args.indexOf("features.shell_snapshot=false");
+    expect(at).toBeGreaterThan(0);
+    expect(args[at - 1]).toBe("-c");
+  });
+
+  it("passes each writable directory as its own --add-dir, ahead of the prompt", () => {
+    // Two, because with one the argv is identical whether the flag repeats or
+    // is emitted once with a list.
+    const { args } = codex({ writableDirs: ["/home/u/.npm", "/other"] });
+    expect(args.slice(-5)).toEqual(["--add-dir", "/home/u/.npm", "--add-dir", "/other", "-"]);
+  });
+
+  it("adds no --add-dir when nothing outside the workspace has to be written", () => {
+    expect(codex().args).not.toContain("--add-dir");
+    expect(codex({ writableDirs: [] }).args).not.toContain("--add-dir");
+  });
+
+  it("builds one argv, in one order", () => {
+    // The whole list, so a setting cannot move, repeat or go missing without
+    // this saying so.
+    expect(codex({ writableDirs: ["/home/u/.npm"] }).args).toEqual([
+      "exec",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "--color",
+      "never",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+      "-c",
+      'approval_policy="never"',
+      "-c",
+      "features.shell_snapshot=false",
+      "--add-dir",
+      "/home/u/.npm",
+      "-",
+    ]);
+  });
+
   it("claims no activity format, so no parser is pointed at its output", () => {
-    // Codex's `--json` event names differ between releases and nothing here has
-    // been run against the binary to settle which. A feed built on a guessed
-    // schema reads as a record of what the agent did.
+    // Codex's `--json` event names differ between releases, and the recorded
+    // runs did not pass `--json`, so nothing has settled which. A feed built on
+    // a guessed schema reads as a record of what the agent did.
     expect(codex().activityFormat).toBe("none");
     expect(codex().args).not.toContain("--json");
     // And Claude's, which this parser *was* written against, still declares it.
@@ -144,9 +210,11 @@ describe("driving Codex headless", () => {
   });
 
   it("silently drops the Claude-shaped options it has no mechanism for", () => {
-    // `--add-dir` answers a read scope Codex does not have, and there is no
-    // per-program allow list to translate `Bash(prog:*)` into. Leaving the
-    // flags off is the decision; emitting a nearest-looking one is not.
+    // Claude's `--add-dir` answers a read scope Codex does not have (Codex's
+    // flag of that name grants writes, and only `writableDirs` drives it), and
+    // there is no per-program allow list to translate `Bash(prog:*)` into.
+    // Leaving the flags off is the decision; emitting a nearest-looking one is
+    // not.
     const { args } = codex({ readableDirs: ["/repo"], allowedPrograms: ["python3"] });
     expect(args).not.toContain("--add-dir");
     expect(args).not.toContain("--allowedTools");
@@ -177,6 +245,148 @@ describe("driving Codex headless", () => {
     // the prompt reaches the process at all.
     expect(launched?.args.at(-1)).toBe("-");
     expect(launched?.env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
+  });
+});
+
+describe("Claude Code, which the writable directories do not reach", () => {
+  const base = {
+    agentId: "claude" as const,
+    task: "t",
+    readableDirs: ["/repo"],
+    allowedPrograms: ["python3"],
+  };
+
+  it("builds the same invocation with them as without, in both modes", () => {
+    // Its recorded npm runs wrote the cache with nothing named, so nothing here
+    // is allowed to change what it is launched with.
+    for (const interactive of [true, false]) {
+      expect(buildInvocation({ ...base, interactive, writableDirs: ["/home/u/.npm"] })).toEqual(
+        buildInvocation({ ...base, interactive }),
+      );
+    }
+  });
+
+  it("keeps the headless argv it had", () => {
+    expect(
+      buildInvocation({ ...base, interactive: false, writableDirs: ["/home/u/.npm"] }).args,
+    ).toEqual([
+      "--add-dir",
+      "/repo",
+      "--allowedTools",
+      "Bash(python3:*)",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--disallowedTools",
+      "EnterPlanMode",
+      "Task",
+      "Agent",
+      "--permission-mode",
+      "acceptEdits",
+    ]);
+  });
+});
+
+describe("finding the npm cache a sandboxed agent has to write", () => {
+  /** Resolves against an npm that answers `npm`, from the agent's cwd. */
+  function resolveWith(npm: Partial<RunProcessResult>, env: NodeJS.ProcessEnv = {}) {
+    const { run, runs } = fakeRunProcess({ results: { npm } });
+    return {
+      runs,
+      resolved: resolveNpmCacheDir({ cwd: "/repo/app", env, runProcess: run, homeDir: "/home/u" }),
+    };
+  }
+
+  it("takes npm's own answer, asked where the agent will stand", async () => {
+    // An `.npmrc` can move the cache anywhere, and npm is the one that knows.
+    const { runs, resolved } = resolveWith({ output: "/Volumes/fast/npm-cache\n" });
+    expect(await resolved).toBe("/Volumes/fast/npm-cache");
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.program).toBe("npm");
+    expect(runs[0]?.args).toEqual([
+      "config",
+      "get",
+      "cache",
+      "--loglevel=silent",
+      "--no-update-notifier",
+    ]);
+    expect(runs[0]?.cwd).toBe("/repo/app");
+  });
+
+  it("falls back to npm_config_cache when npm cannot answer", async () => {
+    const failures = [
+      { spawnFailed: true, exitCode: 127 },
+      // What npm 10 says when a project `.npmrc` sets a relative cache.
+      { exitCode: 1, output: "npm error The cache option is protected" },
+      { timedOut: true, exitCode: 143 },
+    ];
+    for (const failure of failures) {
+      const { resolved } = resolveWith(failure, { npm_config_cache: "/env/npm-cache" });
+      expect(await resolved).toBe("/env/npm-cache");
+    }
+  });
+
+  it("falls back to ~/.npm when neither npm nor the environment says", async () => {
+    const { resolved } = resolveWith({ spawnFailed: true, exitCode: 127 });
+    expect(await resolved).toBe(join("/home/u", ".npm"));
+  });
+
+  it("does not take a warning, a relative path or nothing as the answer", async () => {
+    // The runner hands back stdout and stderr as one string.
+    for (const output of ["npm warn something\n/Users/u/.npm\n", "relcache\n", ""]) {
+      const { resolved } = resolveWith({ output });
+      expect(await resolved).toBe(join("/home/u", ".npm"));
+    }
+  });
+});
+
+describe("making the npm cache exist before the sandbox needs it", () => {
+  let base: string;
+  beforeEach(() => {
+    // Real, because `/var` on macOS is itself a link and the answer is a real path.
+    base = realpathSync(mkdtempSync(join(tmpdir(), "tr-writable-dir-")));
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("creates a cache that is not there yet, parents included", () => {
+    // A fresh machine has no `~/.npm` until npm's first run, and that run is
+    // the sandboxed one, which cannot create it.
+    const dir = join(base, "home", ".npm");
+    expect(prepareWritableDir(dir)).toBe(dir);
+    expect(statSync(dir).isDirectory()).toBe(true);
+  });
+
+  it("leaves an existing cache as it is", () => {
+    const dir = join(base, ".npm");
+    mkdirSync(join(dir, "_cacache"), { recursive: true });
+    writeFileSync(join(dir, "_cacache", "index"), "kept");
+    const before = statSync(dir);
+
+    expect(prepareWritableDir(dir)).toBe(dir);
+    expect(readdirSync(dir)).toEqual(["_cacache"]);
+    expect(readFileSync(join(dir, "_cacache", "index"), "utf8")).toBe("kept");
+    expect(statSync(dir).mtimeMs).toBe(before.mtimeMs);
+    expect(statSync(dir).mode).toBe(before.mode);
+  });
+
+  it("names a linked cache by its target, which Codex's sandbox accepts", () => {
+    // Codex's macOS sandbox refuses a writable root with a symlink in it, and
+    // refuses it for every command.
+    const target = join(base, "other-disk", "npm-cache");
+    mkdirSync(target, { recursive: true });
+    const link = join(base, ".npm");
+    symlinkSync(target, link);
+    expect(prepareWritableDir(link)).toBe(target);
+  });
+
+  it("returns null when the directory cannot be made", () => {
+    // A file where the cache, or one of its parents, would have to be.
+    writeFileSync(join(base, "blocker"), "");
+    expect(prepareWritableDir(join(base, "blocker"))).toBeNull();
+    expect(prepareWritableDir(join(base, "blocker", ".npm"))).toBeNull();
   });
 });
 

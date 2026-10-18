@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -3944,6 +3945,145 @@ describe("how to instrument", () => {
 
     expect(asked.filter((q) => q.message.includes("How should TraceRoot be added"))).toEqual([]);
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(1);
+  });
+});
+
+describe("the npm cache a Codex run has to write", () => {
+  /**
+   * Where the fake npm says its cache is: outside the repository, and not
+   * `~/.npm`, so a fallback would show. Real, since setup names the real path.
+   */
+  let cacheBase: string;
+  beforeEach(() => {
+    cacheBase = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-cache-")));
+  });
+  afterEach(() => {
+    rmSync(cacheBase, { recursive: true, force: true });
+  });
+
+  /** A JavaScript service, with the lockfile that names its package manager. */
+  function nodeRepo(lockfile: string): void {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "app", dependencies: { express: "^4" } }),
+    );
+    writeFileSync(join(dir, lockfile), "{}\n");
+    writeFileSync(join(dir, "index.js"), "console.log('hi');\n");
+  }
+
+  async function runWith(agent: "claude" | "codex", entryPoint: string, npmCache: string) {
+    initGit();
+    const process = fakeRunProcess({
+      gitStatus: ["", ` M ${entryPoint}`],
+      results: { npm: { output: `${npmCache}\n` } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent } });
+    const result = await runSetupMachine(ctx, deps);
+    const cacheQueries = process.runs.filter(
+      (r) => r.program === "npm" && r.args.slice(0, 3).join(" ") === "config get cache",
+    );
+    const launched = process.runs.find((r) => r.program === agent);
+    return { result, runs: process.runs, cacheQueries, launched, stderr: plain(err.data) };
+  }
+
+  it("names npm's own cache to Codex as a directory it may write", async () => {
+    // A recorded run had `npm install` fail with EPERM on `~/.npm/_cacache`
+    // under Codex's sandbox, and nothing was instrumented until it was named.
+    nodeRepo("package-lock.json");
+    const cache = join(cacheBase, "npm-cache");
+    mkdirSync(join(cache, "_cacache"), { recursive: true });
+    writeFileSync(join(cache, "_cacache", "index"), "kept");
+    const { result, runs, cacheQueries, launched } = await runWith("codex", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(cacheQueries).toHaveLength(1);
+    // Asked where the agent will stand, since a project `.npmrc` can move it.
+    expect(cacheQueries[0]?.cwd).toBe(dir);
+    // Asked before the agent starts, so the answer can be in its argv.
+    const queried = runs.findIndex((r) => r.program === "npm");
+    expect(queried).toBeGreaterThanOrEqual(0);
+    expect(queried).toBeLessThan(runs.findIndex((r) => r.program === "codex"));
+    expect(launched?.args.slice(-3)).toEqual(["--add-dir", cache, "-"]);
+    // An existing cache is used as it is.
+    expect(readFileSync(join(cache, "_cacache", "index"), "utf8")).toBe("kept");
+  });
+
+  it("creates a cache that does not exist yet, since the sandboxed npm cannot", async () => {
+    // A fresh machine has no cache until npm's first run, which is the
+    // sandboxed one. Codex takes a missing `--add-dir` silently, and on Linux
+    // drops it, so the directory has to exist before the launch.
+    nodeRepo("package-lock.json");
+    const cache = join(cacheBase, "fresh-home", ".npm");
+    const { result, launched, stderr } = await runWith("codex", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(existsSync(cache)).toBe(true);
+    expect(launched?.args.slice(-3)).toEqual(["--add-dir", cache, "-"]);
+    expect(stderr).not.toContain("npm's cache directory");
+  });
+
+  it("launches without the cache, and says so once, when it cannot be created", async () => {
+    nodeRepo("package-lock.json");
+    // A file where a parent directory of the cache would have to be.
+    writeFileSync(join(cacheBase, "blocker"), "");
+    const cache = join(cacheBase, "blocker", ".npm");
+    const { result, launched, stderr } = await runWith("codex", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(launched?.args.at(-1)).toBe("-");
+    // One line, whole. Matched from `warning:` on, so the glyph in front of it
+    // can be whatever the terminal supports.
+    const said = stderr.split("\n").filter((line) => line.includes("npm's cache directory"));
+    expect(said).toHaveLength(1);
+    expect(said[0]?.slice(said[0].indexOf("warning:"))).toBe(
+      `warning: could not create npm's cache directory ${cache}, so Codex starts without it and \`npm install\` may fail`,
+    );
+  });
+
+  it("asks npm nothing and adds nothing for a Python service", async () => {
+    // pip needed nothing in the recorded runs.
+    pythonRepo();
+    const cache = join(cacheBase, ".npm");
+    const { cacheQueries, launched } = await runWith("codex", "main.py", cache);
+
+    expect(launched).toBeDefined();
+    expect(cacheQueries).toEqual([]);
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(existsSync(cache)).toBe(false);
+  });
+
+  it("adds nothing for a package manager no Codex run has been recorded on", async () => {
+    // pnpm keeps its store somewhere else entirely, and naming npm's cache for
+    // it would be a guess that looks like a fix.
+    nodeRepo("pnpm-lock.yaml");
+    const cache = join(cacheBase, ".npm");
+    const { cacheQueries, launched } = await runWith("codex", "index.js", cache);
+
+    expect(launched).toBeDefined();
+    expect(cacheQueries).toEqual([]);
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(existsSync(cache)).toBe(false);
+  });
+
+  it("leaves a Claude Code run on npm exactly as it was", async () => {
+    // Its recorded npm runs wrote the cache with nothing named. So it does not
+    // ask npm, creates nothing, and its argv gains nothing.
+    nodeRepo("package-lock.json");
+    const cache = join(cacheBase, ".npm");
+    const { result, cacheQueries, launched } = await runWith("claude", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(launched).toBeDefined();
+    expect(cacheQueries).toEqual([]);
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(launched?.args.join(" ")).not.toContain(cache);
+    expect(existsSync(cache)).toBe(false);
   });
 });
 

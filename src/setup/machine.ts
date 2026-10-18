@@ -56,7 +56,7 @@ import {
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
-import { buildInvocation, launchAgent } from "./launch.js";
+import { buildInvocation, launchAgent, prepareWritableDir, resolveNpmCacheDir } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
 import { writeSetupReport } from "./report.js";
 import {
@@ -2884,6 +2884,34 @@ const instrument: StageDefinition = {
       }
     }
 
+    // npm's cache, for a Codex run whose task installs with npm. Codex's
+    // sandbox confines writes to the workspace and the cache is outside it: in
+    // a recorded run `npm install` failed with EPERM on `~/.npm/_cacache` and
+    // nothing was instrumented until the cache was named. Codex only, because
+    // Claude Code's recorded npm runs wrote the cache with nothing named, so a
+    // Claude run neither asks npm nor launches any differently.
+    //
+    // Decided from the install command the task hands the agent, so the two
+    // cannot disagree. pip needed nothing. pnpm, yarn, bun, uv and poetry keep
+    // their caches elsewhere and were not tested with Codex, so nothing is
+    // added for them on a guess.
+    //
+    // Settled here, before the agent's feed starts, so the one line said when
+    // the cache cannot be created is not drawn over by the spinner.
+    const npmCache =
+      agent.id === "codex" &&
+      installCommand(sdk, service, service.language, pythonInterpreter).startsWith("npm ")
+        ? await resolveNpmCacheDir({ cwd: agentCwd, env: deps.env, runProcess: deps.runProcess })
+        : null;
+    const writableNpmCache = npmCache === null ? null : prepareWritableDir(npmCache);
+    if (npmCache !== null && writableNpmCache === null) {
+      wizardWarn(
+        ctx,
+        `could not create npm's cache directory ${npmCache}, so Codex starts without it and \`npm install\` may fail`,
+      );
+    }
+    const writableDirs = writableNpmCache === null ? [] : [writableNpmCache];
+
     const tempDir = deps.makeTempDir();
     try {
       // This is the longest step of the run by a wide margin, and the only one
@@ -2930,6 +2958,7 @@ const instrument: StageDefinition = {
         // The repository root, whenever the agent is standing somewhere
         // else. That is where the skill and its reference files live.
         readableDirs: agentCwd === ctx.root ? [] : [ctx.root],
+        writableDirs,
         // Exactly the programs this task names, plus the manifest tools
         // it will reach for. An interpreter it cannot execute leaves it
         // able to write instrumentation and unable to prove any of it.

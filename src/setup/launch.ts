@@ -1,3 +1,6 @@
+import { mkdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type { AgentId } from "../agents/types.js";
 import type { RunProcess, RunProcessResult } from "./exec.js";
 import type { Secret } from "./secret.js";
@@ -61,6 +64,16 @@ export interface BuildInvocationInput {
    * service, and an agent that cannot read its own instructions guesses.
    */
   readableDirs?: readonly string[];
+  /**
+   * Directories outside its working directory that the agent's commands must
+   * be able to write, such as a package manager's cache.
+   *
+   * Only Codex reads this. Its sandbox confines writes to the workspace, and a
+   * recorded npm run failed on the cache until the cache was named here. Claude
+   * Code's recorded npm runs wrote the cache with nothing named, so its
+   * invocation ignores this and stays the one those runs used.
+   */
+  writableDirs?: readonly string[];
 }
 
 /**
@@ -157,25 +170,31 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
           };
     case "codex":
       // Every flag here is one OpenAI's published Codex documentation spells
-      // out for `codex exec`. None of it was arrived at by analogy with Claude
-      // Code above, because the two agents do not share a permission model:
-      // Claude's is a per-tool allow/deny list, Codex's is a sandbox. A flag
-      // guessed from the wrong model fails at the moment a user is watching, on
-      // their repository, so what could not be established is left out and said
-      // out loud rather than approximated.
+      // out for `codex exec`, or one a recorded run of this task showed it
+      // needs. None of it was arrived at by analogy with Claude Code above,
+      // because the two agents do not share a permission model: Claude's is a
+      // per-tool allow/deny list, Codex's is a sandbox. A flag guessed from the
+      // wrong model fails at the moment a user is watching, on their
+      // repository, so what could not be established is left out and said out
+      // loud rather than approximated.
       //
-      // What "documented" does and does not mean here: every flag, subcommand
-      // and config key below is named in OpenAI's own Codex reference, and the
-      // flag spellings are confirmed by `codex exec --help` on codex-cli
-      // 0.163.0 — which lists no config keys, so those are reference-only.
-      // What has not happened is a run: no `codex` has been handed this task, so
-      // the spellings are sourced and the combination is still unproven. The two
-      // `-c` overrides are the weakest link: `-c` is documented as `key=value`
-      // with a dotted path and a TOML value, which is the spelling used below,
-      // but that these two keys do what the reference says they do is an
-      // inference. It fails loudly if it is wrong — a usage error at startup,
-      // before the agent has touched a file — which is the failure mode to
-      // prefer when something has to be inferred at all.
+      // What is established, and on what. `codex exec --help` on codex-cli
+      // 0.163.0 confirms the flag spellings; it lists no config keys. Beyond
+      // that, recorded runs of this pipeline on codex-cli 0.162.1 reached a
+      // trace on staging: a Python service installed with pip into a venv, and
+      // a JavaScript one installed with npm. Those runs passed `exec`,
+      // `--sandbox workspace-write`, `--skip-git-repo-check`, the network and
+      // shell-snapshot overrides below and, on the npm run, `--add-dir` for the
+      // npm cache. They also passed `--ignore-user-config`, which this launch
+      // does not, so they show a stock install rather than a user's
+      // `config.toml`. `--color never` and the approval-policy override were
+      // not part of them; the stock install already started at `approval:
+      // never`.
+      //
+      // Still untested: pnpm, yarn, bun, uv and poetry; a run in a directory
+      // that is not a git repository; and the browser sign-in path, where
+      // `configure_repository` writes the key into a `.env`, because the
+      // recorded runs took the key from the environment.
       //
       // `exec` is the non-interactive subcommand. The prompt is the positional
       // argument, and `-` is documented as "read it from stdin" — which is the
@@ -185,28 +204,40 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //
       // `--sandbox workspace-write` is the equivalent of Claude's
       // `--permission-mode acceptEdits`, and it is not optional: `codex exec`
-      // defaults to a *read-only* sandbox, so without it the agent reads the
-      // task, cannot write a line of the instrumentation, and exits having
-      // reported that it could not. It is also what OpenAI's own documentation
-      // recommends for a non-interactive run. `--full-auto` is deliberately not
-      // used: the current documentation says it is no longer supported, and
+      // defaults to a *read-only* sandbox (a stock install starts there, and
+      // every write fails), so without it the agent reads the task, cannot
+      // write a line of the instrumentation, and exits having reported that it
+      // could not. It is also what OpenAI's own documentation recommends for a
+      // non-interactive run. `--full-auto` is deliberately not used: the
+      // current documentation says it is no longer supported, and
       // `--dangerously-bypass-approvals-and-sandbox` (`--yolo`) is exactly the
       // bypass-all-permissions switch this function's contract refuses to offer.
       //
-      // The two `-c` overrides are documented config keys set through the
-      // documented inline-override flag, and both are load-bearing:
+      // The `-c` overrides are config keys set through the documented
+      // inline-override flag, and each is load-bearing:
       //
       //   `sandbox_workspace_write.network_access=true` — under
       //   `workspace-write` the sandbox has network access turned off by
       //   default. The first thing this task asks for is `pip install` or
       //   `npm install`, so the default turns the whole run into a long way of
-      //   discovering that the SDK could not be fetched.
+      //   discovering that the SDK could not be fetched. A stock run without
+      //   it could not resolve `pypi.org`.
       //
       //   `approval_policy="never"` — a non-interactive run has nobody to
       //   approve anything, and the policy otherwise comes from the user's own
       //   `$CODEX_HOME/config.toml`. Pinned so this launch does not inherit an
       //   `on-request` policy from a file setup has never read. Quoted so the
       //   value is unambiguously a TOML string.
+      //
+      //   `features.shell_snapshot=false` — Codex's shell snapshot, on by
+      //   default, re-applies the exports in the user's shell profile to every
+      //   command the agent runs, so a `TRACEROOT_API_KEY` exported in
+      //   `~/.zshrc` replaces the one `buildAgentEnv` hands the agent. In a
+      //   recorded run the profile exported a production key, the
+      //   application's exporter got a 401 from the staging host setup had
+      //   targeted, and no trace arrived; with the snapshot off the same run
+      //   reached one. A profile key for another project on the same host
+      //   would presumably send the trace there instead, which is untested.
       //
       // `--color never` keeps ANSI escapes out of the captured stdout. The
       // completion block is recovered from that text by a fenced-block regex
@@ -215,7 +246,18 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       // exported must not be able to break it.
       //
       // `--skip-git-repo-check` because setup supports a repository that is not
-      // a git repository and `codex exec` otherwise refuses to start in one.
+      // a git repository and `codex exec` otherwise refuses to start in one
+      // ("Not inside a trusted directory", on a stock install).
+      //
+      // `--add-dir` once per `writableDirs` entry, because `workspace-write`
+      // confines writes to the working directory and a package manager's cache
+      // lives outside it. In a recorded npm run `npm install` failed with EPERM
+      // writing `~/.npm/_cacache`, and Codex changed nothing; with `--add-dir
+      // ~/.npm` the same run reached a trace. The flag rather than the
+      // `sandbox_workspace_write.writable_roots` key, because the flag is what
+      // that run passed and a path needs no TOML quoting. Which directories to
+      // pass is the instrument stage's decision, not this function's, and so
+      // is making sure each one exists; see `prepareWritableDir`.
       //
       // NOT mirrored, because the mechanism does not exist on this side:
       //
@@ -229,10 +271,10 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //   at the repository root. Codex's sandbox governs writes, execution and
       //   network, not read scope, so the skill above the service is readable
       //   with no flag at all. (A service in a monorepo subdirectory that needs
-      //   to *write* above itself — a root lockfile, say — is the open question
-      //   the first recorded Codex run should answer;
-      //   `sandbox_workspace_write.writable_roots` is the documented key for
-      //   it, and it is not set here on a guess.)
+      //   to *write* above itself — a root lockfile, say — is still open: the
+      //   recorded runs were single-directory sample apps. `--add-dir` would be
+      //   the mechanism, and the repository root is not passed to it on a
+      //   guess.)
       //
       //   The deny list — `EnterPlanMode`, `Task`, `Agent` exist to stop a
       //   plan-mode exit ending the run without doing the work, and to stop
@@ -262,16 +304,19 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
           "sandbox_workspace_write.network_access=true",
           "-c",
           'approval_policy="never"',
+          "-c",
+          "features.shell_snapshot=false",
+          ...(input.writableDirs ?? []).flatMap((dir) => ["--add-dir", dir]),
           // The positional prompt argument, and therefore last.
           "-",
         ],
         promptVia: "stdin",
         interactive: false,
         // `codex exec --json` emits newline-delimited events, but the field
-        // names differ between releases and nothing here has been run against
-        // the binary to settle which. A feed built on a guessed schema either
-        // shows nothing or narrates the wrong thing; the spinner and its
-        // elapsed counter say the true part either way.
+        // names differ between releases and the recorded runs did not pass
+        // `--json`, so nothing has settled which. A feed built on a guessed
+        // schema either shows nothing or narrates the wrong thing; the spinner
+        // and its elapsed counter say the true part either way.
         activityFormat: "none",
       };
     default:
@@ -280,6 +325,92 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       // it — like any id setup does not drive — to the prompt-only path before
       // ever getting here.
       throw new Error(`agent '${agentId}' cannot be launched`);
+  }
+}
+
+/** A config read; the bound is for an npm that hangs, not for a slow one. */
+const NPM_CACHE_QUERY_TIMEOUT_MS = 10_000;
+
+/**
+ * Where npm will write its cache for a command run in `cwd`.
+ *
+ * Asked of npm itself, because the answer is npm's to give: an `.npmrc` at the
+ * user, global or project level can move the cache, and so can the
+ * environment. It is one config read that runs no scripts and writes nothing
+ * but npm's own debug log, as every npm command does. `--loglevel=silent`
+ * because the runner returns stdout and stderr as one string, and a warning
+ * about the user's `.npmrc` would otherwise be read as part of the path.
+ * `--no-update-notifier` because the notifier's registry check is a network
+ * request this question does not need.
+ *
+ * Anything but one absolute path falls back to `npm_config_cache`, then to
+ * `~/.npm`. That covers npm missing from PATH, a shim that refuses to run here,
+ * and npm 10 refusing the question ("The cache option is protected") when a
+ * project `.npmrc` sets a relative cache, which then lives inside the project,
+ * where the sandbox already allows writes. `~/.npm` is npm's default on macOS
+ * and Linux; on Windows npm uses `%LocalAppData%\npm-cache`, and no Windows run
+ * has been recorded.
+ */
+export async function resolveNpmCacheDir(input: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  runProcess: RunProcess;
+  /** Defaults to the real home directory; a test passes its own. */
+  homeDir?: string;
+}): Promise<string> {
+  const result = await input.runProcess({
+    program: "npm",
+    args: ["config", "get", "cache", "--loglevel=silent", "--no-update-notifier"],
+    cwd: input.cwd,
+    env: input.env,
+    stdio: "capture",
+    timeoutMs: NPM_CACHE_QUERY_TIMEOUT_MS,
+  });
+  const answer = result.output.trim();
+  if (
+    result.exitCode === 0 &&
+    !result.timedOut &&
+    !result.spawnFailed &&
+    !answer.includes("\n") &&
+    isAbsolute(answer)
+  ) {
+    return answer;
+  }
+  const fromEnv = input.env.npm_config_cache ?? input.env.NPM_CONFIG_CACHE;
+  if (fromEnv !== undefined && fromEnv !== "") {
+    return fromEnv;
+  }
+  return join(input.homeDir ?? homedir(), ".npm");
+}
+
+/**
+ * Makes `dir` exist and returns the path to name to Codex's sandbox, or `null`
+ * when it cannot be made.
+ *
+ * Created here because nothing else can create it. On a fresh machine npm's
+ * cache does not exist until npm's first run, and that first run is the
+ * sandboxed one. Codex 0.162.1 and 0.163.0 take a missing `--add-dir` without a
+ * word (read from their source, not run). On macOS it becomes a Seatbelt rule
+ * for a path that is not there yet. On Linux bubblewrap cannot
+ * bind a missing path, so it is dropped from the writable roots, and the
+ * sandboxed `npm install` meets a read-only home as if the flag had never been
+ * passed. Creating it does what npm's own first run would have done, with the
+ * same default mode. A directory that already exists is left as it is.
+ *
+ * The real path, not the configured one, because Codex's macOS sandbox refuses
+ * a writable root with a symlink below the top level ("symlinked writable roots
+ * are not supported"). The refusal comes from building the sandbox itself, so a
+ * `~/.npm` linked to another disk would stop every command the agent runs, not
+ * only npm's. Writes are checked against the resolved path, which is why Codex
+ * rewrites top-level aliases such as `/tmp` itself, so the target is the
+ * directory that has to be writable.
+ */
+export function prepareWritableDir(dir: string): string | null {
+  try {
+    mkdirSync(dir, { recursive: true });
+    return realpathSync(dir);
+  } catch {
+    return null;
   }
 }
 

@@ -68,16 +68,16 @@ export function resolveOnPath(
  *
  * - `claude` — recorded runs of this pipeline, through to a trace, per package
  *   manager. The strong case, and the one the sentence above described.
- * - `codex` — its headless interface read off OpenAI's published Codex
- *   documentation (`codex exec`, a prompt on stdin via `-`, the
- *   `workspace-write` sandbox, and the config overrides for approvals and
- *   sandbox network access; see `buildInvocation` in ./launch.ts). No run of this
- *   pipeline has driven Codex to a trace, on any package manager. What is
- *   established is that the invocation is spelled out of documented flags
- *   rather than guessed at; what is not established is that a Codex run of
- *   *this* task installs an SDK, edits an entry point and emits a trace.
- *   `codex exec --help` on codex-cli 0.163.0 confirms the spellings, and that
- *   is the whole of what a binary has confirmed.
+ * - `codex` — recorded runs of this pipeline on codex-cli 0.162.1, through to a
+ *   trace, for two package managers: pip into a venv for Python, and npm for
+ *   JavaScript. Each needed a setting the first invocation lacked: shell
+ *   snapshots off, so a key exported in the user's shell profile cannot replace
+ *   the one setup injects, and on the npm run a writable npm cache. Both are in
+ *   `buildInvocation` (./launch.ts), with what each fixed. Not yet run: pnpm,
+ *   yarn, bun, uv and poetry; a directory that is not a git repository; and the
+ *   browser sign-in path, which writes the key into a `.env`. Those runs also
+ *   passed `--ignore-user-config`, which setup does not, so a user's own
+ *   `config.toml` is untested as well.
  *
  * It is here anyway because the alternative is worse for the user it is about.
  * A wizard that finds `codex` on PATH and offers nothing but "run it yourself"
@@ -89,8 +89,9 @@ export function resolveOnPath(
  * whichever agent they prefer.
  *
  * So the rule going forward is that an entry here carries its own basis in this
- * comment. Promoting Codex's to the first kind takes recorded runs, not a
- * second reading of the same documentation.
+ * comment. Promoting Codex's to the first kind takes recorded runs on the
+ * package managers still missing, not a second reading of the same
+ * documentation.
  *
  * An agent that is not on this list is still a first-class skill target, and
  * `--no-instrument` still writes the instrumentation task out for it.
