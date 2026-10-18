@@ -6690,11 +6690,11 @@ describe("letting the user stop waiting for the first trace", () => {
     const said = plain(err.data);
     expect(said).not.toContain("Waiting for your first trace");
     expect(said).not.toContain("Enter to stop waiting");
-    // The pre-existing diagnosis, unchanged: no two-minute spinner in front of
-    // an answer that was available immediately.
-    expect(result.ok).toBe(false);
-    expect(result.error?.code).toBe("TRACE_TIMEOUT");
-    expect(plain(result.error?.message ?? "")).toContain("this service is not instrumented");
+    // The hand-over's own ending, unchanged: no two-minute spinner in front of
+    // an answer that was available immediately, and a pause rather than a wait
+    // the user stopped.
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
     expect(ctx.traceWaitSkipped).toBeUndefined();
   });
 

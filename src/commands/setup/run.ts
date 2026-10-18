@@ -403,10 +403,10 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       );
     } else {
       // The other way to end without a trace: the user stopped the wait. The
-      // sentence above is the wrong one for it twice over — it says setup "did
-      // not reach" something it was told to stop reaching for, and it sends
-      // somebody who just watched an agent instrument their service off to
-      // finish an instrumentation task that is already done.
+      // sentence above is the wrong one for it twice over — it tells somebody
+      // who just watched an agent instrument their service that it has no
+      // TraceRoot in it, and sends them off to do an instrumentation task that
+      // is already done.
       wizardNote(
         writers,
         skippedTraceNotice({ uiBaseUrl: result.checkpoint.uiBaseUrl ?? null }, writers.err),
