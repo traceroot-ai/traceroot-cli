@@ -1,6 +1,6 @@
 import { join, relative, sep } from "node:path";
 import { writeFileSecure } from "../util/secureFile.js";
-import { isThinTrace, spanPhrase, thinTraceFinding } from "./trace.js";
+import { spanPhrase } from "./trace.js";
 import type { SetupContext } from "./types.js";
 
 /**
@@ -61,22 +61,10 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
   const app = ctx.application;
   const trace = ctx.trace;
 
-  // Three answers rather than two, because "a trace has been received" is true
-  // of a trace that covers one function and reads as though it covers the
-  // application. A run ended on that sentence over a single-span trace, and the
-  // user was told their instrumentation worked. So the verdict carries what was
-  // found when what was found is small: this is the line a reader skims, and
-  // the line that gets pasted into a pull request.
-  //
-  // What it does not do is guess at the application's shape — it reports the
-  // count, says what one span can and cannot establish, and leaves the
-  // judgement where the knowledge of the program is.
   const verdict =
-    trace === undefined
-      ? "TraceRoot is configured, but no trace has been seen yet."
-      : isThinTrace(trace.spanCount)
-        ? `TraceRoot is connected and a trace has been received, but that trace ${thinTraceFinding(trace.spanCount)}. Check that the instrumentation covers the code you meant it to.`
-        : "TraceRoot is connected and a trace has been received.";
+    trace !== undefined
+      ? "TraceRoot is connected and a trace has been received."
+      : "TraceRoot is configured, but no trace has been seen yet.";
 
   // Four answers, because the fourth is the one a reader acts on differently.
   // "Did not pass" over a suite that was already red sent people to look for a
@@ -98,7 +86,7 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
       : app.outcome === "skipped"
         ? `Not run — ${app.skippedReason ?? "no command to run"}.`
         : app.outcome === "passed"
-          ? "Passed both with and without `TRACEROOT_API_KEY`, so the application does not depend on TraceRoot being configured."
+          ? "Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured."
           : app.outcome === "inconclusive"
             ? inconclusive
             : "Did not pass.";

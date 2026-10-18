@@ -171,9 +171,12 @@ export interface ApplicationVerification {
    * fails" and "the suite still fails" are indistinguishable.
    */
   baseline: VerificationRun | null;
-  withCredentials: VerificationRun;
-  /** Proves the app still behaves with `TRACEROOT_API_KEY` absent. */
-  withoutCredentials: VerificationRun;
+  /**
+   * The command, run once with TraceRoot switched off: `TRACEROOT_API_KEY`
+   * absent and `TRACEROOT_ENABLED=false`. A pass shows the application does not
+   * depend on TraceRoot being configured, and the run itself can send no trace.
+   */
+  run: VerificationRun;
   outcome: VerificationOutcome;
   /**
    * Whether the instrumented application passed its own check.
