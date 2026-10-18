@@ -3719,8 +3719,11 @@ describe("stack and agent selection", () => {
 
     const launch = process.runs.find((run) => run.program === "claude");
     expect(launch).toBeDefined();
-    const named = /1\. Run `([^` ]+)/.exec(launch?.stdin ?? "")?.[1];
-    expect(named).toBe("pytest");
+    // Behind the `TRACEROOT_ENABLED=false` the task puts in front of it, which
+    // is why the prefixed rule is the one that has to be there.
+    const named = /1\. Run `(TRACEROOT_ENABLED=false [^` ]+)/.exec(launch?.stdin ?? "")?.[1];
+    expect(named).toBe("TRACEROOT_ENABLED=false pytest");
+    expect(launch?.args).toContain(`Bash(${named}:*)`);
     expect(launch?.args).toContain("Bash(pytest:*)");
   });
 });

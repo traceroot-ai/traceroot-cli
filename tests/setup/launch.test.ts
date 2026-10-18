@@ -668,10 +668,16 @@ describe("the interpreter the task recommends and the one the agent may run", ()
   }
 
   /** And for the check the task tells the agent to run once, when one exists. */
+  /**
+   * How the check in step 5 starts, as a rule has to name it: the
+   * `TRACEROOT_ENABLED=false` the task puts in front of it, then the program.
+   */
   function programInCheckCommand(text: string): string {
     const command = /1\. Run `([^`]+)` once and confirm it passes\./.exec(text)?.[1];
     expect(command).toBeDefined();
-    return (command as string).split(" ")[0];
+    const [assignment, program] = (command as string).split(" ");
+    expect(assignment).toBe("TRACEROOT_ENABLED=false");
+    return `${assignment} ${program}`;
   }
 
   it("allows the relative spelling the run command uses for a virtualenv in the tree", () => {
@@ -756,15 +762,22 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     // refused check costs the agent the single attempt the task is written to
     // buy it, and its recovery — `./.venv/bin/python -m pytest` — only works
     // where a virtualenv was found.
+    //
+    // The task hands it over behind `TRACEROOT_ENABLED=false`, so the suite
+    // sends no traces of its own, and the prefixed rule `buildInvocation`
+    // writes for every program is the one that matches — beside the file rules
+    // this pull request adds, not instead of them.
     const pip: Partial<DetectedService> = { testCommand: "pytest" };
-    expect(programInCheckCommand(task(null, pip))).toBe("pytest");
+    expect(programInCheckCommand(task(null, pip))).toBe("TRACEROOT_ENABLED=false pytest");
+    expect(rules(null, pip)).toContain("Bash(TRACEROOT_ENABLED=false pytest:*)");
     expect(rules(null, pip)).toContain("Bash(pytest:*)");
+    expect(rules(null, pip)).toContain("Edit(**)");
 
     // `uv` runs it through its own environment, which was already allowed —
     // asserted so the two spellings cannot be mistaken for one case.
     const uv: Partial<DetectedService> = { packageManager: "uv", testCommand: "uv run pytest" };
-    expect(programInCheckCommand(task(null, uv))).toBe("uv");
-    expect(rules(null, uv)).toContain("Bash(uv:*)");
+    expect(programInCheckCommand(task(null, uv))).toBe("TRACEROOT_ENABLED=false uv");
+    expect(rules(null, uv)).toContain("Bash(TRACEROOT_ENABLED=false uv:*)");
   });
 
   it("allows no check when none was detected", () => {
