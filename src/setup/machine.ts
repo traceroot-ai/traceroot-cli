@@ -3474,12 +3474,32 @@ const instrument: StageDefinition = {
     // and shared rather than derived twice.
     const agentCwd = service.path === "." ? ctx.root : join(ctx.root, service.path);
     const credentialFile = credentialEnvFile(ctx, agentCwd);
-    // Found once and used twice: the task names it as the interpreter to use,
-    // and the launch has to allow the agent to actually execute it.
+    // Found once and shared: the task names it as the interpreter to use, the
+    // manual steps install into it, and the launch has to allow the agent to
+    // actually execute it.
     const pythonInterpreter =
       service.language === "python"
         ? detectPythonEnvironment(ctx.root, service.path, deps.env).interpreter
         : null;
+
+    // One list, with the credential's file first.
+    //
+    // The credential used to be a second, parallel instruction: its own path,
+    // its own loader, its own paragraph explaining that loading it was not
+    // redundant. It needed all of that because the file was ours and nothing
+    // read it. Now it is one of the project's own env files, so it belongs in
+    // the list of them — `detectEnvFiles` finds it unprompted, since
+    // `configure_repository` runs several stages before this one.
+    //
+    // First, not merely present, because the snippet the agent's task and the
+    // manual steps show loads the head of this list. `detectEnvFiles` returns
+    // the service's files before the repository root's, and the credential
+    // does not always land in the service: the artefact directory is fixed
+    // before the pipeline starts while the service is detected here, so a run
+    // started at the root of a monorepo writes the key at the root and
+    // instruments `api/`. Deduped, because in the ordinary case it is already
+    // in there.
+    const envFiles = withCredentialFirst(detectEnvFiles(ctx.root, service.path), credentialFile);
 
     const task = buildSetupTask({
       service,
@@ -3505,24 +3525,7 @@ const instrument: StageDefinition = {
       // service runs on is slow for an agent to establish, and all of it
       // happens before the first edit.
       pythonInterpreter,
-      // One list, with the credential's file first.
-      //
-      // The credential used to be a second, parallel instruction: its own path,
-      // its own loader, its own paragraph explaining that loading it was not
-      // redundant. It needed all of that because the file was ours and nothing
-      // read it. Now it is one of the project's own env files, so it belongs in
-      // the list of them — `detectEnvFiles` finds it unprompted, since
-      // `configure_repository` runs several stages before this one.
-      //
-      // First, not merely present, because `buildSetupTask` puts the head of
-      // this list in the snippet it hands the agent. `detectEnvFiles` returns
-      // the service's files before the repository root's, and the credential
-      // does not always land in the service: the artefact directory is fixed
-      // before the pipeline starts while the service is detected here, so a run
-      // started at the root of a monorepo writes the key at the root and
-      // instruments `api/`. Deduped, because in the ordinary case it is already
-      // in there.
-      envFiles: withCredentialFirst(detectEnvFiles(ctx.root, service.path), credentialFile),
+      envFiles,
       credentialEnvFile: credentialFile,
     });
 
@@ -3533,6 +3536,8 @@ const instrument: StageDefinition = {
         service,
         sdk,
         skillPath: displaySkillPath(ctx.root, adapter.getSkillInstallPath(ctx.root, SKILL_NAME)),
+        envFiles,
+        pythonInterpreter,
       });
       wizardLine(ctx, `\n${instructions}`);
       recordHandover(ctx, agent.id, "manual");

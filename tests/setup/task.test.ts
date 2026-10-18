@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSetupTask } from "../../src/setup/task.js";
+import { buildSetupTask, manualInstructions } from "../../src/setup/task.js";
 import type { DetectedService } from "../../src/setup/types.js";
 
 const SDK = { package: "@traceroot-ai/traceroot", version: "1.2.3", source: "registry" as const };
@@ -515,5 +515,61 @@ describe("where the task puts initialization", () => {
     expect(text).toContain("TRACEROOT_ENABLED=false");
     expect(text).toContain("initialize where the framework starts");
     expect(text).toContain("still being imported");
+  });
+});
+
+describe("the manual steps", () => {
+  function manual(overrides: Partial<Parameters<typeof manualInstructions>[0]> = {}): string {
+    return manualInstructions({
+      service: service({ testCommand: "pytest" }),
+      sdk: SDK,
+      skillPath: ".claude/skills/traceroot-instrument-repo",
+      envFiles: ["./.env"],
+      pythonInterpreter: null,
+      ...overrides,
+    });
+  }
+
+  it("load the env file and install into the venv for a pip service", () => {
+    // Followed exactly, the old steps started the application without its key:
+    // nothing loaded the file setup wrote it into, and `python3 -m pip` fails
+    // on a PEP 668 Python with no venv active.
+    const text = manual({
+      sdk: { ...SDK, package: "traceroot" },
+      pythonInterpreter: "/repo/.venv/bin/python",
+    });
+    expect(text).toContain(
+      "'/repo/.venv/bin/python' -m pip install traceroot==1.2.3 python-dotenv",
+    );
+    expect(text).not.toContain("python3 -m pip");
+    expect(text).toContain("from dotenv import load_dotenv");
+    expect(text).toMatch(
+      /if __name__ == "__main__":\n\s+load_dotenv\(Path\(__file__\)\.resolve\(\)\.parent \/ "\.env"\)/,
+    );
+    // The agent's own snippet, so the two cannot drift apart again.
+    expect(task({ envFiles: ["./.env"] })).toContain(
+      'load_dotenv(Path(__file__).resolve().parent / ".env")',
+    );
+  });
+
+  it("load the env file and install dotenv for an npm TypeScript service", () => {
+    const text = manual({
+      service: service({
+        language: "typescript",
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+        testCommand: "npm test",
+      }),
+    });
+    expect(text).toContain("npm install @traceroot-ai/traceroot@1.2.3 dotenv");
+    expect(text).toContain('import { config } from "dotenv";');
+    expect(text).toContain('config({ path: new URL("../.env", import.meta.url) });');
+    expect(text).not.toContain("```");
+  });
+
+  it("install no dotenv when there is no env file to load", () => {
+    const text = manual({ sdk: { ...SDK, package: "traceroot" }, envFiles: [] });
+    expect(text).not.toContain("dotenv");
+    expect(text).toContain("python3 -m pip install traceroot==1.2.3\n");
   });
 });

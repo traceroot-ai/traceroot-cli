@@ -963,34 +963,32 @@ export function manualInstructions(input: {
   service: DetectedService;
   sdk: ResolvedSdk;
   skillPath: string;
+  /** The list the agent's task is given; the snippet loads its head. */
+  envFiles: readonly string[];
+  /** The interpreter the service runs on, when one was found. */
+  pythonInterpreter: string | null;
 }): string {
-  const { service, sdk, skillPath } = input;
+  const { service, sdk, skillPath, envFiles } = input;
   // The project's own command when there is one, so the line can be copied.
   const testRun = `TRACEROOT_ENABLED=false ${service.testCommand ?? "<your test command>"}`;
-  // Inside the guard, not beside the import.
-  //
-  // A snippet showing `initialize()` at module scope is the instruction, and it
-  // contradicts the sentence above it: module scope runs on import, so a test
-  // suite that imports this entry point starts the SDK and every test reaching
-  // an instrumented function exports a trace of its own.
-  const init =
-    service.language === "python"
-      ? ["import traceroot", "", 'if __name__ == "__main__":', "    traceroot.initialize()"].join(
-          "\n",
-        )
-      : [
-          'import { initialize } from "@traceroot-ai/traceroot";',
-          "",
-          "function main() {",
-          "  initialize();",
-          "}",
-        ].join("\n");
+  // The agent's snippet, unfenced for a terminal, so the two cannot drift
+  // apart. This one used to leave out the env-file load, so an application
+  // changed exactly as shown started without its key and sent nothing.
+  const init = initSnippet(service, envFiles)
+    .split("\n")
+    .filter((line) => !line.startsWith("```"));
+  // The package that load imports. Neither SDK depends on it.
+  const dotenv =
+    envFiles.length === 0 ? null : service.language === "python" ? "python-dotenv" : "dotenv";
+  const install = installCommand(sdk, service, service.language, input.pythonInterpreter);
 
   return [
     `Add TraceRoot to ${service.path} by hand:`,
     "",
-    "  1. Install the SDK, pinned:",
-    `       ${installCommand(sdk, service)}`,
+    dotenv === null
+      ? "  1. Install the SDK, pinned:"
+      : `  1. Install the SDK, pinned, and ${dotenv} for the load in step 2:`,
+    `       ${dotenv === null ? install : `${install} ${dotenv}`}`,
     "",
     `  2. Initialize it on the path that runs ${service.entryPoint ?? "your entry point"},`,
     service.language === "python"
@@ -999,7 +997,7 @@ export function manualInstructions(input: {
     "     Module scope runs on import, and your test suite imports your entry",
     "     point, so initializing there starts the SDK in every test:",
     "",
-    ...init.split("\n").map((line) => (line === "" ? "" : `       ${line}`)),
+    ...init.map((line) => (line === "" ? "" : `       ${line}`)),
     "",
     "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
     "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",

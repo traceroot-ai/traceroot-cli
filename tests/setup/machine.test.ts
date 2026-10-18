@@ -5686,6 +5686,33 @@ describe("how to instrument", () => {
     expect(err.data).toContain("traceroot setup --resume");
   });
 
+  it("has the manual steps load the env file it wrote the key into", async () => {
+    // The steps used to leave the load out, so an application changed exactly
+    // as shown started without its key, and the resume timed out. And they
+    // installed with `python3`, which a PEP 668 Python refuses.
+    pythonRepo();
+    const venvPython = join(dir, ".venv", "bin", "python");
+    mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+    writeFileSync(venvPython, "");
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: fakeRunProcess().run,
+    });
+    const { ctx, err } = makeCtx({
+      canPrompt: false,
+      flags: { agent: "claude", method: "manual" },
+    });
+    await runSetupMachine(ctx, deps);
+
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("TRACEROOT_API_KEY=");
+    const said = plain(err.data);
+    expect(said).toContain(
+      `'${venvPython}' -m pip install @traceroot-ai/traceroot==1.2.3 python-dotenv\n`,
+    );
+    expect(said).toContain('load_dotenv(Path(__file__).resolve().parent / ".env")');
+  });
+
   it("asks when it can, and honours the answer", async () => {
     pythonRepo();
     initGit();
