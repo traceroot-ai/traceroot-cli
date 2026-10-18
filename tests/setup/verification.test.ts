@@ -175,12 +175,36 @@ describe("proving the application runs without the credential", () => {
     expect(result.verification.passed).toBe(false);
     // No baseline was taken, so this run cannot say the instrumentation is
     // why: with one run, and that one with TraceRoot off, "passed with the key
-    // and broke without it" is no longer something it observed.
+    // and broke without it" is no longer something it observed. The next test
+    // is the case where it can.
     expect(result.verification.outcome).toBe("inconclusive");
     expect(result.failure?.output).toContain("TRACEROOT_API_KEY is not set");
     // Gone for the only run there is.
     expect(fileWasThere).toEqual([false]);
     expect(result.withheld).toEqual([file]);
+  });
+
+  it("blames the instrumentation for it when the check passed beforehand", async () => {
+    // The agent route measures the check before anything is edited. A suite
+    // that passed then and fails with TraceRoot off now is an application that
+    // came to depend on TraceRoot being configured, which is the regression
+    // this run exists to stop.
+    const { file } = repoWithCredentialFile();
+    const { run } = appThatLoadsTheCredentialFile(file);
+
+    const result = await verifyApplication({
+      command: "npm test",
+      baseline: { ran: true, exitCode: 0, durationMs: 10 },
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      credentialFiles: [file],
+      interpreter: null,
+      runProcess: run,
+    });
+
+    expect(result.verification.outcome).toBe("failed");
+    expect(result.failure?.output).toContain("TRACEROOT_API_KEY is not set");
   });
 
   it("withholds every file the key can be read out of, not only the one it wrote", async () => {
@@ -419,10 +443,12 @@ describe("telling a suite setup broke from one that was already broken", () => {
 
     expect(baseline).toMatchObject({ ran: true, exitCode: 1 });
     expect(runs).toHaveLength(1);
-    // A plain environment: nothing is instrumented yet, so a credential here
-    // could not reach any SDK and would only make this run differ from the
-    // question being asked.
+    // TraceRoot off, exactly as the check has it. A repository that already
+    // carries TraceRoot exports from its suite the moment a key is reachable,
+    // and a baseline taken with TraceRoot in a different state than the check
+    // is not a baseline for it.
     expect("TRACEROOT_API_KEY" in (runs[0]?.env ?? {})).toBe(false);
+    expect(runs[0]?.env.TRACEROOT_ENABLED).toBe("false");
   });
 
   it("reports no baseline for a command it could not parse or spawn", async () => {
@@ -486,6 +512,7 @@ describe("telling a suite setup broke from one that was already broken", () => {
     // commonly reads an empty string as "configured but blank" and takes a
     // different path than it does for absent.
     expect("TRACEROOT_API_KEY" in (runs[0]?.env ?? {})).toBe(false);
+    expect(runs[0]?.env.TRACEROOT_ENABLED).toBe("false");
     expect(runs[0]?.env.PATH).toBe(`/repo/api/.venv/bin${delimiter}/usr/bin`);
     expect(activated.TRACEROOT_API_KEY).toBe("tr-ambient-shell-value");
 

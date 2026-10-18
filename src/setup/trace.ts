@@ -314,11 +314,10 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
       observedAt: new Date(now()).toISOString(),
       waitedMs: now() - began,
       // Onto the record and not only into the attribution beside it. The
-      // report's verdict and its trace row both read the count off here, and
-      // the checkpoint carries this record rather than the attribution — so a
-      // count that stopped at the attribution left every surface that can
-      // remark on a thin trace with nothing to remark on, and `--resume` with
-      // nothing at all.
+      // report's trace row reads the count off here, and the checkpoint carries
+      // this record rather than the attribution — so a count that stopped at
+      // the attribution left the report with nothing to print, and `--resume`
+      // with nothing at all.
       //
       // Spread away when the response did not report one, because absent and
       // zero are different answers and `TraceVerification` spells the first as

@@ -147,6 +147,19 @@ describe("what the report says the checks established", () => {
     expect(text).not.toContain("Inconclusive.");
   });
 
+  it("does not credit instrumentation the check never saw", () => {
+    // A run that hands the task over edits nothing and takes no baseline, and
+    // its check ran on code setup had not touched. Anything said about
+    // TraceRoot there reads as a verdict on instrumentation nobody had written
+    // yet, so the sentence says nothing about it.
+    const text = renderSetupReport(ctx({ application: verification({ baseline: null }) }), NOW);
+
+    expect(text).toContain(
+      "**Your checks.** Passed. Setup made no edits itself, so this checked your code as it was when the check ran.",
+    );
+    expect(text).not.toMatch(/\*\*Your checks\.\*\*[^\n]*TraceRoot/);
+  });
+
   it("names the reason when there was no command to run", () => {
     const text = renderSetupReport(
       ctx({

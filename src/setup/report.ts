@@ -80,13 +80,24 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     app?.baseline?.ran === true
       ? `Inconclusive. \`${app.command}\` was already failing before anything was instrumented${app.baseline.exitCode === null ? "" : ` (exit ${app.baseline.exitCode})`}, so its result afterwards says nothing about the instrumentation.`
       : `Inconclusive. \`${app?.command}\` does not pass, and nothing ran it before the code was instrumented, so this run cannot say whether the instrumentation is why.`;
+  // What ran, and only then what it shows. The check runs with TraceRoot
+  // switched off, so a pass says the application does not depend on TraceRoot
+  // being configured — when the code it ran was setup's instrumentation. A run
+  // that handed the task over edited nothing and took no baseline, and its
+  // check ran on code setup had not touched, so that sentence says nothing
+  // about TraceRoot at all: any claim about it there would be about
+  // instrumentation the check never saw.
+  const passed =
+    app?.baseline === null
+      ? "Passed. Setup made no edits itself, so this checked your code as it was when the check ran."
+      : "Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured.";
   const checks =
     app === undefined
       ? "Not run."
       : app.outcome === "skipped"
         ? `Not run — ${app.skippedReason ?? "no command to run"}.`
         : app.outcome === "passed"
-          ? "Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured."
+          ? passed
           : app.outcome === "inconclusive"
             ? inconclusive
             : "Did not pass.";
@@ -133,11 +144,11 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     `**Your checks.** ${checks}`,
     "",
     ...(app?.command ? [`Command: \`${app.command}\``, ""] : []),
-    // The count beside the id, for every trace and not only a small one. A
-    // reviewer reading this over a healthy trace gets the number that the
-    // qualified verdict would otherwise be the only way to see, and a reader who
-    // finds no number knows the deployment did not report one rather than being
-    // left to read something into its absence.
+    // The count beside the id: the one thing the report says about how much of
+    // the application the trace shows, and said as a number rather than a
+    // verdict, because whether it is enough depends on the program. A reader
+    // who finds no number knows the deployment did not report one rather than
+    // being left to read something into its absence.
     trace !== undefined
       ? `**First trace.** \`${trace.traceId}\`${trace.spanCount === undefined ? "" : ` — ${spanPhrase(trace.spanCount)}`}\n\n${trace.traceUrl}`
       : "**First trace.** None yet. Run the application, then `traceroot setup --resume`.",

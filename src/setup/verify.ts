@@ -357,15 +357,19 @@ export interface BaselineCheckInput {
  * second as the first, which sends the user looking for a fault in work that
  * was done correctly.
  *
- * No credential: nothing is instrumented yet, so `TRACEROOT_API_KEY` could not
- * reach any SDK even if it were set, and running with one would make this run
- * differ from the question being asked. Not adding one is not enough — an
- * ambient key from the user's shell is taken back out as well. Everything else
- * about the environment is the same, virtualenv included — a baseline that
- * cannot find `pytest` where the real check finds it is comparing two
- * different things. The output is not captured for reporting either: the exit
- * code is the whole of what a baseline is for, and a suite's pre-existing
- * failure output is not setup's to put in front of the user.
+ * TraceRoot switched off, exactly as the check has it: no `TRACEROOT_API_KEY`,
+ * an ambient one from the user's shell included, and `TRACEROOT_ENABLED=false`.
+ * Nothing this run instrumented exists yet, but a repository that already
+ * carries TraceRoot does, and its suite exports through `@observe` the moment a
+ * key is reachable — from the shell, or from a file the project loads for
+ * itself. A baseline must not put traces in the user's project any more than
+ * the check may, and one taken with TraceRoot in a different state than the
+ * check is not a baseline for it. Everything else about the environment is the
+ * same, virtualenv included — a baseline that cannot find `pytest` where the
+ * real check finds it is comparing two different things. The output is not
+ * captured for reporting either: the exit code is the whole of what a baseline
+ * is for, and a suite's pre-existing failure output is not setup's to put in
+ * front of the user.
  *
  * Never throws for a failing command: a non-zero exit is the answer, not an
  * error. A command that cannot be parsed returns an un-run result, which reads
@@ -377,20 +381,12 @@ export async function runBaselineCheck(input: BaselineCheckInput): Promise<Verif
   if (parsed === null) {
     return NOT_RUN;
   }
-  // The same environment the real check gets, minus the credential. A baseline
-  // run in a different environment than the run it is compared against is not a
-  // baseline — and a credential is not part of that environment, however it got
-  // there: a developer's shell exports `TRACEROOT_API_KEY` as a matter of
-  // course, and inheriting it here would silently make this run the thing it
-  // exists to be measured against.
-  //
-  // Copied before the key goes, because `withVenvOnPath` hands back the very
-  // object it was given when there is no virtualenv to add, and deleting in
-  // place would reach into the caller's own environment and take the credential
-  // out of the runs that need it.
-  const env: NodeJS.ProcessEnv = { ...withVenvOnPath(input.parentEnv, input.interpreter) };
-  // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
-  delete env.TRACEROOT_API_KEY;
+  // The same environment the real check gets, built by the same function, so
+  // the two cannot drift apart over whether TraceRoot is on. It copies before
+  // it deletes, which matters here: `withVenvOnPath` hands back the very object
+  // it was given when there is no virtualenv to add, and deleting in place
+  // would reach into the caller's own environment.
+  const env = withTraceRootOff(withVenvOnPath(input.parentEnv, input.interpreter));
   const result = await input.runProcess({
     program: parsed.program,
     args: parsed.args,
