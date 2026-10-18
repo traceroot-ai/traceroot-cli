@@ -13,14 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ExitCode } from "../../src/output.js";
 import type { RunProcessOptions, RunProcessResult } from "../../src/setup/exec.js";
 import { makeSecret } from "../../src/setup/secret.js";
-import {
-  isThinTrace,
-  pollForTrace,
-  spanPhrase,
-  THIN_TRACE_MAX_SPANS,
-  thinTraceFinding,
-  WINDOW_GRACE_MS,
-} from "../../src/setup/trace.js";
+import { pollForTrace, spanPhrase } from "../../src/setup/trace.js";
 import { verifyApplication } from "../../src/setup/verify.js";
 import { fakeRunProcess } from "./helpers.js";
 
@@ -52,54 +45,58 @@ const PROCESS_OK: RunProcessResult = {
   spawnFailed: false,
 };
 
-describe("running the project's own check twice", () => {
-  it("points both runs at the same host, so only the credential differs", async () => {
-    // The parent environment may already carry a TRACEROOT_HOST_URL — a
-    // developer pointed at staging, say. Inheriting it on only one of the two
-    // runs makes the comparison about the host rather than about the key.
+describe("running the project's own check", () => {
+  it("runs it once, with the key absent and TraceRoot switched off", async () => {
+    // Both halves, because each closes a different door. The key is gone even
+    // when the user's shell exported it, and `TRACEROOT_ENABLED=false` holds
+    // against a key the application loads for itself from a file nobody moved
+    // aside: `@observe` starts the SDK on its own whenever a key is reachable,
+    // and a check that ran with one sent a project's whole test suite into the
+    // user's project, where the trace poll took a unit test for the first trace.
     const { run, runs } = fakeRunProcess();
-    await verifyApplication({
+    const parentEnv: NodeJS.ProcessEnv = {
+      PATH: "/usr/bin",
+      TRACEROOT_API_KEY: KEY,
+      TRACEROOT_HOST_URL: "https://stale.example.test",
+    };
+    const result = await verifyApplication({
       command: "npm test",
       cwd: "/repo",
-      parentEnv: { PATH: "/usr/bin", TRACEROOT_HOST_URL: "https://stale.example.test" },
+      parentEnv,
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [],
       interpreter: null,
       runProcess: run,
     });
 
-    expect(runs).toHaveLength(2);
-    const [withKey, withoutKey] = runs;
-    expect(withKey?.env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
-    expect(withoutKey?.env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
-    expect(withKey?.env.TRACEROOT_API_KEY).toBe(KEY);
+    expect(runs).toHaveLength(1);
+    const env = runs[0]?.env ?? {};
     // Deleted, not blanked: absent and empty are different to an SDK.
-    expect("TRACEROOT_API_KEY" in (withoutKey?.env ?? {})).toBe(false);
+    expect("TRACEROOT_API_KEY" in env).toBe(false);
+    expect(env.TRACEROOT_ENABLED).toBe("false");
+    expect(Object.values(env)).not.toContain(KEY);
+    expect(result.verification.run).toEqual({ ran: true, exitCode: 0, durationMs: 1 });
+    expect(result.verification.passed).toBe(true);
+    // The switch is the child's. The CLI's own environment keeps its key.
+    expect(parentEnv.TRACEROOT_API_KEY).toBe(KEY);
   });
 
-  it("reports the window the application ran in, so a trace can be tied to it", async () => {
-    // The only thing that separates this run's trace from the project's other
-    // traffic. Measured around the run that had the credential, because that is
-    // the only one that can have emitted anything.
-    let clock = Date.parse("2026-07-26T12:00:00.000Z");
+  it("reports a failing check with its output", async () => {
     const result = await verifyApplication({
       command: "npm test",
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [],
       interpreter: null,
-      runProcess: fakeRunProcess().run,
-      now: () => {
-        clock += 1000;
-        return clock;
-      },
+      runProcess: fakeRunProcess({
+        results: { npm: { exitCode: 1, output: "1 failed" } },
+      }).run,
     });
 
-    expect(result.ranAt?.from.toISOString()).toBe("2026-07-26T12:00:01.000Z");
-    expect(result.ranAt?.to.toISOString()).toBe("2026-07-26T12:00:02.000Z");
+    expect(result.verification.passed).toBe(false);
+    expect(result.verification.run).toEqual({ ran: true, exitCode: 1, durationMs: 1 });
+    expect(result.failure).toEqual({ output: "1 failed" });
   });
 });
 
@@ -136,7 +133,7 @@ describe("proving the application runs without the credential", () => {
     // Deleting TRACEROOT_API_KEY from the child environment is not enough. The
     // instrumentation task tells the agent to add `load_dotenv(".env.traceroot")`
     // to the entry point, so with the file still on disk the credential-free run
-    // is a second run *with* the credential and the check passes for free.
+    // is a run *with* the credential and the check passes for free.
     const { file } = repoWithCredentialFile();
     const { run, fileWasThere } = appThatLoadsTheCredentialFile(file);
 
@@ -145,18 +142,15 @@ describe("proving the application runs without the credential", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file],
       interpreter: null,
       runProcess: run,
     });
 
     expect(result.verification.passed).toBe(false);
-    expect(result.failure?.phase).toBe("without");
     expect(result.failure?.output).toContain("TRACEROOT_API_KEY is not set");
-    // In place for the run that is supposed to have the key, gone for the run
-    // that is supposed not to.
-    expect(fileWasThere).toEqual([true, false]);
+    // Gone for the only run there is.
+    expect(fileWasThere).toEqual([false]);
     expect(result.withheld).toEqual([file]);
   });
 
@@ -177,15 +171,13 @@ describe("proving the application runs without the credential", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file, projectEnv],
       interpreter: null,
       runProcess: run,
     });
 
     expect(result.verification.passed).toBe(false);
-    expect(result.failure?.phase).toBe("without");
-    expect(fileWasThere).toEqual([true, false]);
+    expect(fileWasThere).toEqual([false]);
     expect(result.withheld).toEqual([file, projectEnv]);
     // And the project's file comes back with everything else that was in it.
     expect(readFileSync(projectEnv, "utf8")).toContain("DATABASE_URL=postgres:///app");
@@ -207,7 +199,6 @@ describe("proving the application runs without the credential", () => {
         cwd: "/repo",
         parentEnv: {},
         credential: makeSecret(KEY),
-        host: "https://api.example.test",
         credentialFiles: [file],
         interpreter: null,
         runProcess: fakeRunProcess().run,
@@ -227,7 +218,6 @@ describe("proving the application runs without the credential", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file],
       interpreter: null,
       runProcess: run,
@@ -242,13 +232,8 @@ describe("proving the application runs without the credential", () => {
     // Losing a user's credential file because verification crashed would be a
     // worse bug than the one the move exists to fix.
     const { root, file } = repoWithCredentialFile();
-    let calls = 0;
     const run = async (): Promise<RunProcessResult> => {
-      calls += 1;
-      if (calls === 2) {
-        throw new Error("spawn exploded");
-      }
-      return PROCESS_OK;
+      throw new Error("spawn exploded");
     };
 
     await expect(
@@ -257,7 +242,6 @@ describe("proving the application runs without the credential", () => {
         cwd: "/repo",
         parentEnv: {},
         credential: makeSecret(KEY),
-        host: "https://api.example.test",
         credentialFiles: [file],
         interpreter: null,
         runProcess: run,
@@ -282,13 +266,9 @@ describe("proving the application runs without the credential", () => {
     const { root, file } = repoWithCredentialFile();
     const projectEnv = join(root, ".env");
     writeFileSync(projectEnv, `DATABASE_URL=postgres:///app\nTRACEROOT_API_KEY=${KEY}\n`, "utf8");
-    let calls = 0;
+    // Both files are parked while the check runs.
     const run = async (): Promise<RunProcessResult> => {
-      calls += 1;
-      // The second run is the credential-free one, with both files parked.
-      if (calls === 2) {
-        mkdirSync(file);
-      }
+      mkdirSync(file);
       return PROCESS_OK;
     };
 
@@ -297,7 +277,6 @@ describe("proving the application runs without the credential", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file, projectEnv],
       interpreter: null,
       runProcess: run,
@@ -330,14 +309,9 @@ describe("proving the application runs without the credential", () => {
     const { root, file } = repoWithCredentialFile();
     const projectEnv = join(root, ".env");
     writeFileSync(projectEnv, `TRACEROOT_API_KEY=${KEY}\n`, "utf8");
-    let calls = 0;
     const run = async (): Promise<RunProcessResult> => {
-      calls += 1;
-      if (calls === 2) {
-        mkdirSync(file);
-        throw new Error("spawn exploded");
-      }
-      return PROCESS_OK;
+      mkdirSync(file);
+      throw new Error("spawn exploded");
     };
 
     const failure = await verifyApplication({
@@ -345,7 +319,6 @@ describe("proving the application runs without the credential", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file, projectEnv],
       interpreter: null,
       runProcess: run,
@@ -371,7 +344,6 @@ describe("proving the application runs without the credential", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [],
       interpreter: null,
       runProcess: fakeRunProcess().run,
@@ -389,7 +361,6 @@ describe("proving the application runs without the credential", () => {
       cwd: "/repo",
       parentEnv: {},
       credential: makeSecret(KEY),
-      host: "https://api.example.test",
       credentialFiles: [file],
       interpreter: null,
       runProcess: fakeRunProcess().run,
@@ -414,7 +385,6 @@ describe("polling for the first trace", () => {
         },
       },
       startedAt: new Date("2026-07-26T12:00:00.000Z"),
-      ranAt: null,
       timeoutMs: 0,
       sleep: async () => undefined,
       now: () => 0,
@@ -440,7 +410,6 @@ describe("polling for the first trace", () => {
         },
       },
       startedAt: new Date("2026-07-26T12:00:00.000Z"),
-      ranAt: null,
       timeoutMs: 5_000,
       sleep: async () => undefined,
       now: () => {
@@ -463,7 +432,6 @@ describe("polling for the first trace", () => {
     await pollForTrace({
       client: { listTraces: async () => ({ data: [], meta: { limit: 0 } }) as never },
       startedAt: new Date("2026-07-26T12:00:00.000Z"),
-      ranAt: null,
       timeoutMs: 20_000,
       sleep: async (ms) => {
         sleeps.push(ms);
@@ -478,147 +446,80 @@ describe("polling for the first trace", () => {
 
 describe("choosing which trace the run produced", () => {
   const STARTED = new Date("2026-07-26T12:00:00.000Z");
-  /** The application ran for ten seconds, five minutes into the setup run. */
-  const RAN_AT = {
-    from: new Date("2026-07-26T12:05:00.000Z"),
-    to: new Date("2026-07-26T12:05:10.000Z"),
-  };
 
   /** A page as the backend returns it: newest first, timestamps without a zone. */
-  function page(rows: Array<{ id: string; at: string; name?: string }>) {
+  function page(rows: Array<{ id: string; at: string; name?: string; spans?: number }>) {
     return {
       data: rows.map((r) => ({
         trace_id: r.id,
         trace_url: `https://app.example.test/trace/${r.id}`,
         trace_start_time: r.at,
         name: r.name ?? `${r.id}-root`,
+        ...(r.spans === undefined ? {} : { span_count: r.spans }),
       })),
       meta: { limit: rows.length },
     } as never;
   }
 
-  it("takes the trace the application's own run produced, not the project's other traffic", async () => {
-    // The hole this closes: with only a start-time bound, a project that
-    // already receives traffic — a second service, a teammate, staging — hands
-    // the poll somebody else's trace, and the first poll succeeds even when the
-    // instrumentation did nothing. `chooseProject` auto-selects when the user
-    // has one project, so this is the ordinary case, not an exotic one.
+  it("takes the earliest trace since setup started, ahead of a burst that lands after it", async () => {
+    // The run this replays. The agent ran the application, which sent one
+    // trace of twenty-one spans; nineteen seconds later the project's tests
+    // sent six more, the earliest a one-span unit test of a single tool. The
+    // poll used to search the tests' window first and opened that unit test as
+    // "your first trace", with the application's own trace outside the window.
     const result = await pollForTrace({
       client: {
         listTraces: async () =>
           page([
-            { id: "ours", at: "2026-07-26T12:05:05.000000" },
-            { id: "a-teammate", at: "2026-07-26T12:00:30.000000" },
+            { id: "test-demo-run", at: "2026-07-26T12:00:40.400000", name: "demo.run", spans: 3 },
+            { id: "test-agent-run", at: "2026-07-26T12:00:40.300000", name: "agent.run", spans: 2 },
+            {
+              id: "test-tool",
+              at: "2026-07-26T12:00:40.200000",
+              name: "agent.execute_tool",
+              spans: 1,
+            },
+            { id: "test-calculate", at: "2026-07-26T12:00:40.100000", name: "calculate", spans: 1 },
+            { id: "app", at: "2026-07-26T12:00:21.000000", name: "demo.run", spans: 21 },
           ]),
       },
       startedAt: STARTED,
-      ranAt: RAN_AT,
       timeoutMs: 5_000,
       sleep: async () => undefined,
       now: () => 0,
     });
 
-    // The teammate's trace is both earlier and still inside the setup run, so
-    // the old poll chose it.
-    expect(result.found && result.trace.traceId).toBe("ours");
-    expect(result.found && result.attribution.basis).toBe("application-run");
-    expect(result.found && result.attribution.candidates).toBe(1);
+    expect(result.found && result.trace.traceId).toBe("app");
+    expect(result.found && result.attribution.spanCount).toBe(21);
+    // The burst is still counted: it is traffic in the same frame, and the count
+    // is what lets a user see there was a choice.
+    expect(result.found && result.attribution.candidates).toBe(5);
   });
 
-  it("sends the application's window to the endpoint as both bounds", async () => {
-    const seen: Array<{ startAfter?: string; endBefore?: string }> = [];
+  it("bounds the search by the start of setup and nothing else", async () => {
+    // There is no narrower window to search first. The only bound is the one
+    // that keeps traces from before setup out.
+    const seen: Array<Record<string, unknown>> = [];
     await pollForTrace({
       client: {
         listTraces: async (params) => {
-          seen.push(params);
+          seen.push({ ...params });
           return page([]);
         },
       },
       startedAt: STARTED,
-      ranAt: RAN_AT,
       timeoutMs: 0,
       sleep: async () => undefined,
       now: () => 0,
     });
 
-    expect(seen[0]?.startAfter).toBe("2026-07-26T12:05:00.000Z");
-    // `end_before` is exclusive, so the run's last millisecond stays in frame.
-    expect(seen[0]?.endBefore).toBe("2026-07-26T12:05:10.001Z");
+    expect(seen).toEqual([{ limit: 200, startAfter: "2026-07-26T12:00:00.000Z" }]);
   });
 
-  it("labels a trace it can only place inside the setup run, and waits for the run's window first", async () => {
-    // Reported rather than withheld — the user may well recognise it — but
-    // reported for what it is, and not before the run's own window has had the
-    // time a trace of its own would need to arrive. The old poll returned this
-    // on its first look and called it "your first trace".
-    //
-    // What it waits is that grace and not the trace budget. A window that
-    // closed empty stays empty when the application was never run inside it,
-    // which is what a check that exercises instrumented code without reaching
-    // the entry point leaves behind — and the whole budget spent waiting for it
-    // is two minutes of a spinner over a trace already in the list.
-    const TIMEOUT_MS = 120_000;
-    let clock = RAN_AT.to.getTime();
-    const result = await pollForTrace({
-      client: {
-        listTraces: async () => page([{ id: "a-teammate", at: "2026-07-26T12:00:30.000000" }]),
-      },
-      startedAt: STARTED,
-      ranAt: RAN_AT,
-      timeoutMs: TIMEOUT_MS,
-      sleep: async (ms) => {
-        clock += ms;
-      },
-      now: () => clock,
-    });
-
-    expect(result.found && result.trace.traceId).toBe("a-teammate");
-    expect(result.found && result.attribution.basis).toBe("setup-window");
-    // Two kinds of bound, because they catch different mistakes.
-    //
-    // The first pair is derived from the grace, so tuning the poll schedule
-    // cannot leave this test asserting a number the code no longer uses: the
-    // lower one proves the wider look was not taken immediately, which would
-    // defeat the point of having a window at all, and the upper one proves it
-    // followed the grace promptly rather than drifting past it.
-    expect(result.found && result.trace.waitedMs).toBeGreaterThanOrEqual(WINDOW_GRACE_MS);
-    expect(result.found && result.trace.waitedMs).toBeLessThan(WINDOW_GRACE_MS * 2);
-    // The second states the property a user would describe — it did not spend
-    // the wait it was given — against this run's own timeout rather than
-    // against the grace. Defence in depth rather than a distinct trap: a grace
-    // wrong in either direction trips one of the pair above first. It is here
-    // so the test still reads as pinning the user-visible outcome, and not only
-    // a relationship to an internal constant.
-    expect(result.found && result.trace.waitedMs).toBeLessThan(TIMEOUT_MS / 2);
-  });
-
-  it("keeps a trace that started after the window out of the run's own frame", async () => {
-    // The timestamps carry six fractional digits and `Date.parse` keeps three,
-    // so a trace four hundred microseconds after the application stopped parses
-    // as having started exactly when it stopped — and the window's upper bound
-    // is inclusive, because a trace in the run's last millisecond is the run's.
-    // Dropped microseconds therefore do not blur the edge of the window, they
-    // move traces across it, and this one belongs on the far side.
-    const result = await pollForTrace({
-      client: {
-        listTraces: async () => page([{ id: "just-after", at: "2026-07-26T12:05:10.000400" }]),
-      },
-      startedAt: STARTED,
-      ranAt: RAN_AT,
-      timeoutMs: 0,
-      sleep: async () => undefined,
-      now: () => 0,
-    });
-
-    // Still worth showing, and shown for what it is rather than as this run's.
-    expect(result.found && result.trace.traceId).toBe("just-after");
-    expect(result.found && result.attribution.basis).toBe("setup-window");
-  });
-
-  it("counts the other traffic that landed in the same window", async () => {
+  it("counts the other traffic that landed since setup started", async () => {
     // Nothing in the list response identifies the process that emitted a trace,
-    // so a window shared with other traffic is a choice between candidates. The
-    // count and the trace's own name are what let a user judge the link.
+    // so a project with other traffic is a choice between candidates. The count
+    // and the trace's own name are what let a user judge the link.
     const result = await pollForTrace({
       client: {
         listTraces: async () =>
@@ -628,7 +529,6 @@ describe("choosing which trace the run produced", () => {
           ]),
       },
       startedAt: STARTED,
-      ranAt: RAN_AT,
       timeoutMs: 5_000,
       sleep: async () => undefined,
       now: () => 0,
@@ -650,7 +550,6 @@ describe("choosing which trace the run produced", () => {
     const result = await pollForTrace({
       client: { listTraces: async () => page(rows) },
       startedAt: STARTED,
-      ranAt: RAN_AT,
       timeoutMs: 5_000,
       sleep: async () => undefined,
       now: () => 0,
@@ -672,7 +571,6 @@ describe("choosing which trace the run produced", () => {
           ]),
       },
       startedAt: STARTED,
-      ranAt: null,
       timeoutMs: 5_000,
       sleep: async () => undefined,
       now: () => 0,
@@ -696,7 +594,6 @@ describe("choosing which trace the run produced", () => {
           ]),
       },
       startedAt: STARTED,
-      ranAt: null,
       timeoutMs: 5_000,
       sleep: async () => undefined,
       now: () => 0,
@@ -710,15 +607,11 @@ describe("choosing which trace the run produced", () => {
 describe("how much of the application the trace covers", () => {
   const STARTED = new Date("2026-07-26T12:00:00.000Z");
 
-  /**
-   * The poll over a run with no window to narrow to, which is the shape that
-   * leaves the span count as the only thing under test here.
-   */
+  /** The poll over a page holding one row, which leaves the span count as the only thing under test. */
   function look(rows: unknown[]) {
     return pollForTrace({
       client: { listTraces: async () => ({ data: rows, meta: { limit: rows.length } }) as never },
       startedAt: STARTED,
-      ranAt: null,
       timeoutMs: 0,
       sleep: async () => undefined,
       now: () => 0,
@@ -741,31 +634,20 @@ describe("how much of the application the trace covers", () => {
   it("carries the count the response reported rather than discarding it", async () => {
     // The response has always said how many spans the trace holds. The poll
     // read four fields out of a row of seventeen and dropped this one, so a run
-    // could report a trace of a single function as a verified first trace and
-    // have nothing in hand to say otherwise with.
+    // had nothing in hand to say how much of the application its trace showed.
     const result = await look([row(7)]);
 
     expect(result.found && result.attribution.spanCount).toBe(7);
-    expect(isThinTrace(result.found ? result.attribution.spanCount : null)).toBe(false);
-  });
-
-  it("says a one-span trace is thin, and reports the count that makes it so", async () => {
-    const result = await look([row(1)]);
-
-    expect(result.found && result.attribution.spanCount).toBe(1);
-    expect(isThinTrace(result.found ? result.attribution.spanCount : null)).toBe(true);
   });
 
   it("reports no count rather than no spans when the response omits the field", async () => {
     // The distinction the null exists for. A deployment that does not carry
-    // `span_count` has told this process nothing, and reading that silence as a
-    // trace with nothing in it would make the run say the opposite of the truth
-    // about the one case it is meant to catch.
+    // `span_count` has told this process nothing, and printing that silence as
+    // a trace with nothing in it would say the opposite of the truth.
     const result = await look([row(undefined)]);
 
     expect(result.found).toBe(true);
     expect(result.found && result.attribution.spanCount).toBeNull();
-    expect(isThinTrace(result.found ? result.attribution.spanCount : null)).toBe(false);
   });
 
   it("refuses a count that is not a whole number of spans", async () => {
@@ -779,31 +661,12 @@ describe("how much of the application the trace covers", () => {
     }
   });
 
-  it("puts the threshold at one span, which needs nothing known about the program", async () => {
-    // Bounds derived from the constant rather than written out, so moving the
-    // threshold moves this test with it instead of leaving it asserting a
-    // number the code no longer uses. The absolute assertion is what stops the
-    // relationship from holding vacuously at some other value.
-    expect(THIN_TRACE_MAX_SPANS).toBe(1);
-    expect(isThinTrace(THIN_TRACE_MAX_SPANS)).toBe(true);
-    expect(isThinTrace(THIN_TRACE_MAX_SPANS + 1)).toBe(false);
-    // Unknown is not small, and neither spelling of unknown is.
-    expect(isThinTrace(null)).toBe(false);
-    expect(isThinTrace(undefined)).toBe(false);
-  });
-
   it("writes the count as prose, so one span does not read as '1 spans'", () => {
-    // These strings reach a user: the report's verdict, the report's trace row
-    // and the line the poll closes on all print them, which is why there is one
-    // of each rather than three.
+    // These strings reach a user: the report's trace row and the line the poll
+    // closes on both print them, which is why there is one of each rather than
+    // two.
     expect(spanPhrase(1)).toBe("a single span");
     expect(spanPhrase(7)).toBe("7 spans");
     expect(spanPhrase(0)).toBe("no spans");
-    expect(thinTraceFinding(1)).toBe(
-      "holds a single span: one instrumented function ran, and nothing instrumented ran inside it",
-    );
-    // No claim about the application in it, in either branch. What the run
-    // knows is the count; what the program's shape is, it does not.
-    expect(thinTraceFinding(0)).toBe("holds no spans: the response reports nothing in it at all");
   });
 });
