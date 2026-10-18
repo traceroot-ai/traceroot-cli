@@ -194,7 +194,10 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     // exports a trace of its own. `observe(options, fn, ...args)` invokes rather
     // than wraps, auto-initializing at call time when `TRACEROOT_API_KEY` is
     // set, so there is no module-scope wrapper to arm either — with the load
-    // inside the function, an imported module exports nothing. And the claim
+    // inside the function, importing the module loads no credential. It can
+    // still export, whenever the key reaches the test process some other way,
+    // which is why the task runs the suite with `TRACEROOT_ENABLED=false`
+    // rather than trusting the placement to keep it quiet. And the claim
     // that `initialize()` must precede the provider's import was never true of
     // this SDK: the instrumentors patch the provider's class methods through
     // `wrapt`, which does not care whether it was imported first. What it has to

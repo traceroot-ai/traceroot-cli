@@ -204,6 +204,11 @@ function isOutcome(value: unknown): value is VerificationOutcome {
  * of the user's test suite. Derived instead: `passed` and `skippedReason`
  * already distinguish the three outcomes that existed, and `inconclusive` is
  * not among them, so nothing can be mistaken for it.
+ *
+ * `run` is required, and has no such fallback. It replaced a pair of runs, one
+ * of them with the key, before setup was ever released; a checkpoint that still
+ * carries the pair was written by a build nobody shipped, and running its check
+ * again is the honest answer to it.
  */
 function readApplication(value: unknown): NonNullable<SetupCheckpoint["application"]> | null {
   if (!isApplication(value)) {

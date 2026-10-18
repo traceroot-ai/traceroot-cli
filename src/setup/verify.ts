@@ -10,10 +10,8 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 /**
  * The one variable the credential-free run does without.
  *
- * Named here because it is now taken out of a file as well as out of the child
- * environment, and the two have to be the same variable. `TRACEROOT_HOST_URL`
- * is deliberately not in this list: the environment sets it for both runs so
- * that they differ by the credential and nothing else.
+ * Named here because it is taken out of a file as well as out of the child
+ * environment, and the two have to be the same variable.
  */
 const KEY_ENV = "TRACEROOT_API_KEY";
 
@@ -268,8 +266,8 @@ function unpark(entry: Parked | null): void {
  */
 function withTraceRootOff(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const off: NodeJS.ProcessEnv = { ...env, TRACEROOT_ENABLED: "false" };
-  // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
-  delete off.TRACEROOT_API_KEY;
+  // Deleted, not blanked: absent and empty are different to an SDK.
+  delete off[KEY_ENV];
   return off;
 }
 
