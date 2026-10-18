@@ -586,7 +586,34 @@ export const runProcess: RunProcess = (options) =>
       child.stdin?.end(options.stdin);
     }
 
-    child.on("error", () => finish(127, true));
+    child.on("error", () => {
+      if (!hasProcess()) {
+        // A failure to start. `spawn` reports EACCES, EAGAIN, EMFILE, ENFILE
+        // and ENOENT on this event rather than throwing, and the child it hands
+        // back for those never gets a pid — which is what tells them apart from
+        // everything below.
+        finish(127, true);
+        return;
+      }
+      // This child started, so whatever went wrong is not a failure to start.
+      // Node emits `error` for a `kill` the kernel refused as well — EPERM for
+      // a child that re-execed something setuid, say — and the timeout and
+      // abort paths here both kill. Recording that as a spawn failure told the
+      // user their command was not installed while it was still running.
+      if (exited) {
+        // `exit` has already fired and the real status is on its way out
+        // through the drain path below. Settling here would replace it with a
+        // failure that did not happen.
+        return;
+      }
+      // Still running, and now known to be unsignallable: `exit` is the only
+      // other way out of this promise, so settling is what keeps a child that
+      // cannot be stopped from hanging the run. `timedOut` still says why the
+      // signal was sent, and `spawnFailed` stays false, so no caller reports a
+      // command that never ran. The escalation to SIGKILL is already queued and
+      // may still land.
+      finish(1);
+    });
     child.on("exit", (code, signalName) => {
       exited = true;
       const status = statusFor(code, signalName);
