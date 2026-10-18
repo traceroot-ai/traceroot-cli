@@ -438,6 +438,50 @@ describe("SDK version resolution", () => {
     expect(resolved.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
+  it("falls back to a version each registry really has, for every package setup installs", async () => {
+    // The bundled pins said 0.0.4, which npm never had for either TypeScript
+    // package and which is alpha-era on PyPI, so a run that could not reach the
+    // registry handed the agent an install that could not succeed. The floor is
+    // what each registry served when the pins were last set; a bump passes, a
+    // placeholder or a missing entry does not.
+    const floor: Record<string, string> = {
+      traceroot: "0.3.0",
+      "@traceroot-ai/traceroot": "0.5.0",
+      "@traceroot-ai/mastra": "0.1.1",
+    };
+    const service: DetectedService = {
+      path: ".",
+      language: "typescript",
+      framework: null,
+      entryPoint: null,
+      packageManager: "npm",
+      testCommand: null,
+      evidence: [],
+    };
+    const packages = [
+      sdkPackageFor({ ...service, language: "python", packageManager: "pip" }),
+      sdkPackageFor(service),
+      sdkPackageFor({ ...service, framework: "mastra" }),
+    ];
+    expect(packages.map((pkg) => pkg.name).sort()).toEqual(Object.keys(floor).sort());
+
+    for (const pkg of packages) {
+      const resolved = await resolveSdkVersion(pkg, {
+        fetchImpl: async () => {
+          throw new Error("offline");
+        },
+      });
+      expect(resolved.source).toBe("bundled");
+      // A release, not a pre-release and not "latest".
+      expect(resolved.version).toMatch(/^\d+\.\d+\.\d+$/);
+      const min = floor[pkg.name] ?? "";
+      expect(
+        resolved.version.localeCompare(min, undefined, { numeric: true }),
+        `${pkg.name} falls back to ${resolved.version}, below ${min}`,
+      ).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   it("pins the exact version in the install command", () => {
     const service: DetectedService = {
       path: ".",
