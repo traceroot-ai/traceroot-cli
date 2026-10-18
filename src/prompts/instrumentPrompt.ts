@@ -83,8 +83,8 @@ ${facts}
 7. **Cover the functions this repository's own code calls.** Where this application runs its own tool loop — reads the tool calls out of the model's reply and dispatches to its own functions — each of those functions gets a span, and so does the step that dispatches between them. Where a tool is only registered, passed in a \`tools=[…]\` list or declared with the framework's own decorator, the framework owns the call and its integration already emits a span per execution, so decorating it reports one call as two. The question is answerable from the source: does a line in this repository call this function? **If you cannot tell, leave it undecorated** — a span you left out reads as an absence in the trace, which is recoverable, while a doubled span misreports what the application did. Do not refactor unrelated code.
 8. **Never print or hardcode API keys.** Do not write the literal key into source or echo it back.
 9. **Read credentials from the environment/config** (\`TRACEROOT_API_KEY\`, optional \`TRACEROOT_HOST_URL\`) — never from inline literals.
-10. **Run the existing tests or a smoke check** to confirm nothing broke.
-11. **Verify with the TraceRoot CLI** after running the app/tests:
+10. **Run the existing tests or a smoke check with \`TRACEROOT_ENABLED=false\`** in front of the command, to confirm nothing broke without sending the tests' traces to the project.
+11. **Verify with the TraceRoot CLI** after running the app itself — the one run here with TraceRoot on:
     - \`traceroot status\`
     - \`traceroot traces list --limit 5\`
     - \`traceroot traces get <trace-id>\`
