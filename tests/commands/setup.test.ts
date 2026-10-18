@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { type Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_TIMEOUT_MS } from "../../src/api/client.js";
 import { buildProgram } from "../../src/cli.js";
 import { runDoctor } from "../../src/commands/doctor.js";
 import {
@@ -83,7 +84,7 @@ afterEach(() => {
 });
 
 function ctxWith(json = false): Context {
-  return { auth: authWithKey(), json };
+  return { auth: authWithKey(), json, timeoutMs: DEFAULT_TIMEOUT_MS };
 }
 
 describe("canPrompt", () => {
@@ -413,7 +414,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       }),
     });
@@ -448,7 +449,7 @@ describe("runSetup", () => {
       canPrompt: true,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [] }),
+        traces: [],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
         skipTraceWait: true,
       }),
@@ -485,7 +486,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey("tr-secret-key-for-json-test"),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       }),
     });
@@ -519,7 +520,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       }),
     });
@@ -535,7 +536,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: process2.run,
       }),
     });
@@ -559,7 +560,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       }),
     });
@@ -593,7 +594,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       }),
     });
@@ -622,7 +623,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       }),
     });
@@ -661,7 +662,7 @@ describe("runSetup", () => {
       canPrompt: false,
       setupDeps: makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       }),
     });
@@ -706,7 +707,7 @@ describe("runSetup", () => {
     const asked: string[] = [];
     const setupDeps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const inner = setupDeps.prompt;
@@ -762,7 +763,7 @@ describe("runSetup", () => {
       };
       const setupDeps = makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       });
       // The production prompt, against a terminal this test types into.
@@ -1005,7 +1006,7 @@ describe("the hosts a --handoff run resolves", () => {
       setupDeps: (auth) =>
         makeDeps({
           auth,
-          client: fakeApiClient({ traces: [traceRow()] }),
+          traces: [traceRow()],
           setupApi: fakeSetupApi({
             listProjects: async () => [
               { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -1034,6 +1035,90 @@ describe("the hosts a --handoff run resolves", () => {
     expect(redeemedAt).toEqual([DEFAULT_HOST]);
     const warning = `warning: ignored TRACEROOT_HOST_URL in ./.env for --handoff; ${REMEDY}`;
     expect(plain(err.data).split(warning)).toHaveLength(2);
+  });
+});
+
+describe("a hand-over nothing has acted on yet", () => {
+  async function handover(
+    flags: Parameters<typeof defaultFlags>[0],
+    json = false,
+  ): Promise<{ result: Awaited<ReturnType<typeof runSetup>>; out: StringSink; err: StringSink }> {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, out, err } = makeWriters();
+    const result = await runSetup({
+      ctx: ctxWith(json),
+      cwd: dir,
+      flags: defaultFlags(flags),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [],
+        runProcess: fakeRunProcess().run,
+      }),
+    });
+    return { result, out, err };
+  }
+
+  it("ends the task-file route normally, saying once what is outstanding", async () => {
+    // It used to stop with exit 14 under a red `error:` block, which read as a
+    // crash over the route the user had just picked.
+    const { result, err } = await handover({ agent: "claude", instrument: false });
+    const said = plain(err.data);
+
+    expect(result.ok).toBe(true);
+    expect(setupFailureExit(result, false)).toEqual({ kind: "none" });
+    expect(said).toContain(
+      "│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Run .traceroot/prompts/setup-instrument.md in Claude Code.\n",
+    );
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+    expect(said).not.toContain("Setup stopped at");
+    expect(said).not.toContain("▲  Wait for the first trace");
+    // Twice: the hand-over's own instruction, and the closing line.
+    expect(said.split("setup --resume").length - 1).toBe(2);
+  });
+
+  it("points the manual route at the printed steps instead", async () => {
+    const { result, err } = await handover({ agent: "claude", method: "manual" });
+    const said = plain(err.data);
+
+    expect(result.ok).toBe(true);
+    expect(said).toContain(
+      "│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Apply the steps above.\n",
+    );
+    expect(said).not.toContain(".traceroot/prompts");
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+    expect(said.split("setup --resume").length - 1).toBe(2);
+  });
+
+  it("reports it under --json as a run that ended without a trace", async () => {
+    const { result, out } = await handover({ agent: "claude", instrument: false }, true);
+    const events = out.data
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const settled = (stage: string) =>
+      events.find((e) => e.event === "stage" && e.stage === stage && e.status !== "start");
+
+    expect(events.at(-1)).toMatchObject({
+      event: "result",
+      ok: true,
+      data: { trace_id: null, trace_url: null },
+    });
+    expect(settled("instrument")).toMatchObject({ data: { mode: "prompt-only" } });
+    expect(settled("verify_trace")?.status).toBe("skipped");
+    expect(setupFailureExit(result, true)).toEqual({ kind: "none" });
+  });
+
+  it("is offered as unfinished work to the next run, not as a finished one", async () => {
+    await handover({ agent: "claude", instrument: false });
+    const found = readCheckpoint(dir);
+
+    expect(found?.completedStages).toContain("complete");
+    expect(found && resumeQuestion(found).message).toBe(
+      "A previous setup for this service did not finish. It is waiting for the instrumentation it handed over. Continue from there?",
+    );
   });
 });
 
@@ -1076,7 +1161,7 @@ describe("doctor reports setup state", () => {
     const out = new StringSink();
     const err = new StringSink();
     const report = await runDoctor({
-      ctx: { auth: auth(), json: false },
+      ctx: { auth: auth(), json: false, timeoutMs: DEFAULT_TIMEOUT_MS },
       cwd: dir,
       env: {},
       configPath: join(dir, ".traceroot", "config.json"),
@@ -1103,7 +1188,7 @@ describe("doctor reports setup state", () => {
     const out = new StringSink();
     const err = new StringSink();
     const report = await runDoctor({
-      ctx: { auth: auth(), json: false },
+      ctx: { auth: auth(), json: false, timeoutMs: DEFAULT_TIMEOUT_MS },
       cwd: dir,
       env: {},
       configPath: join(dir, ".traceroot", "config.json"),
@@ -1136,7 +1221,7 @@ describe("doctor reports setup state", () => {
 
     const out = new StringSink();
     const report = await runDoctor({
-      ctx: { auth: auth(), json: false },
+      ctx: { auth: auth(), json: false, timeoutMs: DEFAULT_TIMEOUT_MS },
       cwd: dir,
       env: {},
       configPath: join(dir, ".traceroot", "config.json"),
@@ -1154,7 +1239,7 @@ describe("doctor reports setup state", () => {
 
   it("says setup has not run rather than inventing a failure", async () => {
     const report = await runDoctor({
-      ctx: { auth: auth(), json: false },
+      ctx: { auth: auth(), json: false, timeoutMs: DEFAULT_TIMEOUT_MS },
       cwd: dir,
       env: {},
       configPath: join(dir, ".traceroot", "config.json"),
@@ -1171,7 +1256,7 @@ describe("doctor reports setup state", () => {
   it("omits the Setup section entirely for a plain doctor run with no checkpoint", async () => {
     mkdirSync(join(dir, ".traceroot"), { recursive: true });
     const report = await runDoctor({
-      ctx: { auth: auth(), json: false },
+      ctx: { auth: auth(), json: false, timeoutMs: DEFAULT_TIMEOUT_MS },
       cwd: dir,
       env: {},
       configPath: join(dir, ".traceroot", "config.json"),
@@ -1185,7 +1270,7 @@ describe("doctor reports setup state", () => {
   function doctorFor(checkpoint: ReturnType<typeof newCheckpoint>) {
     writeCheckpoint(dir, checkpoint);
     return runDoctor({
-      ctx: { auth: auth(), json: false },
+      ctx: { auth: auth(), json: false, timeoutMs: DEFAULT_TIMEOUT_MS },
       cwd: dir,
       env: {},
       configPath: join(dir, ".traceroot", "config.json"),
@@ -1245,12 +1330,10 @@ describe("finding a previous, unfinished run", () => {
     let polls = 0;
     const setupDeps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({
-        traces: () => {
-          polls += 1;
-          return [traceRow()];
-        },
-      }),
+      traces: () => {
+        polls += 1;
+        return [traceRow()];
+      },
     });
     const inner = setupDeps.select;
     setupDeps.select = async (input) => {
@@ -1293,16 +1376,23 @@ describe("finding a previous, unfinished run", () => {
     writeCheckpoint(dir, checkpoint);
 
     const { writers, err } = makeWriters();
-    await runSetup({
+    const result = await runSetup({
       ctx: ctxWith(),
       cwd: dir,
-      flags: defaultFlags({ agent: "claude", manual: true }),
+      // `--manual`, which reaches the run as this method. It was spelled
+      // `manual: true` here, a flag `SetupFlags` has never had, so the run took
+      // the default method instead and nothing noticed.
+      flags: defaultFlags({ agent: "claude", method: "manual" }),
       writers,
       canPrompt: false,
-      setupDeps: makeDeps({ auth: authWithKey(), client: fakeApiClient({ traces: [traceRow()] }) }),
+      setupDeps: makeDeps({ auth: authWithKey(), traces: [traceRow()] }),
     });
 
     expect(err.data).toContain("pass --resume to continue it");
+    // And it did not resume: the run is on a checkpoint of its own, not the one
+    // it found. The message alone would pass for a run that printed it and then
+    // carried on from the old checkpoint anyway.
+    expect(result.checkpoint.startedAt).not.toBe(checkpoint.startedAt);
   });
 });
 
@@ -1315,7 +1405,7 @@ describe("a failed run under --json", () => {
   }> {
     const { writers, out, err } = makeWriters();
     const result = await runSetup({
-      ctx: { auth: authEmpty(), json },
+      ctx: { auth: authEmpty(), json, timeoutMs: DEFAULT_TIMEOUT_MS },
       cwd: dir,
       flags: defaultFlags({ agent: "claude" }),
       writers,
@@ -1350,7 +1440,7 @@ describe("a failed run under --json", () => {
 
     const envelopes = errorEnvelopes(out, err);
     expect(envelopes).toHaveLength(1);
-    expect((envelopes[0].error as { code: string }).code).toBe("NOT_AUTHENTICATED");
+    expect((envelopes[0]?.error as { code: string }).code).toBe("NOT_AUTHENTICATED");
     // The exit status still travels, so a script's `$?` is unchanged.
     expect(failure).toEqual({ kind: "exit", code: result.error?.exitCode });
   });
@@ -1585,7 +1675,7 @@ describe("the question asked about a previous run", () => {
     expect(question.options.map((o) => o.label)).toEqual(["Leave it as it is", "Run setup again"]);
     // Keeping the finished run is the default: starting over mints a second API
     // key and re-runs an agent over code it has already edited.
-    expect(question.options[0].value).toBe("resume");
+    expect(question.options[0]?.value).toBe("resume");
   });
 
   it("asks the finished question for real, on a checkpoint a completed run wrote", async () => {
@@ -1594,7 +1684,7 @@ describe("the question asked about a previous run", () => {
     const asked: string[] = [];
     const setupDeps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
     });
     const inner = setupDeps.select;
     setupDeps.select = async (input) => {
@@ -1632,7 +1722,7 @@ describe("a checkpoint at the repository root that belongs to another service", 
     const asked: string[] = [];
     const setupDeps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
     });
     const inner = setupDeps.select;
     setupDeps.select = async (input) => {
@@ -1681,7 +1771,7 @@ describe("the production block that closes a run", () => {
     const asked: string[] = [];
     const base = makeDeps({
       auth: authWithKey(KEY),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
 

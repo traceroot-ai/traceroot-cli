@@ -206,7 +206,7 @@ describe("request timeout", () => {
     // A fetch that never resolves on its own; it only settles when the
     // per-request AbortSignal fires, rejecting with the signal's reason. This
     // exercises AbortSignal.timeout end to end without hanging the test.
-    const fetchImpl = ((_url: RequestInfo | URL, init?: RequestInit) =>
+    const fetchImpl = ((_url: string | URL | Request, init?: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
         signal?.addEventListener("abort", () => reject(signal.reason));

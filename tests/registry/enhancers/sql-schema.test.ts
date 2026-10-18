@@ -91,8 +91,8 @@ describe("traceroot sql schema", () => {
     const h = harness(jsonResponse(makeSchema()));
     await h.run("sql", "schema");
     expect(h.fake.calls).toHaveLength(1);
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/sql/schema");
-    expect(h.fake.calls[0].init.method?.toUpperCase() ?? "GET").toBe("GET");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sql/schema");
+    expect(h.fake.calls[0]?.init.method?.toUpperCase() ?? "GET").toBe("GET");
     expect(h.out.data).toMatch(/^TABLE\s+COLUMN\s+TYPE/);
   });
 
@@ -107,7 +107,7 @@ describe("traceroot sql schema", () => {
     };
     const h = harness(jsonResponse(result));
     await h.run("sql", "SELECT count() AS n FROM spans", "--json");
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/sql");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sql");
     expect(JSON.parse(h.out.data)).toEqual(result);
   });
 

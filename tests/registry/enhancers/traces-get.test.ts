@@ -34,6 +34,8 @@ function span(over: Partial<TraceDetail["spans"][number]>): TraceDetail["spans"]
     output_tokens: null,
     total_tokens: null,
     cost: null,
+    cost_details: {},
+    usage_details: {},
     ...over,
   };
 }
@@ -70,6 +72,7 @@ function finding(over: Partial<FindingDetail> = {}): FindingDetail {
     detectors: ["hallucination", "failure"],
     results: [],
     rca: { status: "done", result: "Root cause: the model cited a source absent from the tools." },
+    run_ids: [],
     ...over,
   };
 }

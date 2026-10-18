@@ -178,7 +178,10 @@ describe("the machine contract", () => {
     emit(settled("precheck"));
     emit({ event: "result", ok: true, data: { project_id: "p_1" } });
 
-    const parsed = out.data.trim().split("\n").map(JSON.parse);
+    const parsed = out.data
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     expect(parsed).toEqual([
       { event: "stage", stage: "precheck", status: "start" },
       { event: "stage", stage: "precheck", status: "ok", durationMs: 10 },

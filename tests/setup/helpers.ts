@@ -2,7 +2,12 @@ import { appendFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { type ApiClient, type ApiClientOptions, DEFAULT_TIMEOUT_MS } from "../../src/api/client.js";
+import {
+  type ApiClient,
+  type ApiClientOptions,
+  DEFAULT_TIMEOUT_MS,
+  type TraceList,
+} from "../../src/api/client.js";
 import type { SetupApi } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import type { DeviceFlowDeps, DeviceFlowResult } from "../../src/auth/deviceFlow.js";
@@ -164,10 +169,18 @@ export function whoami(overrides: Record<string, unknown> = {}): Record<string, 
 
 export interface FakeClientOptions {
   whoamiResult?: Record<string, unknown> | (() => Promise<Record<string, unknown>>);
-  traces?: unknown[] | (() => unknown[]);
 }
 
-/** An {@link ApiClient} whose methods are stubs; unused methods throw. */
+/**
+ * An {@link ApiClient} whose `whoami` is stubbed; its other method throws.
+ *
+ * Exactly the real interface. It used to carry `listTraces` and the registry's
+ * reads as well, from before they moved off the client, and the trace tests
+ * went on reading through a method the real client does not have — nothing
+ * said so while `tsconfig.json` excluded `tests`. Setup reads traces through
+ * {@link SetupApi.listTraces}, so that is where `traces` on {@link makeDeps}
+ * serves them.
+ */
 export function fakeApiClient(options: FakeClientOptions = {}): ApiClient {
   const unsupported = (name: string) => async (): Promise<never> => {
     throw new Error(`unexpected call: ${name}`);
@@ -178,23 +191,23 @@ export function fakeApiClient(options: FakeClientOptions = {}): ApiClient {
       const value = typeof result === "function" ? await result() : result;
       return value as Awaited<ReturnType<ApiClient["whoami"]>>;
     },
-    listTraces: async () => {
-      const traces =
-        typeof options.traces === "function" ? options.traces() : (options.traces ?? []);
-      // The REAL envelope from `PublicTraceListResponse` (openapi.json), not a
-      // bare array. Returning the convenient shape here is what previously let a
-      // response-unwrapping bug pass every test and still find zero traces
-      // against the live API.
-      return { data: traces, meta: { limit: traces.length } } as unknown as Awaited<
-        ReturnType<ApiClient["listTraces"]>
-      >;
-    },
-    getTrace: unsupported("getTrace"),
-    exportTrace: unsupported("exportTrace"),
-    listDetectors: unsupported("listDetectors"),
-    listFindings: unsupported("listFindings"),
-    getFinding: unsupported("getFinding"),
-    getFindingByTrace: unsupported("getFindingByTrace"),
+    listWorkspaces: unsupported("listWorkspaces"),
+  };
+}
+
+/** Trace rows, or a function called on every read so a test can count or throw. */
+export type FakeTraces = unknown[] | (() => unknown[]);
+
+/** A trace read that answers with `traces`, for a `TraceLister` or a {@link SetupApi}. */
+export function listTracesFrom(traces: FakeTraces): SetupApi["listTraces"] {
+  return async () => {
+    const rows = typeof traces === "function" ? traces() : traces;
+    // The REAL envelope from `PublicTraceListResponse` (openapi.json), not a
+    // bare array. Returning the convenient shape here is what previously let a
+    // response-unwrapping bug pass every test and still find zero traces
+    // against the live API. Cast because a row carries only the fields the poll
+    // reads (see `traceRow`), not the whole list item.
+    return { data: rows, meta: { limit: rows.length } } as unknown as TraceList;
   };
 }
 
@@ -203,7 +216,10 @@ export function fakeSetupApi(overrides: Partial<SetupApi> = {}): SetupApi {
   const reject = (name: string) => async (): Promise<never> => {
     throw new Error(`unexpected setup API call: ${name}`);
   };
+  // No cast: a method `SetupApi` gains and this does not list fails to compile
+  // here, rather than reaching a test as `undefined`.
   return {
+    listTraces: reject("listTraces"),
     listWorkspaces: reject("listWorkspaces"),
     listProjects: reject("listProjects"),
     createProject: reject("createProject"),
@@ -211,8 +227,9 @@ export function fakeSetupApi(overrides: Partial<SetupApi> = {}): SetupApi {
     createApiKey: reject("createApiKey"),
     createProjectApiKey: reject("createProjectApiKey"),
     revokeApiKey: reject("revokeApiKey"),
+    revokeProjectApiKey: reject("revokeProjectApiKey"),
     ...overrides,
-  } as SetupApi;
+  };
 }
 
 /** Resolved auth with a key already present (the "already logged in" case). */
@@ -277,7 +294,13 @@ export const TEST_SDK: ResolvedSdk = {
 export interface MakeDepsOptions {
   auth?: ResolvedAuth;
   client?: ApiClient;
-  setupApi?: SetupApi;
+  /**
+   * The setup API's account calls. Its trace read is always `traces`, so a
+   * `listTraces` here could only be dead.
+   */
+  setupApi?: Omit<SetupApi, "listTraces">;
+  /** What the setup API's trace read answers with; none by default. */
+  traces?: FakeTraces;
   runProcess?: (o: RunProcessOptions) => Promise<RunProcessResult>;
   env?: NodeJS.ProcessEnv;
   answers?: string[];
@@ -330,25 +353,24 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     },
     runProcess: options.runProcess ?? fakeRunProcess().run,
     createClient: (_opts: ApiClientOptions) => options.client ?? fakeApiClient(),
-    // The wizard polls for traces through its own client now. Tests still
-    // describe the traces on the fake API client, so the default setup API
-    // delegates that one read to it rather than making every test say it twice.
-    createSetupApi: () =>
-      ({
-        listTraces: async (params: { limit?: number; startAfter?: string } | undefined) =>
-          (await (options.client ?? fakeApiClient()).listTraces(params)) as Awaited<
-            ReturnType<SetupApi["listTraces"]>
-          >,
-        ...(options.setupApi ?? fakeSetupApi()),
-      }) as SetupApi,
+    // The wizard polls for traces through the setup API, so that is what serves
+    // `traces` — last, so the account half cannot replace it.
+    createSetupApi: () => ({
+      ...(options.setupApi ?? fakeSetupApi()),
+      listTraces: listTracesFrom(options.traces ?? []),
+    }),
     openBrowser: async () => true,
     // Consumes the same `answers` queue as the old text prompts: an entry may be
     // an option value, a 1-based index (how the numbered prompts were answered),
     // or empty to accept the default. Keeps existing tests meaningful.
-    select: async ({ options, initialValue }) => {
+    select: async ({ message, options, initialValue }) => {
       const answer = answers.shift();
       if (answer === undefined || answer === "") {
-        return initialValue ?? options[0].value;
+        const fallback = initialValue ?? options[0]?.value;
+        if (fallback === undefined) {
+          throw new Error(`a question with no options and no default: ${message}`);
+        }
+        return fallback;
       }
       const byValue = options.find((o) => o.value === answer);
       if (byValue !== undefined) {

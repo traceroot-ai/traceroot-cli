@@ -18,6 +18,7 @@
  */
 import { join, resolve } from "node:path";
 import type { Command } from "commander";
+import { displaySkillPath } from "../../agents/index.js";
 import { loadOptionalEnvFileFromDisk } from "../../config/envFile.js";
 import { configPath, loadConfigOrThrow } from "../../config/manager.js";
 import type { ResolvedAuth } from "../../config/resolve.js";
@@ -47,6 +48,7 @@ import {
   applicationKeyLocation,
   defaultSetupDeps,
   runSetupMachine,
+  runTaskSentence,
 } from "../../setup/machine.js";
 import { acknowledgeProduction, nameList } from "../../setup/production.js";
 import type { SelectInput } from "../../setup/select.js";
@@ -207,9 +209,18 @@ export function setupFailureExit(result: SetupResult, json: boolean): SetupFailu
  * The finished case keeps the previous run by default. Starting over mints a
  * second API key and points a coding agent at code it has already edited, so it
  * is offered rather than taken on an unread keypress.
+ *
+ * Holding all twelve is not quite enough, though. A hand-over nothing has acted
+ * on ends normally, so it records the last stage too, with no trace and the
+ * instrumentation still outstanding — the opposite of finished.
  */
 export function resumeQuestion(found: SetupCheckpoint): SelectInput {
-  if (hasCompleted(found, "complete")) {
+  const ranToTheEnd = hasCompleted(found, "complete");
+  const awaitingHandover =
+    ranToTheEnd &&
+    found.trace === undefined &&
+    (found.instrumentHandover === "task-file" || found.instrumentHandover === "manual");
+  if (ranToTheEnd && !awaitingHandover) {
     return {
       stage: "precheck",
       message:
@@ -229,8 +240,11 @@ export function resumeQuestion(found: SetupCheckpoint): SelectInput {
     };
   }
   const stopped = found.completedStages.at(-1);
-  const where =
-    stopped === undefined ? "" : ` It stopped after ${STAGE_LABELS[stopped].toLowerCase()}.`;
+  const where = awaitingHandover
+    ? " It is waiting for the instrumentation it handed over."
+    : stopped === undefined
+      ? ""
+      : ` It stopped after ${STAGE_LABELS[stopped].toLowerCase()}.`;
   return {
     stage: "precheck",
     message: `A previous setup for this service did not finish.${where} Continue from there?`,
@@ -374,18 +388,26 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   // prints is the wrong one for the other.
   if (!json && result.ok && result.trace === null) {
     if (ctx.traceWaitSkipped !== true) {
-      // A run that ended without a trace but without an error: `--no-instrument`
-      // stopped the flow early. Say what happens next rather than implying success.
+      // A run that ended without a trace but without an error: a hand-over —
+      // `--no-instrument`, `--manual` or either menu answer that edits nothing —
+      // that nothing has acted on yet. Say what happens next rather than implying
+      // success, and only the half the closing line does not: that line already
+      // says to rerun with `--resume`, and a third copy of it is noise.
+      const task = ctx.instrumentation?.promptPath ?? null;
       wizardLine(
         { writers, json },
-        `\nSetup did not reach a first trace yet. Finish the instrumentation task, then run \`${setupCommand()} --resume\`.`,
+        `\nNo trace yet: setup changed no code, so the service has no TraceRoot in it. ${
+          task === null
+            ? "Apply the steps above."
+            : `${runTaskSentence(ctx, displaySkillPath(ctx.root, task))}.`
+        }`,
       );
     } else {
       // The other way to end without a trace: the user stopped the wait. The
-      // sentence above is the wrong one for it twice over — it says setup "did
-      // not reach" something it was told to stop reaching for, and it sends
-      // somebody who just watched an agent instrument their service off to
-      // finish an instrumentation task that is already done.
+      // sentence above is the wrong one for it twice over — it tells somebody
+      // who just watched an agent instrument their service that it has no
+      // TraceRoot in it, and sends them off to do an instrumentation task that
+      // is already done.
       wizardNote(
         writers,
         skippedTraceNotice({ uiBaseUrl: result.checkpoint.uiBaseUrl ?? null }, writers.err),

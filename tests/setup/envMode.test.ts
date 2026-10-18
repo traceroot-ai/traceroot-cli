@@ -10,7 +10,6 @@ import { plain } from "./colour.js";
 import {
   authWithKey,
   defaultFlags,
-  fakeApiClient,
   fakeRunProcess,
   makeDeps,
   makeWriters,
@@ -57,7 +56,7 @@ afterEach(() => {
 async function run(): Promise<string> {
   const deps = makeDeps({
     auth: authWithKey(),
-    client: fakeApiClient({ traces: [traceRow()] }),
+    traces: [traceRow()],
     runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
   });
   const { writers, err } = makeWriters();

@@ -46,6 +46,24 @@ const neverAsk = async (): Promise<string> => {
   throw new Error("selectAgent should not have asked anything");
 };
 
+/**
+ * What `selectAgent` refused with, failing the test if it chose an agent.
+ *
+ * A bare `.catch((err) => err as SetupError)` typed the outcome of a choice as
+ * an error too, so a selection that resolved reached the assertions as an agent
+ * with no `code` or `remedy` to compare.
+ */
+async function refusalFrom(choice: Promise<unknown>): Promise<SetupError> {
+  const outcome = await choice.then(
+    (chosen) => chosen,
+    (err: unknown) => err,
+  );
+  if (!(outcome instanceof SetupError)) {
+    throw new Error(`selectAgent did not refuse with a SetupError: ${JSON.stringify(outcome)}`);
+  }
+  return outcome;
+}
+
 describe("which agents setup offers to run", () => {
   it("probes only the agents it has a verified way to drive", () => {
     // The CLI installs skills for more agents than setup can drive headless.
@@ -142,12 +160,14 @@ describe("which agents setup offers to run", () => {
     onPath("claude");
     onPath("codex");
 
-    const refusal = await selectAgent({
-      detected: detectAgents({ cwd, env: { PATH: bin }, platform: "linux" }),
-      canPrompt: false,
-      select: neverAsk,
-      warn: () => undefined,
-    }).catch((err: unknown) => err as SetupError);
+    const refusal = await refusalFrom(
+      selectAgent({
+        detected: detectAgents({ cwd, env: { PATH: bin }, platform: "linux" }),
+        canPrompt: false,
+        select: neverAsk,
+        warn: () => undefined,
+      }),
+    );
 
     expect(refusal.code).toBe("AMBIGUOUS");
     expect(refusal.message).toContain("claude, codex");
@@ -174,12 +194,14 @@ describe("which agents setup offers to run", () => {
   });
 
   it("names a real agent in the nothing-installed remedy", async () => {
-    const refusal = await selectAgent({
-      detected: detectAgents({ cwd, env: { PATH: bin }, platform: "linux" }),
-      canPrompt: false,
-      select: neverAsk,
-      warn: () => undefined,
-    }).catch((err: unknown) => err as SetupError);
+    const refusal = await refusalFrom(
+      selectAgent({
+        detected: detectAgents({ cwd, env: { PATH: bin }, platform: "linux" }),
+        canPrompt: false,
+        select: neverAsk,
+        warn: () => undefined,
+      }),
+    );
 
     expect(refusal.message).toContain("No coding agent was found on PATH");
     for (const adapter of LAUNCHABLE_AGENTS) {
@@ -241,12 +263,14 @@ describe("an agent installed on Windows as a batch shim", () => {
   it("refuses with that reason when nothing else can run, instead of 'not found'", async () => {
     onPath("claude.cmd");
 
-    const refusal = await selectAgent({
-      detected: onWindows(),
-      canPrompt: false,
-      select: neverAsk,
-      warn: () => undefined,
-    }).catch((err: unknown) => err as SetupError);
+    const refusal = await refusalFrom(
+      selectAgent({
+        detected: onWindows(),
+        canPrompt: false,
+        select: neverAsk,
+        warn: () => undefined,
+      }),
+    );
 
     expect(refusal).toBeInstanceOf(SetupError);
     expect(refusal.code).toBe("UNSUPPORTED");
@@ -260,15 +284,17 @@ describe("an agent installed on Windows as a batch shim", () => {
     onPath("claude.cmd");
     let warned = "";
 
-    const refusal = await selectAgent({
-      detected: onWindows(),
-      requested: "claude",
-      canPrompt: false,
-      select: neverAsk,
-      warn: (message) => {
-        warned = message;
-      },
-    }).catch((err: unknown) => err as SetupError);
+    const refusal = await refusalFrom(
+      selectAgent({
+        detected: onWindows(),
+        requested: "claude",
+        canPrompt: false,
+        select: neverAsk,
+        warn: (message) => {
+          warned = message;
+        },
+      }),
+    );
 
     expect(refusal).toBeInstanceOf(SetupError);
     expect(refusal.code).toBe("UNSUPPORTED");

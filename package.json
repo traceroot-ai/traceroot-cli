@@ -34,7 +34,7 @@
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "codegen": "openapi-typescript openapi.json -o src/api/generated/schema.ts",
     "codegen:check": "node scripts/codegen-check.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",

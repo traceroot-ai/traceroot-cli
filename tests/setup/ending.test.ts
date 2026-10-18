@@ -68,9 +68,10 @@ describe("acknowledging it", () => {
     // instruction grey on the right — the only row of the block waiting on
     // anybody, and it should look like it.
     expect(asked).toHaveLength(1);
-    expect(plain(asked[0])).toContain("│  I've confirmed my application is sending traces.");
-    expect(plain(asked[0])).not.toContain("●");
-    expect(plain(asked[0])).toContain("(Press Enter to continue)");
+    const question = plain(asked[0] ?? "");
+    expect(question).toContain("│  I've confirmed my application is sending traces.");
+    expect(question).not.toContain("●");
+    expect(question).toContain("(Press Enter to continue)");
     // A settled block: `◇` is what the transcript shows once the
     // acknowledgement under it has been given.
     expect(plain(err.data)).toContain(

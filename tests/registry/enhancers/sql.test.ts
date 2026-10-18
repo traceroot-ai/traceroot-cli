@@ -301,9 +301,9 @@ describe("traceroot sql (through the registry factory)", () => {
     );
     expect(h.fake.calls).toHaveLength(1);
     const call = h.fake.calls[0];
-    expect(call.url).toBe("https://api.test/api/v1/public/sql");
-    expect(call.init.method?.toUpperCase()).toBe("POST");
-    expect(JSON.parse(call.init.body as string)).toEqual({
+    expect(call?.url).toBe("https://api.test/api/v1/public/sql");
+    expect(call?.init.method?.toUpperCase()).toBe("POST");
+    expect(JSON.parse(call?.init.body as string)).toEqual({
       query: "SELECT model_name, count() AS spans FROM spans GROUP BY model_name",
       max_rows: 50,
       parameters: { min_ms: "100" },

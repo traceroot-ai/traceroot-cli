@@ -110,6 +110,7 @@ describe("findingsGet.render (--json)", () => {
       args: {},
       state: undefined,
       dispatchTool: () => Promise.reject(new Error("unused")),
+      dispatchToolOptional: () => Promise.reject(new Error("unused")),
     });
     const parsed = JSON.parse(out.data) as Record<string, unknown>;
     expect(parsed.finding_id).toBe("fnd-1");

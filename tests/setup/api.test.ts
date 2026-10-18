@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { TraceList } from "../../src/api/client.js";
 import { BackendUnavailableError, SetupApiError, createSetupApi } from "../../src/api/setup.js";
 import { pollForTrace } from "../../src/setup/trace.js";
-import { fakeApiClient, traceRow } from "./helpers.js";
+import { listTracesFrom, traceRow } from "./helpers.js";
 
 /** A `fetch` stand-in that replies from a queue and records every request. */
 function stubFetch(replies: Array<{ status: number; body?: unknown }>): {
@@ -194,12 +195,12 @@ describe("trace polling", () => {
 
   it("returns the first trace created after the run began", async () => {
     let calls = 0;
-    const client = fakeApiClient({
-      traces: () => {
+    const client = {
+      listTraces: listTracesFrom(() => {
         calls += 1;
         return calls < 2 ? [] : [traceRow()];
-      },
-    });
+      }),
+    };
     const result = await pollForTrace({
       client,
       startedAt,
@@ -216,9 +217,9 @@ describe("trace polling", () => {
   });
 
   it("ignores traces that predate the run even if the server returns them", async () => {
-    const client = fakeApiClient({
-      traces: [traceRow({ trace_start_time: "2020-01-01T00:00:00.000000" })],
-    });
+    const client = {
+      listTraces: listTracesFrom([traceRow({ trace_start_time: "2020-01-01T00:00:00.000000" })]),
+    };
     let clock = 0;
     const result = await pollForTrace({
       client,
@@ -237,7 +238,7 @@ describe("trace polling", () => {
   it("gives up after the timeout instead of polling forever", async () => {
     let clock = 0;
     const result = await pollForTrace({
-      client: fakeApiClient({ traces: [] }),
+      client: { listTraces: listTracesFrom([]) },
       startedAt,
       ranAt: null,
       timeoutMs: 100,
@@ -255,13 +256,13 @@ describe("trace polling", () => {
     // Regression: the poller originally understood only a bare array / {traces},
     // so against the real API it saw zero rows forever and reported a timeout
     // for traces that had already arrived.
+    //
+    // Spelled out rather than taken from `listTracesFrom`, which answers the
+    // same way, because the envelope is what this test is about. Cast because
+    // the row carries only the fields the poll reads.
     const client = {
-      ...fakeApiClient(),
-      listTraces: async () =>
-        ({ data: [traceRow()], meta: { limit: 1 } }) as unknown as Awaited<
-          ReturnType<typeof fakeApiClient>["listTraces"]
-        >,
-    } as ReturnType<typeof fakeApiClient>;
+      listTraces: async () => ({ data: [traceRow()], meta: { limit: 1 } }) as unknown as TraceList,
+    };
     const result = await pollForTrace({
       client,
       startedAt,
@@ -278,7 +279,7 @@ describe("trace polling", () => {
     // started and discard it — a false timeout for a trace that did arrive.
     const justAfterStart = "2026-07-26T12:00:01.000000";
     const result = await pollForTrace({
-      client: fakeApiClient({ traces: [traceRow({ trace_start_time: justAfterStart })] }),
+      client: { listTraces: listTracesFrom([traceRow({ trace_start_time: justAfterStart })]) },
       startedAt,
       ranAt: null,
       timeoutMs: 1000,
@@ -295,8 +296,8 @@ describe("trace polling", () => {
     // linked to the second one, and the two disagreed. Sorting makes the
     // answer the same whenever anyone looks.
     const result = await pollForTrace({
-      client: fakeApiClient({
-        traces: [
+      client: {
+        listTraces: listTracesFrom([
           traceRow({
             trace_id: "second",
             trace_url: "https://app.example.test/trace/second",
@@ -307,8 +308,8 @@ describe("trace polling", () => {
             trace_url: "https://app.example.test/trace/first",
             trace_start_time: "2026-07-26T12:00:15.000000",
           }),
-        ],
-      }),
+        ]),
+      },
       startedAt,
       ranAt: null,
       timeoutMs: 1000,
@@ -324,9 +325,11 @@ describe("trace polling", () => {
     // Unparseable sorts last rather than out: it is a real trace, it just
     // cannot win an ordering contest against one that can be read.
     const result = await pollForTrace({
-      client: fakeApiClient({
-        traces: [traceRow({ trace_id: "unreadable", trace_start_time: "not a date" })],
-      }),
+      client: {
+        listTraces: listTracesFrom([
+          traceRow({ trace_id: "unreadable", trace_start_time: "not a date" }),
+        ]),
+      },
       startedAt,
       ranAt: null,
       timeoutMs: 1000,
@@ -337,12 +340,12 @@ describe("trace polling", () => {
 
   it("stops immediately on an auth failure", async () => {
     let calls = 0;
-    const client = fakeApiClient({
-      traces: () => {
+    const client = {
+      listTraces: listTracesFrom(() => {
         calls += 1;
         throw new Error("401 unauthorized");
-      },
-    });
+      }),
+    };
     const result = await pollForTrace({
       client,
       startedAt,
@@ -356,15 +359,15 @@ describe("trace polling", () => {
 
   it("keeps polling through a transient error", async () => {
     let calls = 0;
-    const client = fakeApiClient({
-      traces: () => {
+    const client = {
+      listTraces: listTracesFrom(() => {
         calls += 1;
         if (calls === 1) {
           throw new Error("request to host failed: fetch failed");
         }
         return [traceRow()];
-      },
-    });
+      }),
+    };
     const result = await pollForTrace({
       client,
       startedAt,

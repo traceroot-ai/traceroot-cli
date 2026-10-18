@@ -22,7 +22,7 @@ describe("workspaces list rendering", () => {
     // Exact order, not presence: a reorder of columns must fail this guard.
     const header = out.data
       .split("\n")[0]
-      .trim()
+      ?.trim()
       .split(/\s{2,}/);
     expect(header).toEqual(["NAME", "ROLE", "WORKSPACE ID"]);
   });
@@ -61,7 +61,7 @@ describe("projects list rendering", () => {
     renderProjectsList(RES, { json: false, writers });
     const header = out.data
       .split("\n")[0]
-      .trim()
+      ?.trim()
       .split(/\s{2,}/);
     expect(header).toEqual(["NAME", "WORKSPACE", "PROJECT ID"]);
   });
