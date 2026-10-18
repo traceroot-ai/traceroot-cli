@@ -387,6 +387,35 @@ describe("the span coverage the task asks for", () => {
   });
 });
 
+describe("how the task has the agent run the project's tests", () => {
+  it("runs the suite with TraceRoot switched off, in the command itself", () => {
+    // A plain `pytest` sends a trace per test whenever a key is within reach —
+    // the agent's own environment, or an entry point that loads its `.env` at
+    // module scope — and those traces land beside the application's. The
+    // variable is in the command, not in a sentence the agent may skim past.
+    expect(task({ verifyCommand: "pytest" })).toContain(
+      "Run `TRACEROOT_ENABLED=false pytest` once",
+    );
+    expect(task({ verifyCommand: "npm test" })).toContain(
+      "Run `TRACEROOT_ENABLED=false npm test` once",
+    );
+    expect(task()).toContain("with `TRACEROOT_ENABLED=false` in front of it");
+  });
+
+  it("says the trace setup looks for comes from running the application", () => {
+    for (const text of [task({ verifyCommand: "pytest" }), task()]) {
+      expect(text).toContain("by running the application itself as step 6 says");
+      expect(text).toContain("The trace `traceroot setup` looks for is the application's own");
+    }
+  });
+
+  it("asks for no report of a run without credentials", () => {
+    // The task tells the agent not to make that run, and setup makes its own
+    // check with TraceRoot off. A field asking for its result invites the run.
+    expect(task()).not.toContain("tests_passed_without_credentials");
+  });
+});
+
 describe("where the task puts initialization", () => {
   it("puts the credential load and the initialize call on the run path, not at module scope", () => {
     // Module scope runs on import. A project whose test suite imports the
@@ -446,13 +475,29 @@ describe("where the task puts initialization", () => {
   });
 
   it("stops offering the test suite as the thing that emits the trace", () => {
-    // Step 6 listed "a test" among the ways to produce one. With the load and
-    // the initialize behind the guard, a test run emits nothing — so that
-    // route would have the agent prove the trace with the one path that
-    // cannot produce it.
+    // Step 6 listed "a test" among the ways to produce one. The suite runs with
+    // TraceRoot switched off now, and the trace setup looks for is the one the
+    // application sends — so that route would have the agent prove the trace
+    // with the one path that is meant to send nothing.
     const text = task({ envFiles: ["./.env"] });
     expect(text).not.toContain("a test, a script, one function call");
-    expect(text).toContain("test suite is\nnot one of those things any more");
+    expect(text).toContain(
+      "test suite is\nnot one of those things: it runs with TraceRoot switched off",
+    );
+  });
+
+  it("does not claim the guard alone keeps the tests from exporting", () => {
+    // It does not. `observe` starts the SDK whenever `TRACEROOT_API_KEY` is in
+    // the environment, and a real run's suite exported every test it ran with
+    // `initialize()` correctly under the guard. The placement rule stays; the
+    // promise that it was enough goes.
+    const text = task({ envFiles: ["./.env"] });
+    expect(text).not.toContain("the tests stop\nexporting without touching them");
+    expect(text).not.toContain("loads no credential and starts no SDK");
+    expect(text).toContain(
+      "the run path does not on its own keep the project's tests from exporting",
+    );
+    expect(text).toContain('if __name__ == "__main__":');
   });
 
   it("refuses the project's test configuration as the place to fix this", () => {

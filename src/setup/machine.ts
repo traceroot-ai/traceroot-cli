@@ -76,7 +76,7 @@ import { type SelectFn, type SelectOption, interactiveSelect } from "./select.js
 import { startLineSpinner } from "./spinner.js";
 import { detectStack, normalizeLanguage } from "./stack.js";
 import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters } from "./task.js";
-import { isThinTrace, pollForTrace, spanPhrase, thinTraceFinding } from "./trace.js";
+import { pollForTrace, spanPhrase } from "./trace.js";
 import { discardTypeAhead } from "./tty.js";
 import type {
   DetectedAgent,
@@ -494,6 +494,40 @@ async function confirmDirtyWorktree(
 
 /** Per-run baseline of changed files, keyed by context (no global state). */
 const baselineChanges = new WeakMap<SetupContext, string[]>();
+
+/**
+ * Runs in which this process launched the coding agent, keyed by context.
+ *
+ * In memory and never checkpointed, because what it answers is whether a trace
+ * can still be on its way: the task has the agent run the application once,
+ * and that trace reaches the list seconds after the run that sent it. A resumed
+ * run restores `instrumentation` from the checkpoint whichever route wrote it,
+ * so that record cannot say whether anything ran the application in this
+ * process.
+ */
+const agentLaunched = new WeakSet<SetupContext>();
+
+/**
+ * Whether anything can still send this run a trace, which is what decides how
+ * long `verify_trace` waits for one.
+ *
+ * Two things can. The coding agent, when this process launched it, because
+ * the task has it run the application. And the application itself, once it
+ * carries TraceRoot — a repository that already did, or a resume after the
+ * user instrumented it by hand — because whoever runs it next sends one.
+ * Detection reads the entry point afresh on every run, so the second answer is
+ * about the code as it stands now.
+ *
+ * Setup's own check is not on the list. It runs with TraceRoot switched off and
+ * sends nothing, so whether it ran says nothing about whether a trace is
+ * coming. That was the reading this replaced: a repository with no test command
+ * gave up on the agent's trace after one look, and one with a test command
+ * waited out the whole budget on a hand-over route where nothing had been
+ * instrumented at all.
+ */
+function traceCanArrive(ctx: SetupContext): boolean {
+  return agentLaunched.has(ctx) || ctx.stack?.existingInstrumentation.present === true;
+}
 
 // ── AUTHENTICATE ────────────────────────────────────────────────────────────
 
@@ -3196,6 +3230,9 @@ const instrument: StageDefinition = {
           ].join("\n"),
         });
       }
+      // It ran, and the task told it to run the application: from here on a
+      // trace can be on its way whether or not anything below finds fault.
+      agentLaunched.add(ctx);
       if (result.exitCode !== 0) {
         const changed =
           observedChangedFiles.length === 0
@@ -3441,15 +3478,13 @@ const verifyApplicationStage: StageDefinition = {
   async run(ctx, deps) {
     const service = requireService(ctx);
     const credential = requireCredential(ctx);
-    const session = requireSession(ctx);
     const command = service.testCommand;
 
     if (command === null) {
       ctx.application = {
         command: null,
         baseline: null,
-        withCredentials: { ran: false, exitCode: null, durationMs: 0 },
-        withoutCredentials: { ran: false, exitCode: null, durationMs: 0 },
+        run: { ran: false, exitCode: null, durationMs: 0 },
         outcome: "skipped",
         passed: false,
         skippedReason: "no test or health command was detected",
@@ -3465,7 +3500,7 @@ const verifyApplicationStage: StageDefinition = {
     }
 
     wizardProgress(ctx, `Verifying the application: ${command}`);
-    const { verification, failure, ranAt } = await verifyApplication({
+    const { verification, failure } = await verifyApplication({
       command,
       // What the same command did before anything was instrumented, or null on
       // a route that instrumented nothing. Absent is not "it passed": it is
@@ -3477,8 +3512,8 @@ const verifyApplicationStage: StageDefinition = {
       // The same virtualenv the baseline measured in. `detect_stack` names the
       // check as the project documents it — `pytest`, not `.venv/bin/pytest` —
       // and that command resolves for the user because their shell has the
-      // virtualenv activated. Without this both runs below spawn against the
-      // CLI's own environment and fail with ENOENT after the instrumentation
+      // virtualenv activated. Without this the check below spawns against the
+      // CLI's own environment and fails with ENOENT after the instrumentation
       // itself had succeeded, which reads to the user as changes that broke
       // their suite. It is also the comparison's premise: a baseline taken in
       // one environment and a verification taken in another are not the same
@@ -3495,7 +3530,6 @@ const verifyApplicationStage: StageDefinition = {
           ? detectPythonEnvironment(ctx.root, service.path, deps.env).interpreter
           : null,
       credential: credential.key,
-      host: session.host,
       // The credential-free run is only credential-free if the key goes out of
       // every file the entry point loads for itself, not just the one this run
       // wrote — see {@link applicationCredentialFiles}. An empty list is an
@@ -3507,7 +3541,6 @@ const verifyApplicationStage: StageDefinition = {
       signal: ctx.signal,
     });
     ctx.application = verification;
-    ctx.applicationRanAt = ranAt;
     ctx.checkpoint.application = verification;
 
     // A command that never started is not "inconclusive" in the sense this
@@ -3548,12 +3581,9 @@ const verifyApplicationStage: StageDefinition = {
       // that it passed before — which on a suite that was already red sent the
       // user looking for a fault in work that had just been done correctly.
       const measuredBefore = verification.baseline?.ran === true;
-      const message =
-        failure?.phase === "without"
-          ? `\`${command}\` passed with TraceRoot configured but failed with ${KEY_ENV} removed. The application must keep working when TraceRoot is absent.${tail}`
-          : measuredBefore
-            ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
-            : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
+      const message = measuredBefore
+        ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
+        : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
       // Paused, which is what this remedy has always promised and what the
       // rollback used to contradict: the run revoked the key and took the
       // credential back out of the env file, and then told the user to resume
@@ -3567,7 +3597,20 @@ const verifyApplicationStage: StageDefinition = {
       });
     }
 
-    wizardProgress(ctx, "Application passes its checks, with and without TraceRoot.");
+    // What ran, and only then what it shows. The check ran with TraceRoot
+    // switched off, so a pass says the application does not depend on TraceRoot
+    // being configured — when the code it ran was the agent's instrumentation.
+    // A route that hands the task over edits nothing and takes no baseline, and
+    // its check ran on code setup had not touched, so the line says that and
+    // nothing about TraceRoot: any claim about it there would be about
+    // instrumentation the check never saw. The report reads the same field and
+    // says the same thing.
+    wizardProgress(
+      ctx,
+      verification.baseline === null
+        ? "Application passes its checks. Setup made no edits itself, so this checked your code as it is."
+        : "Application passes its checks with TraceRoot switched off, so it doesn't depend on TraceRoot being configured.",
+    );
     return "ok";
   },
 };
@@ -3599,20 +3642,24 @@ const verifyTrace: StageDefinition = {
       timeoutMs: 15_000,
     });
 
-    // Nothing ran the application, so nothing can have emitted a trace.
+    // How long to wait is a question about what can still send a trace — see
+    // {@link traceCanArrive}, and note that setup's own check is not one of
+    // those things.
     //
-    // Waiting the full timeout here is the wizard patiently hoping for
-    // something it already knows cannot happen — two minutes of a spinner and
-    // then a timeout, when the answer was available immediately. The agent may
-    // still have run the code itself while instrumenting, so this takes one
-    // look before giving up rather than assuming.
-    const somethingRan = ctx.application?.withCredentials.ran === true;
-    const timeoutMs = somethingRan ? ctx.flags.traceTimeoutSec * 1000 : 0;
+    // When something can, the whole budget. Ingest lags the run that sent the
+    // trace, and the agent's run of the application may have ended a second
+    // ago, so a single look straight after it reports a timeout for a trace
+    // that was a moment from arriving. When nothing can, one look and no
+    // spinner: waiting two minutes for a trace nothing could send is the wizard
+    // patiently hoping for something it already knows cannot happen, and the
+    // one look still finds a trace the user sent before they resumed.
+    const canArrive = traceCanArrive(ctx);
+    const timeoutMs = canArrive ? ctx.flags.traceTimeoutSec * 1000 : 0;
     // The other long unattended wait. Nothing arrives to report on until the
     // trace does, so the elapsed counter is the whole of what a user can be
     // told — and it is the difference between waiting and suspecting a hang.
     const waiting =
-      ctx.json || !somethingRan
+      ctx.json || !canArrive
         ? null
         : startLineSpinner({
             sink: ctx.writers.err,
@@ -3624,7 +3671,6 @@ const verifyTrace: StageDefinition = {
       outcome = await pollForTrace({
         client,
         startedAt: new Date(ctx.checkpoint.startedAt),
-        ranAt: ctx.applicationRanAt ?? null,
         timeoutMs,
         signal: ctx.signal,
         sleep: deps.sleep,
@@ -3634,11 +3680,11 @@ const verifyTrace: StageDefinition = {
       waiting?.stop("Stopped waiting for a trace.");
       throw err;
     }
-    // The size, whether or not it is small. This is the one line in the run
-    // where the application's own output arrives, and "received" with no size
-    // to it is the claim that turned out to need qualifying — a run reported it
-    // over a trace of one span. Omitted rather than guessed at when the
-    // response did not carry a count.
+    // The size, whatever it is. This is the one line in the run where the
+    // application's own output arrives, and the count is the one thing a list
+    // row says about how much of the application the trace shows — stated, and
+    // never judged, because whether it is enough depends on the program.
+    // Omitted rather than guessed at when the response did not carry a count.
     const received =
       outcome.found && outcome.attribution.spanCount !== null
         ? `First trace received (${spanPhrase(outcome.attribution.spanCount)}).`
@@ -3647,16 +3693,21 @@ const verifyTrace: StageDefinition = {
       outcome.found ? received : `No trace after ${Math.round(outcome.waitedMs / 1000)}s.`,
     );
 
-    if (!outcome.found && !somethingRan) {
+    if (!outcome.found && !canArrive) {
       // Say the actual reason rather than reporting a timeout that never
-      // really elapsed. Nothing exercised the code, so there is nothing to
-      // have waited for.
+      // really elapsed. Nothing in this run could have sent a trace, so there
+      // is nothing to have waited for — and the reason is about what runs the
+      // application, not about whether setup found a test command, because
+      // setup's own check sends nothing either way.
       throw new PausedSetupError({
         stage: "verify_trace",
         code: "TRACE_TIMEOUT",
         message:
-          "No trace yet, and nothing has run your application — setup found no test or health command to run, so the instrumented code was never executed.",
-        remedy: ["Run your application once, then:", "  traceroot setup --resume"].join("\n"),
+          "No trace yet, and nothing has run your application: setup did not run it, and found no TraceRoot initialization in it, so nothing else could have sent a trace either.",
+        remedy: [
+          "Instrument it if you have not yet, run it once, then:",
+          "  traceroot setup --resume",
+        ].join("\n"),
       });
     }
 
@@ -3678,28 +3729,12 @@ const verifyTrace: StageDefinition = {
 
     // Kept on the record rather than only mentioned. The report is rendered
     // from this, including on a `--resume` that rehydrates it from the
-    // checkpoint, so a count held only in this invocation would let a later run
-    // print the unqualified verdict over a trace this one had qualified.
+    // checkpoint, so a count held only in this invocation would leave a later
+    // run's report without it.
     const spanCount = outcome.attribution.spanCount;
     const trace = spanCount === null ? outcome.trace : { ...outcome.trace, spanCount };
     ctx.trace = trace;
     ctx.checkpoint.trace = trace;
-
-    // Said, never fatal. The credential works, the backend has the trace, and a
-    // program that genuinely is one function has nothing more to show — failing
-    // a run over this would be worse than the sentence it qualifies. What it
-    // must not do is let the run close on "a trace has been received" and leave
-    // a user believing their application is covered when one function is.
-    //
-    // No judgement about the application's shape, because nothing this run
-    // inspected says what that shape is: it reports the count, says what the
-    // count means, and asks for a look.
-    if (isThinTrace(spanCount)) {
-      wizardWarn(
-        ctx,
-        `your first trace ${thinTraceFinding(spanCount)}. That is enough to show the credential works, and not enough to show that the instrumentation reaches the code you care about — open the trace and check that the functions you expected to see are in it.`,
-      );
-    }
     return "ok";
   },
 };
@@ -4217,7 +4252,10 @@ function stageData(ctx: SetupContext, stage: SetupStage): Record<string, unknown
             // second is a fact about this run.
             baseline_ran: ctx.application.baseline?.ran ?? false,
             baseline_exit_code: ctx.application.baseline?.exitCode ?? null,
-            ran_without_credentials: ctx.application.withoutCredentials.ran,
+            // The check itself, which runs once and with TraceRoot switched
+            // off. It replaced a pair, and `ran_without_credentials` was the
+            // pair's second half.
+            ran: ctx.application.run.ran,
             skipped_reason: ctx.application.skippedReason,
           };
     case "verify_trace":
