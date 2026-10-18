@@ -18,6 +18,7 @@ import type { ApiClientOptions } from "../../src/api/client.js";
 import { BackendUnavailableError, type SetupApi, SetupApiError } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
+import { redeemHandoff } from "../../src/auth/handoff.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
@@ -40,6 +41,7 @@ import type { TraceLister } from "../../src/setup/trace.js";
 import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import { sleep } from "../../src/util/sleep.js";
+import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
 import {
@@ -1312,6 +1314,36 @@ describe("the handoff code from browser-first onboarding", () => {
     expect(text).toContain("signing in the normal way");
     // And the run ends up on the device flow's credential, not a half-written one.
     expect(run.written.map((e) => e.session_token)).toEqual(["device-session-token-value"]);
+  });
+
+  it("falls back to the device flow on a server without the handoff route", async () => {
+    // Through the real redemption, so the 404 is the server's answer and not a
+    // stubbed outcome.
+    const fake = createFakeFetch(() => jsonResponse({}, 404));
+    const run = handoffRun({
+      redeem: (opts) => redeemHandoff({ ...opts, fetchImpl: fake.fetchImpl }),
+    });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(fake.calls).toHaveLength(1);
+    expect(result.ok).toBe(true);
+    expect(run.deviceFlows()).toBe(1);
+    expect(said(run.err.data)).toContain("signing in the normal way");
+  });
+
+  it("bounds the redemption the way whoami is bounded", async () => {
+    // Unbounded, a stalled app held the run until Node's own fetch defaults
+    // gave up, minutes later.
+    const timeouts: Array<number | undefined> = [];
+    const run = handoffRun({
+      redeem: async (opts) => {
+        timeouts.push(opts.timeoutMs);
+        return { kind: "redeemed", credential: { sessionToken: "handoff-session-token" } };
+      },
+    });
+    await runSetupMachine(run.ctx, run.deps);
+
+    expect(timeouts).toEqual([15_000]);
   });
 
   it("does not fall back when redemption fails for a network reason", async () => {

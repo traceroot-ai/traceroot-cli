@@ -59,9 +59,11 @@ export interface HandoffResult extends DeviceFlowResult {
 export type HandoffOutcome =
   | { kind: "redeemed"; credential: HandoffResult }
   /**
-   * The server refused the code (401/403). Unknown, expired and
-   * already-redeemed are deliberately one answer — the route is not an oracle,
-   * so there is nothing finer to report and nothing to branch on.
+   * The server refused the code (401/403), or has no route to redeem it at
+   * (404). Unknown, expired and already-redeemed are deliberately one answer —
+   * the route is not an oracle, so there is nothing finer to report and nothing
+   * to branch on — and a deployment that predates the route is recovered from
+   * the same way.
    */
   | { kind: "rejected" };
 
@@ -75,10 +77,10 @@ interface RedeemBody {
  * Exchanges a handoff code for a session token at
  * `POST {authHost}/api/cli/handoff/redeem`.
  *
- * Resolves to `{ kind: "rejected" }` when the server refuses the code, so the
- * caller can fall back. Everything else throws: a 429, a 5xx or a timeout is a
- * reachability problem and is reported as one (`ExitCode.network`) rather than
- * being dressed up as a bad code.
+ * Resolves to `{ kind: "rejected" }` when the server refuses the code or has
+ * no such route, so the caller can fall back. Everything else throws: a 429, a
+ * 5xx or a timeout is a reachability problem and is reported as one
+ * (`ExitCode.network`) rather than being dressed up as a bad code.
  */
 export async function redeemHandoff(opts: HandoffRedeemOptions): Promise<HandoffOutcome> {
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
@@ -138,21 +140,16 @@ export async function redeemHandoff(opts: HandoffRedeemOptions): Promise<Handoff
 
     // One indistinguishable refusal for unknown / expired / already-redeemed.
     // Recoverable by contract: the caller signs in the ordinary way instead.
-    if (res.status === 401 || res.status === 403) {
+    //
+    // A 404 too: a deployment that predates the route. Not a bad code, but the
+    // ordinary sign-in still works there, where ending the run did not help.
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
       return { kind: "rejected" };
     }
     if (res.status === 429) {
       throw new CliError(
         "handoff sign-in rate limited — wait a moment and try again",
         ExitCode.network,
-      );
-    }
-    if (res.status === 404) {
-      // A deployment that predates the route. Not a bad code, and not something
-      // a retry fixes — say where it was looked for.
-      throw new CliError(
-        `${base} does not support handoff sign-in (no /api/cli/handoff/redeem)`,
-        ExitCode.notFound,
       );
     }
     // A 5xx is the server failing to answer, which a retry may well fix; any

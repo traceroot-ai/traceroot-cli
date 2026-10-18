@@ -1010,11 +1010,12 @@ function accountSwitchLine(
  * the result is an ordinary `credentials-file` session, with no new source and
  * no new precedence rule.
  *
- * Returns false when the server refused the code, so the caller can fall back
- * to the sign-in it would have used anyway. That is the *only* recoverable
- * failure: a 429, a 5xx or a timeout is a reachability problem and is raised as
- * one by `redeemHandoff`, because reporting "your code expired" for a network
- * fault would send the user hunting for a new code they do not need.
+ * Returns false when the server refused the code, or has no route for it, so
+ * the caller can fall back to the sign-in it would have used anyway. Those are
+ * the *only* recoverable failures: a 429, a 5xx or a timeout is a reachability
+ * problem and is raised as one by `redeemHandoff`, because reporting "your code
+ * expired" for a network fault would send the user hunting for a new code they
+ * do not need.
  */
 async function handoffSignIn(
   ctx: SetupContext,
@@ -1027,10 +1028,13 @@ async function handoffSignIn(
   // app. Same resolution the device flow and the token mint already use.
   const authHost = deps.resolvedAuth.authHost.value ?? host;
 
-  const outcome = await deps.redeemHandoff({ authHost, code });
+  // Bounded like `whoami`, so a stalled app cannot hold the run for minutes.
+  const outcome = await deps.redeemHandoff({ authHost, code, timeoutMs: 15_000 });
   if (outcome.kind === "rejected") {
     // Unknown, expired and already-redeemed are one answer by design, so this
-    // says the true thing all three have in common rather than guessing.
+    // says the true thing all three have in common rather than guessing. A
+    // server without the route gets the same words: rarer, and not quite its
+    // case, but the fallback is the right one for it.
     wizardWarn(
       ctx,
       "the sign-in code from the browser is no longer valid (it expires after a few minutes, and works once); signing in the normal way",
