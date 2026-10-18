@@ -62,7 +62,13 @@ import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
 import { setupCommand } from "./invocation.js";
-import { buildInvocation, launchAgent, prepareWritableDir, resolveNpmCacheDir } from "./launch.js";
+import {
+  buildInvocation,
+  launchAgent,
+  prepareWritableDir,
+  resolveNpmCacheDir,
+  shadowingApiKey,
+} from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
 import { writeSetupReport } from "./report.js";
 import {
@@ -3543,6 +3549,18 @@ const instrument: StageDefinition = {
       return "skipped";
     }
 
+    // Before the question, so the user can decline and unset it first.
+    const shadowing = shadowingApiKey({
+      parentEnv: deps.env,
+      credential: credential.key,
+      credentialFiles: applicationCredentialFiles(ctx),
+    });
+    if (shadowing !== null) {
+      wizardWarn(
+        ctx,
+        `your shell exports TRACEROOT_API_KEY (${shadowing}), which is not this run's key (${credential.key.hint}). It beats the env file, so the application's traces would go to that key's project instead; unset it and rerun to send them here`,
+      );
+    }
     await confirmAgentLaunch(ctx, deps, adapter.displayName);
 
     // The one measurement that cannot be taken later.

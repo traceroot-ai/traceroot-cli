@@ -219,6 +219,50 @@ describe("happy path", () => {
     expect(deps.env.TRACEROOT_API_KEY).toBeUndefined();
   });
 
+  it("warns before the launch when the shell exports another key, and drops its TRACEROOT_ENABLED", async () => {
+    // Both reach the agent through the inherited environment. The key beats
+    // the env file this run wrote, because dotenv does not override, and an
+    // exported `false` switched off the application run the task asks for.
+    pythonRepo();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey("tr-live-project-key-abcd"),
+      env: {
+        PATH: "/usr/bin",
+        TRACEROOT_API_KEY: "tr-shell-other-project-wxyz",
+        TRACEROOT_ENABLED: "false",
+      },
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    const said = plain(err.data);
+    const warning = said.indexOf(
+      "warning: your shell exports TRACEROOT_API_KEY (tr-…wxyz), which is not this run's key",
+    );
+    expect(warning).toBeGreaterThan(-1);
+    expect(warning).toBeLessThan(said.indexOf("Claude Code finished."));
+    const agentRun = process.runs.find((r) => r.program === "claude");
+    expect(agentRun).toBeDefined();
+    expect("TRACEROOT_ENABLED" in (agentRun?.env ?? {})).toBe(false);
+  });
+
+  it("says nothing about the shell's key when it is this run's", async () => {
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey("tr-live-project-key-abcd"),
+      env: { PATH: "/usr/bin", TRACEROOT_API_KEY: "tr-live-project-key-abcd" },
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    expect(plain(err.data)).not.toContain("your shell exports TRACEROOT_API_KEY");
+  });
+
   it("runs the application check once, without the credential", async () => {
     pythonRepo();
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });

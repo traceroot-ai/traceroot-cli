@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { AgentId } from "../agents/types.js";
 import type { RunProcess, RunProcessResult } from "./exec.js";
-import type { Secret } from "./secret.js";
+import { type Secret, secretHint } from "./secret.js";
 
 /**
  * The assignment the task puts in front of the project's own checks —
@@ -502,8 +502,9 @@ export interface LaunchAgentInput {
 }
 
 /**
- * Builds the child's environment: the parent's, the host, and the credential
- * only when no file the application loads already holds it.
+ * Builds the child's environment: the parent's without `TRACEROOT_ENABLED`, the
+ * host, and the credential only when no file the application loads already
+ * holds it.
  *
  * `credentialFiles` is every file the application can read this credential out
  * of, and it is the same list — settled in the same place, for the same reason —
@@ -532,7 +533,13 @@ export interface LaunchAgentInput {
  * environment, and taking a variable back out of it is a different decision
  * from declining to add one. `verifyApplication` does take it out, because
  * there the question put to the application is explicitly "and without the
- * key"; here it is only which channel setup itself uses.
+ * key"; here it is only which channel setup itself uses. Where it would beat
+ * this run's key, setup warns before the launch: see {@link shadowingApiKey}.
+ *
+ * An inherited `TRACEROOT_ENABLED` is the one variable taken out. Exported as
+ * `false`, it switched off the application run the task asks for, and the
+ * trace wait then blamed the code path. Dropped rather than forced on: the
+ * agent's own checks set it on their command line, and are unaffected.
  *
  * When the credential does go here it goes here and nowhere else — not in
  * `argv` (visible in `ps`), not in the task file (which is written to disk),
@@ -550,14 +557,41 @@ export function buildAgentEnv(input: {
   credentialFiles: readonly string[];
   host: string;
 }): NodeJS.ProcessEnv {
+  const { TRACEROOT_ENABLED: _inherited, ...parentEnv } = input.parentEnv;
   const env: NodeJS.ProcessEnv = {
-    ...input.parentEnv,
+    ...parentEnv,
     TRACEROOT_HOST_URL: input.host,
   };
   if (input.credentialFiles.length === 0) {
     env.TRACEROOT_API_KEY = input.credential.reveal();
   }
   return env;
+}
+
+/**
+ * The hint of a `TRACEROOT_API_KEY` the parent exports over this run's key, or
+ * null when there is nothing to warn about.
+ *
+ * {@link buildAgentEnv} passes an exported key through, and dotenv never
+ * overrides a variable that is already set. So when the key reaches the
+ * application through a file, a different exported one beats it, and the
+ * application's traces go to that key's project. With no such file, setup's own
+ * copy goes into the environment over it.
+ */
+export function shadowingApiKey(input: {
+  parentEnv: NodeJS.ProcessEnv;
+  credential: Secret;
+  credentialFiles: readonly string[];
+}): string | null {
+  const exported = input.parentEnv.TRACEROOT_API_KEY;
+  if (
+    exported === undefined ||
+    input.credentialFiles.length === 0 ||
+    exported === input.credential.reveal()
+  ) {
+    return null;
+  }
+  return secretHint(exported);
 }
 
 /** Runs the agent with the task and a scoped environment. */
