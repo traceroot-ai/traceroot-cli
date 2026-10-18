@@ -7117,43 +7117,76 @@ describe("how long setup waits for the first trace", () => {
     expect(plain(err.data)).not.toMatch(/Application passes its checks[^\n]*TraceRoot/);
   });
 
-  it("says nothing has run the application on a resume with nothing to wait for", async () => {
-    // A hand-over that nothing has acted on ends as a pause of its own, and an
-    // agent run that left the service uninstrumented fails the instrument
-    // stage. What is left for this message is a resume over code that no
-    // longer carries TraceRoot — here the agent's edit was undone in between:
-    // no agent runs in this process, detection finds no `initialize()`, and
-    // setup's own check sends nothing — so one look, and a reason that names
-    // what runs the application rather than a test command.
-    pythonRepo();
-    const traceless = () =>
-      makeDeps({
-        auth: authWithKey(),
-        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
-      });
-    const first = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
-    const firstResult = await runSetupMachine(first.ctx, traceless());
-    expect(firstResult.error?.message).toContain("No trace arrived within");
-    writeFileSync(join(dir, "main.py"), "print('hi')\n");
-
-    const { traces, looks } = countingTraces();
-    const { ctx, err } = makeCtx({
-      flags: { agent: "claude", traceTimeoutSec: 5, resume: true },
-      resumeFrom: readCheckpoint(dir) ?? undefined,
-    });
-    const result = await runSetupMachine(ctx, {
-      ...traceless(),
-      createSetupApi: makeDeps({ traces }).createSetupApi,
-    });
-
-    expect(looks()).toBe(1);
-    expect(result.error?.code).toBe("TRACE_TIMEOUT");
-    expect(result.error?.message).toContain(
-      "No trace yet, and nothing has run your application: setup did not run it, and found no TraceRoot initialization in it, so nothing else could have sent a trace either.",
+  /** A TypeScript service whose entry point detection reads. */
+  function typescriptRepo(): void {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "svc", main: "src/index.ts", dependencies: { express: "^4" } }),
     );
-    expect(result.error?.remedy).toContain("traceroot setup --resume");
-    expect(plain(err.data)).not.toContain("Waiting for your first trace");
-  });
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "src", "index.ts"), "console.log('hi');\n");
+  }
+
+  it.each([
+    [
+      "in a module the entry point imports",
+      pythonRepo,
+      {
+        "main.py": "import tracing\n\nprint('hi')\n",
+        "tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
+      },
+    ],
+    [
+      "as a TypeScript `initialize({...})`",
+      typescriptRepo,
+      {
+        "src/index.ts":
+          'import { initialize } from "@traceroot-ai/traceroot";\n\ninitialize({ integrations: [] });\n',
+      },
+    ],
+    [
+      "with no entry point detection knows",
+      pythonRepo,
+      { "main.py": null, "worker.py": "import traceroot\n\ntraceroot.initialize()\n" },
+    ],
+  ])(
+    "waits the full budget on a resume after the agent ran, initialization %s",
+    async (_, repo, layout) => {
+      // The resume a trace timeout asks for: run the application, then
+      // `--resume`. No agent runs in this process, and detection reads only the
+      // entry point, so it cannot see these layouts. Waiting keyed off the agent
+      // having been launched in this process, so the resume took one look and
+      // said nothing had run the application.
+      repo();
+      const traceless = () => makeDeps({ auth: authWithKey(), runProcess: fakeRunProcess().run });
+      const first = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+      const firstResult = await runSetupMachine(first.ctx, traceless());
+      expect(firstResult.error?.message).toContain("No trace arrived within");
+      for (const [file, content] of Object.entries(layout)) {
+        if (content === null) {
+          rmSync(join(dir, file));
+        } else {
+          writeFileSync(join(dir, file), content);
+        }
+      }
+
+      const { traces, looks } = countingTraces();
+      const { ctx, err } = makeCtx({
+        flags: { agent: "claude", traceTimeoutSec: 5, resume: true },
+        resumeFrom: readCheckpoint(dir) ?? undefined,
+      });
+      const result = await runSetupMachine(ctx, {
+        ...traceless(),
+        createSetupApi: makeDeps({ traces }).createSetupApi,
+      });
+
+      expect(ctx.stack?.existingInstrumentation.present).toBe(false);
+      expect(looks()).toBeGreaterThan(1);
+      expect(result.error?.code).toBe("TRACE_TIMEOUT");
+      expect(result.error?.message).toMatch(/^No trace arrived within \ds\./);
+      expect(plain(err.data)).toContain("Waiting for your first trace");
+    },
+  );
 
   it("waits the full budget for a service that already carries TraceRoot", async () => {
     // Whoever runs an instrumented application next sends a trace — the user,

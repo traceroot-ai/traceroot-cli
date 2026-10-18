@@ -528,23 +528,15 @@ async function confirmDirtyWorktree(
 const baselineChanges = new WeakMap<SetupContext, string[]>();
 
 /**
- * Runs in which this process launched the coding agent, keyed by context.
- *
- * In memory and never checkpointed, because what it answers is whether a trace
- * can still be on its way: the task has the agent run the application once,
- * and that trace reaches the list seconds after the run that sent it. A resumed
- * run restores `instrumentation` from the checkpoint whichever route wrote it,
- * so that record cannot say whether anything ran the application in this
- * process.
- */
-const agentLaunched = new WeakSet<SetupContext>();
-
-/**
  * Whether anything can still send this run a trace, which is what decides how
  * long `verify_trace` waits for one.
  *
- * Two things can. The coding agent, when this process launched it, because
- * the task has it run the application. And the application itself, once it
+ * Two things can. The coding agent, because the task has it run the
+ * application, and the resume after a timeout follows "run your application
+ * once". That is read from the route the checkpoint recorded, so it holds for
+ * the run a `--resume` picks up as well as for this one. Detection is no
+ * substitute: it reads only the entry point, and an agent may put
+ * `initialize()` where it cannot see. And the application itself, once it
  * carries TraceRoot — a repository that already did, or a resume after the
  * user instrumented it by hand — because whoever runs it next sends one.
  * Detection reads the entry point afresh on every run, so the second answer is
@@ -558,7 +550,10 @@ const agentLaunched = new WeakSet<SetupContext>();
  * instrumented at all.
  */
 function traceCanArrive(ctx: SetupContext): boolean {
-  return agentLaunched.has(ctx) || ctx.stack?.existingInstrumentation.present === true;
+  return (
+    ctx.checkpoint.instrumentHandover === "agent" ||
+    ctx.stack?.existingInstrumentation.present === true
+  );
 }
 
 // ── AUTHENTICATE ────────────────────────────────────────────────────────────
@@ -3838,9 +3833,6 @@ const instrument: StageDefinition = {
           ].join("\n"),
         });
       }
-      // It ran, and the task told it to run the application: from here on a
-      // trace can be on its way whether or not anything below finds fault.
-      agentLaunched.add(ctx);
       if (result.exitCode !== 0) {
         const changed =
           observedChangedFiles.length === 0
@@ -4467,10 +4459,9 @@ const verifyTrace: StageDefinition = {
     // is done, and the one thing left is an observation nobody can hurry.
     //
     // Ordered before every failure below, because each of those is a diagnosis
-    // of a wait that ran out, and this wait did not run out. The "nothing has
-    // run your application" branch needs `!canArrive`, which is never true
-    // where a skip was offered — `canArrive` is a precondition of the offer —
-    // and an un-run hand-over cannot be skipped at all.
+    // of a wait that ran out, and this wait did not run out. An un-run
+    // hand-over cannot be skipped at all: `canArrive` is false there, and it is
+    // a precondition of the offer.
     //
     // A trace that arrived in the request already in flight when the key was
     // pressed still counts, and falls through to the normal success below:
@@ -4487,8 +4478,7 @@ const verifyTrace: StageDefinition = {
     }
 
     if (!outcome.found && unrunHandover !== null) {
-      // Named before "nothing ran it", because it is the cause underneath it —
-      // and ended as a pause, not a failure, because nothing has failed.
+      // Ended as a pause, not a failure, because nothing has failed.
       //
       // This route reported a missing trace as "nothing has run your
       // application", which sent the user off to run an application that has
@@ -4501,24 +4491,6 @@ const verifyTrace: StageDefinition = {
       // recorded as the trace, so `--resume` looks again; the key stays put,
       // because the resume needs it.
       return "skipped";
-    }
-
-    if (!outcome.found && !canArrive) {
-      // Say the actual reason rather than reporting a timeout that never
-      // really elapsed. Nothing in this run could have sent a trace, so there
-      // is nothing to have waited for — and the reason is about what runs the
-      // application, not about whether setup found a test command, because
-      // setup's own check sends nothing either way.
-      throw new PausedSetupError({
-        stage: "verify_trace",
-        code: "TRACE_TIMEOUT",
-        message:
-          "No trace yet, and nothing has run your application: setup did not run it, and found no TraceRoot initialization in it, so nothing else could have sent a trace either.",
-        remedy: [
-          "Instrument it if you have not yet, run it once, then:",
-          `  ${setupCommand()} --resume`,
-        ].join("\n"),
-      });
     }
 
     if (!outcome.found) {
