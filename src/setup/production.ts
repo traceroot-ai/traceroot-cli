@@ -2,13 +2,13 @@ import type { Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import type { StackLanguage } from "./types.js";
 import {
+  settleAcknowledgement,
   wizardAcknowledgement,
   wizardAside,
   wizardEmphasis,
   wizardEnvVar,
   wizardNote,
 } from "./wizard.js";
-import { settleAcknowledgement } from "./wizard.js";
 
 /**
  * The last thing a run says, and the only part of it about somewhere other than
@@ -151,14 +151,12 @@ export async function acknowledgeProduction(input: AcknowledgeProductionInput): 
   // use; this line is the user reporting they already used it, and weight says
   // "this is the thing you just did" where a second blue would only repeat the
   // sentence above.
-  await input.prompt(
-    `${wizardAcknowledgement(`I have added ${wizardEmphasis(KEY_ENV)} to my production env.`)} `,
-  );
+  //
+  // Named once, because it is written twice: live, then greyed over itself.
+  const ack = `I have added ${wizardEmphasis(KEY_ENV)} to my production env.`;
+  await input.prompt(`${wizardAcknowledgement(ack)} `);
   // The variable stays bold in the settled copy too. Dimming a line that
   // already carries a bold span would end the dim where the bold ends, so the
   // weight is re-applied inside rather than composed around.
-  settleAcknowledgement(
-    input.writers,
-    `I have added ${wizardEmphasis(KEY_ENV)} to my production env.`,
-  );
+  settleAcknowledgement(input.writers, ack);
 }

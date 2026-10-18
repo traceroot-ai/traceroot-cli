@@ -144,13 +144,6 @@ function assertedService(
   };
 }
 
-/**
- * An actual call that starts the SDK, in either language.
- *
- * The bar for "already instrumented": importing the package, or listing it as
- * a dependency, proves only that somebody intended to. Matching the call is
- * what distinguishes a wired-up application from one that merely mentions us.
- */
 /** `traceroot.init(...)` or `traceroot.initialize(...)`: unambiguous on its own. */
 const QUALIFIED_INITIALIZE = /\btraceroot\s*\.\s*init(?:ialize)?\s*\(/i;
 /**
@@ -163,6 +156,13 @@ const BARE_INITIALIZE = /(?:^|[^\w.])initialize\s*\(\s*\)/m;
 const TRACEROOT_IMPORT =
   /^\s*(?:from|import)\s+traceroot\b|require\(\s*["'][^"']*traceroot|from\s+["'][^"']*traceroot/im;
 
+/**
+ * An actual call that starts the SDK, in either language.
+ *
+ * The bar for "already instrumented": importing the package, or listing it as
+ * a dependency, proves only that somebody intended to. Matching the call is
+ * what distinguishes a wired-up application from one that merely mentions us.
+ */
 function initializesTraceRoot(source: string): boolean {
   return (
     QUALIFIED_INITIALIZE.test(source) ||
@@ -179,6 +179,14 @@ function readIfPresent(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** `dependencies` and `devDependencies` as one map: every question asked here is about both. */
+function dependenciesOf(pkg: Record<string, unknown>): Record<string, string> {
+  return {
+    ...((pkg.dependencies as Record<string, string>) ?? {}),
+    ...((pkg.devDependencies as Record<string, string>) ?? {}),
+  };
 }
 
 function readPackageJson(dir: string): Record<string, unknown> | null {
@@ -283,10 +291,7 @@ function describesAnApplication(pkg: Record<string, unknown>, hasEntryPoint: boo
   if (pkg.workspaces !== undefined && !hasEntryPoint && pkg.bin === undefined) {
     return false;
   }
-  const deps = {
-    ...((pkg.dependencies as Record<string, string>) ?? {}),
-    ...((pkg.devDependencies as Record<string, string>) ?? {}),
-  };
+  const deps = dependenciesOf(pkg);
   const scripts = (pkg.scripts as Record<string, string>) ?? {};
   return Object.keys(deps).length > 0 || Object.keys(scripts).length > 0 || hasEntryPoint;
 }
@@ -335,11 +340,7 @@ function nodeService(dir: string, repoRoot: string): DetectedService | null {
     evidence.push(`tsconfig.json in ${relPath}`);
   }
 
-  const deps = {
-    ...((pkg.dependencies as Record<string, string>) ?? {}),
-    ...((pkg.devDependencies as Record<string, string>) ?? {}),
-  };
-  const framework = matchFrameworkByName(Object.keys(deps), NODE_FRAMEWORKS);
+  const framework = matchFrameworkByName(Object.keys(dependenciesOf(pkg)), NODE_FRAMEWORKS);
   if (framework !== null) {
     evidence.push(`${framework} dependency`);
   }
@@ -442,18 +443,8 @@ function candidateDirs(root: string): string[] {
 
   // Every top-level directory is a possible project.
   try {
-    for (const entry of readdirSync(root).sort()) {
-      if (IGNORED_DIRS.has(entry) || entry.startsWith(".")) {
-        continue;
-      }
-      const child = join(root, entry);
-      try {
-        if (statSync(child).isDirectory()) {
-          dirs.push(child);
-        }
-      } catch {
-        // unreadable entry — skip
-      }
+    for (const dir of subdirectories(root, readdirSync(root))) {
+      dirs.push(dir);
     }
   } catch {
     // unreadable root — the root itself is still a candidate
@@ -473,18 +464,27 @@ function candidateDirs(root: string): string[] {
     // `api/` and `server/` are often the service itself rather than a container
     // of services, so consider the directory as well as its children.
     dirs.push(workspaceDir);
-    for (const entry of entries.sort()) {
-      if (IGNORED_DIRS.has(entry) || entry.startsWith(".")) {
-        continue;
+    for (const dir of subdirectories(workspaceDir, entries)) {
+      dirs.push(dir);
+    }
+  }
+  return dirs;
+}
+
+/** The directories among `entries` of `parent`, by name, minus ignored and hidden ones. */
+function subdirectories(parent: string, entries: readonly string[]): string[] {
+  const dirs: string[] = [];
+  for (const entry of [...entries].sort()) {
+    if (IGNORED_DIRS.has(entry) || entry.startsWith(".")) {
+      continue;
+    }
+    const child = join(parent, entry);
+    try {
+      if (statSync(child).isDirectory()) {
+        dirs.push(child);
       }
-      const child = join(workspaceDir, entry);
-      try {
-        if (statSync(child).isDirectory()) {
-          dirs.push(child);
-        }
-      } catch {
-        // unreadable entry — skip
-      }
+    } catch {
+      // unreadable entry — skip
     }
   }
   return dirs;
@@ -609,8 +609,12 @@ export function detectStack(root: string, options: DetectStackOptions = {}): Det
 
   let candidates = services;
 
-  if (options.service !== undefined) {
-    const wanted = options.service.replace(/^\.\//, "").replace(/\/+$/, "") || ".";
+  // `--service` as a repo-relative path: `./api/` and `api` name one directory.
+  const wanted =
+    options.service === undefined
+      ? undefined
+      : options.service.replace(/^\.\//, "").replace(/\/+$/, "") || ".";
+  if (wanted !== undefined) {
     candidates = candidates.filter((s) => s.path === wanted);
   }
 
@@ -629,17 +633,13 @@ export function detectStack(root: string, options: DetectStackOptions = {}): Det
     });
   }
 
-  // The user named a directory that has no manifest. Honour it: `--service` is
-  // them answering the question, and refusing would make the remedy this very
-  // error suggests impossible to follow.
   // The user named a directory that produced no service. Honour it when they
   // also said which language: `--service` is them answering, and refusing would
   // make the remedy other errors suggest impossible to follow. Without a
   // language there is nothing to guess from — inferring one from file
   // extensions is exactly the kind of guess that produces a confident, wrong
   // answer, so it is refused.
-  if (options.service !== undefined && candidates.length === 0) {
-    const wanted = options.service.replace(/^\.\//, "").replace(/\/+$/, "") || ".";
+  if (wanted !== undefined && candidates.length === 0) {
     const language = normalizeLanguage(options.language ?? "");
     if (language !== null) {
       const asserted = assertedService(root, wanted, language);
