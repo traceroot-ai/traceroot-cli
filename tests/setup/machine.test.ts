@@ -1318,6 +1318,8 @@ describe("the handoff code from browser-first onboarding", () => {
     expect(run.redeemed).toEqual([{ authHost: "https://api.example.test", code: CODE }]);
     expect(said(run.err.data)).toContain("Signed in as bob@new.example.");
     expect(said(run.err.data)).toContain("no second page needed");
+    // Single-use, so spent at sign-in and not kept for the rest of the run.
+    expect(run.ctx.flags.handoff).toBeUndefined();
   });
 
   it("writes a credential indistinguishable from the one a device flow writes", async () => {

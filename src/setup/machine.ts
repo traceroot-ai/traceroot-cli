@@ -616,8 +616,10 @@ const authenticate: StageDefinition = {
     }
 
     // Browser-first onboarding's one-shot code. It is redeemed at most once per
-    // run, from whichever of the two rungs below is reached first.
+    // run, from whichever of the two rungs below is reached first, and comes off
+    // the flags as it is read, so nothing the rest of the run holds carries it.
     const handoffCode = ctx.flags.handoff?.trim();
+    ctx.flags.handoff = undefined;
     const handoff = handoffCode === undefined || handoffCode === "" ? null : handoffCode;
     let handoffTried = false;
     const tryHandoff = async (): Promise<boolean> => {
