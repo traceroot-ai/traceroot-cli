@@ -303,10 +303,12 @@ function resolveWindowsProgram(
  * A bare name is resolved against PATH × PATHEXT here rather than left to the
  * spawn, because Node's own search on Windows looks in the child's working
  * directory first, and that directory is the customer's repository: a shim
- * checked into it must never be run in preference to the real one. The search
- * uses the child's PATH, not this process's, because the caller composes that
- * PATH to decide what resolves: a virtualenv prepended so `pytest` is the one
- * inside it is exactly why a caller composes that environment at all.
+ * checked into it must never be run in preference to the real one. A name
+ * nothing on PATH answers to therefore returns null, and the caller reports a
+ * failed spawn, rather than reaching Node's search at all. The search uses the
+ * child's PATH, not this process's, because the caller composes that PATH to
+ * decide what resolves: a virtualenv prepended so `pytest` is the one inside it
+ * is exactly why a caller composes that environment at all.
  *
  * A name that resolves to a batch shim is then spawned through `ComSpec` with
  * `/d /s /c` and a command line built here, because Node refuses to start one
@@ -331,9 +333,10 @@ export function resolveSpawnTarget(
   const env = lookup.env ?? process.env;
   const resolved = resolveWindowsProgram(program, env, lookup.cwd, lookup.isFile ?? isRegularFile);
   if (resolved === null) {
-    // Nothing on PATH answers to it. Passed through so the spawn reports the
-    // ENOENT it always did, rather than this inventing a different failure.
-    return unchanged;
+    // Nothing on PATH answers to it. Refused rather than passed through: given
+    // the bare name, Node's own search tries the repository first, and would
+    // run the very shim the search above exists to skip.
+    return null;
   }
   if (!BATCH_EXTENSIONS.has(windowsPath.extname(resolved).toLowerCase())) {
     return { program: resolved, args, windowsVerbatimArguments: false };
@@ -409,7 +412,7 @@ export const runProcess: RunProcess = (options) =>
       cwd: options.cwd,
     });
     if (target === null) {
-      // Refused rather than approximated: see `CMD_UNSAFE_ARGUMENT`. Reported as a failed
+      // Refused rather than approximated: see `resolveSpawnTarget`. Reported as a failed
       // spawn, which is what it is — the command was never run.
       return resolve(spawnFailure());
     }
