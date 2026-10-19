@@ -61,6 +61,11 @@ export interface WorkspaceSummary {
   id: string;
   name: string;
   role: string;
+  /**
+   * The public TraceRoot demo, which every account joins as a viewer. A server
+   * that predates it sends nothing, which reads as no.
+   */
+  is_demo?: boolean;
 }
 
 export interface ProjectSummary {
@@ -68,6 +73,8 @@ export interface ProjectSummary {
   project_name: string;
   workspace_id: string;
   workspace_name?: string | null;
+  /** Whether the project belongs to the demo; see {@link WorkspaceSummary.is_demo}. */
+  workspace_is_demo?: boolean;
 }
 
 /** Key metadata. The plaintext `key` is only ever present on creation. */
@@ -311,7 +318,10 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
         method: "GET",
         path: "/api/v1/public/workspaces",
       });
-      return unwrap<WorkspaceSummary>(response, "data");
+      return unwrap<WorkspaceSummary>(response, "data").map((workspace) => ({
+        ...workspace,
+        is_demo: workspace.is_demo === true,
+      }));
     },
     async listProjects(workspaceId) {
       const query =
@@ -328,6 +338,7 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
         project_name: String(item.name ?? item.project_name ?? ""),
         workspace_id: String(item.workspace_id ?? ""),
         workspace_name: typeof item.workspace_name === "string" ? item.workspace_name : null,
+        workspace_is_demo: item.workspace_is_demo === true,
       }));
     },
     createProject(name, workspaceId) {

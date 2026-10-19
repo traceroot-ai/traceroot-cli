@@ -12,6 +12,7 @@ import {
   type ProjectSummary,
   type SetupApi,
   SetupApiError,
+  type WorkspaceSummary,
   createSetupApi,
 } from "../api/setup.js";
 import {
@@ -1586,6 +1587,10 @@ const selectContext: StageDefinition = {
  * the server will refuse with a 403 wastes the question. If that leaves nothing,
  * the message says the account has no workspace they can create in, which is
  * the actual problem.
+ *
+ * So is the TraceRoot demo, whatever the role in it: it is a public workspace
+ * every account joins, never a place for a repository's traces. An account
+ * that is in nothing else is told that, rather than to ask an admin for access.
  */
 async function chooseWorkspace(
   ctx: SetupContext,
@@ -1593,10 +1598,14 @@ async function chooseWorkspace(
   api: SetupApi,
   stage: SetupStage,
 ): Promise<string> {
-  const workspaces = (await api.listWorkspaces()).filter((w) => w.role.toLowerCase() !== "viewer");
+  const listed = await api.listWorkspaces();
+  const workspaces = listed.filter((w) => w.role.toLowerCase() !== "viewer" && w.is_demo !== true);
 
   const only = workspaces[0];
   if (only === undefined) {
+    if (onlyInDemo(listed)) {
+      throw demoOnly(stage);
+    }
     throw new SetupError({
       stage,
       code: "AMBIGUOUS",
@@ -1623,6 +1632,21 @@ async function chooseWorkspace(
     options: workspaces.map((w) => ({ value: w.id, label: w.name })),
   });
   return workspaces.find((w) => w.id === answer)?.id ?? only.id;
+}
+
+/** Whether the TraceRoot demo is the only workspace the account is in. */
+function onlyInDemo(workspaces: readonly WorkspaceSummary[]): boolean {
+  return workspaces.length > 0 && workspaces.every((w) => w.is_demo === true);
+}
+
+/** Why setup stops for an account that is in the demo and nothing else. */
+function demoOnly(stage: SetupStage): SetupError {
+  return new SetupError({
+    stage,
+    code: "AMBIGUOUS",
+    message: "This account is only in the TraceRoot demo workspace, which is view-only.",
+    remedy: "Create a workspace and project in the TraceRoot dashboard, then rerun setup.",
+  });
 }
 
 /**
@@ -1712,6 +1736,12 @@ export function projectOptions(projects: readonly ProjectSummary[]): SelectOptio
  * project is where the choice starts, and where a run with nobody to ask stays.
  * Whether a different answer may replace it is {@link confirmProjectSwitch}'s
  * call, not this function's.
+ *
+ * Projects in the TraceRoot demo are not among the choices. Every account joins
+ * the demo as a viewer, so counting its project as one of the account's own
+ * turned a lone project into a question, and an account with only the demo
+ * into a key mint the server refuses. Only `--project` with its exact id still
+ * reaches one: that is the user choosing it.
  */
 async function chooseProject(
   ctx: SetupContext,
@@ -1732,7 +1762,7 @@ async function chooseProject(
   // endpoint leaves the projects inside a workspace unordered, so a row's
   // position moved between runs, and "the third `test`" was not an answer that
   // could be given twice.
-  const projects = [...listed].sort(byNameThenId);
+  const projects = listed.filter((p) => p.workspace_is_demo !== true).sort(byNameThenId);
   const current = projects.find((p) => p.project_id === currentProjectId);
 
   const summarize = (p: ProjectSummary) => ({
@@ -1745,10 +1775,11 @@ async function chooseProject(
     // A name is unique only inside its workspace, so it can match several
     // projects. Among them, the one the repository already reports to: the
     // `--project` that set a repository up must not move it to a namesake on
-    // the next run.
+    // the next run. An exact id is looked up in the whole list, the demo's
+    // projects included.
     const matches = projects.filter((p) => p.project_id === wanted || p.project_name === wanted);
     const match =
-      matches.find((p) => p.project_id === wanted) ??
+      listed.find((p) => p.project_id === wanted) ??
       matches.find((p) => p === current) ??
       matches[0];
     if (match === undefined) {
@@ -1773,6 +1804,11 @@ async function chooseProject(
 
   if (first === undefined) {
     if (!ctx.canPrompt) {
+      // Every listed project was the demo's. Told to rerun interactively, an
+      // account with nowhere else would only be stopped by `chooseWorkspace`.
+      if (listed.length > 0 && onlyInDemo(await api.listWorkspaces())) {
+        throw demoOnly(stage);
+      }
       throw new SetupError({
         stage,
         code: "AMBIGUOUS",

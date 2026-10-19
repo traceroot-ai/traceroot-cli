@@ -15,7 +15,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 /** `git status --porcelain -z` record separator. */
 const NUL = String.fromCharCode(0);
 import type { ApiClientOptions } from "../../src/api/client.js";
-import { BackendUnavailableError, type SetupApi, SetupApiError } from "../../src/api/setup.js";
+import {
+  BackendUnavailableError,
+  type ProjectSummary,
+  type SetupApi,
+  SetupApiError,
+  type WorkspaceSummary,
+} from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
 import { redeemHandoff } from "../../src/auth/handoff.js";
@@ -1826,6 +1832,236 @@ describe("the project picker's rows", () => {
     ]);
     expect(result.ok).toBe(true);
     expect(ctx.project?.projectId).toBe("p_2");
+  });
+});
+
+describe("the TraceRoot demo workspace", () => {
+  // Every account joins the public demo as a viewer, and the server lists it
+  // alongside the account's own workspaces. Its project is named to sort first,
+  // so a picker that offered it would open on it.
+  const OWN: ProjectSummary = {
+    project_id: "p_own",
+    project_name: "web",
+    workspace_id: "w_own",
+    workspace_name: "Acme",
+  };
+  const WORKER: ProjectSummary = {
+    project_id: "p_worker",
+    project_name: "worker",
+    workspace_id: "w_own",
+    workspace_name: "Acme",
+  };
+  const DEMO: ProjectSummary = {
+    project_id: "p_demo",
+    project_name: "agent-demo",
+    workspace_id: "w_demo",
+    workspace_name: "TraceRoot Demo",
+    workspace_is_demo: true,
+  };
+  const OWN_WORKSPACE: WorkspaceSummary = { id: "w_own", name: "Acme", role: "admin" };
+  const DEMO_WORKSPACE: WorkspaceSummary = {
+    id: "w_demo",
+    name: "TraceRoot Demo",
+    role: "viewer",
+    is_demo: true,
+  };
+
+  /** One `traceroot setup` on a saved sign-in, recording what it asked and created. */
+  function demoRun(options: {
+    projects: readonly ProjectSummary[];
+    workspaces?: readonly WorkspaceSummary[];
+    canPrompt?: boolean;
+    flags?: Partial<SetupFlags>;
+    answers?: string[];
+  }) {
+    const asked: Parameters<SetupDeps["select"]>[0][] = [];
+    const calls: string[] = [];
+    const base = makeDeps({
+      auth: authEmpty(),
+      setupApi: fakeSetupApi({
+        listProjects: async () => options.projects.map((p) => ({ ...p })),
+        listWorkspaces: async () => (options.workspaces ?? []).map((w) => ({ ...w })),
+        createProject: async (name, workspaceId) => {
+          calls.push(`create ${workspaceId}`);
+          return { project_id: "p_new", project_name: name, workspace_id: workspaceId ?? "" };
+        },
+        createProjectApiKey: async (input) => {
+          calls.push(`mint ${input.projectId}`);
+          return {
+            id: `ak_${calls.length}`,
+            name: input.name,
+            hint: "tr-4444-5555",
+            project_id: input.projectId,
+            scope: input.scope ?? "admin",
+            expires_at: null,
+            key: `tr-${input.scope}-${input.projectId}`,
+          };
+        },
+      }),
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      answers: options.answers ?? [],
+      storedCredential: { session_token: "saved-session-token" },
+    });
+    const deps: SetupDeps = {
+      ...base,
+      select: (input) => {
+        asked.push(input);
+        return base.select(input);
+      },
+    };
+    const harness = makeCtx({
+      canPrompt: options.canPrompt ?? true,
+      flags: { agent: "claude", ...options.flags },
+    });
+    return { ...harness, deps, asked, calls };
+  }
+
+  const projectQuestion = (asked: Parameters<SetupDeps["select"]>[0][]) =>
+    asked.find((input) => input.message.includes("Which project"));
+  const minted = (calls: string[]) => calls.filter((call) => call.startsWith("mint "));
+
+  it("takes the account's own project without asking when the other one is the demo's", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [OWN, DEMO] });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(projectQuestion(run.asked)).toBeUndefined();
+    expect(run.ctx.project?.projectId).toBe("p_own");
+    expect(minted(run.calls).length).toBeGreaterThan(0);
+    expect(minted(run.calls).every((call) => call === "mint p_own")).toBe(true);
+  });
+
+  it("takes it with nobody to ask, as an agent or CI run did before the demo", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO, OWN], canPrompt: false });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.ctx.project?.projectId).toBe("p_own");
+  });
+
+  it("says so when the account is only in the demo, before any key is minted", async () => {
+    // The demo's project used to be taken as the account's only one, and the
+    // key mint behind it answered 403.
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO], workspaces: [DEMO_WORKSPACE] });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message).toContain(
+      "This account is only in the TraceRoot demo workspace, which is view-only.",
+    );
+    expect(result.error?.remedy).toContain("Create a workspace and project");
+    expect(projectQuestion(run.asked)).toBeUndefined();
+    expect(run.calls).toEqual([]);
+  });
+
+  it("says so with nobody to ask as well, rather than to rerun interactively", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO], workspaces: [DEMO_WORKSPACE], canPrompt: false });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.AMBIGUOUS);
+    expect(result.error?.message).toContain(
+      "This account is only in the TraceRoot demo workspace, which is view-only.",
+    );
+    expect(run.calls).toEqual([]);
+  });
+
+  it("still sends an account with an empty workspace of its own to create a project", async () => {
+    pythonRepo();
+    const run = demoRun({
+      projects: [DEMO],
+      workspaces: [DEMO_WORKSPACE, OWN_WORKSPACE],
+      canPrompt: false,
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message).toContain("no projects yet");
+    expect(run.calls).toEqual([]);
+  });
+
+  it("creates the first project in the account's own workspace, not the demo", async () => {
+    // A demo admin, as on our own team: the role alone would offer the demo as
+    // somewhere to create a project.
+    pythonRepo();
+    const run = demoRun({
+      projects: [DEMO],
+      workspaces: [{ ...DEMO_WORKSPACE, role: "admin" }, OWN_WORKSPACE],
+      // Only the project name: leaving the demo out leaves one workspace.
+      answers: [""],
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.asked.find((input) => input.message.includes("Which workspace"))).toBeUndefined();
+    expect(run.calls[0]).toBe("create w_own");
+    expect(run.ctx.project?.projectId).toBe("p_new");
+  });
+
+  it("honours --project naming the demo's project by its id", async () => {
+    pythonRepo();
+    const run = demoRun({
+      projects: [OWN, DEMO],
+      canPrompt: false,
+      flags: { project: "p_demo" },
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.ctx.project?.projectId).toBe("p_demo");
+    expect(minted(run.calls).every((call) => call === "mint p_demo")).toBe(true);
+  });
+
+  it("does not resolve a --project name to the demo's project", async () => {
+    pythonRepo();
+    const run = demoRun({
+      projects: [OWN, WORKER, DEMO],
+      canPrompt: false,
+      flags: { project: "agent-demo" },
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.remedy).toBe("Available projects: web, worker");
+    expect(run.calls).toEqual([]);
+  });
+
+  it("offers only the account's own projects", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO, OWN, WORKER], answers: ["p_worker"] });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(projectQuestion(run.asked)?.options.map((o) => o.value)).toEqual(["p_own", "p_worker"]);
+    expect(run.ctx.project?.projectId).toBe("p_worker");
+  });
+
+  it("counts and names only the account's own projects when it cannot ask", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO, OWN, WORKER], canPrompt: false });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message).toContain("has 2 projects");
+    expect(result.error?.remedy).toContain("--project web");
+    expect(result.error?.remedy).not.toContain("agent-demo");
+    expect(run.calls).toEqual([]);
   });
 });
 
