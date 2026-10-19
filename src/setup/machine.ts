@@ -3419,8 +3419,9 @@ function keepAgentOutput(input: {
         // Said here rather than only in `transcript.ts`, because this is the
         // line read by the person deciding whether to send the file to us. The
         // application credential is scrubbed out of it twice; anything else the
-        // agent read out of the repository is in there verbatim.
-        "It quotes what the agent read from the repository, so read it before you attach it to anything.",
+        // agent read out of the repository is in there verbatim, secrets too,
+        // and a pattern scrub for those would miss some and read as a promise.
+        "It can quote your repository's files, secrets included, so check it before you share it.",
       ];
 }
 

@@ -5351,6 +5351,11 @@ describe("the agent's own account of a failed run", () => {
     expect(plain(result.error?.message ?? "")).toContain("still not instrumented");
     expect(transcript()).toContain("could not edit main.py");
     expect(plain(result.error?.remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+    // Only the TraceRoot key is scrubbed, so the line naming the file says so
+    // to whoever is deciding whether to send it.
+    expect(plain(result.error?.remedy ?? "")).toContain(
+      "It can quote your repository's files, secrets included, so check it before you share it.",
+    );
   });
 
   it("writes nothing on a run that worked", async () => {
