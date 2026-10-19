@@ -212,7 +212,7 @@ export function renderSetupReport(
     // who finds no number knows the deployment did not report one rather than
     // being left to read something into its absence.
     trace !== undefined
-      ? `**First trace.** \`${trace.traceId}\`${trace.spanCount === undefined ? "" : ` — ${spanPhrase(trace.spanCount)}`}\n\n${trace.traceUrl}`
+      ? `**First trace.** \`${trace.traceId}\`${trace.spanCount === undefined ? "" : ` — ${spanPhrase(trace.spanCount)}`}${trace.attributed === false ? ". Not confirmed to come from this service: the project already had traces before setup started." : ""}\n\n${trace.traceUrl}`
       : `**First trace.** None yet. Run the application, then \`${setupCommand()} --resume\`.`,
     "",
     "## Files this run touched",

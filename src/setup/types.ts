@@ -223,6 +223,19 @@ export interface TraceVerification {
    * be handled by every reader.
    */
   spanCount?: number;
+  /** The trace's root span name; absent when the row carried none. */
+  name?: string;
+  /** How many traces since setup started were on the page this one was chosen from. */
+  candidates?: number;
+  /** That page came back full, so an earlier trace may have fallen off it. */
+  truncated?: boolean;
+  /**
+   * False when the project already had traces from before setup started, so
+   * this trace may come from another sender; true when it had none. Absent
+   * when that could not be learned, and on a checkpoint written before it was
+   * recorded: both are "unknown", and neither is printed as a doubt.
+   */
+  attributed?: boolean;
 }
 
 /**

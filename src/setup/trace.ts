@@ -11,7 +11,11 @@ import { sleep } from "../util/sleep.js";
  * Anything that can list traces satisfies this.
  */
 export interface TraceLister {
-  listTraces(params: { limit?: number; startAfter?: string }): Promise<TraceList>;
+  listTraces(params: {
+    limit?: number;
+    startAfter?: string;
+    endBefore?: string;
+  }): Promise<TraceList>;
 }
 import type { TraceVerification } from "./types.js";
 
@@ -60,8 +64,8 @@ export interface TraceAttribution {
   /** The trace's own name: the one field in a list row that hints at its origin. */
   name: string;
   /**
-   * How many traces matched. More than one means the project received other
-   * traffic since setup started and this was a choice between them.
+   * How many traces matched. More than one means this was a choice between
+   * them, not that another sender exists: see {@link attributed}.
    */
   candidates: number;
   /** The page came back full, so a matching trace may have fallen off the end. */
@@ -86,6 +90,17 @@ export interface TraceAttribution {
    * with nothing in it.
    */
   spanCount: number | null;
+  /**
+   * False when the project already had a trace from before setup started:
+   * something else sends to it, so this trace may be that sender's. True when
+   * it had none. Null when that could not be learned, which is never read as
+   * either answer.
+   *
+   * Only earlier traffic decides this, never {@link candidates}. An agent often
+   * runs the application more than once, and one run can send several traces,
+   * so more than one candidate on a fresh project is the ordinary case.
+   */
+  attributed: boolean | null;
 }
 
 /**
@@ -251,6 +266,29 @@ async function earliestSince(client: TraceLister, from: Date): Promise<Search> {
 }
 
 /**
+ * Whether the project had any trace before `before`: the one question about
+ * the project's other traffic the list endpoint can answer.
+ *
+ * Null when the look failed, or when the row it returned started at or after
+ * the bound, which only a backend that ignored `end_before` sends and which
+ * says nothing either way. A failed look must not fail a run that has its
+ * trace, nor mark that trace as someone else's.
+ */
+async function hadEarlierTraffic(client: TraceLister, before: Date): Promise<boolean | null> {
+  try {
+    const rows = rowsOf(await client.listTraces({ limit: 1, endBefore: before.toISOString() }));
+    if (rows.length === 0) {
+      return false;
+    }
+    const row = rowOf(rows[0]);
+    const rowMs = row === null || row.startTime === "" ? Number.NaN : parseStartTime(row.startTime);
+    return Number.isFinite(rowMs) && rowMs >= before.getTime() ? null : true;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Polls for the first trace produced by this setup run and returns the
  * backend's own permalink.
  *
@@ -280,7 +318,8 @@ async function earliestSince(client: TraceLister, from: Date): Promise<Search> {
  * teammate, a staging deployment — can still put a trace in this frame first,
  * and nothing in a list row says which process sent it. So the result carries
  * what a user needs to judge the link ({@link TraceAttribution}) rather than
- * passing the choice off as proof.
+ * passing the choice off as proof, including whether the project had traces
+ * from before setup started, which is the one sign that such a sender exists.
  *
  * The permalink is the `trace_url` the backend returned, echoed verbatim — the
  * same rule `traces get` follows. Constructing a URL client-side would break
@@ -293,7 +332,7 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
   let attempts = 0;
   let lastError: string | null = null;
 
-  const found = (search: Search, row: Row): PollForTraceResult => ({
+  const found = (search: Search, row: Row, earlier: boolean | null): PollForTraceResult => ({
     found: true,
     trace: {
       traceId: row.traceId,
@@ -310,12 +349,19 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
       // zero are different answers and `TraceVerification` spells the first as
       // a missing field. A null here would read downstream as a number.
       ...(row.spanCount === null ? {} : { spanCount: row.spanCount }),
+      // The same, for the attribution: the checkpoint carries this record, and
+      // a resumed run's report reads it from there.
+      ...(row.name === "" ? {} : { name: row.name }),
+      candidates: search.candidates,
+      truncated: search.truncated,
+      ...(earlier === null ? {} : { attributed: !earlier }),
     },
     attribution: {
       name: row.name,
       candidates: search.candidates,
       truncated: search.truncated,
       spanCount: row.spanCount,
+      attributed: earlier === null ? null : !earlier,
     },
   });
   const notFound = (error: string | null): PollForTraceResult => ({
@@ -336,7 +382,11 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
     try {
       const search = await earliestSince(input.client, input.startedAt);
       if (search.earliest !== null) {
-        return found(search, search.earliest);
+        return found(
+          search,
+          search.earliest,
+          await hadEarlierTraffic(input.client, input.startedAt),
+        );
       }
       lastError = null;
     } catch (err) {

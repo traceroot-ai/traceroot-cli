@@ -4525,10 +4525,17 @@ const verifyTrace: StageDefinition = {
     // row says about how much of the application the trace shows — stated, and
     // never judged, because whether it is enough depends on the program.
     // Omitted rather than guessed at when the response did not carry a count.
-    const received =
+    const size =
       outcome.found && outcome.attribution.spanCount !== null
-        ? `First trace received (${spanPhrase(outcome.attribution.spanCount)}).`
-        : "First trace received.";
+        ? ` (${spanPhrase(outcome.attribution.spanCount)})`
+        : "";
+    // How many arrived since setup started, when it was more than one. Stated,
+    // never a doubt: an agent that runs the application twice sends two.
+    const among =
+      outcome.found && outcome.attribution.candidates > 1
+        ? ` — first of ${outcome.attribution.candidates}${outcome.attribution.truncated ? "+" : ""} since setup started`
+        : "";
+    const received = `First trace received${size}${among}.`;
     waiting?.stop(
       outcome.found
         ? received
@@ -4590,6 +4597,17 @@ const verifyTrace: StageDefinition = {
           "  traceroot traces list --limit 5",
         ].join("\n"),
       });
+    }
+
+    // Not a failure and not a change of exit code: the trace may well be this
+    // service's. But the project has another sender, and nothing in the list
+    // says which of the two sent this one.
+    if (outcome.attribution.attributed === false) {
+      const name = outcome.attribution.name;
+      wizardWarn(
+        ctx,
+        `this project already had traces before setup started, so ${name === "" ? "this trace" : `the trace "${name}"`} may not come from this service. Open it and check.`,
+      );
     }
 
     // Kept on the record rather than only mentioned. The report is rendered
@@ -5157,6 +5175,13 @@ function stageData(ctx: SetupContext, stage: SetupStage): Record<string, unknown
             // warning reaches json mode as a `warn` event; this is the number
             // behind it, so a caller does not have to parse the sentence.
             span_count: ctx.trace.spanCount ?? null,
+            // `trace_attributed` is null when the look for earlier traffic
+            // failed, and `false` is the one value that means "check this
+            // trace".
+            trace_name: ctx.trace.name ?? null,
+            candidates: ctx.trace.candidates ?? null,
+            truncated: ctx.trace.truncated ?? null,
+            trace_attributed: ctx.trace.attributed ?? null,
           };
     default:
       return undefined;

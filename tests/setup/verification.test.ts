@@ -892,6 +892,90 @@ describe("choosing which trace the run produced", () => {
   });
 });
 
+describe("whether the project had traces before setup started", () => {
+  const STARTED = new Date("2026-07-26T12:00:00.000Z");
+  const OURS = {
+    trace_id: "ours",
+    trace_url: "https://app.example.test/trace/ours",
+    trace_start_time: "2026-07-26T12:00:30.000000",
+    name: "demo.run",
+  };
+
+  /** The poll over one trace since setup started, with `earlier` answering the look before it. */
+  function look(earlier: unknown[] | Error) {
+    const seen: Array<Record<string, unknown>> = [];
+    const result = pollForTrace({
+      client: {
+        listTraces: async (params) => {
+          seen.push({ ...params });
+          if (params.endBefore === undefined) {
+            return { data: [OURS], meta: { limit: 200 } } as never;
+          }
+          if (earlier instanceof Error) {
+            throw earlier;
+          }
+          return { data: earlier, meta: { limit: 1 } } as never;
+        },
+      },
+      startedAt: STARTED,
+      timeoutMs: 5_000,
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+    return { seen, result };
+  }
+
+  it("asks once, after the trace is found, for one trace from before setup started", async () => {
+    const { seen, result } = look([]);
+    await result;
+
+    expect(seen).toEqual([
+      { limit: 200, startAfter: "2026-07-26T12:00:00.000Z" },
+      { limit: 1, endBefore: "2026-07-26T12:00:00.000Z" },
+    ]);
+  });
+
+  it("calls the trace attributed when the project had none", async () => {
+    const outcome = await look([]).result;
+
+    expect(outcome.found && outcome.attribution.attributed).toBe(true);
+    expect(outcome.found && outcome.trace).toMatchObject({
+      name: "demo.run",
+      candidates: 1,
+      truncated: false,
+      attributed: true,
+    });
+  });
+
+  it("calls it unattributed when the project already had traffic", async () => {
+    const outcome = await look([
+      { ...OURS, trace_id: "old", trace_start_time: "2026-07-25T09:00:00.000000" },
+    ]).result;
+
+    expect(outcome.found && outcome.trace.traceId).toBe("ours");
+    expect(outcome.found && outcome.attribution.attributed).toBe(false);
+    expect(outcome.found && outcome.trace.attributed).toBe(false);
+  });
+
+  it("leaves it unknown, and the trace found, when that look fails", async () => {
+    // The run has its trace. A second read that fails must neither undo that
+    // nor be read as "someone else sent it".
+    const outcome = await look(new Error("request to host failed: fetch failed")).result;
+
+    expect(outcome.found).toBe(true);
+    expect(outcome.found && outcome.attribution.attributed).toBeNull();
+    expect(outcome.found && "attributed" in outcome.trace).toBe(false);
+  });
+
+  it("leaves it unknown when the backend ignored the bound", async () => {
+    // A row from after setup started can only mean `end_before` was not
+    // applied, which says nothing about what came before.
+    const outcome = await look([OURS]).result;
+
+    expect(outcome.found && outcome.attribution.attributed).toBeNull();
+  });
+});
+
 describe("how much of the application the trace covers", () => {
   const STARTED = new Date("2026-07-26T12:00:00.000Z");
 

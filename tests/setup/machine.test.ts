@@ -60,6 +60,7 @@ import {
   fakeApiClient,
   fakeRunProcess,
   fakeSetupApi,
+  listTracesFrom,
   makeDeps,
   makeWriters,
   traceRow,
@@ -7728,7 +7729,12 @@ describe("the first trace is the application's", () => {
 
     expect(result.ok).toBe(true);
     expect(ctx.trace?.traceId).toBe("app");
-    expect(plain(err.data)).toContain("First trace received (21 spans).");
+    // The burst is counted beside it, as information: five traces since setup
+    // started is not, on its own, a reason to doubt the first.
+    expect(plain(err.data)).toContain(
+      "First trace received (21 spans) — first of 5 since setup started.",
+    );
+    expect(plain(err.data)).not.toContain("may not come from this service");
   });
 
   it("sends nothing from setup's own runs of the project's check", async () => {
@@ -8707,5 +8713,125 @@ describe("how much of the application the first trace covers", () => {
         e.status === "ok",
     ) as unknown as { data: { span_count: number | null } };
     expect(stage.data.span_count).toBeNull();
+  });
+});
+
+describe("a project that already had traces before setup started", () => {
+  const EARLIER = traceRow({ trace_id: "t_old", trace_start_time: "2026-07-25T09:00:00.000000" });
+
+  /**
+   * A run that reaches a trace, with `earlier` answering the one read bounded
+   * by `end_before`: the question of whether anything else sends to this
+   * project.
+   */
+  function run(options: { earlier: unknown[] | Error; rows?: unknown[]; json?: boolean }) {
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: options.rows ?? [traceRow({ name: "demo.run", span_count: 7 })],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const createApi = deps.createSetupApi;
+    deps.createSetupApi = (o) => {
+      const api = createApi(o);
+      return {
+        ...api,
+        listTraces: async (params) => {
+          if (params?.endBefore === undefined) {
+            return api.listTraces(params);
+          }
+          if (options.earlier instanceof Error) {
+            throw options.earlier;
+          }
+          return listTracesFrom(options.earlier)(params);
+        },
+      };
+    };
+    const harness = makeCtx({ json: options.json ?? false, flags: { agent: "claude" } });
+    return { harness, result: runSetupMachine(harness.ctx, deps) };
+  }
+
+  function foundLine(err: StringSink): string | undefined {
+    return plain(err.data)
+      .split("\n")
+      .find((l) => l.includes("First trace received"));
+  }
+
+  function traceStage(events: SetupEvent[]): Record<string, unknown> {
+    const stage = events.find(
+      (e) =>
+        e.event === "stage" &&
+        (e as unknown as { stage: string }).stage === "verify_trace" &&
+        e.status === "ok",
+    ) as unknown as { data: Record<string, unknown> };
+    return stage.data;
+  }
+
+  it("says exactly what it always said when the project had none and one trace arrived", async () => {
+    // The onboarding case, and the approved core path: nothing about it changes.
+    const { harness, result } = run({ earlier: [] });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(foundLine(harness.err)).toBe("│  First trace received (7 spans).");
+    expect(plain(harness.err.data)).not.toContain("may not come from this service");
+    expect(outcome.checkpoint.trace?.attributed).toBe(true);
+  });
+
+  it("warns, names the trace and still succeeds when the project already had traffic", async () => {
+    const { harness, result } = run({ earlier: [EARLIER] });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(foundLine(harness.err)).toBe("│  First trace received (7 spans).");
+    expect(plain(harness.err.data)).toContain(
+      'warning: this project already had traces before setup started, so the trace "demo.run" may not come from this service. Open it and check.',
+    );
+    // On the checkpoint, so a resumed run's report says the same.
+    expect(outcome.checkpoint.trace?.attributed).toBe(false);
+  });
+
+  it("puts the attribution on the JSON step", async () => {
+    const { harness, result } = run({ earlier: [EARLIER], json: true });
+    await result;
+
+    expect(traceStage(harness.events)).toMatchObject({
+      trace_name: "demo.run",
+      candidates: 1,
+      truncated: false,
+      trace_attributed: false,
+    });
+  });
+
+  it("counts several traces since setup started without doubting the first", async () => {
+    // An agent that runs the application twice sends two. Only earlier traffic
+    // shows another sender exists.
+    const { harness, result } = run({
+      earlier: [],
+      rows: [
+        traceRow({ trace_id: "t_2", trace_start_time: "2026-07-26T12:00:40.000000" }),
+        traceRow({ name: "demo.run", span_count: 7 }),
+      ],
+    });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(foundLine(harness.err)).toBe(
+      "│  First trace received (7 spans) — first of 2 since setup started.",
+    );
+    expect(plain(harness.err.data)).not.toContain("may not come from this service");
+  });
+
+  it("neither warns nor guesses when the look for earlier traffic fails", async () => {
+    const { harness, result } = run({
+      earlier: new Error("request to host failed: fetch failed"),
+      json: true,
+    });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(harness.err.data).not.toContain("may not come from this service");
+    expect(traceStage(harness.events)).toMatchObject({ trace_attributed: null });
+    expect(outcome.checkpoint.trace?.attributed).toBeUndefined();
   });
 });
