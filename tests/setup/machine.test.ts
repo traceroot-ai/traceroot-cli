@@ -1020,7 +1020,7 @@ describe("authentication", () => {
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       storedCredential: { session_token: "tru-saved-token" },
     });
-    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+    const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
 
     const result = await runSetupMachine(ctx, deps);
 
@@ -1032,7 +1032,49 @@ describe("authentication", () => {
     expect(attempted).toHaveLength(3);
     expect(attempted[1]).not.toBe(attempted[0]);
     expect(attempted[1]).toContain(attempted[0]);
+    // A 409 created nothing, so there is no key to go looking for.
+    expect(plain(err.data)).not.toContain("did not confirm");
   });
+
+  for (const [why, error] of [
+    ["a 5xx", new SetupApiError("Service Unavailable", 503)],
+    ["a reply that never arrived", new SetupApiError("fetch failed", 0)],
+  ] as const) {
+    it(`names the key a mint may have created on ${why}`, async () => {
+      // The server may have committed the key before the reply was lost, and
+      // the ledger never saw it, so the rollback cannot revoke it. Naming it is
+      // the only way the user learns there is a key to look for.
+      pythonRepo();
+      const attempted: string[] = [];
+      const setupApi = fakeSetupApi({
+        listProjects: async () => [
+          { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+        ],
+        createProjectApiKey: async (input) => {
+          attempted.push(input.name);
+          throw error;
+        },
+      });
+      const deps = makeDeps({
+        auth: authEmpty(),
+        setupApi,
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        storedCredential: { session_token: "tru-saved-token" },
+      });
+      const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(result.ok).toBe(false);
+      // Not retried under another name, which could only orphan a second key.
+      expect(attempted).toHaveLength(1);
+      expect(plain(err.data)).toContain(
+        `the server did not confirm the API key ${attempted[0]}, but it may have been created. If it shows up in the project's API keys at https://api.example.test, delete it, or ask a workspace admin to.`,
+      );
+      expect(ctx.checkpoint.mintedKeys ?? []).toEqual([]);
+    });
+  }
 
   it("does not use a saved credential belonging to a different host", async () => {
     // `readCredential` is keyed by host; this pins that the machine asks for
@@ -5791,14 +5833,21 @@ describe("what a failed run takes back", () => {
     expect(ctx.checkpoint.mintedKeys).toEqual([]);
   });
 
-  for (const [why, error] of [
+  for (const [why, error, advice] of [
     [
       "a deployment without that route",
       new BackendUnavailableError("/api/v1/public/projects/p_1/api-keys/ak_1", 404),
+      "they are still live. Delete them from the project's API keys at https://api.example.test.",
     ],
-    ["a role that may not revoke", new SetupApiError("Your role cannot revoke these keys", 403)],
+    [
+      "a role that may not revoke",
+      new SetupApiError("Your role cannot revoke these keys", 403),
+      // A member cannot delete them in the dashboard either, so "delete them"
+      // would send them somewhere that refuses them again.
+      "this account may not revoke keys, so they are still live. A workspace admin has to delete them from the project's API keys at https://api.example.test.",
+    ],
   ] as const) {
-    it(`still names them as live, and where to delete them, on ${why}`, async () => {
+    it(`still names them as live, and who can delete them where, on ${why}`, async () => {
       pythonRepo();
       const { deps, revoked } = signInThenFail({ revokeError: error });
       const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
@@ -5807,9 +5856,7 @@ describe("what a failed run takes back", () => {
 
       expect(revoked).toEqual([]);
       expect(plain(err.data)).toContain("could not revoke the 2 API keys traceroot-cli-");
-      expect(plain(err.data)).toContain(
-        "they are still live. Delete them from the project's API keys at https://api.example.test.",
-      );
+      expect(plain(err.data)).toContain(advice);
       expect(plain(err.data)).not.toContain("Revoked the");
       expect(ctx.checkpoint.mintedKeys?.map((key) => key.id)).toEqual(["ak_1", "ak_2"]);
     });

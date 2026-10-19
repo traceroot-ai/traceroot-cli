@@ -1455,7 +1455,7 @@ async function mintProjectKey(
   const base =
     scope === "admin" ? `traceroot-cli-${basename(ctx.root)}` : `traceroot-${basename(ctx.root)}`;
   const mint = (name: string, withScope: "ingest" | "admin") =>
-    mintRecordedKey(ctx, api, {
+    mintRecordedKey(ctx, deps, api, {
       projectId,
       name,
       scope: withScope,
@@ -2058,7 +2058,7 @@ const acquireProjectKey: StageDefinition = {
     }
 
     const name = uniqueKeyName(`traceroot-setup-${basename(ctx.root)}`, existingNames);
-    const created = await mintRecordedKey(ctx, api, {
+    const created = await mintRecordedKey(ctx, deps, api, {
       name,
       projectId: project.projectId,
       // The application's credential, so it sends telemetry and nothing else.
@@ -2270,27 +2270,41 @@ interface MintRequest {
  * throws, so the durable record cannot itself be what loses the key. The one
  * window this cannot close is a process that dies between the server minting
  * the key and the response arriving here: nothing on this side of that call can
- * know the key exists.
+ * know the key exists. A reply that is lost, or a 5xx the server may have sent
+ * after committing the key, is the same window with the process still alive,
+ * so the key it asked for is named before the failure ends the run.
  */
 async function mintRecordedKey(
   ctx: SetupContext,
+  deps: SetupDeps,
   api: SetupApi,
   request: MintRequest,
 ): Promise<CreatedApiKey> {
-  const created =
-    request.authenticatedBy === "user"
-      ? await api.createProjectApiKey({
-          projectId: request.projectId,
-          name: request.name,
-          scope: request.scope,
-          expiresInDays: null,
-        })
-      : await api.createApiKey({
-          name: request.name,
-          projectId: request.projectId,
-          scope: request.scope,
-          expiresInDays: null,
-        });
+  let created: CreatedApiKey;
+  try {
+    created =
+      request.authenticatedBy === "user"
+        ? await api.createProjectApiKey({
+            projectId: request.projectId,
+            name: request.name,
+            scope: request.scope,
+            expiresInDays: null,
+          })
+        : await api.createApiKey({
+            name: request.name,
+            projectId: request.projectId,
+            scope: request.scope,
+            expiresInDays: null,
+          });
+  } catch (err) {
+    if (err instanceof SetupApiError && (err.status === 0 || err.status >= 500)) {
+      wizardWarn(
+        ctx,
+        `the server did not confirm the API key ${request.name}, but it may have been created. If it shows up in the project's API keys at ${keyListHost(ctx, deps)}, delete it, or ask a workspace admin to.`,
+      );
+    }
+    throw err;
+  }
 
   const entry: MintedKey = {
     id: created.id,
@@ -4780,6 +4794,9 @@ async function revokeMintedKeys(ctx: SetupContext, deps: SetupDeps): Promise<Rea
 
   const revoked: MintedKey[] = [];
   const kept: MintedKey[] = [];
+  // Kept apart because "delete it" is advice a member cannot take: the
+  // dashboard refuses them the same revoke the server just did.
+  const refused: MintedKey[] = [];
   for (const key of minted) {
     try {
       if (key.authenticatedBy === "user") {
@@ -4788,18 +4805,29 @@ async function revokeMintedKeys(ctx: SetupContext, deps: SetupDeps): Promise<Rea
         await key.api.revokeApiKey(key.id);
       }
       revoked.push(key);
-    } catch {
+    } catch (err) {
       kept.push(key);
+      if (isForbidden(err)) {
+        refused.push(key);
+      }
     }
   }
 
   if (revoked.length > 0) {
     wizardProgress(ctx, `Revoked ${describeKeys(revoked)}, created by this run.`);
   }
-  if (kept.length > 0) {
+  const host = keyListHost(ctx, deps);
+  const unrevoked = kept.filter((key) => !refused.includes(key));
+  if (unrevoked.length > 0) {
     wizardWarn(
       ctx,
-      `could not revoke ${describeKeys(kept)}, created by this run — ${kept.length === 1 ? "it is" : "they are"} still live. Delete ${kept.length === 1 ? "it" : "them"} from the project's API keys at ${deps.resolvedAuth.hostUrl.value ?? ctx.session?.host ?? "your TraceRoot deployment"}.`,
+      `could not revoke ${describeKeys(unrevoked)}, created by this run — ${unrevoked.length === 1 ? "it is" : "they are"} still live. Delete ${unrevoked.length === 1 ? "it" : "them"} from the project's API keys at ${host}.`,
+    );
+  }
+  if (refused.length > 0) {
+    wizardWarn(
+      ctx,
+      `could not revoke ${describeKeys(refused)}, created by this run — this account may not revoke keys, so ${refused.length === 1 ? "it is" : "they are"} still live. A workspace admin has to delete ${refused.length === 1 ? "it" : "them"} from the project's API keys at ${host}.`,
     );
   }
 
@@ -4811,6 +4839,11 @@ async function revokeMintedKeys(ctx: SetupContext, deps: SetupDeps): Promise<Rea
   );
   writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
   return new Set(revoked.map((key) => key.id));
+}
+
+/** Where a key this run could not take back is deleted by hand. */
+function keyListHost(ctx: SetupContext, deps: SetupDeps): string {
+  return deps.resolvedAuth.hostUrl.value ?? ctx.session?.host ?? "your TraceRoot deployment";
 }
 
 /** `name (hint)` for each, which is how the dashboard's key list reads. */
