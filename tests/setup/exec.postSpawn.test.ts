@@ -51,7 +51,11 @@ function killRefused(): Error {
 
 function opts(extra: Record<string, unknown> = {}) {
   return {
-    program: "whatever",
+    // A file that exists on every host, named by its absolute path. `spawn` is
+    // mocked, so it never runs, but on Windows the module resolves the program
+    // first and refuses a bare name nothing on PATH answers to, which would
+    // settle these runs as failures to start before any fake was made.
+    program: process.execPath,
     args: [],
     cwd: process.cwd(),
     env: {},
