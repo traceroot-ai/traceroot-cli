@@ -981,6 +981,17 @@ export function manualInstructions(input: {
   const dotenv =
     envFiles.length === 0 ? null : service.language === "python" ? "python-dotenv" : "dotenv";
   const install = installCommand(sdk, service, service.language, input.pythonInterpreter);
+  // Named beside the load, as the agent's task does: that load anchors on
+  // `import.meta.url`, which a CommonJS entry point does not have, and which
+  // module system the entry point uses is not something detection establishes.
+  const commonJs =
+    dotenv === "dotenv"
+      ? [
+          "",
+          "     A CommonJS entry point has no import.meta.url. There, require() both",
+          '     packages and give the same path as join(__dirname, "...").',
+        ]
+      : [];
 
   return [
     `Add TraceRoot to ${service.path} by hand:`,
@@ -998,6 +1009,7 @@ export function manualInstructions(input: {
     "     point, so initializing there starts the SDK in every test:",
     "",
     ...init.map((line) => (line === "" ? "" : `       ${line}`)),
+    ...commonJs,
     "",
     "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
     "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",
