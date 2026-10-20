@@ -232,24 +232,6 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       // repository, so what could not be established is left out and said out
       // loud rather than approximated.
       //
-      // What is established, and on what. `codex exec --help` on codex-cli
-      // 0.163.0 confirms the flag spellings; it lists no config keys. Beyond
-      // that, recorded runs of this pipeline on codex-cli 0.162.1 reached a
-      // trace on staging: a Python service installed with pip into a venv, and
-      // a JavaScript one installed with npm. Those runs passed `exec`,
-      // `--sandbox workspace-write`, `--skip-git-repo-check`, the network and
-      // shell-snapshot overrides below and, on the npm run, `--add-dir` for the
-      // npm cache. They also passed `--ignore-user-config`, which this launch
-      // does not, so they show a stock install rather than a user's
-      // `config.toml`. `--color never` and the approval-policy override were
-      // not part of them; the stock install already started at `approval:
-      // never`.
-      //
-      // Still untested: pnpm, yarn, bun, uv and poetry; a run in a directory
-      // that is not a git repository; and the browser sign-in path, where
-      // `configure_repository` writes the key into a `.env`, because the
-      // recorded runs took the key from the environment.
-      //
       // `exec` is the non-interactive subcommand. The prompt is the positional
       // argument, and `-` is documented as "read it from stdin" — which is the
       // channel this launch already uses for Claude, for the same reason: a
@@ -274,8 +256,7 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //   `workspace-write` the sandbox has network access turned off by
       //   default. The first thing this task asks for is `pip install` or
       //   `npm install`, so the default turns the whole run into a long way of
-      //   discovering that the SDK could not be fetched. A stock run without
-      //   it could not resolve `pypi.org`.
+      //   discovering that the SDK could not be fetched.
       //
       //   `approval_policy="never"` — a non-interactive run has nobody to
       //   approve anything, and the policy otherwise comes from the user's own
@@ -286,12 +267,7 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //   `features.shell_snapshot=false` — Codex's shell snapshot, on by
       //   default, re-applies the exports in the user's shell profile to every
       //   command the agent runs, so a `TRACEROOT_API_KEY` exported in
-      //   `~/.zshrc` replaces the one `buildAgentEnv` hands the agent. In a
-      //   recorded run the profile exported a production key, the
-      //   application's exporter got a 401 from the staging host setup had
-      //   targeted, and no trace arrived; with the snapshot off the same run
-      //   reached one. A profile key for another project on the same host
-      //   would presumably send the trace there instead, which is untested.
+      //   `~/.zshrc` replaces the one `buildAgentEnv` hands the agent.
       //
       // `--color never` keeps ANSI escapes out of the captured stdout. The
       // completion block is recovered from that text by a fenced-block regex
@@ -305,13 +281,11 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //
       // `--add-dir` once per `writableDirs` entry, because `workspace-write`
       // confines writes to the working directory and a package manager's cache
-      // lives outside it. In a recorded npm run `npm install` failed with EPERM
-      // writing `~/.npm/_cacache`, and Codex changed nothing; with `--add-dir
-      // ~/.npm` the same run reached a trace. The flag rather than the
-      // `sandbox_workspace_write.writable_roots` key, because the flag is what
-      // that run passed and a path needs no TOML quoting. Which directories to
-      // pass is the instrument stage's decision, not this function's, and so
-      // is making sure each one exists; see `prepareWritableDir`.
+      // lives outside it. The flag rather than the
+      // `sandbox_workspace_write.writable_roots` key, because a path needs no
+      // TOML quoting. Which directories to pass is the instrument stage's
+      // decision, not this function's, and so is making sure each one exists;
+      // see `prepareWritableDir`.
       //
       // NOT mirrored, because the mechanism does not exist on this side:
       //

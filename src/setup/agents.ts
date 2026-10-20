@@ -91,24 +91,12 @@ function launchRefusal(
  * environment this CLI controls rather than one the user's shell profile
  * re-exports over the top of.
  *
- * The two entries are not on this list on the same evidence, and the comment
- * that used to stand here claimed otherwise. It said a place was "earned by a
- * recorded run of this pipeline that reached a trace, for each package manager
- * the language has". That is still the bar Claude Code cleared, and it is not
- * the bar Codex cleared:
+ * The two entries are not on this list on the same evidence:
  *
- * - `claude` — recorded runs of this pipeline, through to a trace, per package
- *   manager. The strong case, and the one the sentence above described.
- * - `codex` — recorded runs of this pipeline on codex-cli 0.162.1, through to a
- *   trace, for two package managers: pip into a venv for Python, and npm for
- *   JavaScript. Each needed a setting the first invocation lacked: shell
- *   snapshots off, so a key exported in the user's shell profile cannot replace
- *   the one setup injects, and on the npm run a writable npm cache. Both are in
- *   `buildInvocation` (./launch.ts), with what each fixed. Not yet run: pnpm,
- *   yarn, bun, uv and poetry; a directory that is not a git repository; and the
- *   browser sign-in path, which writes the key into a `.env`. Those runs also
- *   passed `--ignore-user-config`, which setup does not, so a user's own
- *   `config.toml` is untested as well.
+ * - `claude` — this pipeline has reached a trace with each package manager the
+ *   language has.
+ * - `codex` — it has reached one with pip and npm only. The settings it needs
+ *   are in `buildInvocation` (./launch.ts), each with its reason.
  *
  * It is here anyway because the alternative is worse for the user it is about.
  * A wizard that finds `codex` on PATH and offers nothing but "run it yourself"
@@ -119,10 +107,9 @@ function launchRefusal(
  * the user's worktree, and `--no-instrument` still writes the task out for
  * whichever agent they prefer.
  *
- * So the rule going forward is that an entry here carries its own basis in this
- * comment. Promoting Codex's to the first kind takes recorded runs on the
- * package managers still missing, not a second reading of the same
- * documentation.
+ * So an entry here carries its own basis in this comment. Promoting Codex's to
+ * the first kind takes runs on the package managers still missing, not a
+ * second reading of the same documentation.
  *
  * An agent that is not on this list is still a first-class skill target, and
  * `--no-instrument` still writes the instrumentation task out for it.

@@ -4466,13 +4466,14 @@ const verifyTrace: StageDefinition = {
     // wizard uses for "is there somebody at a terminal": a CI job, a pipe or
     // `--no-input` must behave exactly as it did before this existed.
     //
-    // Deliberately not a flag. The reason to stop waiting is that the browser
-    // page is already watching for the same trace, which is a fact about a
-    // human with a browser open; a flag would also have to mean something under
-    // `--json` and in CI, where it would turn the one check that proves the
-    // instrumentation works into an opt-out — a run that reports success having
-    // verified nothing. `--trace-timeout` already serves anyone who wants a
-    // shorter wait, and it keeps a timeout a timeout.
+    // Deliberately not a flag. Stopping early is a call for the person at the
+    // terminal: the device sign-in page ends at approval, and only the web
+    // onboarding tab, when setup was started from one, also waits for this
+    // trace. A flag would also have to mean something under `--json` and in
+    // CI, where it would turn the one check that proves the instrumentation
+    // works into an opt-out — a run that reports success having verified
+    // nothing. `--trace-timeout` already serves anyone who wants a shorter
+    // wait, and it keeps a timeout a timeout.
     const canSkip = !ctx.json && canArrive && ctx.canPrompt;
 
     let waiting: LineSpinner | null = null;
