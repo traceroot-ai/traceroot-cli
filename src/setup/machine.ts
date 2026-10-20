@@ -126,6 +126,7 @@ import {
   wizardStepLine,
   wizardValue,
   wizardWarn,
+  withoutControlChars,
 } from "./wizard.js";
 
 /**
@@ -4603,7 +4604,9 @@ const verifyTrace: StageDefinition = {
     // service's. But the project has another sender, and nothing in the list
     // says which of the two sent this one.
     if (outcome.attribution.attributed === false) {
-      const name = outcome.attribution.name;
+      // Stripped, because the name may well be the other sender's: written as
+      // it came, it could put escapes or a forged line into this warning.
+      const name = withoutControlChars(outcome.attribution.name);
       wizardWarn(
         ctx,
         `this project already had traces before setup started, so ${name === "" ? "this trace" : `the trace "${name}"`} may not come from this service. Open it and check.`,

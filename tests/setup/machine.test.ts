@@ -8732,6 +8732,8 @@ describe("a project that already had traces before setup started", () => {
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const createApi = deps.createSetupApi;
+    /** Every `end_before` the run asked with, so a test can check the bound itself. */
+    const bounds: string[] = [];
     deps.createSetupApi = (o) => {
       const api = createApi(o);
       return {
@@ -8740,6 +8742,7 @@ describe("a project that already had traces before setup started", () => {
           if (params?.endBefore === undefined) {
             return api.listTraces(params);
           }
+          bounds.push(params.endBefore);
           if (options.earlier instanceof Error) {
             throw options.earlier;
           }
@@ -8748,7 +8751,7 @@ describe("a project that already had traces before setup started", () => {
       };
     };
     const harness = makeCtx({ json: options.json ?? false, flags: { agent: "claude" } });
-    return { harness, result: runSetupMachine(harness.ctx, deps) };
+    return { harness, bounds, result: runSetupMachine(harness.ctx, deps) };
   }
 
   function foundLine(err: StringSink): string | undefined {
@@ -8779,16 +8782,34 @@ describe("a project that already had traces before setup started", () => {
   });
 
   it("warns, names the trace and still succeeds when the project already had traffic", async () => {
-    const { harness, result } = run({ earlier: [EARLIER] });
+    const { harness, bounds, result } = run({ earlier: [EARLIER] });
     const outcome = await result;
 
     expect(outcome.ok).toBe(true);
+    // Asked once, and bounded by this run's own start: a later bound would
+    // count the agent's own traces as another sender's.
+    expect(bounds).toEqual([new Date(outcome.checkpoint.startedAt).toISOString()]);
     expect(foundLine(harness.err)).toBe("│  First trace received (7 spans).");
     expect(plain(harness.err.data)).toContain(
       'warning: this project already had traces before setup started, so the trace "demo.run" may not come from this service. Open it and check.',
     );
     // On the checkpoint, so a resumed run's report says the same.
     expect(outcome.checkpoint.trace?.attributed).toBe(false);
+  });
+
+  it("strips control characters from the name it warns about", async () => {
+    // The name is the sending process's own text, and here that sender may be
+    // the other one: an escape or a newline in it must not reach the terminal.
+    const { harness, result } = run({
+      earlier: [EARLIER],
+      rows: [traceRow({ name: "demo.run\u001b[2J\nwarning: forged", span_count: 7 })],
+    });
+    await result;
+
+    expect(harness.err.data).not.toContain("\u001b[2J");
+    expect(plain(harness.err.data)).toContain(
+      'so the trace "demo.run[2Jwarning: forged" may not come from this service.',
+    );
   });
 
   it("puts the attribution on the JSON step", async () => {

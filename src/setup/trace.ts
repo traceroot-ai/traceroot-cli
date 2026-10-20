@@ -305,14 +305,9 @@ async function hadEarlierTraffic(client: TraceLister, before: Date): Promise<boo
  * suite the same way. What arrives is the application being run — by the
  * agent, or by the user before a `--resume`.
  *
- * It used to be narrower, and the narrowing was the bug. Setup ran the
- * project's check with the key in its environment, then searched that run's
- * window first and called the earliest trace in it the application's. A suite
- * that never reaches `initialize()` still exports when the key is in its
- * environment, because `@observe` starts the SDK on its own, so the window
- * filled with unit-test traces and the poll opened a one-span test of a single
- * tool as "your first trace" — while the application's own trace, sent seconds
- * earlier by the agent, sat outside the window.
+ * Switching TraceRoot off is what keeps the suite out of this frame: even a
+ * suite that never reaches `initialize()` exports when the key is in its
+ * environment, because `@observe` starts the SDK on its own.
  *
  * A project that already receives other traffic — a second service, a
  * teammate, a staging deployment — can still put a trace in this frame first,
