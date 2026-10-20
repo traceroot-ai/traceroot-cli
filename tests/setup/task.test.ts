@@ -542,6 +542,7 @@ describe("the manual steps", () => {
       "'/repo/.venv/bin/python' -m pip install traceroot==1.2.3 python-dotenv",
     );
     expect(text).not.toContain("python3 -m pip");
+    expect(text).not.toContain("CommonJS");
     expect(text).toContain("from dotenv import load_dotenv");
     expect(text).toMatch(
       /if __name__ == "__main__":\n\s+load_dotenv\(Path\(__file__\)\.resolve\(\)\.parent \/ "\.env"\)/,
@@ -565,6 +566,9 @@ describe("the manual steps", () => {
     expect(text).toContain('import { config } from "dotenv";');
     expect(text).toContain('config({ path: new URL("../.env", import.meta.url) });');
     expect(text).not.toContain("```");
+    // The form above does not parse in a CommonJS entry point, and nothing
+    // detected says which kind this one is, so the other form is named too.
+    expect(text).toContain('give the same path as join(__dirname, "...")');
   });
 
   it("install no dotenv when there is no env file to load", () => {
