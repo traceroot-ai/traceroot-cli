@@ -194,6 +194,15 @@ describe("setup command registration", () => {
     expect(program.options.map((o) => o.long)).not.toContain("--handoff");
   });
 
+  it("still parses --handoff with it hidden from the help", () => {
+    const setup = buildProgram().commands.find((c) => c.name() === "setup");
+    if (setup === undefined) {
+      throw new Error("setup is not registered");
+    }
+    expect(setup.parseOptions(["--handoff", "trh_code"]).unknown).toEqual([]);
+    expect(setup.opts().handoff).toBe("trh_code");
+  });
+
   it("refuses a stray operand at the parse, before any action runs", async () => {
     // `traceroot setup doctr` used to run the whole wizard: commander 12 allows
     // excess arguments by default, so the typo reached `setup`'s own action as
