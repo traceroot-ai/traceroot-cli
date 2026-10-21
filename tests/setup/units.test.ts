@@ -737,7 +737,9 @@ describe("setup report", () => {
     }) as unknown as Parameters<typeof renderSetupReport>[0];
 
   it("records what was connected, instrumented and verified", () => {
-    const md = renderSetupReport(baseCtx(), new Date("2026-07-30T00:02:00.000Z"));
+    const md = renderSetupReport(baseCtx(), new Date("2026-07-30T00:02:00.000Z"), {
+      kind: "environment",
+    });
 
     expect(md).toContain("a trace has been received");
     expect(md).toContain("checkout");
@@ -750,7 +752,7 @@ describe("setup report", () => {
   it("never contains a credential", () => {
     // This file is written to be pasted into pull requests, which is the last
     // place a key should be able to reach. Only the hint appears.
-    const md = renderSetupReport(baseCtx(), new Date());
+    const md = renderSetupReport(baseCtx(), new Date(), { kind: "environment" });
     expect(md).toContain("tr-a439-a3dc");
     expect(md).not.toMatch(/tr[_-][a-z0-9]{8,}/i);
   });
@@ -758,7 +760,9 @@ describe("setup report", () => {
   it("does not claim checks passed when they never ran", () => {
     const ctx = baseCtx() as unknown as { application?: unknown };
     ctx.application = undefined;
-    const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date());
+    const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date(), {
+      kind: "environment",
+    });
 
     expect(md).toContain("Not run.");
     expect(md).not.toContain("Passed with TraceRoot switched off");
@@ -767,7 +771,9 @@ describe("setup report", () => {
   it("says what to do next when no trace arrived", () => {
     const ctx = baseCtx() as unknown as { trace?: unknown };
     ctx.trace = undefined;
-    const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date());
+    const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date(), {
+      kind: "environment",
+    });
 
     expect(md).toContain("no trace has been seen yet");
     expect(md).toContain("--resume");
@@ -1295,6 +1301,7 @@ describe("reading a checkpoint that cannot be trusted", () => {
         typeof renderSetupReport
       >[0],
       new Date("2026-07-26T12:01:00.000Z"),
+      { kind: "environment" },
     );
     expect(md).toContain("**First trace.** `t_1` — 7 spans\n");
     expect(md).not.toContain("Not confirmed");
