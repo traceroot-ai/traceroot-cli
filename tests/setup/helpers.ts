@@ -88,7 +88,7 @@ function instrumentEntryPoint(cwd: string): void {
     return;
   }
   // By the detector's own rules, not a substring of one of them.
-  if (findTraceRootInitialization(cwd, service) !== null) {
+  if (findTraceRootInitialization(cwd, service).kind === "found") {
     return;
   }
   appendFileSync(

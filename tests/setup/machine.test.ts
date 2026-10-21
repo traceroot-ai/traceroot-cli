@@ -5231,6 +5231,62 @@ describe("proving the agent did something", () => {
     expect(result.checkpoint.completedStages).toContain("instrument");
   });
 
+  it("does not fail a service started with arguments the reading cannot match", async () => {
+    // `initialize(integrations=[...])` after `from traceroot import initialize`
+    // is how the Python SDK is started with an integration, and the bare-call
+    // pattern only matches empty parentheses. With no report and no git, that
+    // read as no TraceRoot at all and failed a service that was instrumented.
+    pythonRepo();
+    writeFileSync(
+      join(dir, "main.py"),
+      "from traceroot import Integration, initialize\n\ninitialize(integrations=[Integration.ANTHROPIC])\n",
+    );
+    const process = fakeRunProcess({
+      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.existingInstrumentation.present).toBe(false);
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("does not fail a module deeper than the directory walk reaches", async () => {
+    // With no report and no git, the service's own directory is read two
+    // levels down. A module three levels down is never opened, which is not
+    // the same as finding no TraceRoot in it.
+    pythonRepo();
+    mkdirSync(join(dir, "app", "core", "telemetry"), { recursive: true });
+    writeFileSync(
+      join(dir, "app", "core", "telemetry", "tracing.py"),
+      "import traceroot\n\ntraceroot.initialize()\n",
+    );
+    writeFileSync(join(dir, "main.py"), "from app.core.telemetry import tracing\n\nprint('hi')\n");
+    const process = fakeRunProcess({
+      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
   it("says nothing when it could not identify an entry point to read", async () => {
     // Only ever a positive finding of absence. A service with no recognised
     // entry file gives the reading nowhere to look, and "I could not check"

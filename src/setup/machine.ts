@@ -4014,7 +4014,11 @@ const instrument: StageDefinition = {
       //
       // Only ever a positive finding of absence. An entry point that could not
       // be identified is not evidence of anything, so there the stage says
-      // nothing and the run carries on.
+      // nothing and the run carries on. Nor is a reading that could not see
+      // everything: a directory walk the budget cut short, or a file that
+      // imports TraceRoot and starts it in a form the patterns miss, such as
+      // `initialize({ serviceName: "api" })`. Those answer `unknown`, and the
+      // trace wait is what settles them.
       const entryPoint = serviceEntryPath(service);
       if (ctx.stack?.existingInstrumentation.present !== true && entryPoint !== null) {
         //
@@ -4032,7 +4036,7 @@ const instrument: StageDefinition = {
           ...observedChangedFiles,
           ...(reported === null ? [service.path] : []),
         ]);
-        if (wiredIn === null) {
+        if (wiredIn.kind === "absent") {
           throw new PausedSetupError({
             stage: "instrument",
             code: "AGENT_FAILED",

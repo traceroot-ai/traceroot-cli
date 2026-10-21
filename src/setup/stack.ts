@@ -578,14 +578,15 @@ export function serviceEntryPath(service: DetectedService): string | null {
  * whatever the model wrote, and a file outside the repository says nothing
  * about this service however instrumented it is.
  *
- * Returns the first file found to start TraceRoot, spelled as it was given, or
- * `null` when none of them does.
+ * Returns the first file found to start TraceRoot, spelled as it was given.
+ * When none does, the answer is `absent` only if the reading saw everything it
+ * was pointed at — see {@link TraceRootInitialization}.
  */
 export function findTraceRootInitialization(
   root: string,
   service: DetectedService,
   alsoRead: readonly string[] = [],
-): string | null {
+): TraceRootInitialization {
   const dir = service.path === "." ? root : join(root, service.path);
   const candidates: Array<{ display: string; path: string }> = [];
   const entry = serviceEntryPath(service);
@@ -607,9 +608,14 @@ export function findTraceRootInitialization(
     }
   }
 
-  for (const candidate of expandDirectories(
+  const expanded = expandDirectories(
     candidates.filter((candidate) => withinRoot(root, candidate.path)),
-  )) {
+  );
+  // A file that imports us without a call these patterns match. The import is
+  // the agent's own doing as surely as the call would be, and the call may be
+  // there in a form the patterns do not follow.
+  let importedWithoutCall = false;
+  for (const candidate of expanded.candidates) {
     // The same exclusion detection makes: a compiled bundle mentions
     // everything it ever imported, so reading one reports instrumentation that
     // is not in the source.
@@ -617,12 +623,32 @@ export function findTraceRootInitialization(
       continue;
     }
     const source = readIfPresent(candidate.path);
-    if (source !== null && initializesTraceRoot(source)) {
-      return candidate.display;
+    if (source === null) {
+      continue;
     }
+    if (initializesTraceRoot(source)) {
+      return { kind: "found", file: candidate.display };
+    }
+    importedWithoutCall ||= TRACEROOT_IMPORT.test(source);
   }
-  return null;
+  return expanded.complete && !importedWithoutCall ? { kind: "absent" } : { kind: "unknown" };
 }
+
+/**
+ * What {@link findTraceRootInitialization} found.
+ *
+ * Three answers, because "no call found" is two different facts. `absent` is a
+ * finding: every file the reading was pointed at was read, and none of them so
+ * much as imports TraceRoot. `unknown` is the reading's own limit: a directory
+ * walk the budget stopped before the end, or a file that imports TraceRoot but
+ * starts it in a form the patterns here do not match —
+ * `initialize({ serviceName: "api" })`, or a call through an alias. A caller
+ * that fails a run on the answer must fail it on `absent` alone.
+ */
+export type TraceRootInitialization =
+  | { kind: "found"; file: string }
+  | { kind: "absent" }
+  | { kind: "unknown" };
 
 /**
  * Whether a resolved path is inside the repository.
@@ -655,6 +681,13 @@ const SOURCE_EXTENSIONS = [".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 const MAX_DIRECTORY_FILES = 64;
 const MAX_DIRECTORY_DEPTH = 2;
 
+/** Whether a repo-relative path has a dot-segment, such as `.claude/`. */
+function isHiddenPath(relPath: string): boolean {
+  return relPath
+    .split(/[\\/]/)
+    .some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..");
+}
+
 /** Whether the path is a directory — absent or unreadable is not. */
 function isDirectory(path: string): boolean {
   try {
@@ -664,27 +697,38 @@ function isDirectory(path: string): boolean {
   }
 }
 
-/** Source files beneath `dir`, as paths relative to it. */
-function sourceFilesUnder(dir: string, depth = 0): string[] {
+/**
+ * Source files beneath `dir`, as paths relative to it.
+ *
+ * `complete` is false when the walk left something unread: a directory below
+ * the depth limit, the files past the budget, or a directory it could not list.
+ * Reaching the budget counts even when nothing was left, which only ever turns
+ * a finding into an `unknown`.
+ */
+function sourceFilesUnder(dir: string, depth = 0): { files: string[]; complete: boolean } {
   let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {
-    return [];
+    return { files: [], complete: false };
   }
   const files: string[] = [];
+  let complete = true;
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith(".") || IGNORED_DIRS.has(entry.name)) {
       continue;
     }
     if (entry.isDirectory()) {
       if (depth >= MAX_DIRECTORY_DEPTH) {
+        complete = false;
         continue;
       }
-      for (const nested of sourceFilesUnder(join(dir, entry.name), depth + 1)) {
-        files.push(`${entry.name}/${nested}`);
+      const nested = sourceFilesUnder(join(dir, entry.name), depth + 1);
+      complete &&= nested.complete;
+      for (const file of nested.files) {
+        files.push(`${entry.name}/${file}`);
         if (files.length >= MAX_DIRECTORY_FILES) {
-          return files;
+          return { files, complete: false };
         }
       }
       continue;
@@ -694,17 +738,17 @@ function sourceFilesUnder(dir: string, depth = 0): string[] {
     }
     files.push(entry.name);
     if (files.length >= MAX_DIRECTORY_FILES) {
-      return files;
+      return { files, complete: false };
     }
   }
-  return files;
+  return { files, complete };
 }
 
 /**
  * The candidate list with every directory in it replaced by the source files
  * inside it.
  *
- * A reported path can be a directory, and reading one answers `null` however
+ * A reported path can be a directory, and reading one finds nothing however
  * instrumented its contents are. `git status --porcelain` is where they come
  * from: without `-uall` it reports a wholly untracked directory as the single
  * entry `src/telemetry/` rather than the files in it, so an initialization an
@@ -714,23 +758,37 @@ function sourceFilesUnder(dir: string, depth = 0): string[] {
  * is what the setup report then says the run changed.)
  *
  * Anything that is not a directory is passed through untouched, including a
- * path that does not exist: the read is what answers for those.
+ * path that does not exist: the read is what answers for those. `complete` is
+ * whether every directory was walked to the end.
  */
-function expandDirectories(
-  candidates: ReadonlyArray<{ display: string; path: string }>,
-): Array<{ display: string; path: string }> {
+function expandDirectories(candidates: ReadonlyArray<{ display: string; path: string }>): {
+  candidates: Array<{ display: string; path: string }>;
+  complete: boolean;
+} {
   const expanded: Array<{ display: string; path: string }> = [];
+  let complete = true;
   for (const candidate of candidates) {
     // The artifact test is first and short-circuits the stat: `node_modules/`
     // and `dist/` arrive here like any other untracked directory, and the loop
     // that reads these drops them on sight, so expanding one would readdir a
     // dependency tree to reach an answer already known.
-    if (isBuildArtifact(candidate.display) || !isDirectory(candidate.path)) {
+    //
+    // A dot-directory is not walked either, the same rule the walk applies to
+    // what it finds. Git reports the agent's skill directory, `.claude/`, which
+    // setup itself installed; it holds no source of the service's, and it is
+    // deep enough to leave the walk incomplete.
+    if (
+      isBuildArtifact(candidate.display) ||
+      isHiddenPath(candidate.display) ||
+      !isDirectory(candidate.path)
+    ) {
       expanded.push(candidate);
       continue;
     }
     const display = candidate.display.replace(/\/+$/, "");
-    for (const file of sourceFilesUnder(candidate.path)) {
+    const walk = sourceFilesUnder(candidate.path);
+    complete &&= walk.complete;
+    for (const file of walk.files) {
       // `.` is how a root service's own directory arrives, and `./main.py` is
       // not how anything else in the run spells that file.
       expanded.push({
@@ -739,7 +797,7 @@ function expandDirectories(
       });
     }
   }
-  return expanded;
+  return { candidates: expanded, complete };
 }
 
 /** Languages present in the repo that the CLI cannot instrument. */
