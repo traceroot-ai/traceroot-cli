@@ -6403,18 +6403,26 @@ describe("the npm cache a Codex run has to write", () => {
    * the home directory is ever opened to the sandbox.
    */
   let cacheBase: string;
-  let previousHome: string | undefined;
+  // Both spellings: `os.homedir()` reads `HOME` on macOS and Linux and
+  // `USERPROFILE` on Windows.
+  const homeVars = ["HOME", "USERPROFILE"] as const;
+  let previousHome: Partial<Record<(typeof homeVars)[number], string>> = {};
   beforeEach(() => {
     cacheBase = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-cache-")));
-    previousHome = process.env.HOME;
-    process.env.HOME = cacheBase;
+    previousHome = {};
+    for (const name of homeVars) {
+      previousHome[name] = process.env[name];
+      process.env[name] = cacheBase;
+    }
   });
   afterEach(() => {
-    if (previousHome === undefined) {
-      // biome-ignore lint/performance/noDelete: restoring an env var; assigning undefined would stringify it
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
+    for (const name of homeVars) {
+      const previous = previousHome[name];
+      if (previous === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = previous;
+      }
     }
     rmSync(cacheBase, { recursive: true, force: true });
   });

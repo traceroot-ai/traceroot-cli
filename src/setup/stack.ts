@@ -615,6 +615,7 @@ export function findTraceRootInitialization(
   // the agent's own doing as surely as the call would be, and the call may be
   // there in a form the patterns do not follow.
   let importedWithoutCall = false;
+  let unread = false;
   for (const candidate of expanded.candidates) {
     // The same exclusion detection makes: a compiled bundle mentions
     // everything it ever imported, so reading one reports instrumentation that
@@ -624,6 +625,10 @@ export function findTraceRootInitialization(
     }
     const source = readIfPresent(candidate.path);
     if (source === null) {
+      // A file that is there and could not be read is not a file without
+      // TraceRoot in it. A path that is missing, or a directory that was not
+      // walked, says nothing either way.
+      unread ||= isFile(candidate.path);
       continue;
     }
     if (initializesTraceRoot(source)) {
@@ -631,7 +636,9 @@ export function findTraceRootInitialization(
     }
     importedWithoutCall ||= TRACEROOT_IMPORT.test(source);
   }
-  return expanded.complete && !importedWithoutCall ? { kind: "absent" } : { kind: "unknown" };
+  return expanded.complete && !importedWithoutCall && !unread
+    ? { kind: "absent" }
+    : { kind: "unknown" };
 }
 
 /**
@@ -640,10 +647,10 @@ export function findTraceRootInitialization(
  * Three answers, because "no call found" is two different facts. `absent` is a
  * finding: every file the reading was pointed at was read, and none of them so
  * much as imports TraceRoot. `unknown` is the reading's own limit: a directory
- * walk the budget stopped before the end, or a file that imports TraceRoot but
- * starts it in a form the patterns here do not match —
- * `initialize({ serviceName: "api" })`, or a call through an alias. A caller
- * that fails a run on the answer must fail it on `absent` alone.
+ * walk the budget stopped before the end, a file it could not read, or a file
+ * that imports TraceRoot but starts it in a form the patterns here do not
+ * match — `initialize({ serviceName: "api" })`, or a call through an alias. A
+ * caller that fails a run on the answer must fail it on `absent` alone.
  */
 export type TraceRootInitialization =
   | { kind: "found"; file: string }
@@ -686,6 +693,15 @@ function isHiddenPath(relPath: string): boolean {
   return relPath
     .split(/[\\/]/)
     .some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..");
+}
+
+/** Whether the path is a regular file, readable or not. */
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** Whether the path is a directory — absent or unreadable is not. */

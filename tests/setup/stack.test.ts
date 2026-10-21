@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -297,6 +297,24 @@ describe("reading whether a service is wired up now", () => {
       kind: "found",
       file: "shared/tracing.py",
     });
+  });
+
+  it.skipIf(process.getuid?.() === 0)("answers unknown for a file it could not read", () => {
+    // Root reads a mode-000 file anyway, so this only means something as a user.
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "import telemetry\n\nprint('hi')\n",
+      "telemetry/tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
+    });
+    const locked = join(root, "telemetry", "tracing.py");
+    chmodSync(locked, 0o000);
+    try {
+      expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toEqual({
+        kind: "unknown",
+      });
+    } finally {
+      chmodSync(locked, 0o644);
+    }
   });
 
   it("does not walk the agent's own skill directory", () => {

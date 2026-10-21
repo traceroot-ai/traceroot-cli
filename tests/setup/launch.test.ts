@@ -400,6 +400,31 @@ describe("finding the npm cache a sandboxed agent has to write", () => {
     }
   });
 
+  it("opens nothing through a link when the cache below it does not exist yet", async () => {
+    // A fresh cache is created after this check, and creating it follows the
+    // link: `~/link/npm-cache` with `~/link` pointing outside becomes a
+    // directory outside the home directory.
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-home-")));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-outside-")));
+    try {
+      symlinkSync(outside, join(home, "link"));
+      mkdirSync(join(home, "real"));
+      symlinkSync(join(home, "real"), join(home, "inner"));
+      const answer = async (path: string) => {
+        const { run } = fakeRunProcess({ results: { npm: { output: `${path}\n` } } });
+        return resolveNpmCacheDir({ env: {}, runProcess: run, homeDir: home });
+      };
+
+      expect(await answer(join(home, "link", "npm-cache"))).toBe(join(home, ".npm"));
+      expect(await answer(join(home, "link", "a", "b"))).toBe(join(home, ".npm"));
+      // A link that stays inside the home directory is still fine.
+      expect(await answer(join(home, "inner", "npm-cache"))).toBe(join(home, "inner", "npm-cache"));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("does not let the project's .npmrc choose the directory, with the real npm", async () => {
     // The report: a project `.npmrc` with `cache=/` built `--add-dir /`, and
     // `cache=~/.ssh` made `~/.ssh` writable. `~/.ssh` is inside the home

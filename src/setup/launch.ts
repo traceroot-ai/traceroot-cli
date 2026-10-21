@@ -1,6 +1,6 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentId } from "../agents/types.js";
 import type { RunProcess, RunProcessResult } from "./exec.js";
 import { type Secret, secretHint } from "./secret.js";
@@ -428,15 +428,19 @@ export async function resolveNpmCacheDir(input: {
 
 /**
  * Whether `path` is an absolute path strictly inside `home`, both as written
- * and, when it exists, as it resolves: the sandbox is handed the resolved path,
- * so a link under the home directory that points at `/` is `/`.
+ * and as it resolves: the sandbox is handed the resolved path, so a link under
+ * the home directory that points at `/` is `/`.
+ *
+ * Resolved through the nearest part of it that exists, because the cache often
+ * does not exist yet and `prepareWritableDir` creates it. `~/link/npm-cache`,
+ * with `~/link` pointing at `/`, reads as inside the home directory until the
+ * directory is made, and then it is `/npm-cache`.
  */
 function isInsideHome(path: string, home: string): boolean {
   if (!isAbsolute(path) || !isStrictlyInside(resolve(home), resolve(path))) {
     return false;
   }
-  const real = realpathIfExists(path);
-  return real === null || isStrictlyInside(realpathIfExists(home) ?? resolve(home), real);
+  return isStrictlyInside(resolvedThroughExisting(home), resolvedThroughExisting(path));
 }
 
 function isStrictlyInside(dir: string, path: string): boolean {
@@ -449,6 +453,24 @@ function realpathIfExists(path: string): string | null {
     return realpathSync(path);
   } catch {
     return null;
+  }
+}
+
+/** `path` with its longest existing prefix resolved, and the missing rest appended. */
+function resolvedThroughExisting(path: string): string {
+  let existing = resolve(path);
+  const missing: string[] = [];
+  for (;;) {
+    const real = realpathIfExists(existing);
+    if (real !== null) {
+      return join(real, ...missing);
+    }
+    const parent = dirname(existing);
+    if (parent === existing) {
+      return resolve(path);
+    }
+    missing.unshift(basename(existing));
+    existing = parent;
   }
 }
 
