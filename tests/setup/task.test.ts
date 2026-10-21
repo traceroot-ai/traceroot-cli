@@ -553,6 +553,24 @@ describe("the manual steps", () => {
     );
   });
 
+  it("keep the snippet's trailing prose out of the code and say the provider is an example", () => {
+    // Copied as shown, the block ended in an English sentence, and an
+    // application on any other provider imported a library it doesn't use.
+    const text = manual({ sdk: { ...SDK, package: "traceroot" } });
+    expect(text).not.toContain("and, for a short-lived script only");
+    expect(text).toMatch(/\n {11}main\(\)[^\n]*\n\n {5}Anthropic stands in for your provider/);
+    expect(text).toContain("traceroot.flush() before it exits.");
+    const ts = manual({
+      service: service({
+        language: "typescript",
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+      }),
+    });
+    expect(ts).not.toContain("stands in for your provider");
+    expect(ts).toMatch(/\n {7}\}\n/);
+  });
+
   it("load the env file and install dotenv for an npm TypeScript service", () => {
     const text = manual({
       service: service({
