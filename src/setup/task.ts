@@ -973,10 +973,11 @@ export function manualInstructions(input: {
   const testRun = `TRACEROOT_ENABLED=false ${service.testCommand ?? "<your test command>"}`;
   // The agent's snippet, unfenced for a terminal, so the two cannot drift
   // apart. This one used to leave out the env-file load, so an application
-  // changed exactly as shown started without its key and sent nothing.
-  const init = initSnippet(service, envFiles)
-    .split("\n")
-    .filter((line) => !line.startsWith("```"));
+  // changed exactly as shown started without its key and sent nothing. Only
+  // the code between the fences: the sentence after them is the task's prose,
+  // and indented here it would read as a line of the program.
+  const snippet = initSnippet(service, envFiles).split("\n");
+  const init = snippet.slice(1, snippet.lastIndexOf("```"));
   // The package that load imports. Neither SDK depends on it.
   const dotenv =
     envFiles.length === 0 ? null : service.language === "python" ? "python-dotenv" : "dotenv";
@@ -990,6 +991,17 @@ export function manualInstructions(input: {
           "",
           "     A CommonJS entry point has no import.meta.url. There, require() both",
           '     packages and give the same path as join(__dirname, "...").',
+        ]
+      : [];
+  // The agent is told to pick the integration; someone copying the block is
+  // not, and detection does not establish which provider the service calls.
+  const python =
+    service.language === "python"
+      ? [
+          "",
+          "     Anthropic stands in for your provider: import and name the library",
+          "     your application calls. A short-lived script also calls",
+          "     traceroot.flush() before it exits.",
         ]
       : [];
 
@@ -1010,6 +1022,7 @@ export function manualInstructions(input: {
     "",
     ...init.map((line) => (line === "" ? "" : `       ${line}`)),
     ...commonJs,
+    ...python,
     "",
     "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
     "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",
