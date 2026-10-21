@@ -6399,12 +6399,23 @@ describe("the npm cache a Codex run has to write", () => {
   /**
    * Where the fake npm says its cache is: outside the repository, and not
    * `~/.npm`, so a fallback would show. Real, since setup names the real path.
+   * It is also the home directory for the test, because only a cache inside
+   * the home directory is ever opened to the sandbox.
    */
   let cacheBase: string;
+  let previousHome: string | undefined;
   beforeEach(() => {
     cacheBase = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-cache-")));
+    previousHome = process.env.HOME;
+    process.env.HOME = cacheBase;
   });
   afterEach(() => {
+    if (previousHome === undefined) {
+      // biome-ignore lint/performance/noDelete: restoring an env var; assigning undefined would stringify it
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
     rmSync(cacheBase, { recursive: true, force: true });
   });
 
@@ -6449,8 +6460,8 @@ describe("the npm cache a Codex run has to write", () => {
 
     expect(result.error).toBeNull();
     expect(cacheQueries).toHaveLength(1);
-    // Asked where the agent will stand, since a project `.npmrc` can move it.
-    expect(cacheQueries[0]?.cwd).toBe(dir);
+    // Asked from the home directory, so the project's `.npmrc` has no say.
+    expect(cacheQueries[0]?.cwd).toBe(cacheBase);
     // Asked before the agent starts, so the answer can be in its argv.
     const queried = runs.findIndex((r) => r.program === "npm");
     expect(queried).toBeGreaterThanOrEqual(0);
@@ -6491,6 +6502,16 @@ describe("the npm cache a Codex run has to write", () => {
     expect(said[0]?.slice(said[0].indexOf("warning:"))).toBe(
       `warning: could not create npm's cache directory ${cache}, so Codex starts without it and \`npm install\` may fail`,
     );
+  });
+
+  it("names ~/.npm instead of a cache npm puts outside the home directory", async () => {
+    // A cache at `/` opened the whole disk to a run with the network on and no
+    // approval prompts.
+    nodeRepo("package-lock.json");
+    const { result, launched } = await runWith("codex", "index.js", "/");
+
+    expect(result.error).toBeNull();
+    expect(launched?.args.slice(-3)).toEqual(["--add-dir", join(cacheBase, ".npm"), "-"]);
   });
 
   it("asks npm nothing and adds nothing for a Python service", async () => {

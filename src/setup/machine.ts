@@ -3712,7 +3712,7 @@ const instrument: StageDefinition = {
     const npmCache =
       agent.id === "codex" &&
       installCommand(sdk, service, service.language, pythonInterpreter).startsWith("npm ")
-        ? await resolveNpmCacheDir({ cwd: agentCwd, env: deps.env, runProcess: deps.runProcess })
+        ? await resolveNpmCacheDir({ env: deps.env, runProcess: deps.runProcess })
         : null;
     const writableNpmCache = npmCache === null ? null : prepareWritableDir(npmCache);
     if (npmCache !== null && writableNpmCache === null) {

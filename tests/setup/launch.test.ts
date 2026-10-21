@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { RunProcessResult } from "../../src/setup/exec.js";
+import { type RunProcessResult, runProcess } from "../../src/setup/exec.js";
 import {
   buildAgentEnv,
   buildInvocation,
@@ -310,19 +310,19 @@ describe("Claude Code, which the writable directories do not reach", () => {
 });
 
 describe("finding the npm cache a sandboxed agent has to write", () => {
-  /** Resolves against an npm that answers `npm`, from the agent's cwd. */
+  /** Resolves against an npm that answers `npm`, with `/home/u` as the home directory. */
   function resolveWith(npm: Partial<RunProcessResult>, env: NodeJS.ProcessEnv = {}) {
     const { run, runs } = fakeRunProcess({ results: { npm } });
     return {
       runs,
-      resolved: resolveNpmCacheDir({ cwd: "/repo/app", env, runProcess: run, homeDir: "/home/u" }),
+      resolved: resolveNpmCacheDir({ env, runProcess: run, homeDir: "/home/u" }),
     };
   }
 
-  it("takes npm's own answer, asked where the agent will stand", async () => {
-    // An `.npmrc` can move the cache anywhere, and npm is the one that knows.
-    const { runs, resolved } = resolveWith({ output: "/Volumes/fast/npm-cache\n" });
-    expect(await resolved).toBe("/Volumes/fast/npm-cache");
+  it("takes npm's own answer, asked from the home directory", async () => {
+    // The user's `.npmrc` can move the cache, and npm is the one that knows.
+    const { runs, resolved } = resolveWith({ output: "/home/u/.cache/npm\n" });
+    expect(await resolved).toBe("/home/u/.cache/npm");
     expect(runs).toHaveLength(1);
     expect(runs[0]?.program).toBe("npm");
     expect(runs[0]?.args).toEqual([
@@ -332,19 +332,21 @@ describe("finding the npm cache a sandboxed agent has to write", () => {
       "--loglevel=silent",
       "--no-update-notifier",
     ]);
-    expect(runs[0]?.cwd).toBe("/repo/app");
+    // Never the project: npm reads the `.npmrc` of the directory it runs in,
+    // and the project's is the repository's to write.
+    expect(runs[0]?.cwd).toBe("/home/u");
   });
 
   it("falls back to npm_config_cache when npm cannot answer", async () => {
     const failures = [
       { spawnFailed: true, exitCode: 127 },
-      // What npm 10 says when a project `.npmrc` sets a relative cache.
+      // What npm 10 says when an `.npmrc` sets a relative cache.
       { exitCode: 1, output: "npm error The cache option is protected" },
       { timedOut: true, exitCode: 143 },
     ];
     for (const failure of failures) {
-      const { resolved } = resolveWith(failure, { npm_config_cache: "/env/npm-cache" });
-      expect(await resolved).toBe("/env/npm-cache");
+      const { resolved } = resolveWith(failure, { npm_config_cache: "/home/u/env-cache" });
+      expect(await resolved).toBe("/home/u/env-cache");
     }
   });
 
@@ -355,9 +357,80 @@ describe("finding the npm cache a sandboxed agent has to write", () => {
 
   it("does not take a warning, a relative path or nothing as the answer", async () => {
     // The runner hands back stdout and stderr as one string.
-    for (const output of ["npm warn something\n/Users/u/.npm\n", "relcache\n", ""]) {
+    for (const output of ["npm warn something\n/home/u/.npm-other\n", "relcache\n", ""]) {
       const { resolved } = resolveWith({ output });
       expect(await resolved).toBe(join("/home/u", ".npm"));
+    }
+  });
+
+  it("opens nothing outside the home directory, nor the home directory or above it", async () => {
+    // Codex runs with the network on and no approval prompts, so this
+    // directory is as far as anything in the repository can write. A cache set
+    // to `/` made the whole disk writable.
+    for (const outside of ["/", "/home", "/home/u", "/home/u/", "/etc/npm", "/home/u/../v/.npm"]) {
+      const fromNpm = resolveWith({ output: `${outside}\n` });
+      expect(await fromNpm.resolved).toBe(join("/home/u", ".npm"));
+      // The environment gets the same check, and a relative value is no path.
+      const fromEnv = resolveWith(
+        { spawnFailed: true, exitCode: 127 },
+        { npm_config_cache: outside },
+      );
+      expect(await fromEnv.resolved).toBe(join("/home/u", ".npm"));
+    }
+    const relative = resolveWith(
+      { spawnFailed: true, exitCode: 127 },
+      { npm_config_cache: "cache" },
+    );
+    expect(await relative.resolved).toBe(join("/home/u", ".npm"));
+  });
+
+  it("opens nothing through a link in the home directory that points out of it", async () => {
+    // The sandbox is handed the resolved path, so the link is what it opens.
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-home-")));
+    try {
+      symlinkSync("/", join(home, "everything"));
+      const { run } = fakeRunProcess({
+        results: { npm: { output: `${join(home, "everything")}\n` } },
+      });
+      expect(await resolveNpmCacheDir({ env: {}, runProcess: run, homeDir: home })).toBe(
+        join(home, ".npm"),
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let the project's .npmrc choose the directory, with the real npm", async () => {
+    // The report: a project `.npmrc` with `cache=/` built `--add-dir /`, and
+    // `cache=~/.ssh` made `~/.ssh` writable. `~/.ssh` is inside the home
+    // directory, so only asking from outside the project stops that one.
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-home-")));
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-project-")));
+    try {
+      writeFileSync(join(project, "package.json"), '{"name":"app"}\n');
+      writeFileSync(join(project, ".npmrc"), `cache=${join(home, ".ssh")}\n`);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
+      for (const name of ["npm_config_cache", "NPM_CONFIG_CACHE", "npm_config_userconfig"]) {
+        delete env[name];
+      }
+      // The same npm, asked in the project, gives the project's line: that is
+      // the question setup used to ask.
+      const inProject = await runProcess({
+        program: "npm",
+        args: ["config", "get", "cache", "--loglevel=silent", "--no-update-notifier"],
+        cwd: project,
+        env,
+        stdio: "capture",
+        timeoutMs: 15_000,
+      });
+      expect(inProject.output.trim()).toBe(join(home, ".ssh"));
+
+      const resolved = await resolveNpmCacheDir({ env, runProcess, homeDir: home });
+
+      expect(resolved).toBe(join(home, ".npm"));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
     }
   });
 });
