@@ -3454,6 +3454,7 @@ function recordHandover(
   route: "task-file" | "manual",
 ): void {
   ctx.checkpoint.instrumentHandover = route;
+  ctx.handedOverThisRun = true;
   ctx.instrumentation = {
     agentId,
     mode: "prompt-only",
@@ -4441,6 +4442,10 @@ const verifyTrace: StageDefinition = {
     //
     // Nothing on this route can send a trace, so `traceCanArrive` has already
     // given it one look rather than the budget; what this adds is the ending.
+    // On a resume that reading is no longer the whole story — the user may have
+    // done the task, with `initialize()` in a module the entry point imports —
+    // so the closing line in `commands/setup/run.ts` stops short of saying the
+    // service has no TraceRoot in it there.
     const unrunHandover =
       ctx.instrumentation?.mode === "prompt-only" &&
       ctx.stack?.existingInstrumentation.present !== true
