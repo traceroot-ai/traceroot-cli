@@ -299,23 +299,26 @@ describe("reading whether a service is wired up now", () => {
     });
   });
 
-  it.skipIf(process.getuid?.() === 0)("answers unknown for a file it could not read", () => {
-    // Root reads a mode-000 file anyway, so this only means something as a user.
-    const root = repo({
-      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
-      "main.py": "import telemetry\n\nprint('hi')\n",
-      "telemetry/tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
-    });
-    const locked = join(root, "telemetry", "tracing.py");
-    chmodSync(locked, 0o000);
-    try {
-      expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toEqual({
-        kind: "unknown",
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "answers unknown for a file it could not read",
+    () => {
+      // chmod 000 has no effect on win32 or when running as root.
+      const root = repo({
+        "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+        "main.py": "import telemetry\n\nprint('hi')\n",
+        "telemetry/tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
       });
-    } finally {
-      chmodSync(locked, 0o644);
-    }
-  });
+      const locked = join(root, "telemetry", "tracing.py");
+      chmodSync(locked, 0o000);
+      try {
+        expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toEqual({
+          kind: "unknown",
+        });
+      } finally {
+        chmodSync(locked, 0o644);
+      }
+    },
+  );
 
   it("does not walk the agent's own skill directory", () => {
     // Git reports `.claude/` when setup has installed the skill there. It is
