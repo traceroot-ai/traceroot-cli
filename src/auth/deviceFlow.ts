@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { normalizeBaseUrl } from "../api/client.js";
-import { CliError, ExitCode, type Writers, logInfo } from "../output.js";
+import { CliError, ExitCode, type Writers, logInfo, logWarn } from "../output.js";
 import { getVersion } from "../version.js";
 
 /** The allowlisted OAuth client id for this CLI (server-side allowlist). */
@@ -50,8 +50,9 @@ export interface DeviceFlowDeps {
   /** Injectable for tests; defaults to `Date.now`. */
   now?: () => number;
   /**
-   * Opens `url` in a browser; resolving `false` or rejecting means it couldn't.
-   * Always non-fatal — the URL is printed regardless (SSH sessions).
+   * Opens `url` in a browser; resolving `false` or rejecting means it couldn't,
+   * which the flow says out loud. Always non-fatal — the URL is printed
+   * regardless (SSH sessions).
    */
   openBrowser?: (url: string) => Promise<boolean>;
   /** Environment for CI detection; defaults to `process.env`. */
@@ -214,10 +215,17 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   }
   logInfo(`Confirm this code in your browser: ${userCode}`, writers);
   logInfo(`Open ${verifyUrl}`, writers);
+  let opened = false;
   try {
-    await openBrowser(verifyUrl);
+    opened = await openBrowser(verifyUrl);
   } catch {
     // Non-fatal: the URL is already printed.
+  }
+  if (!opened) {
+    // Nothing is about to appear on screen, so do not leave the user waiting on
+    // a browser window that is not coming. The printed URL above is the whole
+    // fallback: the flow still completes by copy-paste.
+    logWarn("could not open a browser — open the URL above to approve this login", writers);
   }
   logInfo("Waiting for approval…", writers);
 
@@ -343,19 +351,45 @@ export function browserOpenCommand(platform: NodeJS.Platform, url: string): [str
 }
 
 /**
- * Opens `url` with the platform opener, detached so the CLI's poll loop never
- * waits on the browser. Resolves `false` when the spawn fails synchronously.
+ * Spawns an opener command detached, so the CLI's poll loop never waits on the
+ * browser, and reports whether the child process actually started.
+ *
+ * Node reports a command it could not execute — missing (`ENOENT`), not
+ * executable (`EACCES`), or no process slot (`EAGAIN`/`EMFILE`/`ENFILE`) — on
+ * the `error` event one tick after `spawn` returns, so answering synchronously
+ * would always claim success and a machine with no `xdg-open` would be told a
+ * browser had opened. Node emits exactly one of `spawn` and `error`, so
+ * awaiting that pair reports the truth without waiting on a timer.
+ *
+ * What a `true` here does not promise: an opener that starts and then fails on
+ * its own (an `xdg-open` with no registered handler exits non-zero, which is
+ * visible only to someone still waiting for the child — exactly what detaching
+ * avoids), and an opener that genuinely succeeds on a machine with no browser
+ * to show. Exported for tests.
  */
+export async function spawnOpener(cmd: string, args: string[]): Promise<boolean> {
+  try {
+    const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+    child.unref();
+    return await new Promise<boolean>((resolve) => {
+      child.once("spawn", () => resolve(true));
+      // `on`, not `once`: the listener must stay attached whatever the verdict,
+      // because an unhandled `error` event on a ChildProcess throws.
+      child.on("error", () => resolve(false));
+      // Both events arrive on the nextTick queue, which drains before the check
+      // phase, so an immediate that has seen neither means Node reported
+      // nothing either way — claim success rather than hang the login.
+      setImmediate(() => resolve(true));
+    });
+  } catch {
+    // `spawn` itself threw, which means malformed options rather than a command
+    // that is not installed. The promise above never rejects.
+    return false;
+  }
+}
+
+/** Opens `url` with the platform opener; see {@link spawnOpener}. */
 async function openBrowserForPlatform(url: string): Promise<boolean> {
   const [cmd, args] = browserOpenCommand(process.platform, url);
-  return new Promise((resolve) => {
-    try {
-      const child = spawn(cmd, args, { stdio: "ignore", detached: true });
-      child.on("error", () => resolve(false));
-      child.unref();
-      resolve(true);
-    } catch {
-      resolve(false);
-    }
-  });
+  return spawnOpener(cmd, args);
 }
