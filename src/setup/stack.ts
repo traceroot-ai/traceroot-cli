@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { type Dirent, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 import type { PackageManager } from "../repo/detect.js";
 import type { DetectedService, DetectedStack, StackLanguage } from "./types.js";
 
@@ -538,6 +538,208 @@ function detectExistingInstrumentation(
   // depends on TraceRoot for other reasons, or one named after it. Only an
   // actual initialization call means there is nothing to do.
   return { present: wired, evidence };
+}
+
+/** The service's entry point as a path from the repository root, if it has one. */
+export function serviceEntryPath(service: DetectedService): string | null {
+  const entry = service.entryPoint;
+  if (entry === null) {
+    return null;
+  }
+  return service.path === "." ? entry : `${service.path}/${entry}`;
+}
+
+/**
+ * Reads whether a service is wired up to TraceRoot *now*, naming the file that
+ * proves it.
+ *
+ * {@link detectStack} asks this once, before anything has been edited, and
+ * stores the answer as `existingInstrumentation`. This is that same reading —
+ * an actual `initialize()` call in hand-written source, by the rules in
+ * {@link initializesTraceRoot} — made available on its own so a caller can ask
+ * again after a coding agent has had the repository. Asking directly is what
+ * separates "nothing was edited" from "something was edited that instrumented
+ * nothing", and unlike a diff it needs no git repository to answer.
+ *
+ * The entry point is read first: it is where the task tells the agent to put
+ * the call, and it is the file worth naming when the answer is no. `alsoRead`
+ * is for files the agent claims to have changed, or that git saw change — a
+ * call wired into a module the entry point imports is still instrumentation,
+ * and refusing to look there would fail a run that worked. Each of those is
+ * tried against the repository root and the service directory, because a
+ * reported path may be relative to either, and one that turns out to be a
+ * directory is read as the source files inside it, because that is how `git
+ * status` spells a wholly untracked one — which also lets a caller with no
+ * report and no diff to go on name the service's own directory and have it read
+ * under the same bounded budget.
+ *
+ * Every candidate is resolved and required to be inside `root` first. The
+ * reported ones are the agent's own JSON, so an absolute path or a `..` is
+ * whatever the model wrote, and a file outside the repository says nothing
+ * about this service however instrumented it is.
+ *
+ * Returns the first file found to start TraceRoot, spelled as it was given, or
+ * `null` when none of them does.
+ */
+export function findTraceRootInitialization(
+  root: string,
+  service: DetectedService,
+  alsoRead: readonly string[] = [],
+): string | null {
+  const dir = service.path === "." ? root : join(root, service.path);
+  const candidates: Array<{ display: string; path: string }> = [];
+  const entry = serviceEntryPath(service);
+  if (entry !== null && service.entryPoint !== null) {
+    candidates.push({ display: entry, path: join(dir, service.entryPoint) });
+  }
+  for (const file of alsoRead) {
+    if (isAbsolute(file)) {
+      candidates.push({ display: file, path: file });
+      continue;
+    }
+    candidates.push({ display: file, path: join(root, file) });
+    // The second resolution only when it is a second file. A root service's
+    // directory *is* the repository root, so pushing both reads every reported
+    // file twice — and walks a reported directory twice, under a file budget
+    // that is meant to be one.
+    if (dir !== root) {
+      candidates.push({ display: file, path: join(dir, file) });
+    }
+  }
+
+  for (const candidate of expandDirectories(
+    candidates.filter((candidate) => withinRoot(root, candidate.path)),
+  )) {
+    // The same exclusion detection makes: a compiled bundle mentions
+    // everything it ever imported, so reading one reports instrumentation that
+    // is not in the source.
+    if (isBuildArtifact(candidate.display)) {
+      continue;
+    }
+    const source = readIfPresent(candidate.path);
+    if (source !== null && initializesTraceRoot(source)) {
+      return candidate.display;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether a resolved path is inside the repository.
+ *
+ * The repository, not the service directory: the candidates are deliberately
+ * resolved against both roots, and a module shared between services is still
+ * this service's instrumentation when its entry point imports it. What is
+ * excluded is everything outside the tree the agent was given —
+ * `/usr/lib/python3/site-packages/traceroot/__init__.py` certifies nothing, and
+ * neither does `../sibling/app.py`.
+ *
+ * `root` itself passes: that is the candidate a root service's own directory
+ * resolves to.
+ */
+function withinRoot(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** Extensions worth opening when a whole directory has to be searched. */
+const SOURCE_EXTENSIONS = [".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+
+/**
+ * How much of one directory is read: a handful of new files, never a tree walk.
+ *
+ * The thing being looked for is a module an agent just added, so the budget is
+ * set where that is comfortably covered and an untracked `data/` or `fixtures/`
+ * is not read file by file.
+ */
+const MAX_DIRECTORY_FILES = 64;
+const MAX_DIRECTORY_DEPTH = 2;
+
+/** Whether the path is a directory — absent or unreadable is not. */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Source files beneath `dir`, as paths relative to it. */
+function sourceFilesUnder(dir: string, depth = 0): string[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.name.startsWith(".") || IGNORED_DIRS.has(entry.name)) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      if (depth >= MAX_DIRECTORY_DEPTH) {
+        continue;
+      }
+      for (const nested of sourceFilesUnder(join(dir, entry.name), depth + 1)) {
+        files.push(`${entry.name}/${nested}`);
+        if (files.length >= MAX_DIRECTORY_FILES) {
+          return files;
+        }
+      }
+      continue;
+    }
+    if (!entry.isFile() || !SOURCE_EXTENSIONS.some((ext) => entry.name.endsWith(ext))) {
+      continue;
+    }
+    files.push(entry.name);
+    if (files.length >= MAX_DIRECTORY_FILES) {
+      return files;
+    }
+  }
+  return files;
+}
+
+/**
+ * The candidate list with every directory in it replaced by the source files
+ * inside it.
+ *
+ * A reported path can be a directory, and reading one answers `null` however
+ * instrumented its contents are. `git status --porcelain` is where they come
+ * from: without `-uall` it reports a wholly untracked directory as the single
+ * entry `src/telemetry/` rather than the files in it, so an initialization an
+ * agent put in a new module arrives here as a directory name and the run was
+ * failed as uninstrumented when it was not. (`-uall` on the status call would
+ * fix the same thing by listing every file in every untracked directory, which
+ * is what the setup report then says the run changed.)
+ *
+ * Anything that is not a directory is passed through untouched, including a
+ * path that does not exist: the read is what answers for those.
+ */
+function expandDirectories(
+  candidates: ReadonlyArray<{ display: string; path: string }>,
+): Array<{ display: string; path: string }> {
+  const expanded: Array<{ display: string; path: string }> = [];
+  for (const candidate of candidates) {
+    // The artifact test is first and short-circuits the stat: `node_modules/`
+    // and `dist/` arrive here like any other untracked directory, and the loop
+    // that reads these drops them on sight, so expanding one would readdir a
+    // dependency tree to reach an answer already known.
+    if (isBuildArtifact(candidate.display) || !isDirectory(candidate.path)) {
+      expanded.push(candidate);
+      continue;
+    }
+    const display = candidate.display.replace(/\/+$/, "");
+    for (const file of sourceFilesUnder(candidate.path)) {
+      // `.` is how a root service's own directory arrives, and `./main.py` is
+      // not how anything else in the run spells that file.
+      expanded.push({
+        display: display === "." ? file : `${display}/${file}`,
+        path: join(candidate.path, file),
+      });
+    }
+  }
+  return expanded;
 }
 
 /** Languages present in the repo that the CLI cannot instrument. */

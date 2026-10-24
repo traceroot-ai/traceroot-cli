@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { appendFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -14,6 +14,7 @@ import type { RunProcessOptions, RunProcessResult } from "../../src/setup/exec.j
 import type { SetupDeps } from "../../src/setup/machine.js";
 import type { ResolvedSdk } from "../../src/setup/sdk.js";
 import { makeSecret } from "../../src/setup/secret.js";
+import { detectStack, findTraceRootInitialization } from "../../src/setup/stack.js";
 import type { SetupFlags } from "../../src/setup/types.js";
 import { StringSink } from "../helpers/stringSink.js";
 
@@ -40,6 +41,58 @@ export interface FakeProcessOptions {
    * `status` is still served by `gitStatus` above.
    */
   git?: (args: readonly string[]) => Partial<RunProcessResult>;
+  /**
+   * Whether the fake coding agent instruments the service it is launched in.
+   *
+   * On by default, because that is what a real one does, and a suite whose
+   * agent never wires anything up cannot tell a working run from the one bug
+   * that matters most here: an agent that exits 0 having done nothing. It
+   * appends the initialization `detectStack` looks for to the entry point in
+   * the directory the agent was launched in — the smallest edit that makes the
+   * service genuinely instrumented.
+   *
+   * `false` is for the tests about an agent that did not do its job.
+   */
+  instrument?: boolean;
+}
+
+/** The agents setup can actually launch; see `LAUNCHABLE_AGENT_IDS`. */
+const AGENT_PROGRAMS = new Set(["claude", "codex"]);
+
+/**
+ * The one edit the fake agent makes: a real `initialize()` call in the entry
+ * point, in the form the detector recognizes for that language.
+ *
+ * Which file that is, and whether it is already instrumented, are both asked of
+ * the production detector rather than answered by a copy of its rules here. A
+ * copy drifts in two directions and both produce a lying fixture: a different
+ * entry point from the one `detect_stack` reads leaves the service the run
+ * checks untouched, and a narrower idea of what counts as instrumentation (an
+ * exact `traceroot.initialize(` and nothing else) appends a second
+ * initialization to a fixture that was wired up with `traceroot.init()` or an
+ * imported bare `initialize()`.
+ *
+ * Appended rather than written over, so a fixture that already carries
+ * instrumentation (or any other content a test asserts on) keeps it.
+ */
+function instrumentEntryPoint(cwd: string): void {
+  // The agent is launched in the service directory, so that is the root the
+  // detector is asked about and the service is the one at `.`.
+  const service = detectStack(cwd).selected;
+  if (service === null || service.entryPoint === null) {
+    return;
+  }
+  // By the detector's own rules, not a substring of one of them.
+  if (findTraceRootInitialization(cwd, service) !== null) {
+    return;
+  }
+  appendFileSync(
+    join(cwd, service.entryPoint),
+    service.language === "python"
+      ? "\nimport traceroot\n\ntraceroot.initialize()\n"
+      : '\nimport * as traceroot from "traceroot";\n\ntraceroot.initialize();\n',
+    "utf8",
+  );
 }
 
 /**
@@ -68,6 +121,10 @@ export function fakeRunProcess(options: FakeProcessOptions = {}): {
       const value = statuses[Math.min(gitCalls, statuses.length - 1)] ?? "";
       gitCalls += 1;
       return { exitCode: 0, output: value, durationMs: 1, timedOut: false, spawnFailed: false };
+    }
+
+    if (AGENT_PROGRAMS.has(o.program) && options.instrument !== false) {
+      instrumentEntryPoint(o.cwd);
     }
 
     const override =

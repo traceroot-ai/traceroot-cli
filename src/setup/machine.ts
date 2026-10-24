@@ -75,8 +75,13 @@ import {
 } from "./sdk.js";
 import { type Secret, makeSecret } from "./secret.js";
 import { type SelectFn, type SelectOption, interactiveSelect } from "./select.js";
-import { startLineSpinner } from "./spinner.js";
-import { detectStack, normalizeLanguage } from "./stack.js";
+import { type LineSpinner, startLineSpinner } from "./spinner.js";
+import {
+  detectStack,
+  findTraceRootInitialization,
+  normalizeLanguage,
+  serviceEntryPath,
+} from "./stack.js";
 import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters } from "./task.js";
 import { pollForTrace, spanPhrase } from "./trace.js";
 import { discardTypeAhead } from "./tty.js";
@@ -3706,6 +3711,76 @@ const instrument: StageDefinition = {
         });
       }
 
+      // Exit 0, and the service still has no TraceRoot in it.
+      //
+      // The guard above cannot fire without the agent's own report, so an agent
+      // that finishes without emitting one is not covered by it at all — which
+      // is what the run that prompted this did. No completion block, the SDK
+      // installed into `.venv`, not one line of `main.py` touched, the stage
+      // recorded as done, `verify_application` passing on untouched code, and
+      // then two minutes of trace spinner before the failure blamed the
+      // instrumented path for never running. Every one of those was true and
+      // none of them was the answer, which had been available the moment the
+      // agent exited.
+      //
+      // So this asks the question rather than inferring it from how many files
+      // moved: {@link findTraceRootInitialization} is the reading
+      // `detect_stack` makes for `existingInstrumentation`, re-run now that the
+      // agent has finished. It reads files, not a diff, so it holds in a
+      // repository that is not under git — where `observedChangedFiles` is
+      // empty whatever happened, and the inference above is therefore blind.
+      //
+      // Both ways the agent can be right are allowed for. It is not required to
+      // have edited the entry point: whatever it reported changing and whatever
+      // git saw change are read too, because a call wired into a module the
+      // entry point imports is instrumentation. And a service that already
+      // carried TraceRoot is excluded, for the same reason it is excluded
+      // above — there the right amount of editing may genuinely be none.
+      //
+      // Only ever a positive finding of absence. An entry point that could not
+      // be identified is not evidence of anything, so there the stage says
+      // nothing and the run carries on.
+      const entryPoint = serviceEntryPath(service);
+      if (ctx.stack?.existingInstrumentation.present !== true && entryPoint !== null) {
+        //
+        // With no report and no diff, both of those lists are empty and the
+        // reading narrows to the entry point alone — which fails a run that put
+        // the call in a module the entry point imports, the case allowed for
+        // just above. Neither input is exotic: `reported` is null for any agent
+        // that does not emit the completion fence, which for Codex is the
+        // expected state rather than the exception, and `changedFiles` is empty
+        // in every repository that is not under git. So when the agent reported
+        // nothing, the service's own directory goes in, and a directory
+        // candidate is read as the same bounded source scan a directory git
+        // reported already gets — not a tree walk.
+        const wiredIn = findTraceRootInitialization(ctx.root, service, [
+          ...(reported?.filesChanged ?? []),
+          ...observedChangedFiles,
+          ...(reported === null ? [service.path] : []),
+        ]);
+        if (wiredIn === null) {
+          throw new PausedSetupError({
+            stage: "instrument",
+            code: "AGENT_FAILED",
+            message: [
+              `${adapter.displayName} finished, but the service is still not instrumented: there is no TraceRoot initialization in ${entryPoint}.`,
+              reported === null || reported.notes === null
+                ? null
+                : `It reported: ${oneLine(reported.notes)}`,
+            ]
+              .filter((part) => part !== null)
+              .join(" "),
+            remedy: [
+              "Exit 0 is the agent saying it finished, not that it wired anything up — a refused command and an exhausted context both end that way.",
+              "Nothing was reverted, so a rerun picks up from whatever it did get done:",
+              "  traceroot setup --resume",
+              "Or write the task out and run it yourself:",
+              "  traceroot setup --no-instrument",
+            ].join("\n"),
+          });
+        }
+      }
+
       const sdkCheck = await checkSdkImportable(ctx, deps, service, sdk, agentCwd);
       if (sdkCheck !== null && !sdkCheck.importable) {
         const install = installCommand(sdk, service, service.language, sdkCheck.interpreter);
@@ -4096,13 +4171,22 @@ const verifyTrace: StageDefinition = {
     // The other long unattended wait. Nothing arrives to report on until the
     // trace does, so the elapsed counter is the whole of what a user can be
     // told — and it is the difference between waiting and suspecting a hang.
-    const waiting =
-      ctx.json || !canArrive
-        ? null
-        : startLineSpinner({
-            sink: ctx.writers.err,
-            message: `Waiting for your first trace (up to ${ctx.flags.traceTimeoutSec}s)`,
-          });
+    //
+    // A blank rail line above it, the same way the agent block gets one: this
+    // is the run's other two-minute wait and it sat flush against the
+    // verification lines over it, reading as one more of them rather than as
+    // the state of the whole run. Written only when the spinner is: with
+    // nothing to wait for no line is drawn at all, and a `--json` run has no
+    // frame for one to sit in, so either way the gap would be a blank line with
+    // nothing under it.
+    let waiting: LineSpinner | null = null;
+    if (!ctx.json && canArrive) {
+      wizardLine(ctx, "");
+      waiting = startLineSpinner({
+        sink: ctx.writers.err,
+        message: `Waiting for your first trace (up to ${ctx.flags.traceTimeoutSec}s)`,
+      });
+    }
 
     let outcome: Awaited<ReturnType<typeof pollForTrace>>;
     try {
