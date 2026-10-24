@@ -86,6 +86,7 @@ import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters }
 import { pollForTrace, spanPhrase } from "./trace.js";
 import { discardTypeAhead } from "./tty.js";
 import type {
+  ApplicationKeyLocation,
   DetectedAgent,
   DetectedService,
   DetectedStack,
@@ -2487,6 +2488,12 @@ const configureRepository: StageDefinition = {
         // file is the project's own. Tracked means the next `git commit -a`
         // carries the key with no further decision from the user, and there is
         // nothing this stage could add to the repository to prevent it.
+        // Recorded, not just said. This warning scrolls past; the closing
+        // production block is the last thing the run prints, and it has to know
+        // that the reason there is no credential file is this one and not "the
+        // user's own environment already had the key" — the instruction it gives
+        // differs between the two. See {@link ApplicationKeyLocation}.
+        ctx.refusedCredentialEnvFile = envPath;
         wizardWarn(
           ctx,
           `${envEntry} is tracked by git, so the API key was not written to it. The key is available to this setup run only; add it to an untracked env file to persist it.`,
@@ -2596,6 +2603,38 @@ function readIfPresent(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Where the application's key sits on this machine, for whoever has to tell the
+ * user to carry it somewhere else.
+ *
+ * Here rather than at the call site because both facts it reads are this
+ * stage's: the file it wrote, and the file it refused. The third case is the
+ * absence of both, and it is not a guess — `configure_repository` runs on every
+ * successful pipeline unless {@link applicationCanResolve} said the application
+ * already finds *this* credential in the user's own environment, which that
+ * function establishes by reading the value back rather than by trusting a
+ * label. So: a file, a refusal, or a key the user's environment already holds.
+ *
+ * `auto-env-file` is folded back into the file case on purpose. It is the one
+ * ambient source that is a file — the `.env` beside where the command ran, which
+ * is the file an application's own loader reads — and a user who can be sent to
+ * a path should be, rather than told vaguely that their environment has it.
+ */
+export function applicationKeyLocation(ctx: SetupContext, deps: SetupDeps): ApplicationKeyLocation {
+  if (ctx.credentialEnvFile !== undefined) {
+    return { kind: "file", path: relativeToRoot(ctx.root, ctx.credentialEnvFile) };
+  }
+  if (ctx.refusedCredentialEnvFile !== undefined) {
+    return { kind: "refused", path: relativeToRoot(ctx.root, ctx.refusedCredentialEnvFile) };
+  }
+  // `ctx.cwd`, not `ctx.root`: the file `resolveAuth` auto-discovers is the one
+  // beside where the command was run, and a service in a monorepo has its own.
+  // The same join `applicationCanResolve` reads the value out of.
+  return deps.resolvedAuth.credential.source === "auto-env-file"
+    ? { kind: "file", path: relativeToRoot(ctx.root, join(ctx.cwd, ".env")) }
+    : { kind: "environment" };
 }
 
 /**
@@ -4301,7 +4340,10 @@ const complete: StageDefinition = {
     // Written, not announced. The report is there for whoever goes looking
     // after the fact; saying so on the last screen spends the user's attention
     // on a file they did not ask for, one line above the thing they did.
-    writeSetupReport(ctx, deps.now());
+    // The key's location rather than the file this run wrote: the report has
+    // to point the reader at the value, and a key already in the project's own
+    // `.env` skipped the stage that records one. See {@link applicationKeyLocation}.
+    writeSetupReport(ctx, deps.now(), applicationKeyLocation(ctx, deps));
     return "ok";
   },
 };

@@ -1,8 +1,10 @@
 import { join, relative, sep } from "node:path";
 import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import { writeFileSecure } from "../util/secureFile.js";
+import { applicationEnvKeys } from "./envWrite.js";
+import { nameList } from "./production.js";
 import { spanPhrase } from "./trace.js";
-import type { SetupContext } from "./types.js";
+import type { ApplicationKeyLocation, SetupContext } from "./types.js";
 
 /**
  * The record a setup run leaves behind.
@@ -43,6 +45,23 @@ export function slashPath(path: string, separator: string = sep): string {
   return path.split(separator).join("/");
 }
 
+/**
+ * The variables a deployment needs, as code spans in a sentence.
+ *
+ * Asked of {@link applicationEnvKeys} rather than written out, which is what
+ * keeps this in step with the file the run wrote and the notice it printed: off
+ * the default host the application needs `TRACEROOT_HOST_URL` as well, and a
+ * report that named the key alone would reproduce exactly the omission that
+ * silently sends a self-hosted user's traces to the wrong instance.
+ *
+ * Joined by {@link nameList}, the same helper the closing notice and the
+ * closing sentence use, so the one rule this phrase follows — names in a
+ * sentence, no Oxford comma — is stated once rather than reproduced here.
+ */
+function productionKeys(host: string | undefined): string {
+  return nameList(applicationEnvKeys(host).map((name) => `\`${name}\``));
+}
+
 function line(label: string, value: string | null | undefined): string {
   const text = value === null || value === undefined || value === "" ? "—" : cell(value);
   return `| ${label} | ${text} |`;
@@ -72,12 +91,36 @@ function skillRow(root: string, agentId: string): string {
  * which is the same rule the checkpoint follows — a report is a file people
  * paste into pull requests, which is the last place a secret should be able to
  * reach.
+ *
+ * `keyLocation` is where the key sits on this machine — see
+ * {@link ApplicationKeyLocation}. Optional because the context alone answers
+ * the question for every run that wrote a file, and a caller that has no run's
+ * deps to hand gets that answer. A caller that does should pass
+ * `applicationKeyLocation`, which is the only thing that can tell a key already
+ * in the project's own `.env` from a key in no file at all: that run skips
+ * `configure_repository` entirely, so `credentialEnvFile` stays unset over a
+ * file the application genuinely loads.
  */
-export function renderSetupReport(ctx: SetupContext, now: Date): string {
+export function renderSetupReport(
+  ctx: SetupContext,
+  now: Date,
+  keyLocation?: ApplicationKeyLocation,
+): string {
   const cp = ctx.checkpoint;
   const service = cp.service;
   const app = ctx.application;
   const trace = ctx.trace;
+  // The file to copy the value out of, or null when there is no file to name.
+  // `relativeToRoot` has already made the location's path root-relative with
+  // `/` separators, which is what the fallback does for itself.
+  const keyFile =
+    keyLocation === undefined
+      ? ctx.credentialEnvFile === undefined
+        ? null
+        : slashPath(relative(ctx.root, ctx.credentialEnvFile))
+      : keyLocation.kind === "file"
+        ? keyLocation.path
+        : null;
 
   const verdict =
     trace !== undefined
@@ -192,6 +235,37 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
     "",
     "Application files changed by the agent are not listed here — `git diff` is the",
     "authority on those, and duplicating it would only go stale.",
+    "",
+    // The one thing the run did not do, said in the file that outlives the run.
+    //
+    // The terminal block that asks for this is seen once, by one person, at the
+    // end of a long wizard. This report is what a reviewer reads when the diff
+    // arrives as a pull request, and what the author reads a week later — and
+    // the gap it has to close is the same one: everything above is about a
+    // laptop, nothing in the repository carries the key, and a deployment of
+    // this diff emits nothing until someone sets the variables. A report whose
+    // last word is "a trace has been received" lets that be discovered in
+    // production.
+    //
+    // Variables, never the value. Same rule as the key row above, and the same
+    // source of truth as the closing notice, so a non-default host's second
+    // variable is named here too.
+    "## What production still needs",
+    "",
+    `${productionKeys(cp.host)} in your deployment's own environment.`,
+    "",
+    // Where to copy it from, and only when there is somewhere. A run that wrote
+    // no file has nothing to point at, and pointing anyway is what sends a
+    // reader looking for a file the repository does not contain.
+    //
+    // "Wrote no file" and "has nowhere to point" are not the same run, which is
+    // why this asks the key's location rather than the file this run wrote: a
+    // key already in the project's own `.env` is in the file the application
+    // loads, and saying nothing carries it would be false about the file the
+    // reader is most likely to already have open.
+    keyFile !== null
+      ? `The value is in \`${cell(keyFile)}\`, which stays on this machine — nothing in the repository carries it.`
+      : "This run wrote the value to no file in the project, so nothing here carries it.",
   ];
 
   return `${sections.join("\n")}\n`;
@@ -204,14 +278,18 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
  * application and saw a trace has succeeded, and failing it at the last step
  * over a file nobody has read yet would be absurd.
  */
-export function writeSetupReport(ctx: SetupContext, now: Date = new Date()): string | null {
+export function writeSetupReport(
+  ctx: SetupContext,
+  now: Date = new Date(),
+  keyLocation?: ApplicationKeyLocation,
+): string | null {
   const target = join(ctx.root, REPORT_PATH);
   try {
     // Creates `.traceroot/` 0700, writes a fresh temp file exclusively and
     // renames it into place, so a symlink planted at the report's path is
     // replaced rather than written through. Also makes the write atomic and
     // leaves the file 0600, which is right for something in a 0700 directory.
-    writeFileSecure(target, renderSetupReport(ctx, now));
+    writeFileSecure(target, renderSetupReport(ctx, now, keyLocation));
     return REPORT_PATH;
   } catch {
     return null;

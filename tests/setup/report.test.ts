@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import {
   REPORT_PATH,
   renderSetupReport,
@@ -245,6 +246,95 @@ describe("what the report says about the trace it found", () => {
   });
 });
 
+describe("what the report says production still needs", () => {
+  // The terminal block that says this is read once, by one person, at the end
+  // of a long wizard. This file is what a reviewer opens when the diff arrives
+  // as a pull request and what its author opens a week later, and it had the
+  // same gap the run used to have: everything in it is about one laptop, and a
+  // deployment of the diff it describes emits nothing until someone sets the
+  // variables.
+  const section = (text: string) => (text.split("## What production still needs")[1] ?? "").trim();
+
+  /** The hosted product, where the key is the only variable to carry. */
+  const hosted = (overrides: Record<string, unknown> = {}) =>
+    ctx({ checkpoint: { ...ctx().checkpoint, host: DEFAULT_HOST }, ...overrides });
+
+  it("names the variable and where the value is", () => {
+    const text = renderSetupReport(hosted({ credentialEnvFile: "/repo/apps/api/.env.local" }), NOW);
+
+    expect(section(text)).toContain("`TRACEROOT_API_KEY` in your deployment's own environment.");
+    expect(section(text)).toContain(
+      "The value is in `apps/api/.env.local`, which stays on this machine",
+    );
+  });
+
+  it("names the host variable too, off the default host", () => {
+    // The same list the run wrote into the file and printed in the closing
+    // notice. A report that named the key alone would reproduce the omission
+    // that sends a self-hosted user's traces to the hosted product in silence.
+    const checkpoint = {
+      ...ctx().checkpoint,
+      host: "https://traceroot.internal.example",
+    };
+    const text = renderSetupReport(ctx({ checkpoint, credentialEnvFile: "/repo/.env" }), NOW);
+
+    expect(section(text)).toContain(
+      "`TRACEROOT_API_KEY` and `TRACEROOT_HOST_URL` in your deployment's own environment.",
+    );
+  });
+
+  it("points at no file when the run wrote none", () => {
+    // `configure_repository` refuses a file git tracks and does not run at all
+    // when the application already resolves the key, so the pointer has to be
+    // able to not be there — naming a file anyway sends a reader looking
+    // through the repository for something that was never in it.
+    const text = renderSetupReport(hosted(), NOW);
+
+    expect(section(text)).toContain("`TRACEROOT_API_KEY` in your deployment's own environment.");
+    expect(section(text)).toContain("This run wrote the value to no file in the project");
+    expect(section(text)).not.toContain("The value is in");
+  });
+
+  it("points at the project's own file when the run wrote none itself", () => {
+    // The run that wrote no file is not always the run with nowhere to point: a
+    // key already in the project's `.env` skips `configure_repository`
+    // entirely, so `credentialEnvFile` stays unset over the very file the
+    // application loads. The location is what knows the difference, and the
+    // report has to say where the value is.
+    const text = renderSetupReport(hosted(), NOW, { kind: "file", path: ".env" });
+
+    expect(section(text)).toContain("The value is in `.env`, which stays on this machine");
+    expect(section(text)).not.toContain("wrote the value to no file");
+    // Still not in the files-touched table, because this run touched no file.
+    expect(text).not.toContain("| `.env` |");
+  });
+
+  it("points at no file when the key reached none, refusal included", () => {
+    for (const location of [
+      { kind: "environment" } as const,
+      { kind: "refused", path: ".env" } as const,
+    ]) {
+      const text = renderSetupReport(hosted(), NOW, location);
+
+      expect(section(text)).toContain("This run wrote the value to no file in the project");
+      expect(section(text)).not.toContain("The value is in");
+    }
+  });
+
+  it("names the variable and never a value", () => {
+    // Same rule as the key row, and worth pinning here because this section is
+    // about carrying a secret somewhere: the hint is the only key-shaped string
+    // this file ever holds, it belongs in the row that identifies the key in a
+    // settings list, and it has no business being repeated here.
+    const checkpoint = { ...ctx().checkpoint, projectKeyHint: "tr-…abcd" };
+    const text = renderSetupReport(ctx({ checkpoint, credentialEnvFile: "/repo/.env" }), NOW);
+
+    expect(text).toContain("tr-…abcd");
+    expect(section(text)).not.toContain("tr-…abcd");
+    expect(section(text)).not.toContain("TRACEROOT_API_KEY=");
+  });
+});
+
 describe("what the report says the check ran with", () => {
   it("says it ran with TraceRoot switched off, and claims no run with it on", () => {
     // The check runs once, with the key absent and `TRACEROOT_ENABLED=false`.
@@ -331,13 +421,17 @@ describe("the report as Markdown", () => {
         [verdict],
         ["Generated 2026-07-26T12:00:00.000Z by traceroot-cli 0.6.0."],
       ]);
-      // Every heading and finding is one line of its own; only the closing note wraps.
-      expect(paragraphs.at(-1)).toEqual(CLOSING);
-      for (const paragraph of paragraphs.slice(0, -1)) {
-        expect(paragraph).toHaveLength(1);
+      // Every heading and finding is one line of its own; only the closing note
+      // wraps. The production section follows it, so it is no longer last.
+      const closing = paragraphs.findIndex((block) => block.join("\n") === CLOSING.join("\n"));
+      expect(closing).toBeGreaterThan(0);
+      for (const [i, paragraph] of paragraphs.entries()) {
+        if (i !== closing) {
+          expect(paragraph).toHaveLength(1);
+        }
       }
       expect(text).not.toContain("\n\n\n");
-      expect(text.endsWith(`${CLOSING[1]}\n`)).toBe(true);
+      expect(text).toMatch(/[^\n]\n$/);
     });
   });
 });

@@ -28,6 +28,7 @@ import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
 import {
   SETUP_PIPELINE,
+  applicationKeyLocation,
   defaultSetupDeps,
   projectOptions,
   runSetupMachine,
@@ -3403,6 +3404,130 @@ describe("the credential the instrumented application will read", () => {
     // The stage used to append a rule here. It asks git and tells the user now;
     // the user's ignore file is theirs.
     expect(existsSync(join(dir, ".gitignore"))).toBe(false);
+  });
+});
+
+describe("where the application's key ended up", () => {
+  // The question the closing production block asks, and the one it used to
+  // answer with a constant. Three outcomes reach it with a trace in hand, and
+  // "the credential file, or `./.env` if there isn't one" collapsed two of them
+  // into an instruction to open a file the run deliberately did not write.
+  const KEY = "tr-located-key-value";
+
+  function authFrom(source: ResolvedAuth["credential"]["source"]): ResolvedAuth {
+    return {
+      credential: { kind: "api-key", value: KEY, source },
+      hostUrl: { value: "https://api.example.test", source: "config" },
+      authHost: { value: "https://api.example.test", source: "default" },
+      projectId: { value: undefined, source: "none" },
+    };
+  }
+
+  function depsFor(auth: ResolvedAuth, env?: NodeJS.ProcessEnv): SetupDeps {
+    return makeDeps({
+      auth,
+      env,
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+  }
+
+  it("names the file, relative to the repository root, when one holds the key", async () => {
+    pythonRepo();
+    initGit();
+    const deps = depsFor(authFrom("config"));
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    // The run has to have reached `configure_repository` for the answer to mean
+    // anything. Two of the cases below are what the fallback returns from an
+    // untouched context, so a pipeline that failed at stage one would answer
+    // them correctly by accident.
+    expect(result.error).toBeNull();
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "file", path: ".env" });
+  });
+
+  it("names the file for an ambient key that is already in one", async () => {
+    // `auto-env-file` is the one ambient source that is a file — the `.env`
+    // beside where the command ran, which is what an application's own loader
+    // reads. Nothing was written, and there is still a path to send the user
+    // to, so it is a file case rather than a vague gesture at the environment.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), `TRACEROOT_API_KEY=${KEY}\n`);
+    const deps = depsFor(authFrom("auto-env-file"));
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(ctx.credentialEnvFile).toBeUndefined();
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "file", path: ".env" });
+  });
+
+  it("says the environment when the key was never in a file at all", async () => {
+    pythonRepo();
+    initGit();
+    const deps = depsFor(authFrom("env"), { PATH: "/usr/bin", TRACEROOT_API_KEY: KEY });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(existsSync(join(dir, ".env"))).toBe(false);
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "environment" });
+  });
+
+  it("records the file git made it refuse, so it is not read as the case above", async () => {
+    // The two no-file runs need different instructions: here the key was
+    // written down nowhere, and telling this user to copy it out of their
+    // environment would be as wrong as naming a file. The refusal is kept on
+    // the context for exactly that reason.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), "# committed by mistake\n");
+    const deps = depsFor(authFrom("config"));
+    deps.runProcess = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      // Answered per subcommand, not per program: `.env` on stdout means
+      // "tracked" to `ls-files` and "ignored" to `check-ignore`, so a single
+      // canned answer tells this stage two contradictory things and only
+      // happens to exercise the tracked branch because that one returns first.
+      git: (args) => (args.includes("ls-files") ? { output: ".env\n" } : {}),
+    }).run;
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    // The refusal degrades rather than fails: the child environment handoff
+    // still works, so the run goes on to the trace.
+    expect(result.error).toBeNull();
+    expect(readFileSync(join(dir, ".env"), "utf8")).toBe("# committed by mistake\n");
+    expect(ctx.refusedCredentialEnvFile).toBe(join(dir, ".env"));
+    expect(applicationKeyLocation(ctx, deps)).toEqual({ kind: "refused", path: ".env" });
+  });
+
+  it("names the service's own .env for an ambient key, not the repository root's", async () => {
+    // The ambient branch joins `ctx.cwd`, not `ctx.root`, because the file
+    // `resolveAuth` auto-discovers is the one beside where the command ran —
+    // and in a monorepo that is the service, not the repository. Every other
+    // case here runs from the root, where the two are the same directory, so
+    // this is the only input that can tell the right join from the wrong one.
+    // Called directly rather than after a pipeline: the fact under test is the
+    // path arithmetic, and the two context fields it reads first are unset.
+    const service = join(dir, "apps", "api");
+    mkdirSync(service, { recursive: true });
+    writeFileSync(join(service, ".env"), `TRACEROOT_API_KEY=${KEY}\n`);
+    const deps = depsFor(authFrom("auto-env-file"));
+    const { ctx } = makeCtx({ cwd: service, flags: { agent: "claude", service: "apps/api" } });
+
+    expect(ctx.credentialEnvFile).toBeUndefined();
+    expect(ctx.refusedCredentialEnvFile).toBeUndefined();
+    expect(applicationKeyLocation(ctx, deps)).toEqual({
+      kind: "file",
+      path: join("apps", "api", ".env"),
+    });
   });
 });
 

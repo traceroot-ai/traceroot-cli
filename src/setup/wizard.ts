@@ -643,7 +643,7 @@ export function wizardWarn(target: FramedOutput, text: string): void {
  *
  * `closing` is the one sentence only a successful run may print, so it is a
  * parameter rather than a constant: a run that stopped at the agent has not
- * earned "you can now use TraceRoot in production".
+ * earned a sentence about using TraceRoot in production.
  */
 export function wizardOutro(
   writers: Writers,
