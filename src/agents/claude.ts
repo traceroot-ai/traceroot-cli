@@ -12,6 +12,7 @@ const SKILLS_SUBDIR = "skills";
  */
 export const claudeAdapter: AgentAdapter = {
   id: "claude",
+  binary: "claude",
   displayName: "Claude Code",
   getSkillInstallPath(cwd: string, skillName: string): string {
     return join(cwd, CLAUDE_DIR, SKILLS_SUBDIR, skillName);
