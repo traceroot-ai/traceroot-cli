@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Writers } from "../../../src/output.js";
 import { renderProjectsList } from "../../../src/registry/enhancers/projects-list.js";
 import { renderWorkspacesList } from "../../../src/registry/enhancers/workspaces-list.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();

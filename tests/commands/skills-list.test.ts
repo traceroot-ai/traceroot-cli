@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runSkillsList } from "../../src/commands/skills/list.js";
 import type { Writers } from "../../src/output.js";
+import { withoutForcedColor } from "../helpers/plainColor.js";
 import { StringSink } from "../helpers/stringSink.js";
+
+withoutForcedColor();
 
 let cwd: string;
 let codexHome: string;

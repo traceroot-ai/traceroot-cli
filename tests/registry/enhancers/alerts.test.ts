@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Writers } from "../../../src/output.js";
 import { renderAlertDetail } from "../../../src/registry/enhancers/alerts-get.js";
 import { alertsList, renderAlertsList } from "../../../src/registry/enhancers/alerts-list.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();

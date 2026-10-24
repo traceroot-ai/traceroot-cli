@@ -30,11 +30,43 @@ const ANSI_DIM = "\x1b[2m";
 const ANSI_RED = "\x1b[91m";
 
 /**
- * Whether ANSI color should be applied for the given sink: true iff `NO_COLOR`
- * is unset in `env` AND the sink is a TTY.
+ * `FORCE_COLOR` values that are not a request for color: the empty string, and
+ * the two spellings of "off" that the wider ecosystem understands —
+ * `FORCE_COLOR=0` is how chalk and supports-color are told to stay plain, so
+ * reading it as "yes, color" would paint output for someone who asked for none.
+ *
+ * They do not switch color off, which stays `NO_COLOR`'s single job; they just
+ * do not count as asking for it, and the sink decides as it otherwise would.
+ */
+const FORCE_COLOR_OFF = new Set(["", "0", "false"]);
+
+/**
+ * Whether ANSI color should be applied for the given sink, in three steps.
+ *
+ * `NO_COLOR`, set to anything at all, means no. It comes first, which is also
+ * the answer when both variables are set: they ask for opposite things, and the
+ * refusal outranks the request. Obeying `NO_COLOR` too eagerly costs a terminal
+ * the color it could have had; obeying `FORCE_COLOR` too eagerly writes escape
+ * codes into a file someone has to read. picocolors — the painter every wizard
+ * line goes through — settles the same pair the same way, so a single run is
+ * never half-painted.
+ *
+ * `FORCE_COLOR` then means yes, whatever the sink is. This is the clause a
+ * caller that is not a terminal needs: a CI runner, a capture that is replayed
+ * into one, or a suite that strips the codes back out all render SGR perfectly
+ * well, and `isTTY` is false for every one of them. The caller is the only one
+ * who knows, so saying so is the whole point of the variable.
+ *
+ * Otherwise the sink decides: a terminal gets color, a pipe or a file does not.
  */
 export function colorEnabled(sink: Sink, env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.NO_COLOR === undefined && sink.isTTY === true;
+  if (env.NO_COLOR !== undefined) {
+    return false;
+  }
+  if (env.FORCE_COLOR !== undefined && !FORCE_COLOR_OFF.has(env.FORCE_COLOR)) {
+    return true;
+  }
+  return sink.isTTY === true;
 }
 
 /**

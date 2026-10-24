@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FindingDetail, TraceDetail } from "../../../src/api/client.js";
 import { CliError, type Writers } from "../../../src/output.js";
 import { runGet, tracesGet } from "../../../src/registry/enhancers/traces-get.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { confirm, dim, yellow } from "../src/prompt.js";
+import { withoutForcedColor } from "./helpers/plainColor.js";
 import { StringSink } from "./helpers/stringSink.js";
+
+withoutForcedColor();
 
 describe("dim", () => {
   it("wraps text in the dim ANSI code when the sink supports color (TTY)", () => {
