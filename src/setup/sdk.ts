@@ -102,6 +102,82 @@ export async function resolveSdkVersion(
   }
 }
 
+/** How to prove the SDK is importable, paired with {@link installCommand}. */
+export interface ImportCheck {
+  program: string;
+  args: string[];
+  /** How to name the interpreter in a failure message, e.g. `poetry run python`. */
+  display: string;
+  /** The module asked for, which is not always the distribution name. */
+  module: string;
+}
+
+/**
+ * The command that proves {@link installCommand} actually landed.
+ *
+ * It lives beside the install deliberately. The two have to agree about *where*
+ * the package goes, and they are easy to let drift: `poetry add` installs into
+ * Poetry's own environment, which for a project without an in-project
+ * virtualenv is a directory under Poetry's cache that no amount of looking
+ * beside the service will find. A probe of the system interpreter then rejects
+ * a perfectly successful install — worse than not checking at all. Adding a
+ * package manager to one function and not the other is now visibly wrong.
+ *
+ * Per manager:
+ *
+ * - `poetry` — asked through `poetry run python`, which executes in the
+ *   project's environment wherever Poetry put it. `poetry run` does not
+ *   install, so it reports on the environment rather than changing it.
+ * - `uv` — the located interpreter. `uv add` puts the environment at `.venv`
+ *   in the project directory, which is exactly where `detectPythonEnvironment`
+ *   looks. `uv run` is deliberately *not* used: it syncs the environment first
+ *   (hence its `--no-sync`), so it would install the package it is supposed to
+ *   be checking for and always succeed.
+ * - `pip` and no manager at all — the located interpreter, falling back to
+ *   `python3`, which is the interpreter the install command itself names.
+ *
+ * Returns null when there is nothing to check. JavaScript and TypeScript are
+ * unverified **by design**, for all four of `npm`, `pnpm`, `yarn` and `bun`:
+ * proving a package resolves means reproducing Node's algorithm across
+ * hoisting, workspaces, pnpm's symlinked store, Yarn PnP — which has no
+ * `node_modules` to look in at all — and an exports map that can refuse a
+ * CommonJS require of a working install. Every one of those failure modes
+ * rejects a working install, and a check that does that costs more than the
+ * silence it replaces.
+ */
+export function importCheck(
+  sdk: ResolvedSdk,
+  service: DetectedService,
+  /** The virtualenv interpreter found for this service, if any. */
+  pythonInterpreter: string | null,
+): ImportCheck | null {
+  if (service.language !== "python") {
+    return null;
+  }
+  // A distribution name is not always an import name: PyPI allows a `-` where
+  // Python requires `_`, and `import a-b` is a syntax error rather than a
+  // missing module, which would fail every run instead of the broken ones.
+  const module = sdk.package.replaceAll("-", "_");
+  // `import X` alone is not evidence the SDK is installed. `python -c` puts the
+  // working directory first on `sys.path`, so a service-local `X.py` or `X/`
+  // satisfies the import and the probe passes with no SDK present — and a
+  // repository being instrumented for TraceRoot is exactly where a directory of
+  // that name is plausible. Distribution metadata cannot be shadowed that way:
+  // it exists only for something a package manager actually installed. Asking
+  // for both keeps the import in the signal and settles installation with it.
+  const code = `import ${module}, importlib.metadata as m; m.version("${sdk.package}")`;
+  if (service.packageManager === "poetry") {
+    return {
+      program: "poetry",
+      args: ["run", "python", "-c", code],
+      display: "poetry run python",
+      module,
+    };
+  }
+  const interpreter = pythonInterpreter ?? "python3";
+  return { program: interpreter, args: ["-c", code], display: interpreter, module };
+}
+
 /** The install command an agent should run, with the version pinned exactly. */
 export function installCommand(
   sdk: ResolvedSdk,

@@ -250,15 +250,28 @@ export function upsertEnvFile(path: string, updates: Record<string, string>): Up
   return { written, created: !existed };
 }
 
-/** Removes keys from a dotenv file, leaving every other line untouched. */
-export function removeEnvKeys(path: string, keys: readonly string[]): string[] {
-  if (!existsSync(path)) {
-    return [];
-  }
+/**
+ * The same removal as {@link removeEnvKeys}, without the disk.
+ *
+ * Split out because one caller has a file's contents and not a path it can
+ * write: `verify.ts` moves the credential file aside and stands a copy without
+ * the credential in its place. The shape a dotenv assignment can take —
+ * `export`, leading space, a carriage return the file may or may not have — has
+ * to be the one this module already uses, because two readings of it would
+ * drift, and the direction they would drift in is leaving a live key in a file
+ * this tool has promised does not hold one.
+ *
+ * Everything that is not a removed assignment survives as it was: comments,
+ * blank lines, ordering, CRLF endings, and a final newline or its absence.
+ */
+export function removeEnvContent(
+  existing: string,
+  keys: readonly string[],
+): { content: string; removed: string[] } {
   const wanted = new Set(keys);
   const removed: string[] = [];
   const kept: string[] = [];
-  for (const line of readFileSync(path, "utf8").split("\n")) {
+  for (const line of existing.split("\n")) {
     const key = line.match(LINE)?.[1];
     if (key !== undefined && wanted.has(key)) {
       removed.push(key);
@@ -266,9 +279,18 @@ export function removeEnvKeys(path: string, keys: readonly string[]): string[] {
     }
     kept.push(line);
   }
+  return { content: kept.join("\n"), removed };
+}
+
+/** Removes keys from a dotenv file, leaving every other line untouched. */
+export function removeEnvKeys(path: string, keys: readonly string[]): string[] {
+  if (!existsSync(path)) {
+    return [];
+  }
+  const { content, removed } = removeEnvContent(readFileSync(path, "utf8"), keys);
   if (removed.length === 0) {
     return [];
   }
-  writeFileSync(path, kept.join("\n"), { mode: 0o600 });
+  writeFileSync(path, content, { mode: 0o600 });
   return removed;
 }

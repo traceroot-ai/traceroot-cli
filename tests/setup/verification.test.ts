@@ -321,6 +321,11 @@ describe("proving the application runs without the credential", () => {
     writeFileSync(projectEnv, `DATABASE_URL=postgres:///app\nTRACEROOT_API_KEY=${KEY}\n`, "utf8");
     // Both files are parked while the check runs.
     const run = async (): Promise<RunProcessResult> => {
+      // Parking leaves this run's own credential-stripped copy at the
+      // original path, so the directory has to replace that copy rather than
+      // appear beside it. Without the removal this is EEXIST from `mkdir`,
+      // not the EISDIR from `rename` the test is about.
+      rmSync(file, { force: true });
       mkdirSync(file);
       return PROCESS_OK;
     };
@@ -363,6 +368,11 @@ describe("proving the application runs without the credential", () => {
     const projectEnv = join(root, ".env");
     writeFileSync(projectEnv, `TRACEROOT_API_KEY=${KEY}\n`, "utf8");
     const run = async (): Promise<RunProcessResult> => {
+      // Parking leaves this run's own credential-stripped copy at the
+      // original path, so the directory has to replace that copy rather than
+      // appear beside it. Without the removal this is EEXIST from `mkdir`,
+      // not the EISDIR from `rename` the test is about.
+      rmSync(file, { force: true });
       mkdirSync(file);
       throw new Error("spawn exploded");
     };

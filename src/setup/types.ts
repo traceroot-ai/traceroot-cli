@@ -126,7 +126,13 @@ export interface InstrumentationResult {
   durationMs: number;
   /**
    * The agent's self-reported completion block, when it emitted a parseable
-   * one. Diagnostics only — never used to decide pass/fail.
+   * one.
+   *
+   * Diagnostics, with one exception: an agent that reports having changed no
+   * files fails the stage, because a run that edited nothing cannot have
+   * instrumented anything. Even there the claim is not taken on its own — the
+   * worktree has to show no change either (`observedChangedFiles`), since a
+   * report is a claim and `git status` is evidence.
    */
   reported: {
     filesChanged: string[];
@@ -241,6 +247,32 @@ export interface SetupCheckpoint {
   service?: { path: string; language: StackLanguage; framework: string | null };
   sdkVersion?: string;
   application?: ApplicationVerification;
+  /**
+   * The project's own check as it stood before this run instrumented anything.
+   *
+   * On the checkpoint rather than only in memory because the two measurements
+   * can happen in different invocations: a run that instruments and then fails
+   * waiting for a trace is resumed, and `verify_application` on that resume
+   * still has to know whether the suite was red to begin with. Taken once and
+   * never retaken, because after the first edit there is no "before" left to
+   * measure.
+   */
+  applicationBaseline?: VerificationRun;
+  /**
+   * Keys a setup run minted in this repository that no run has put into
+   * service and no rollback has revoked.
+   *
+   * Written the moment a key is created, because a process that dies takes
+   * every other record of it with it, and a key nobody knows about cannot be
+   * found again except by date in a list of keys that all look alike. Emptied
+   * when a run completes — then the keys are the ones in use — and pruned by a
+   * rollback as it revokes them, so what is left is exactly what is still out
+   * there.
+   *
+   * Never the key itself. The hint and the name are what identify a row in the
+   * project's key list, and a checkpoint is a file people paste into issues.
+   */
+  mintedKeys?: { id: string; name: string | null; hint: string }[];
   trace?: TraceVerification;
   lastError?: { stage: SetupStage; code: SetupErrorCode; message: string };
 }

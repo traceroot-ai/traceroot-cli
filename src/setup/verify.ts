@@ -1,4 +1,5 @@
-import { existsSync, renameSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { removeEnvContent } from "./envWrite.js";
 import { type RunProcess, splitCommand } from "./exec.js";
 import { withVenvOnPath } from "./python.js";
 import type { Secret } from "./secret.js";
@@ -7,7 +8,15 @@ import type { ApplicationVerification, VerificationRun } from "./types.js";
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Where the credential file is parked while the application runs without it.
+ * The one variable the credential-free run does without.
+ *
+ * Named here because it is taken out of a file as well as out of the child
+ * environment, and the two have to be the same variable.
+ */
+const KEY_ENV = "TRACEROOT_API_KEY";
+
+/**
+ * Where the credential file is kept while the application runs without it.
  *
  * A sibling path, so the move is a rename within one directory and cannot fail
  * across filesystems, and a name obvious enough that someone who finds one left
@@ -91,23 +100,42 @@ export interface VerifyApplicationResult {
   verification: ApplicationVerification;
   failure: { output: string } | null;
   /**
-   * Files moved aside for the credential-free run, so what "without the
-   * credential" meant is a fact the caller can report rather than a promise.
-   * Empty when there was nothing to move.
+   * Files the credential was taken out of for the credential-free run, so what
+   * "without the credential" meant is a fact the caller can report rather than
+   * a promise. Empty when there was no such file.
    */
   withheld: readonly string[];
 }
 
 const NOT_RUN: VerificationRun = { ran: false, exitCode: null, durationMs: 0 };
 
-/** A file moved out of the way, and where it came from. */
+/** The untouched copy of a credential file, and where it came from. */
 interface Parked {
   original: string;
   parked: string;
 }
 
 /**
- * Moves the credential file aside, or returns null when there is nothing there.
+ * Takes the credential out of a file for the duration of one run, or returns
+ * null when the file is not there.
+ *
+ * The credential's file is the project's own `.env` — setup writes the key into
+ * a file the application already loads, which is the whole reason the key is
+ * reachable at all. So that file holds the project's other variables too, and
+ * moving the whole file aside, which is what this used to do, ran the
+ * credential-free check against an application missing its database URL and
+ * everything else it is configured with. The check then failed for reasons that
+ * have nothing to do with TraceRoot, and the run stopped and told the user
+ * their instrumentation had broken their application. Withholding the
+ * credential has to mean the credential.
+ *
+ * The rename stays, as the copy that comes back. It is no longer the mechanism
+ * but it is the crash path: from the moment it happens until the run ends, the
+ * file's original bytes sit under a name nothing else writes, so a process
+ * killed in between leaves them recoverable — and the restore is a rename of
+ * bytes this function never parsed rather than a rewrite of what it understood.
+ * Rewriting a user's `.env` in place with no copy anywhere is the one way to
+ * actually lose it.
  *
  * Throws rather than carrying on: a credential-free run that cannot be made
  * credential-free proves nothing, and reporting "your application works without
@@ -130,6 +158,11 @@ function park(file: string): Parked | null {
       `${parked} is already there, and moving ${file} aside would overwrite it. It is a copy of ${file} left behind by a run that was interrupted while the application ran without its credential. Put it back or delete it, then run setup again.`,
     );
   }
+  // Read, and stat, before anything moves: the copy written below comes from the
+  // bytes this call was handed rather than from a path it has to go and find
+  // again, and a failure in either of these leaves the file exactly where it is.
+  const original = readFileSync(file, "utf8");
+  const mode = statSync(file).mode & 0o777;
   try {
     renameSync(file, parked);
   } catch (err) {
@@ -138,14 +171,62 @@ function park(file: string): Parked | null {
       `could not move ${file} aside to run the application without its credential: ${reason}`,
     );
   }
+  const { content, removed } = removeEnvContent(original, [KEY_ENV]);
+  if (removed.length === 0) {
+    // Nothing in this file can hand the key back, so the credential-free run
+    // does not need it touched — and rewriting a user's env file to take out a
+    // line it does not have is risk for nothing. The caller already asks which
+    // files hold the credential; this is the same question asked of the bytes.
+    unpark({ original: file, parked });
+    return null;
+  }
+  try {
+    // `wx` never follows a symlink and never writes over an existing file. The
+    // rename above just emptied this path, so anything at it now appeared in
+    // between and must not be written through.
+    //
+    // The original's own mode, because the file at this path has to look to the
+    // project exactly like its own file minus one line, permissions included. A
+    // check that reads the repository as another uid — a container, a process
+    // started under a different account — can read a 0644 env file and cannot
+    // read a 0600 one, so standing in a tighter copy would fail the
+    // credential-free run for a reason this step introduced, which is the
+    // defect this function exists to stop causing. Tightening it would protect
+    // nothing in any case: the copy that still holds the credential is the one
+    // the rename moved aside, and a rename keeps the inode, so that copy sits
+    // at the user's own mode for the whole window.
+    writeFileSync(file, content, { mode, flag: "wx" });
+    // And again, because `writeFileSync`'s `mode` is masked by the process
+    // umask: under one that strips group and other read, a 0644 original is
+    // created 0600 and the stand-in ends up tighter than the file it replaces —
+    // the very outcome the mode is here to avoid, in exactly the hardened
+    // environments most likely to run the check as another uid. `chmod` is not
+    // masked. The window between the two calls is tighter than intended and
+    // never looser, so nothing can read the stand-in that could not already
+    // read the original.
+    chmodSync(file, mode);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    // The file is aside at this point, and leaving it there is the whole-file
+    // withholding this function exists to stop doing. Put it back, then refuse:
+    // a check run against a repository missing its configuration proves nothing
+    // about the credential either.
+    unpark({ original: file, parked });
+    throw new Error(`could not stand in a copy of ${file} without its credential: ${reason}`);
+  }
   return { original: file, parked };
 }
 
 /**
  * Puts the credential file back. Safe to call more than once, and deliberately
- * unconditional about the destination: if anything has since appeared at the
- * original path, the user's own credential file is still the copy that has to
- * survive this function.
+ * unconditional about the destination: what sits at the original path is this
+ * run's own copy of the file without the credential, and if something else has
+ * appeared there instead, the user's own credential file is still the copy that
+ * has to survive this function.
+ *
+ * A rename, so the file comes back as the bytes it was — the same CRLF endings,
+ * the same final newline or lack of one, the same mode. Nothing here
+ * re-serialises what it read.
  *
  * Throws with the parked name in it rather than passing the `rename` error on
  * as it stands: the file is still on disk under a name its owner never chose,
@@ -185,8 +266,8 @@ function unpark(entry: Parked | null): void {
  */
 function withTraceRootOff(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const off: NodeJS.ProcessEnv = { ...env, TRACEROOT_ENABLED: "false" };
-  // biome-ignore lint/performance/noDelete: absent and empty are different to an SDK
-  delete off.TRACEROOT_API_KEY;
+  // Deleted, not blanked: absent and empty are different to an SDK.
+  delete off[KEY_ENV];
   return off;
 }
 
@@ -202,10 +283,11 @@ function withTraceRootOff(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * Absent means absent from every place the application can read it. The
  * instrumented entry point loads its credential file itself, so deleting
  * `TRACEROOT_API_KEY` from the child environment and leaving that file on disk
- * hands the run the same key back off disk, and the check passes for free.
- * Every file that holds the key is moved aside for the duration and restored in
- * a `finally`, because a verification step that can lose a user's credential
- * file is worse than one that proves too little.
+ * hands the run the same key back off disk, and the check passes for free. So
+ * the key is taken out of every file that holds it for the duration, and the
+ * files are restored in a `finally`: the key and not the file, because the file
+ * is the project's own `.env` and the rest of it is the configuration the
+ * application needs in order to start at all.
  *
  * Once, and never with the key. There used to be a first run with
  * `TRACEROOT_API_KEY` set, and it was the one thing setup ran that could send a
@@ -406,12 +488,12 @@ export async function runBaselineCheck(input: BaselineCheckInput): Promise<Verif
 }
 
 /**
- * Runs `body` with every credential file moved aside, and puts them all back
- * however `body` ends.
+ * Runs `body` with the credential taken out of every one of these files, and
+ * puts them all back however `body` ends.
  *
  * All of them or none: a refusal part-way through puts back what it already
- * moved before it propagates, because a run that stops here still has to leave
- * the repository as it found it.
+ * touched before it propagates, because a run that stops here still has to
+ * leave the repository as it found it.
  *
  * `finally` covers a throw, a non-zero exit, a timeout and an abort — the
  * process runner resolves rather than rejects for the last three. It does not

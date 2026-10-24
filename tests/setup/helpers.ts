@@ -25,8 +25,17 @@ export interface RecordedRun {
 export interface FakeProcessOptions {
   /** Result per program name; anything unlisted exits 0 with no output. */
   results?: Record<string, Partial<RunProcessResult>>;
-  /** `git status --porcelain` output, keyed by call order (last value repeats). */
+  /** `git status --porcelain -z` output, keyed by call order (last value repeats). */
   gitStatus?: string[];
+  /**
+   * Result per git invocation, chosen from its arguments.
+   *
+   * `results` is keyed by program name, which cannot tell one git subcommand
+   * from another — and setup now makes three different ones, where
+   * `check-ignore` and `ls-files` have to be able to answer differently.
+   * `status` is still served by `gitStatus` above.
+   */
+  git?: (args: readonly string[]) => Partial<RunProcessResult>;
 }
 
 /**
@@ -48,14 +57,19 @@ export function fakeRunProcess(options: FakeProcessOptions = {}): {
       stdin: o.stdin,
     });
 
-    if (o.program === "git" && o.args[0] === "status") {
+    // `includes`, not `args[0]`: the probe passes `--no-optional-locks` before the
+    // subcommand so it cannot take `index.lock`.
+    if (o.program === "git" && o.args.includes("status")) {
       const statuses = options.gitStatus ?? [""];
       const value = statuses[Math.min(gitCalls, statuses.length - 1)] ?? "";
       gitCalls += 1;
       return { exitCode: 0, output: value, durationMs: 1, timedOut: false, spawnFailed: false };
     }
 
-    const override = options.results?.[o.program];
+    const override =
+      o.program === "git" && options.git !== undefined
+        ? options.git(o.args)
+        : options.results?.[o.program];
     // A real capture streams as it goes; replaying the canned output through
     // `onData` is what lets the activity feed be exercised without a process.
     if (override?.output !== undefined && override.output !== "") {
@@ -185,8 +199,6 @@ export function makeContext(json = false): Context {
 
 export function defaultFlags(overrides: Partial<SetupFlags> = {}): SetupFlags {
   return {
-    skills: false,
-    mcp: false,
     browser: false,
     instrument: true,
     resume: false,
@@ -211,6 +223,8 @@ export interface MakeDepsOptions {
   hiddenAnswers?: string[];
   sdk?: ResolvedSdk;
   onWriteConfig?: (config: { api_key: string; host_url: string }) => void;
+  /** The CLI's config as an earlier run left it; none by default, as on a first run. */
+  config?: { api_key?: string; host_url?: string } | null;
   tempDir?: string;
   /** Whether a local TraceRoot API answers, for the missing-endpoint hint. */
   localHostResponds?: boolean;
@@ -271,6 +285,10 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     promptHidden: async () => hidden.shift() ?? "",
     resolveSdk: async () => options.sdk ?? TEST_SDK,
     writeConfig: options.onWriteConfig ?? (() => undefined),
+    readConfig: () => options.config ?? null,
+    // No file behind the config by default, so a rollback finds nothing to put back.
+    readConfigText: () => null,
+    restoreConfigText: () => undefined,
     sleep: async () => undefined,
     makeTempDir: () => options.tempDir ?? "/tmp/traceroot-setup-test",
     probeHost: async () => options.localHostResponds ?? false,
@@ -280,10 +298,22 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     writeCredential: options.onWriteCredential ?? (() => undefined),
     deleteCredential: options.onDeleteCredential ?? (() => true),
     runDeviceFlow: options.runDeviceFlow ?? (async () => ({ sessionToken: "session-token-value" })),
-    createTokenProvider: () => ({
-      getAccessToken: async () => "access-jwt-value",
-      invalidate: () => undefined,
-    }),
+    // Refuses a missing token, because the real one sends it as the bearer and a
+    // provider built from nothing can never sign anyone in. Accepting it let
+    // every saved-sign-in test pass with the token `undefined`: their fixtures
+    // spelled the field `sessionToken`, which `CredentialEntry` does not have,
+    // and nothing noticed because `tsconfig.json` excludes `tests`.
+    createTokenProvider: ({ sessionToken }) => {
+      if (typeof sessionToken !== "string" || sessionToken === "") {
+        throw new Error(
+          `createTokenProvider was handed no session token (${String(sessionToken)})`,
+        );
+      }
+      return {
+        getAccessToken: async () => "access-jwt-value",
+        invalidate: () => undefined,
+      };
+    },
   };
 }
 
