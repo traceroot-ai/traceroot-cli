@@ -49,12 +49,27 @@ import {
 } from "./helpers.js";
 
 let dir: string;
+let prevCodexHome: string | undefined;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "tr-setup-machine-"));
+  // Codex's skills directory is global, not project-local: it is read from
+  // `$CODEX_HOME`, falling back to the real `~/.codex`. A hand-over route that
+  // targets Codex installs the skill there, so leaving this unpinned makes the
+  // suite's behaviour depend on whether the developer running it happens to
+  // use Codex — and, worse, writes into their home directory. Pointed at the
+  // fixture, the same way `doctor` and `skills` already do.
+  prevCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = join(dir, "codex-home");
 });
 
 afterEach(() => {
+  if (prevCodexHome === undefined) {
+    // biome-ignore lint/performance/noDelete: restoring an env var; assigning undefined would stringify it
+    delete process.env.CODEX_HOME;
+  } else {
+    process.env.CODEX_HOME = prevCodexHome;
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -3978,6 +3993,11 @@ describe("resume and rerun", () => {
       previous.completedStages.push(stage);
     }
     previous.lastError = { stage: "verify_trace", code: "TRACE_TIMEOUT", message: "no trace" };
+    // What that previous run would have recorded: it instrumented, so an agent
+    // edited this worktree. The field is how the resumed run knows not to send
+    // one over it again, so a fixture standing in for such a run has to carry
+    // it.
+    previous.instrumentHandover = "agent";
     writeCheckpoint(dir, previous);
 
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
@@ -4880,7 +4900,571 @@ describe("--no-instrument", () => {
     expect(err.data).toContain("--resume");
     // It did not reach a trace, so it must not print the completion sentence.
     expect(out.data).not.toContain("TraceRoot is connected");
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+  });
+});
+
+describe("the agent a hand-over targets", () => {
+  /** `.claude/` in the project, which is what Claude Code's adapter looks for. */
+  function withClaudeConfigured(): void {
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+  }
+
+  /** `$CODEX_HOME`, pinned into the fixture by the suite's `beforeEach`. */
+  function withCodexConfigured(): string {
+    const home = join(dir, "codex-home");
+    mkdirSync(home, { recursive: true });
+    return home;
+  }
+
+  /** Records every question asked, so "it did not ask" is assertable. */
+  function askRecorder(deps: SetupDeps): {
+    deps: SetupDeps;
+    asked: Array<{ message: string; options: string[] }>;
+  } {
+    const asked: Array<{ message: string; options: string[] }> = [];
+    const inner = deps.select;
+    return {
+      asked,
+      deps: {
+        ...deps,
+        select: async (input) => {
+          asked.push({ message: input.message, options: input.options.map((o) => o.value) });
+          return inner(input);
+        },
+      },
+    };
+  }
+
+  /** A hand-over run: writes the task, edits nothing, stops short of a trace. */
+  function handoverDeps(answers: string[] = []): SetupDeps {
+    return makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [] }),
+      runProcess: fakeRunProcess().run,
+      answers,
+    });
+  }
+
+  const skillInstalled = (...parts: string[]): boolean =>
+    existsSync(join(...parts, "traceroot-instrument-repo", "SKILL.md"));
+
+  it("names Codex, and installs the skill in Codex's own directory", async () => {
+    // The route that writes a markdown task out drives nothing, so the
+    // launchable-agent list has no business narrowing it. This machine has
+    // Codex and not Claude Code; being told to run the task in Claude Code is
+    // advice about software that is not here.
+    pythonRepo();
+    const codexHome = withCodexConfigured();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    await runSetupMachine(ctx, handoverDeps());
+
+    const said = plain(err.data);
+    expect(said).toContain("Run it in Codex");
+    expect(said).not.toContain("Claude Code");
+    expect(ctx.agent?.id).toBe("codex");
+    // Codex reads skills from the home directory, not from the repository, so
+    // "the right agent" has to mean its path and not merely its name.
+    expect(skillInstalled(codexHome, "skills")).toBe(true);
+    expect(skillInstalled(dir, ".claude", "skills")).toBe(false);
+  });
+
+  it("names Claude Code when that is what is set up", async () => {
+    pythonRepo();
+    withClaudeConfigured();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    await runSetupMachine(ctx, handoverDeps());
+
+    const said = plain(err.data);
+    expect(said).toContain("Run it in Claude Code");
+    expect(said).not.toContain("Codex");
+    expect(ctx.agent?.id).toBe("claude");
+    expect(skillInstalled(dir, ".claude", "skills")).toBe(true);
+  });
+
+  /**
+   * `$CODEX_HOME` outside the repository, where a real `~/.codex` is. The
+   * suite's own pin sits inside the fixture, which makes Codex's copy of the
+   * skill a write into the repository and hides the case these tests are for.
+   */
+  function withCodexHomeOutsideRepository(): string {
+    const home = mkdtempSync(join(tmpdir(), "tr-codex-home-"));
+    process.env.CODEX_HOME = home;
+    return home;
+  }
+
+  it("says where the skill went when Codex keeps it outside the repository", async () => {
+    // Codex is detected from the home directory, never from this repository,
+    // so a fresh repository on a machine with a leftover `~/.codex` hands over
+    // to Codex, and the skill is written into the home directory. Picking
+    // Codex is right; doing that without a word is not, because `git diff`
+    // will never show the write.
+    pythonRepo();
+    const home = withCodexHomeOutsideRepository();
+    try {
+      const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+      await runSetupMachine(ctx, handoverDeps());
+
+      expect(ctx.agent?.id).toBe("codex");
+      expect(skillInstalled(home, "skills")).toBe(true);
+      // The whole destination, on one line. Matched on its tail, because
+      // whether the home directory prints as `~` depends on where the temp
+      // directory happens to sit.
+      const line = plain(err.data)
+        .split("\n")
+        .find((l) => l.includes("Installed the TraceRoot skill"));
+      expect(line).toContain("Installed the TraceRoot skill for Codex in ");
+      expect(line).toContain(
+        `${join(basename(home), "skills", "traceroot-instrument-repo")}, outside this repository.`,
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("names that place in the report's list of touched files", async () => {
+    pythonRepo();
+    const home = withCodexHomeOutsideRepository();
+    try {
+      // The task was run in Codex and its trace arrived, so the run reaches
+      // the report — which is written only by a run that finishes.
+      const deps = makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: fakeRunProcess().run,
+      });
+      const { ctx } = makeCtx({ flags: { instrument: false } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(result.error).toBeNull();
+      expect(result.ok).toBe(true);
+      const report = readFileSync(join(dir, ".traceroot", "setup-report.md"), "utf8");
+      const row = report.split("\n").find((l) => l.includes("The instrumentation skill"));
+      expect(row).toContain(`${basename(home)}/skills/traceroot-instrument-repo/\``);
+      expect(row).toMatch(/ \| The instrumentation skill, outside this repository\. \|$/);
+      // Not the Claude Code directory, which this run never created.
+      expect(report).not.toContain(".claude/skills/");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("names the generic agent's own skill directory in the report", async () => {
+    // With no agent set up, the skill goes in the tool-neutral `.agents/`, and
+    // the report has to say so rather than name Claude Code's directory.
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess().run,
+    });
+    const { ctx } = makeCtx({ flags: { instrument: false } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(ctx.agent?.id).toBe("generic");
+    expect(skillInstalled(dir, ".agents", "skills")).toBe(true);
+    const report = readFileSync(join(dir, ".traceroot", "setup-report.md"), "utf8");
+    expect(report).toContain(
+      "| `.agents/skills/traceroot-instrument-repo/` | The instrumentation skill. |",
+    );
+    expect(report).not.toContain(".claude/skills/");
+  });
+
+  it("says nothing about the skill when it lands inside the repository", async () => {
+    // Claude Code's copy goes in `.claude/`, which `git diff` already shows, so
+    // the install stays the silent bookkeeping it always was.
+    pythonRepo();
+    withClaudeConfigured();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    await runSetupMachine(ctx, handoverDeps());
+
+    expect(ctx.agent?.id).toBe("claude");
+    expect(skillInstalled(dir, ".claude", "skills")).toBe(true);
+    const said = plain(err.data);
+    expect(said).not.toContain("Installed the TraceRoot skill");
+    expect(said).not.toContain("outside this repository");
+  });
+
+  it("asks which one when both are set up, and honours the answer", async () => {
+    pythonRepo();
+    withClaudeConfigured();
+    const codexHome = withCodexConfigured();
+    const { deps, asked } = askRecorder(handoverDeps(["codex"]));
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    const question = asked.find((q) => q.message.includes("Which coding agent"));
+    expect(question?.options).toEqual(["claude", "codex"]);
+    expect(ctx.agent?.id).toBe("codex");
+    expect(plain(err.data)).toContain("Run it in Codex");
+    expect(skillInstalled(codexHome, "skills")).toBe(true);
+  });
+
+  it("does not offer the generic fallback it created itself", async () => {
+    // `.agents/` is where a hand-over with nothing to name puts the skill, so
+    // from the second run onwards the repository has one. Counted as an agent
+    // that is "set up here", it raises a second question — the one
+    // `chooseInstrumentation` exists to avoid — between a real agent and a
+    // category, and answering "Agent (generic)" is then met with "no coding
+    // agent is set up here".
+    pythonRepo();
+    withClaudeConfigured();
+    mkdirSync(join(dir, ".agents"), { recursive: true });
+    const { deps, asked } = askRecorder(handoverDeps(["generic"]));
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
+    expect(ctx.agent?.id).toBe("claude");
+    const said = plain(err.data);
+    expect(said).toContain("Run it in Claude Code");
+    expect(said).not.toContain("Agent (generic)");
+  });
+
+  it("never asks when it cannot, and says what it picked and how to change it", async () => {
+    // A `--json` consumer and a CI job have nobody to answer a question, and
+    // stdout there belongs to the event stream — so the choice is reported
+    // after the fact rather than put to the user.
+    pythonRepo();
+    withClaudeConfigured();
+    withCodexConfigured();
+    const { deps, asked } = askRecorder(handoverDeps());
+    const { ctx, err } = makeCtx({
+      canPrompt: false,
+      flags: { instrument: false, traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
+    const said = plain(err.data);
+    // Both are named, so the one it did not pick is not invisible.
+    expect(said).toContain("Agents set up here: Claude Code, Codex");
+    expect(said).toContain("Targeting Claude Code");
+    expect(said).toContain("--agent");
+    // And not a word of the question itself.
+    expect(said).not.toContain("Which coding agent");
+    expect(ctx.agent?.id).toBe("claude");
+  });
+
+  it("keeps the choice out of a --json run's event stream", async () => {
+    pythonRepo();
+    withClaudeConfigured();
+    withCodexConfigured();
+    const { deps, asked } = askRecorder(handoverDeps());
+    const { ctx, out, err } = makeCtx({
+      json: true,
+      flags: { instrument: false, traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(asked).toEqual([]);
+    // stdout belongs to the event stream; the note about what was targeted is
+    // stderr, like every other thing the run says about itself. Both halves
+    // asserted: "not on stdout" alone passes just as well if the note is never
+    // printed at all, which would lose the only account of what was picked.
+    expect(plain(out.data)).not.toContain("Which coding agent");
+    expect(plain(out.data)).not.toContain("Agents set up here");
+    expect(plain(err.data)).toContain("Agents set up here: Claude Code, Codex");
+    expect(plain(err.data)).toContain("Targeting Claude Code");
+    expect(ctx.agent?.id).toBe("claude");
+  });
+
+  it("still writes a useful task when no agent is set up at all", async () => {
+    // Not a dead end: the markdown is self-contained, so the run says so and
+    // puts the skill in the tool-neutral location rather than naming a product
+    // this machine has not got.
+    pythonRepo();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    await runSetupMachine(ctx, handoverDeps());
+
+    const taskPath = join(dir, ".traceroot", "prompts", "setup-instrument.md");
+    expect(readFileSync(taskPath, "utf8")).toContain("Instrument this service with TraceRoot");
+    const said = plain(err.data);
+    expect(said).toContain("No coding agent is set up here");
+    expect(said).toContain("run it in whichever agent you use");
+    expect(said).not.toContain("Run it in Claude Code");
+    expect(ctx.agent?.id).toBe("generic");
+    expect(skillInstalled(dir, ".agents", "skills")).toBe(true);
+  });
+
+  it("obeys --agent over what is on the machine", async () => {
+    pythonRepo();
+    withClaudeConfigured();
+    const codexHome = join(dir, "codex-home");
+    const { deps, asked } = askRecorder(handoverDeps());
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { agent: "codex", instrument: false, traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
+    expect(ctx.agent?.id).toBe("codex");
+    expect(plain(err.data)).toContain("Run it in Codex");
+    expect(skillInstalled(codexHome, "skills")).toBe(true);
+  });
+});
+
+describe("why no trace arrived", () => {
+  /** A Python service with no test or health command for setup to run. */
+  function pythonRepoWithoutTests(): void {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi"]\n');
+    writeFileSync(join(dir, "main.py"), "print('hi')\n");
+  }
+
+  /** The same service, already wired up by hand before setup ever ran. */
+  function alreadyInstrumented(): void {
+    writeFileSync(
+      join(dir, "main.py"),
+      'import traceroot\n\nif __name__ == "__main__":\n    traceroot.initialize()\n',
+    );
+  }
+
+  function traceless(): SetupDeps {
+    return makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+  }
+
+  it("ends an un-run hand-over as a pause, not as a program that never ran", async () => {
+    // The live failure. `main.py` held zero TraceRoot references and the SDK
+    // was not installed, and the run said "nothing has run your application —
+    // Run your application once". Running an uninstrumented application again
+    // produces the same nothing, so that advice is a loop with no exit; what
+    // is outstanding is the instrumentation itself. Nor is it a failure: the
+    // user chose to do that part, so the run ends normally and leaves the
+    // trace unrecorded for `--resume` to look for.
+    pythonRepoWithoutTests();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
+
+    const result = await runSetupMachine(ctx, traceless());
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.trace).toBeNull();
+    expect(result.stagesRun.find((s) => s.stage === "verify_trace")?.status).toBe("skipped");
+    expect(ctx.checkpoint.lastError).toBeUndefined();
+    expect(plain(err.data)).not.toContain("nothing has run your application");
+    // Nothing can arrive, so nothing is waited for: no two-minute spinner in
+    // front of an answer that was available immediately.
+    expect(plain(err.data)).not.toContain("Waiting for your first trace");
+  });
+
+  it("pauses the same way when the project's own suite did run", async () => {
+    // A test command exercising uninstrumented code is still uninstrumented
+    // code: "the instrumented code path never ran" would name the wrong one of
+    // the two missing halves.
+    pythonRepo();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
+
+    const result = await runSetupMachine(ctx, traceless());
+
+    expect(ctx.application?.run.ran).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(plain(err.data)).not.toContain("Waiting for your first trace");
+  });
+
+  it("pauses on the manual route too, with no task file to name", async () => {
+    // `--manual` writes no task file, so there is no path to send anyone to.
+    pythonRepoWithoutTests();
+    const { ctx } = makeCtx({ flags: { method: "manual", traceTimeoutSec: 120 } });
+
+    const result = await runSetupMachine(ctx, traceless());
+
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(ctx.instrumentation?.mode).toBe("prompt-only");
+    expect(ctx.instrumentation?.promptPath).toBeNull();
+  });
+
+  it("keeps the key it installed, which the resume needs", async () => {
+    // The pause it replaced kept the key and the env file, and so must this:
+    // the next step is the user's application sending a trace with them.
+    pythonRepo();
+    let revoked = 0;
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({
+        whoamiResult: async () => whoami({ project_id: "p_other" }),
+        traces: [],
+      }),
+      setupApi: fakeSetupApi({
+        listProjects: async () => [
+          { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+        ],
+        listApiKeys: async () => [],
+        createApiKey: async ({ name }) => ({
+          id: "ak_1",
+          name,
+          hint: "tr-…9999",
+          project_id: "p_1",
+          scope: "ingest",
+          expires_at: null,
+          key: "tr-minted-secret-value-42",
+        }),
+        revokeApiKey: async () => {
+          revoked += 1;
+        },
+      }),
+      runProcess: fakeRunProcess().run,
+    });
+    const { ctx } = makeCtx({ flags: { instrument: false, project: "demo", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(revoked).toBe(0);
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-minted-secret-value-42");
+  });
+
+  it("does not call a hand-picked repository uninstrumented", async () => {
+    // A repository the user instrumented by hand before running setup is the
+    // reason this route still reaches the trace stage at all. `detect_stack`
+    // saw the initialization, so the hand-over says nothing about whether
+    // there is instrumentation here — and the run waits and reports as usual.
+    pythonRepo();
+    alreadyInstrumented();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, traceless());
+
+    expect(ctx.stack?.existingInstrumentation.present).toBe(true);
+    // A real timeout, so it still fails rather than pausing like a hand-over.
+    expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(plain(result.error?.message ?? "")).toContain("No trace arrived within");
+    // It really did wait for it, rather than giving up on a verdict it has no
+    // grounds for.
+    expect(plain(err.data)).toContain("Waiting for your first trace");
+  });
+
+  it("waits for the agent's trace when an agent did the instrumenting", async () => {
+    // The other diagnosis has to keep working: here the code *was* changed, and
+    // the agent was told to run the application, so a trace can be on its way
+    // whether or not there is a test command. The run waits for it and, when
+    // none comes, says so as a timeout rather than as an application nothing
+    // ran.
+    pythonRepoWithoutTests();
+    initGit();
+    const { ctx, err } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 120 } });
+
+    const result = await runSetupMachine(ctx, traceless());
+
+    expect(ctx.instrumentation?.mode).toBe("background");
+    expect(result.ok).toBe(false);
+    expect(plain(result.error?.message ?? "")).toContain("No trace arrived within");
+    expect(plain(result.error?.message ?? "")).not.toContain("nothing has run your application");
+    expect(plain(err.data)).toContain("Waiting for your first trace");
+  });
+
+  it("pauses again on a resume that finds the hand-over still un-run", async () => {
+    // The route a user is on: the first run writes the task and tells them to
+    // rerun with `--resume`, so the resumed run is where this has to hold.
+    // `--resume` restores the instrument stage from the checkpoint rather
+    // than running it again — and a restored hand-over that claimed an agent
+    // had edited the code is what sent them back to run an application with no
+    // TraceRoot in it, which is the loop this whole route exists to break.
+    pythonRepoWithoutTests();
+    const first = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
+    await runSetupMachine(first.ctx, traceless());
+
+    const { ctx, err } = makeCtx({
+      flags: { instrument: false, traceTimeoutSec: 120, resume: true },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, traceless());
+
+    // Restored as what it was, not as an agent run.
+    expect(ctx.instrumentation?.mode).toBe("prompt-only");
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(plain(err.data)).not.toContain("nothing has run your application");
+    expect(plain(err.data)).not.toContain("Waiting for your first trace");
+  });
+
+  it("waits for the trace on the resume after the task is applied, and finishes", async () => {
+    // The pause records no trace, so the trace stage is unsatisfied on the
+    // resume and runs again — this time over code that has TraceRoot in it.
+    pythonRepo();
+    const first = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
+    const paused = await runSetupMachine(first.ctx, traceless());
+    expect(paused.ok).toBe(true);
+    expect(paused.trace).toBeNull();
+
+    // What the user's own agent did with the task.
+    alreadyInstrumented();
+    const { ctx, err } = makeCtx({
+      flags: { instrument: false, traceTimeoutSec: 120, resume: true },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: fakeRunProcess().run,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.trace?.traceUrl).toBe("https://app.example.test/trace/t_1");
+    expect(plain(err.data)).toContain("Waiting for your first trace");
+    expect(readCheckpoint(dir)?.trace?.traceId).toBe("t_1");
+    expect(existsSync(join(dir, ".traceroot", "setup-report.md"))).toBe(true);
+  });
+
+  it("does not read a checkpoint that predates the field as an agent run", async () => {
+    // The upgrade case. A checkpoint written by a version that had the
+    // hand-over routes but not the field recording which one it took carries no
+    // value here, and absence must not be read as "an agent ran" — read that
+    // way it restores a result claiming the code was edited, which is the
+    // misdiagnosis above, back again and silent. There is nothing to restore
+    // it from, so the stage runs instead and records what it did this time.
+    pythonRepoWithoutTests();
+    const first = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
+    await runSetupMachine(first.ctx, traceless());
+
+    // The checkpoint such a version would have left: everything else it knows,
+    // and no answer to this.
+    const legacy = readCheckpoint(dir);
+    if (legacy !== null) {
+      legacy.instrumentHandover = undefined;
+    }
+
+    const { ctx, err } = makeCtx({
+      flags: { instrument: false, traceTimeoutSec: 120, resume: true },
+      resumeFrom: legacy ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, traceless());
+
+    expect(ctx.instrumentation?.mode).toBe("prompt-only");
+    expect(ctx.checkpoint.instrumentHandover).toBe("task-file");
+    expect(result.ok).toBe(true);
+    expect(plain(err.data)).not.toContain("nothing has run your application");
   });
 });
 
@@ -4928,7 +5512,8 @@ describe("how long setup waits for the first trace", () => {
     // A route that hands the task over instruments nothing, and setup's own
     // check runs with TraceRoot switched off, so nothing in this run can send a
     // trace. The check having run used to buy a full wait here anyway: two
-    // minutes of a spinner for a trace nothing could produce.
+    // minutes of a spinner for a trace nothing could produce. The look finds
+    // nothing, and the hand-over ends as the pause it is.
     pythonRepo();
     const { client, looks } = countingClient();
     const deps = makeDeps({
@@ -4944,11 +5529,8 @@ describe("how long setup waits for the first trace", () => {
 
     expect(ctx.application?.run.ran).toBe(true);
     expect(looks()).toBe(1);
-    expect(result.error?.code).toBe("TRACE_TIMEOUT");
-    expect(result.error?.message).toContain(
-      "No trace yet, and nothing has run your application: setup did not run it, and found no TraceRoot initialization in it, so nothing else could have sent a trace either.",
-    );
-    expect(result.error?.remedy).toContain("traceroot setup --resume");
+    expect(result.ok).toBe(true);
+    expect(result.stagesRun.find((s) => s.stage === "verify_trace")?.status).toBe("skipped");
     expect(plain(err.data)).not.toContain("Waiting for your first trace");
     // The check ran on code setup never touched, so its line claims nothing
     // about TraceRoot.
@@ -4956,6 +5538,42 @@ describe("how long setup waits for the first trace", () => {
       "Application passes its checks. Setup made no edits itself, so this checked your code as it is.",
     );
     expect(plain(err.data)).not.toMatch(/Application passes its checks[^\n]*TraceRoot/);
+  });
+
+  it("says nothing has run the application on a resume with nothing to wait for", async () => {
+    // A hand-over that nothing has acted on ends as a pause of its own. What is
+    // left for this message is a resume after an agent run whose edits setup
+    // cannot see: no agent runs in this process, detection finds no
+    // `initialize()`, and setup's own check sends nothing — so one look, and a
+    // reason that names what runs the application rather than a test command.
+    pythonRepo();
+    const traceless = () =>
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [] }),
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      });
+    const first = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+    const firstResult = await runSetupMachine(first.ctx, traceless());
+    expect(firstResult.error?.message).toContain("No trace arrived within");
+
+    const { client, looks } = countingClient();
+    const { ctx, err } = makeCtx({
+      flags: { agent: "claude", traceTimeoutSec: 5, resume: true },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, {
+      ...traceless(),
+      createSetupApi: makeDeps({ client }).createSetupApi,
+    });
+
+    expect(looks()).toBe(1);
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(result.error?.message).toContain(
+      "No trace yet, and nothing has run your application: setup did not run it, and found no TraceRoot initialization in it, so nothing else could have sent a trace either.",
+    );
+    expect(result.error?.remedy).toContain("traceroot setup --resume");
+    expect(plain(err.data)).not.toContain("Waiting for your first trace");
   });
 
   it("waits the full budget for a service that already carries TraceRoot", async () => {

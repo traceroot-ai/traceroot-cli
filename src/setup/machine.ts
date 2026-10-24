@@ -2,8 +2,9 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, relative } from "node:path";
-import { displaySkillPath, requireAgent } from "../agents/index.js";
+import { basename, dirname, join, relative } from "node:path";
+import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
+import type { AgentAdapter } from "../agents/types.js";
 import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
 import {
   BackendUnavailableError,
@@ -45,7 +46,7 @@ import { bundledSkillDir } from "../skills/bundled.js";
 import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
 import { createActivityParser } from "./activity.js";
-import { detectAgents, selectAgent } from "./agents.js";
+import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
 import {
@@ -2650,22 +2651,113 @@ interface InstrumentationChoice {
 }
 
 /**
- * The agent id a route that runs nothing still needs.
+ * An adapter as the agent record a route that launches nothing still needs.
  *
- * `task-file` and `manual` both render a skill path, and a skill path is
- * per-agent — so an agent has to be named even though none will be launched.
  * `runnable: false` is the load-bearing part: nothing downstream may mistake
  * this for a binary that exists.
  */
-function unlaunchedAgent(ctx: SetupContext): DetectedAgent {
-  const adapter = requireAgent(ctx.flags.agent ?? "claude");
+function unlaunchedAgent(adapter: AgentAdapter, configured: boolean): DetectedAgent {
   return {
     id: adapter.id,
     displayName: adapter.displayName,
     runnable: false,
-    configured: false,
+    configured,
     evidence: [],
   };
+}
+
+/**
+ * The agent a hand-over route targets.
+ *
+ * `task-file` and `manual` both render a skill path and install the skill, and
+ * both are per-agent — so an agent has to be named even though none will be
+ * launched. It used to be named as `--agent` or else Claude Code, which made
+ * the narrowness of `LAUNCHABLE_AGENTS` leak somewhere it has no business
+ * being: that list exists because driving an agent headless needs an
+ * environment this CLI controls, and this route drives nothing. A machine with
+ * both `~/.codex` and `~/.claude` was told to run the task in Claude Code and
+ * never heard Codex mentioned, and the skill went to `.claude/skills/` whatever
+ * the user actually runs.
+ *
+ * So the agents *present* decide, through each adapter's own `detect` — which
+ * is also what keeps Codex's global `$CODEX_HOME/skills` out of Claude Code's
+ * project-local `.claude/skills`. The ladder is the one the rest of the CLI
+ * uses: an explicit flag wins, one agent auto-selects, several ask when there
+ * is somebody to ask, and none is not an error here — the markdown task is
+ * self-contained, so it goes to the tool-neutral `.agents/skills/` location and
+ * the wording stops naming a product nobody has.
+ */
+async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<DetectedAgent> {
+  // Validated against the whole registry rather than the launchable list:
+  // nothing is run, so "setup cannot drive that one" is not a reason to refuse
+  // to write its task out.
+  if (ctx.flags.agent !== undefined) {
+    return unlaunchedAgent(requireAgent(ctx.flags.agent), true);
+  }
+
+  const present = detectConfiguredAgents(ctx.root);
+  const first = present[0];
+  if (first === undefined) {
+    return unlaunchedAgent(requireAgent("generic"), false);
+  }
+  if (present.length === 1) {
+    return unlaunchedAgent(first, true);
+  }
+
+  if (!ctx.canPrompt) {
+    // No question, and not a word of one: `--json` owns stdout for its event
+    // stream and a CI job has nobody to read a prompt. The registry's order
+    // decides, and the run then *reports* the decision and the flag that
+    // changes it — output after the fact, not a prompt.
+    wizardProgress(
+      ctx,
+      `Agents set up here: ${present.map((a) => a.displayName).join(", ")}. Targeting ${first.displayName}; rerun with \`--agent <id>\` to target another.`,
+    );
+    return unlaunchedAgent(first, true);
+  }
+
+  const chosenId = await deps.select({
+    stage: "select_agent",
+    message: "Which coding agent will you run the task in?",
+    options: present.map((adapter) => ({
+      value: adapter.id,
+      label: adapter.displayName,
+      // Where its copy of the skill lands, because that is the one consequence
+      // of this answer and it is not the same kind of place for each agent:
+      // Claude Code reads a directory in this repository, Codex one in the
+      // user's home.
+      hint: displaySkillPath(ctx.root, adapter.getSkillInstallPath(ctx.root, SKILL_NAME)),
+    })),
+  });
+  const chosen = present.find((adapter) => adapter.id === chosenId);
+  if (chosen === undefined) {
+    throw new SetupError({
+      stage: "select_agent",
+      code: "AMBIGUOUS",
+      message: `'${chosenId}' is not one of the agents set up here.`,
+    });
+  }
+  return unlaunchedAgent(chosen, true);
+}
+
+/**
+ * "Run it in Codex", or — when there is no agent to name — a sentence that says
+ * the task works anywhere rather than dead-ending on an agent the user has not
+ * got. `subject` is whatever reads best where it is used: "it" straight after
+ * the line that named the file, the path itself where nothing has.
+ *
+ * `generic` is no agent to name: it is the registry's entry for "no particular
+ * agent", and its display name — "Agent (generic)" — is a category rather than
+ * somewhere a user can go and open a file.
+ *
+ * Shared by the hand-over itself and by the closing block that has to repeat it,
+ * so the two cannot come to disagree about where the task is supposed to run.
+ */
+export function runTaskSentence(ctx: SetupContext, subject: string): string {
+  const agent = ctx.agent;
+  return agent === undefined || agent.id === "generic"
+    ? `No coding agent is set up here, but the task is self-contained — run ${subject} in whichever agent you use`
+    : `Run ${subject} in ${agent.displayName}`;
 }
 
 /**
@@ -2709,21 +2801,30 @@ async function chooseInstrumentation(
     }),
   });
 
+  // The other half of the same decision. Spelled once for the same reason
+  // `withAgent` is: four of the returns below differ only in which method they
+  // name, and the agent a hand-over targets is not a question any of them
+  // answers differently.
+  const withHandover = async (
+    method: Exclude<InstrumentMethod, "agent">,
+  ): Promise<InstrumentationChoice> => ({
+    method,
+    agent: await handoverAgent(ctx, deps),
+  });
+
   if (ctx.flags.method !== undefined) {
-    return ctx.flags.method === "agent"
-      ? await withAgent()
-      : { method: ctx.flags.method, agent: unlaunchedAgent(ctx) };
+    return ctx.flags.method === "agent" ? await withAgent() : await withHandover(ctx.flags.method);
   }
   // `--no-instrument` predates the three-way choice and means "do not run one".
   if (!ctx.flags.instrument) {
-    return { method: "task-file", agent: unlaunchedAgent(ctx) };
+    return await withHandover("task-file");
   }
   // An explicit `--agent` is an unambiguous request to launch that agent.
   if (ctx.flags.agent !== undefined) {
     return await withAgent();
   }
   if (!ctx.canPrompt) {
-    return { method: "task-file", agent: unlaunchedAgent(ctx) };
+    return await withHandover("task-file");
   }
 
   const runnable = detected.filter((agent) => agent.runnable);
@@ -2759,7 +2860,7 @@ async function chooseInstrumentation(
       message: `'${answer}' is not one of the offered ways to instrument this service.`,
     });
   }
-  return { method: answer, agent: unlaunchedAgent(ctx) };
+  return await withHandover(answer);
 }
 
 // ── INSTALL_AGENT_CONTEXT ───────────────────────────────────────────────────
@@ -2787,6 +2888,16 @@ const installAgentContext: StageDefinition = {
         force: true,
         dryRun: false,
       });
+      // Except when the copy lands outside the repository. Codex reads its
+      // skills from the user's home, so a run started here writes there — a
+      // change `git diff` will never show, and not one to leave the user to
+      // find by accident.
+      if (!isInsideDirectory(ctx.root, targetDir)) {
+        wizardProgress(
+          ctx,
+          `Installed the TraceRoot skill for ${agent.displayName} in ${displaySkillPath(ctx.root, targetDir)}, outside this repository.`,
+        );
+      }
     } catch (err) {
       // The task prompt is self-contained, so a failed skill install degrades
       // the run rather than ending it.
@@ -2870,6 +2981,45 @@ function oneLine(note: string, max = 200): string {
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
+/**
+ * Where the task-file route writes the instrumentation task.
+ *
+ * Named once because two invocations have to agree on it: the run that writes
+ * the file, and the `--resume` that restores the hand-over and has to name that
+ * file again without having written it.
+ */
+function instrumentTaskPath(root: string): string {
+  return join(root, ".traceroot", "prompts", "setup-instrument.md");
+}
+
+/**
+ * Records a hand-over: the stage result for a route that ran nothing, and the
+ * route itself on the checkpoint.
+ *
+ * Both in one place because the two have to agree. `restore()` rebuilds the
+ * result from the recorded route alone — `"task-file"` wrote a task file,
+ * `"manual"` printed instructions — so a branch that recorded one route and
+ * returned the shape of the other would resume as something it never was. The
+ * task path is derived from the route here for that reason rather than passed
+ * in beside it, and every remaining field is the zero of "no run happened".
+ */
+function recordHandover(
+  ctx: SetupContext,
+  agentId: DetectedAgent["id"],
+  route: "task-file" | "manual",
+): void {
+  ctx.checkpoint.instrumentHandover = route;
+  ctx.instrumentation = {
+    agentId,
+    mode: "prompt-only",
+    exitCode: 0,
+    durationMs: 0,
+    reported: null,
+    observedChangedFiles: [],
+    promptPath: route === "task-file" ? instrumentTaskPath(ctx.root) : null,
+  };
+}
+
 const instrument: StageDefinition = {
   stage: "instrument",
   isSatisfied: (ctx) => ctx.instrumentation !== undefined,
@@ -2880,14 +3030,30 @@ const instrument: StageDefinition = {
     if (agentId === undefined) {
       return;
     }
+    // Unless nothing was edited at all. A hand-over is the other way this stage
+    // completes, and restoring one as an agent run is how a resumed run came to
+    // wait out the trace timeout on an uninstrumented application and then tell
+    // the user to go and run it again. The mode is the thing `verify_trace`
+    // reads to say so instead, so it has to survive the invocation that
+    // recorded it.
+    const completed = ctx.checkpoint.instrumentHandover;
+    if (completed === undefined) {
+      // A checkpoint written before that field existed. Every route records its
+      // own value now, so absence is "not recorded" and nothing else — and
+      // defaulting it to the agent route is the misreading this whole fix is
+      // about, except silent. Decline, and the stage runs again: a rerun
+      // without `--resume` already does exactly that, so it is a path the flow
+      // has, where a restored result built on a guess is not.
+      return;
+    }
     ctx.instrumentation = {
       agentId,
-      mode: "background",
+      mode: completed === "agent" ? "background" : "prompt-only",
       exitCode: 0,
       durationMs: 0,
       reported: null,
       observedChangedFiles: [],
-      promptPath: null,
+      promptPath: completed === "task-file" ? instrumentTaskPath(ctx.root) : null,
     };
   },
   async run(ctx, deps) {
@@ -2979,15 +3145,7 @@ const instrument: StageDefinition = {
         skillPath: displaySkillPath(ctx.root, adapter.getSkillInstallPath(ctx.root, SKILL_NAME)),
       });
       wizardLine(ctx, `\n${instructions}`);
-      ctx.instrumentation = {
-        agentId: agent.id,
-        mode: "prompt-only",
-        exitCode: 0,
-        durationMs: 0,
-        reported: null,
-        observedChangedFiles: [],
-        promptPath: null,
-      };
+      recordHandover(ctx, agent.id, "manual");
       return "skipped";
     }
 
@@ -2995,22 +3153,14 @@ const instrument: StageDefinition = {
       // The task is handed over instead of run. The rest of the flow still
       // works, so "instrument it yourself, then `setup --resume`" is a
       // first-class path rather than a dead end.
-      const promptPath = join(ctx.root, ".traceroot", "prompts", "setup-instrument.md");
+      const promptPath = instrumentTaskPath(ctx.root);
       const { mkdirSync, writeFileSync } = await import("node:fs");
-      mkdirSync(join(ctx.root, ".traceroot", "prompts"), { recursive: true });
+      mkdirSync(dirname(promptPath), { recursive: true });
       writeFileSync(promptPath, task, "utf8");
-      ctx.instrumentation = {
-        agentId: agent.id,
-        mode: "prompt-only",
-        exitCode: 0,
-        durationMs: 0,
-        reported: null,
-        observedChangedFiles: [],
-        promptPath,
-      };
+      recordHandover(ctx, agent.id, "task-file");
       wizardLine(
         ctx,
-        `\nWrote the instrumentation task to ${displaySkillPath(ctx.root, promptPath)}.\nRun it in ${adapter.displayName}, then rerun \`traceroot setup --resume\`.`,
+        `\nWrote the instrumentation task to ${displaySkillPath(ctx.root, promptPath)}.\n${runTaskSentence(ctx, "it")}, then rerun \`traceroot setup --resume\`.`,
       );
       return "skipped";
     }
@@ -3209,6 +3359,12 @@ const instrument: StageDefinition = {
       }
 
       const reported = parseCompletion(result.output);
+      // An agent did run. Recorded positively rather than by clearing the
+      // field, because a rerun without `--resume` still loads the previous
+      // checkpoint: writing `"agent"` overwrites a hand-over an earlier run
+      // recorded here, which is what the clear was for, and leaves absence
+      // meaning only "a version that did not record this".
+      ctx.checkpoint.instrumentHandover = "agent";
       ctx.instrumentation = {
         agentId: agent.id,
         mode: "background",
@@ -3655,6 +3811,30 @@ const verifyTrace: StageDefinition = {
     // one look still finds a trace the user sent before they resumed.
     const canArrive = traceCanArrive(ctx);
     const timeoutMs = canArrive ? ctx.flags.traceTimeoutSec * 1000 : 0;
+
+    // A hand-over that nothing has acted on, which decides how the stage ends
+    // when that one look finds nothing.
+    //
+    // `--no-instrument`, `--manual` and the task-file answer all leave the
+    // repository exactly as they found it, and the stage that did so recorded
+    // that as `mode: "prompt-only"` — read here rather than re-derived, because
+    // the branch that hands over is the only thing that knows it did.
+    //
+    // Whether that leaves the service uninstrumented is the other half, and
+    // `detect_stack` already answered it: `existingInstrumentation.present` is
+    // an actual `initialize()` call in the entry point, measured before the
+    // hand-over. A hand-over changes no code, so on this route that reading is
+    // still current — and a repository the user had instrumented by hand before
+    // running setup is therefore not caught by this, which is the point. It
+    // still gets its full wait and its verification.
+    //
+    // Nothing on this route can send a trace, so `traceCanArrive` has already
+    // given it one look rather than the budget; what this adds is the ending.
+    const unrunHandover =
+      ctx.instrumentation?.mode === "prompt-only" &&
+      ctx.stack?.existingInstrumentation.present !== true
+        ? ctx.instrumentation
+        : null;
     // The other long unattended wait. Nothing arrives to report on until the
     // trace does, so the elapsed counter is the whole of what a user can be
     // told — and it is the difference between waiting and suspecting a hang.
@@ -3692,6 +3872,23 @@ const verifyTrace: StageDefinition = {
     waiting?.stop(
       outcome.found ? received : `No trace after ${Math.round(outcome.waitedMs / 1000)}s.`,
     );
+
+    if (!outcome.found && unrunHandover !== null) {
+      // Named before "nothing ran it", because it is the cause underneath it —
+      // and ended as a pause, not a failure, because nothing has failed.
+      //
+      // This route reported a missing trace as "nothing has run your
+      // application", which sent the user off to run an application that has
+      // no TraceRoot in it — a loop that cannot terminate, since running it
+      // again produces the same nothing. Then as a stopped run, which was no
+      // better: a red `error:` block and exit 14 over the very hand-over the
+      // user had just chosen, read as a crash. The instrumentation is simply
+      // the user's to do now, so the run ends normally and the closing block
+      // in `commands/setup/run.ts` says what is outstanding. Nothing is
+      // recorded as the trace, so `--resume` looks again; the key stays put,
+      // because the resume needs it.
+      return "skipped";
+    }
 
     if (!outcome.found && !canArrive) {
       // Say the actual reason rather than reporting a timeout that never

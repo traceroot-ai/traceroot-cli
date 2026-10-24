@@ -1,4 +1,5 @@
 import { join, relative, sep } from "node:path";
+import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import { writeFileSecure } from "../util/secureFile.js";
 import { spanPhrase } from "./trace.js";
 import type { SetupContext } from "./types.js";
@@ -45,6 +46,23 @@ export function slashPath(path: string, separator: string = sep): string {
 function line(label: string, value: string | null | undefined): string {
   const text = value === null || value === undefined || value === "" ? "—" : cell(value);
   return `| ${label} | ${text} |`;
+}
+
+/**
+ * The skill's row in the table of files the run touched, at the path the
+ * agent's own adapter installs it to.
+ *
+ * Not one fixed path: each agent reads skills from a directory of its own, and
+ * Codex's is in the user's home — outside the repository, where `git diff`
+ * cannot show the write. A row naming `.claude/` for every agent sent the
+ * reader to a directory the run never created, and left that write out.
+ */
+function skillRow(root: string, agentId: string): string {
+  const target = requireAgent(agentId).getSkillInstallPath(root, "traceroot-instrument-repo");
+  const path = `\`${cell(slashPath(displaySkillPath(root, target)))}/\``;
+  return isInsideDirectory(root, target)
+    ? `| ${path} | The instrumentation skill. |`
+    : `| ${path} | The instrumentation skill, outside this repository. |`;
 }
 
 /**
@@ -170,9 +188,7 @@ export function renderSetupReport(ctx: SetupContext, now: Date): string {
       : []),
     "| `.traceroot/config.json` | The CLI's own credential. Git-ignored. |",
     "| `.traceroot/setup.json` | Checkpoint, so `--resume` can continue. |",
-    ...(ctx.agent !== undefined
-      ? ["| `.claude/skills/traceroot-instrument-repo/` | The instrumentation skill. |"]
-      : []),
+    ...(ctx.agent !== undefined ? [skillRow(ctx.root, ctx.agent.id)] : []),
     "",
     "Application files changed by the agent are not listed here — `git diff` is the",
     "authority on those, and duplicating it would only go stale.",

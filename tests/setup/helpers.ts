@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { type ApiClient, type ApiClientOptions, DEFAULT_TIMEOUT_MS } from "../../src/api/client.js";
 import type { SetupApi } from "../../src/api/setup.js";
@@ -290,7 +293,13 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     readConfigText: () => null,
     restoreConfigText: () => undefined,
     sleep: async () => undefined,
-    makeTempDir: () => options.tempDir ?? "/tmp/traceroot-setup-test",
+    // A fresh directory per call, not a fixed path in the real `/tmp`. The
+    // instrument stage deletes whatever this returns (`rmSync(tempDir,
+    // { recursive: true, force: true })`), so one shared name means every
+    // agent-launch test in the suite recursively deletes the same real
+    // directory — a developer's own `/tmp/traceroot-setup-test` among them, and
+    // each other's under a parallel run.
+    makeTempDir: () => options.tempDir ?? mkdtempSync(join(tmpdir(), "traceroot-setup-test-")),
     probeHost: async () => options.localHostResponds ?? false,
     // Default: nothing stored, so tests exercise the browser/paste paths unless
     // they explicitly opt into a saved sign-in. Never touches a real home dir.
