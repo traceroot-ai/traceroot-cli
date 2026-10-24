@@ -32,7 +32,7 @@ export function createFakeFetch(
   responder: (call: FetchCall) => Response | Promise<Response>,
 ): FakeFetch {
   const calls: FetchCall[] = [];
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const call: FetchCall = { url, init: init ?? {} };
     calls.push(call);

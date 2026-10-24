@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Writers } from "../../../src/output.js";
 import { renderProjectsList } from "../../../src/registry/enhancers/projects-list.js";
 import { renderWorkspacesList } from "../../../src/registry/enhancers/workspaces-list.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -19,7 +22,7 @@ describe("workspaces list rendering", () => {
     // Exact order, not presence: a reorder of columns must fail this guard.
     const header = out.data
       .split("\n")[0]
-      .trim()
+      ?.trim()
       .split(/\s{2,}/);
     expect(header).toEqual(["NAME", "ROLE", "WORKSPACE ID"]);
   });
@@ -58,7 +61,7 @@ describe("projects list rendering", () => {
     renderProjectsList(RES, { json: false, writers });
     const header = out.data
       .split("\n")[0]
-      .trim()
+      ?.trim()
       .split(/\s{2,}/);
     expect(header).toEqual(["NAME", "WORKSPACE", "PROJECT ID"]);
   });

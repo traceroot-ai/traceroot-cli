@@ -4,8 +4,11 @@ import type { TraceList } from "../../../src/api/client.js";
 import { buildProgram } from "../../../src/cli.js";
 import type { Writers } from "../../../src/output.js";
 import { renderList, tracesList } from "../../../src/registry/enhancers/traces-list.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { runCli } from "../../helpers/runCli.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function writers(): { writers: Writers; out: StringSink; err: StringSink } {
   const out = new StringSink();
@@ -30,6 +33,7 @@ function listItem(over: Partial<TraceList["data"][number]>): TraceList["data"][n
     total_cost: 0,
     total_input_tokens: 0,
     total_output_tokens: 0,
+    metadata_map: {},
     ...over,
   };
 }

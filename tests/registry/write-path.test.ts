@@ -284,7 +284,7 @@ describe("generic write path (factory registration)", () => {
     writeFileSync(p, JSON.stringify({ name: "file-name" }));
     const h = harness(jsonResponse({ id: "ws-1" }));
     await h.run("write-fixture", "create-workspace", "--from-file", p, "--name", "flag-name");
-    const body = JSON.parse(String(h.fake.calls[0].init.body));
+    const body = JSON.parse(String(h.fake.calls[0]?.init.body));
     expect(body.name).toBe("flag-name");
   });
 
@@ -293,7 +293,7 @@ describe("generic write path (factory registration)", () => {
     writeFileSync(p, JSON.stringify({ name: "file-name" }));
     const h = harness(jsonResponse({ id: "ws-1" }));
     await h.run("write-fixture", "create-workspace", "--from-file", p);
-    const body = JSON.parse(String(h.fake.calls[0].init.body));
+    const body = JSON.parse(String(h.fake.calls[0]?.init.body));
     expect(body.name).toBe("file-name");
   });
 
@@ -320,7 +320,7 @@ describe("generic write path (factory registration)", () => {
       writeFileSync(p, JSON.stringify({ name: "from-file-via-enhancer" }));
       const h = harness(jsonResponse({ id: "ws-1" }));
       await h.run("write-fixture", "create-workspace", "--from-file", p);
-      const body = JSON.parse(String(h.fake.calls[0].init.body));
+      const body = JSON.parse(String(h.fake.calls[0]?.init.body));
       expect(body.name).toBe("from-file-via-enhancer");
     } finally {
       ENHANCERS.create_workspace = undefined;

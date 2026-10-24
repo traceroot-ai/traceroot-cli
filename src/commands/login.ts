@@ -390,7 +390,9 @@ function promptConfirm(question: string): Promise<boolean> {
 export function registerLogin(program: Command): void {
   program
     .command("login")
-    .description("Sign in with the browser (device flow), or persist an explicit --api-key")
+    .description(
+      "Sign in with the browser (device flow), or persist an explicit --api-key. To set up a repository from scratch, use `traceroot setup` instead",
+    )
     .action(async (_opts, command: Command) => {
       // Reuse the standard resolution chain so `login` honors flags, --env-file,
       // env vars, an existing config, and a working-directory .env identically

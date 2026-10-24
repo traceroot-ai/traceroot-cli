@@ -1,8 +1,8 @@
 {
   "name": "traceroot-cli",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
-  "description": "Read your TraceRoot traces from the terminal — list, inspect, and export traces from the TraceRoot public API.",
+  "description": "Set up TraceRoot in your repository, then work with your traces, findings, detectors and evaluations from the terminal.",
   "license": "Apache-2.0",
   "author": "TraceRoot (https://traceroot.ai)",
   "homepage": "https://github.com/traceroot-ai/traceroot-cli#readme",
@@ -31,21 +31,25 @@
   "main": "dist/cli.js",
   "files": ["bin", "dist", "assets", "README.md"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "codegen": "openapi-typescript openapi.json -o src/api/generated/schema.ts",
     "codegen:check": "node scripts/codegen-check.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepack": "npm run build",
-    "prepublishOnly": "node scripts/no-file-deps.mjs"
+    "prepublishOnly": "node scripts/no-file-deps.mjs",
+    "install:local": "npm run build && npm install -g . && traceroot --version",
+    "uninstall:local": "npm rm -g traceroot-cli"
   },
   "dependencies": {
     "@traceroot-ai/tools": "0.5.0",
-    "commander": "^12.1.0"
+    "@clack/prompts": "^1.7.0",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
