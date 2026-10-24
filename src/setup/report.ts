@@ -10,11 +10,10 @@ import type { ApplicationKeyLocation, SetupContext } from "./types.js";
 /**
  * The record a setup run leaves behind.
  *
- * Everything a run establishes — what it found, what it changed, whether the
- * application still passes without TraceRoot, which trace proved it — is
- * printed to stderr and then gone. That is exactly the material a reviewer
- * wants when the resulting diff arrives as a pull request, and exactly what the
- * author has to reconstruct from memory instead.
+ * Everything a run establishes — what it found, what it changed, which trace
+ * proved it — is printed to stderr and then gone. That is exactly the material
+ * a reviewer wants when the resulting diff arrives as a pull request, and
+ * exactly what the author has to reconstruct from memory instead.
  *
  * Keeping it costs one file.
  *
@@ -109,7 +108,6 @@ export function renderSetupReport(
 ): string {
   const cp = ctx.checkpoint;
   const service = cp.service;
-  const app = ctx.application;
   const trace = ctx.trace;
   // The file to copy the value out of, or null when there is no file to name.
   // `relativeToRoot` has already made the location's path root-relative with
@@ -127,42 +125,6 @@ export function renderSetupReport(
     trace !== undefined
       ? "TraceRoot is connected and a trace has been received."
       : "TraceRoot is configured, but no trace has been seen yet.";
-
-  // Four answers, because the fourth is the one a reader acts on differently.
-  // "Did not pass" over a suite that was already red sent people to look for a
-  // fault in instrumentation that had just been done correctly, so the
-  // inconclusive case says what was measured and when.
-  //
-  // Inconclusive has two readings and they are not interchangeable here. One
-  // reports a measurement; the other reports that there was none. A report that
-  // printed the first over the second would be asserting a prior failure
-  // nothing observed, which is the same kind of invented cause this field
-  // exists to stop — pointed the other way.
-  const inconclusive =
-    app?.baseline?.ran === true
-      ? `Inconclusive. \`${app.command}\` was already failing before anything was instrumented${app.baseline.exitCode === null ? "" : ` (exit ${app.baseline.exitCode})`}, so its result afterwards says nothing about the instrumentation.`
-      : `Inconclusive. \`${app?.command}\` does not pass, and nothing ran it before the code was instrumented, so this run cannot say whether the instrumentation is why.`;
-  // What ran, and only then what it shows. The check runs with TraceRoot
-  // switched off, so a pass says the application does not depend on TraceRoot
-  // being configured — when the code it ran was setup's instrumentation. A run
-  // that handed the task over edited nothing and took no baseline, and its
-  // check ran on code setup had not touched, so that sentence says nothing
-  // about TraceRoot at all: any claim about it there would be about
-  // instrumentation the check never saw.
-  const passed =
-    app?.baseline === null
-      ? "Passed. Setup made no edits itself, so this checked your code as it was when the check ran."
-      : "Passed with TraceRoot switched off (`TRACEROOT_API_KEY` unset, `TRACEROOT_ENABLED=false`), so the application does not depend on TraceRoot being configured.";
-  const checks =
-    app === undefined
-      ? "Not run."
-      : app.outcome === "skipped"
-        ? `Not run — ${app.skippedReason ?? "no command to run"}.`
-        : app.outcome === "passed"
-          ? passed
-          : app.outcome === "inconclusive"
-            ? inconclusive
-            : "Did not pass.";
 
   // One entry per line, and `""` is a blank line: Markdown ends a paragraph or
   // a table only at one, so they are the report's structure. An optional entry
@@ -203,9 +165,6 @@ export function renderSetupReport(
     "",
     "## What it verified",
     "",
-    `**Your checks.** ${checks}`,
-    "",
-    ...(app?.command ? [`Command: \`${app.command}\``, ""] : []),
     // The count beside the id: the one thing the report says about how much of
     // the application the trace shows, and said as a number rather than a
     // verdict, because whether it is enough depends on the program. A reader

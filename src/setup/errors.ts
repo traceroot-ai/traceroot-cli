@@ -13,7 +13,6 @@ export type SetupErrorCode =
   | "AMBIGUOUS"
   | "UNSUPPORTED"
   | "AGENT_FAILED"
-  | "APP_VERIFICATION_FAILED"
   | "TRACE_TIMEOUT"
   | "BACKEND_UNSUPPORTED"
   | "UNSAFE_OVERWRITE"
@@ -53,7 +52,9 @@ export const SETUP_EXIT_CODES: Readonly<Record<SetupErrorCode, number>> = {
   AMBIGUOUS: 10,
   UNSUPPORTED: 11,
   AGENT_FAILED: 12,
-  APP_VERIFICATION_FAILED: 13,
+  // 13 is reserved. It was the failure of setup's own run of the project's
+  // checks, which setup no longer makes, and a number is never handed on to a
+  // different outcome.
   TRACE_TIMEOUT: 14,
   BACKEND_UNSUPPORTED: 15,
   UNSAFE_OVERWRITE: 16,

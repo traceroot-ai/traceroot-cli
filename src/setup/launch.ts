@@ -507,7 +507,7 @@ export interface LaunchAgentInput {
  *
  * `credentialFiles` is every file the application can read this credential out
  * of, and it is the same list — settled in the same place, for the same reason —
- * that `verifyApplication` is given: the project env file the run wrote the key
+ * that the task is built from: the project env file the run wrote the key
  * into, plus the project's own file when the key resolved from one that was
  * already there. Empty means there is no such file, and the environment is the
  * only channel left.
@@ -530,9 +530,7 @@ export interface LaunchAgentInput {
  * Withholding means not adding it. A key the user's own shell exports is in
  * `parentEnv` already and stays there — the agent runs in the user's
  * environment, and taking a variable back out of it is a different decision
- * from declining to add one. `verifyApplication` does take it out, because
- * there the question put to the application is explicitly "and without the
- * key"; here it is only which channel setup itself uses.
+ * from declining to add one.
  *
  * When the credential does go here it goes here and nowhere else — not in
  * `argv` (visible in `ps`), not in the task file (which is written to disk),

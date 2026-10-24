@@ -20,7 +20,6 @@ const OWN: readonly SetupErrorCode[] = [
   "AMBIGUOUS",
   "UNSUPPORTED",
   "AGENT_FAILED",
-  "APP_VERIFICATION_FAILED",
   "TRACE_TIMEOUT",
   "BACKEND_UNSUPPORTED",
   "UNSAFE_OVERWRITE",
@@ -47,6 +46,12 @@ describe("setup's exit codes against the table the whole CLI publishes", () => {
     for (const code of OWN) {
       expect(SETUP_EXIT_CODES[code]).toBeGreaterThanOrEqual(10);
     }
+  });
+
+  it("leaves 13 unassigned", () => {
+    // It was the failure of setup's own run of the project's checks. That run is
+    // gone, and its number stays reserved rather than moving to a new outcome.
+    expect(Object.values(SETUP_EXIT_CODES)).not.toContain(13);
   });
 
   it("separates a question answered no from a question never answered", () => {

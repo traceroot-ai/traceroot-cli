@@ -21,7 +21,6 @@ export const SETUP_STAGES = [
   "select_agent",
   "install_agent_context",
   "instrument",
-  "verify_application",
   "verify_trace",
   "complete",
 ] as const;
@@ -146,63 +145,6 @@ export interface InstrumentationResult {
   promptPath: string | null;
 }
 
-/** One execution of the project's own verification command. */
-export interface VerificationRun {
-  ran: boolean;
-  exitCode: number | null;
-  durationMs: number;
-}
-
-/**
- * What the application check established.
- *
- * `passed` and `failed` are claims about the instrumented application.
- * `inconclusive` is a claim about the *check* — that its result afterwards
- * says nothing about the instrumentation — and it covers the two ways that
- * happens: the check was measured before anything changed and was failing
- * then, or it was never measured, so there is nothing its result can be
- * compared against. Reporting either as a failure sent users to look for a
- * fault in work that had just been done correctly. `skipped` is no command to
- * run at all.
- *
- * Four values rather than a boolean because the fourth has to survive into the
- * report and the `--json` envelope, where a reader has only the field to go on.
- */
-export type VerificationOutcome = "passed" | "failed" | "inconclusive" | "skipped";
-
-export interface ApplicationVerification {
-  /** The command as run. Never contains a secret. */
-  command: string | null;
-  /**
-   * The same command before anything was instrumented, or null when no baseline
-   * was taken — a run that hands the task over edits nothing, and a checkpoint
-   * written before baselines existed carries none.
-   *
-   * This is what makes a later failure attributable. Without it, "the suite
-   * fails" and "the suite still fails" are indistinguishable.
-   */
-  baseline: VerificationRun | null;
-  /**
-   * The command, run once with TraceRoot switched off: `TRACEROOT_API_KEY`
-   * absent and `TRACEROOT_ENABLED=false`. A pass shows the application does not
-   * depend on TraceRoot being configured, and the run itself can send no trace.
-   * The baseline runs with TraceRoot switched off too, so whether TraceRoot was
-   * on is never the difference between the two.
-   */
-  run: VerificationRun;
-  outcome: VerificationOutcome;
-  /**
-   * Whether the instrumented application passed its own check.
-   *
-   * Narrower than `outcome !== "failed"`: it is true only for `passed`. An
-   * inconclusive run did not establish that the application passes, so this is
-   * false there — `outcome` is what says that the reason lies with the project's
-   * own suite rather than with the instrumentation.
-   */
-  passed: boolean;
-  skippedReason: string | null;
-}
-
 export interface TraceVerification {
   traceId: string;
   /** The backend's own permalink, echoed verbatim — never constructed here. */
@@ -256,24 +198,12 @@ export interface SetupCheckpoint {
    * claimed an agent had edited the code is what sent a resumed run off to wait
    * for a trace from an application with no TraceRoot in it.
    *
-   * Every route writes its own value, `"agent"` included, so absence means one
-   * thing only: a checkpoint from a version that did not record this. That is
-   * not evidence of an agent run, and the instrument stage declines to restore
+   * Every route writes its own value, `"agent"` included, so a completed stage
+   * without one is a file something other than setup has edited. That is not
+   * evidence of an agent run, and the instrument stage declines to restore
    * rather than assume one — the assumption is the bug.
    */
   instrumentHandover?: "agent" | "task-file" | "manual";
-  application?: ApplicationVerification;
-  /**
-   * The project's own check as it stood before this run instrumented anything.
-   *
-   * On the checkpoint rather than only in memory because the two measurements
-   * can happen in different invocations: a run that instruments and then fails
-   * waiting for a trace is resumed, and `verify_application` on that resume
-   * still has to know whether the suite was red to begin with. Taken once and
-   * never retaken, because after the first edit there is no "before" left to
-   * measure.
-   */
-  applicationBaseline?: VerificationRun;
   /**
    * Keys a setup run minted in this repository that no run has put into
    * service and no rollback has revoked.
@@ -413,7 +343,6 @@ export interface SetupContext {
   /** How the SDK will be added; settled in the same answer that names the agent. */
   method?: InstrumentMethod;
   instrumentation?: InstrumentationResult;
-  application?: ApplicationVerification;
   trace?: TraceVerification;
   /**
    * True when the user ended the trace wait themselves and no trace had arrived.

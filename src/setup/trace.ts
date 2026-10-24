@@ -261,11 +261,10 @@ async function earliestSince(client: TraceLister, from: Date): Promise<Search> {
  * message can be honest.
  *
  * The first trace is the earliest one since setup started, and nothing
- * narrower. That reads as the application's own trace because nothing setup
- * runs for itself can send one: the project's check runs with TraceRoot
- * switched off (see `verifyApplication`), and the agent is told to run the
- * suite the same way. What arrives is the application being run — by the
- * agent, or by the user before a `--resume`.
+ * narrower. That reads as the application's own trace because setup runs
+ * nothing of its own that can send one, and the agent is told to run the suite
+ * with TraceRoot switched off. What arrives is the application being run — by
+ * the agent, or by the user before a `--resume`.
  *
  * It used to be narrower, and the narrowing was the bug. Setup ran the
  * project's check with the key in its environment, then searched that run's

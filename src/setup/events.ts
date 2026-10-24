@@ -38,7 +38,7 @@ export function jsonEmitter(writers: Writers): SetupEmitter {
 }
 
 /**
- * The twelve stages, named for a person rather than for the state machine.
+ * Every stage, named for a person rather than for the state machine.
  *
  * A stage that heads a section is announced as it begins, above the prose and
  * the prompts that belong to it. Not every stage does — see {@link UNANNOUNCED}
@@ -60,7 +60,6 @@ export const STAGE_LABELS: Record<SetupStage, string> = {
   select_agent: "Choose how to instrument",
   install_agent_context: "Install the TraceRoot skill",
   instrument: "Instrument the application",
-  verify_application: "Run your checks",
   verify_trace: "Wait for the first trace",
   complete: "Finish",
 };
@@ -84,7 +83,7 @@ const SELF_ANNOUNCING: ReadonlySet<SetupStage> = new Set(["authenticate"]);
  * Stages that are not sections at all, and print no line of their own.
  *
  * A heading is a promise that something worth attending to is about to happen
- * under it. These five never kept it:
+ * under it. These four never kept it:
  *
  * `install_agent_context` copies a directory. It is bookkeeping — nothing is
  * decided, nothing can be answered — and it was drawn with the same weight as
@@ -95,10 +94,10 @@ const SELF_ANNOUNCING: ReadonlySet<SetupStage> = new Set(["authenticate"]);
  * own block belong under that same heading, and "Instrument the application"
  * between them split one decision across two sections.
  *
- * `verify_application`, `verify_trace` and `complete` are the run's tail, and by
- * then the user's attention is on the closing blocks. They are unattended work
- * announcing itself to somebody who has already been told what to do next; the
- * trace permalink, the one thing from any of them a user actually needs, is
+ * `verify_trace` and `complete` are the run's tail, and by then the user's
+ * attention is on the closing blocks. They are unattended work announcing
+ * itself to somebody who has already been told what to do next; the trace
+ * permalink, the one thing from either of them a user actually needs, is
  * reported by the closing blocks rather than here.
  *
  * A failure still prints. Silence is for work going to plan — a run that broke
@@ -119,7 +118,6 @@ const UNANNOUNCED: ReadonlySet<SetupStage> = new Set([
   "select_agent",
   "install_agent_context",
   "instrument",
-  "verify_application",
   "verify_trace",
   "complete",
 ]);

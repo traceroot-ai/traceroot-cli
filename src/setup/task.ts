@@ -30,18 +30,18 @@ export interface BuildSetupTaskInput {
   envFiles?: readonly string[];
   /**
    * Every file the application can read the TraceRoot credential out of — the
-   * same list `buildAgentEnv` and `verifyApplication` are given, settled once
-   * by the caller so the three cannot come to disagree.
+   * same list `buildAgentEnv` is given, settled once by the caller so the two
+   * cannot come to disagree.
    *
    * Only its emptiness is read here, because the files themselves are already
    * named to the agent as {@link envFiles}: it decides which channel the hard
    * rules describe, and `buildAgentEnv` withholds the variable over exactly the
    * same answer.
    *
-   * Required rather than optional, for the reason `verifyApplication` gives its
-   * own copy: an optional one is satisfied by omitting it, and omitting it here
-   * tells the agent its key is in an environment the launch has just withheld
-   * it from — which is the one thing this field exists to prevent.
+   * Required rather than optional: an optional one is satisfied by omitting
+   * it, and omitting it here tells the agent its key is in an environment the
+   * launch has just withheld it from — which is the one thing this field exists
+   * to prevent.
    */
   credentialFiles: readonly string[];
   /**
@@ -506,10 +506,7 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // application many times over, stripping the key several different ways
   // (`env -u`, an empty assignment, `os.environ.pop`, a dotenv wrapper) because
   // there is no one obvious way to unset it. Each run is a full pass through
-  // the user's application. The CLI already does this
-  // pass itself, in `verify_application`, with TraceRoot switched off in the
-  // child environment; doing it in both places pays for it twice and only the
-  // CLI's answer is recorded.
+  // the user's application, and nothing records what it finds.
   //
   // The suite runs with `TRACEROOT_ENABLED=false`, said in the command itself
   // rather than left to a sentence elsewhere. A plain `pytest` in the agent's
@@ -596,9 +593,8 @@ ${bullet([
     "anywhere, so you never need to check what is tracked or gitignored.",
   "The application must keep working when `TRACEROOT_API_KEY` is absent. Write it that way and " +
     "move on: **do not run the application with the key unset to check.** Not with `env -u`, not " +
-    "with an empty assignment, not by popping it in a wrapper script. `traceroot setup` makes " +
-    "that exact pass itself afterwards and records the result; yours is thrown away, and each " +
-    "attempt is another full run of somebody's application.",
+    "with an empty assignment, not by popping it in a wrapper script. That pass is not part of " +
+    "this task, and each attempt is another full run of somebody's application.",
   "Do not add flush/shutdown handling to a long-running server. Add a single flush before exit only for a short-lived script, CLI or serverless handler that would otherwise drop its trace.",
   "Do not read other services in this repository to copy their instrumentation. They may be " +
     "instrumented against a different SDK version, or wrongly. The skill and the installed " +

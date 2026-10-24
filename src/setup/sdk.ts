@@ -15,11 +15,15 @@ export interface SdkPackage {
  * the registry is unreachable — setup degrades to a slightly stale pin rather
  * than failing. A stale pin still produces a working, reproducible install; a
  * failed setup produces nothing.
+ *
+ * Each one a version the registry actually serves, and bumped at every
+ * release. A placeholder here is an install that fails on exactly the run that
+ * could not reach the registry to correct it.
  */
 const FALLBACK_VERSIONS: Readonly<Record<string, string>> = {
-  traceroot: "0.0.4",
-  "@traceroot-ai/traceroot": "0.0.4",
-  "@traceroot-ai/mastra": "0.0.4",
+  traceroot: "0.3.0",
+  "@traceroot-ai/traceroot": "0.5.0",
+  "@traceroot-ai/mastra": "0.1.1",
 };
 
 /** Chooses the package a service should install. */

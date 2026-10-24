@@ -102,7 +102,6 @@ import type {
   SetupStageStatus,
   StackLanguage,
 } from "./types.js";
-import { runBaselineCheck, verifyApplication } from "./verify.js";
 import {
   wizardAside,
   wizardEmphasis,
@@ -398,11 +397,10 @@ function isExplicitSource(source: ResolvedAuth["credential"]["source"]): boolean
  * A failure that pauses the run rather than ending it.
  *
  * Two endings need telling apart, because only one of them may undo what the
- * run created. A run that stopped because its agent is not installed, because
- * the suite needs fixing, or because no trace has arrived yet is *paused*: its
- * own message tells the user to rerun with `--resume`, and a rollback that
- * revoked the credential they are about to resume with would break the thing it
- * was tidying up after. A run that was cancelled, that cannot authenticate, or
+ * run created. A run that stopped because its agent is not installed, or
+ * because no trace has arrived yet, is *paused*: its own message tells the user
+ * to rerun with `--resume`, and a rollback that revoked the credential they are
+ * about to resume with would break the thing it was tidying up after. A run that was cancelled, that cannot authenticate, or
  * that hit something unexpected is *over*, and what it created is litter.
  *
  * Declared at the throw, not derived from the error's code. The same code is
@@ -550,12 +548,10 @@ const agentLaunched = new WeakSet<SetupContext>();
  * Detection reads the entry point afresh on every run, so the second answer is
  * about the code as it stands now.
  *
- * Setup's own check is not on the list. It runs with TraceRoot switched off and
- * sends nothing, so whether it ran says nothing about whether a trace is
- * coming. That was the reading this replaced: a repository with no test command
- * gave up on the agent's trace after one look, and one with a test command
- * waited out the whole budget on a hand-over route where nothing had been
- * instrumented at all.
+ * Whether the project has a test command is not on the list either. That was
+ * the reading this replaced: a repository with no test command gave up on the
+ * agent's trace after one look, and one with a test command waited out the
+ * whole budget on a hand-over route where nothing had been instrumented at all.
  */
 function traceCanArrive(ctx: SetupContext): boolean {
   return agentLaunched.has(ctx) || ctx.stack?.existingInstrumentation.present === true;
@@ -3421,12 +3417,12 @@ const instrument: StageDefinition = {
     // recorded it.
     const completed = ctx.checkpoint.instrumentHandover;
     if (completed === undefined) {
-      // A checkpoint written before that field existed. Every route records its
-      // own value now, so absence is "not recorded" and nothing else — and
-      // defaulting it to the agent route is the misreading this whole fix is
-      // about, except silent. Decline, and the stage runs again: a rerun
-      // without `--resume` already does exactly that, so it is a path the flow
-      // has, where a restored result built on a guess is not.
+      // No route on record. Every route records its own value, so this is a
+      // file something other than setup has edited — and defaulting it to the
+      // agent route is the misreading this whole fix is about, except silent.
+      // Decline, and the stage runs again: a rerun without `--resume` already
+      // does exactly that, so it is a path the flow has, where a restored
+      // result built on a guess is not.
       return;
     }
     ctx.instrumentation = {
@@ -3478,10 +3474,10 @@ const instrument: StageDefinition = {
       service,
       root: ctx.root,
       sdk,
-      // The same list the credential-free run takes, so the launch, the task
-      // and the verification cannot disagree about which channel carries the
-      // credential. Non-empty means a file the application loads holds the key,
-      // and the agent is not given it in its environment.
+      // The same list the launch takes, so the launch and the task cannot
+      // disagree about which channel carries the credential. Non-empty means a
+      // file the application loads holds the key, and the agent is not given
+      // it in its environment.
       credentialFiles: applicationCredentialFiles(ctx),
       // Relative to the agent's cwd, not the repository root.
       //
@@ -3549,71 +3545,6 @@ const instrument: StageDefinition = {
     }
 
     await confirmAgentLaunch(ctx, deps, adapter.displayName);
-
-    // The one measurement that cannot be taken later.
-    //
-    // Here, and not in a stage of its own, because it has to sit between two
-    // adjacent points: after the last question the user can answer "no" to —
-    // running somebody's test suite and then telling them the run was aborted
-    // is ten minutes spent on nothing — and before the first edit, after which
-    // "the suite fails" no longer distinguishes a suite this run broke from one
-    // that needed a database, a network, or a fix before setup arrived.
-    //
-    // The hand-over routes above return before this, and that is a decision
-    // rather than an omission.
-    //
-    // `--no-instrument` and `--manual` both leave the edit outside the run: the
-    // code changes afterwards, by the user or by an agent they drive
-    // themselves, possibly days later, with this process long gone. A
-    // measurement taken here would answer "was the suite red when setup wrote
-    // the task", which is not the question verification asks. Between those two
-    // moments the user may pull, fix the suite, break it, or change their
-    // dependencies — so such a baseline would support both of the causal claims
-    // verification makes while neither premise could be checked. The direction
-    // that matters is the excusing one: "your suite was already failing" over a
-    // measurement from last Tuesday would clear instrumentation that really did
-    // break something, with authority and in writing.
-    //
-    // Measuring on the resume instead is no better. The code has changed by
-    // then, so it is not a before.
-    //
-    // So those routes take no baseline, and the verification says so instead of
-    // naming a cause: `verifyApplication` reports a failing check with no
-    // baseline as `inconclusive`, the same word this route uses for a suite
-    // that was already red. Spending a ten-minute suite run in order to print a
-    // task file would also be absurd.
-    //
-    // Taken once: a resumed `instrument` stage runs over a worktree the agent
-    // may already have edited, where this would measure the wrong thing while
-    // looking like a baseline.
-    if (service.testCommand !== null && ctx.checkpoint.applicationBaseline === undefined) {
-      wizardProgress(ctx, `Checking \`${service.testCommand}\` before anything changes`);
-      const baseline = await runBaselineCheck({
-        command: service.testCommand,
-        cwd: agentCwd,
-        parentEnv: deps.env,
-        // The interpreter found above, the same one the agent is told to
-        // install into and the same one `verify_application` runs the real
-        // check with. Without it `pytest` is not on the child's PATH and the
-        // spawn fails before a single test runs — which is every Python
-        // project with a virtualenv, i.e. nearly all of them.
-        interpreter: pythonInterpreter,
-        runProcess: deps.runProcess,
-        signal: ctx.signal,
-      });
-      ctx.checkpoint.applicationBaseline = baseline;
-      // `ran`, not just the exit code. An un-run baseline has `exitCode: null`,
-      // and `null !== 0` — so warning on the code alone announced that the
-      // project's suite does not pass on every run where the measurement
-      // simply did not happen. That is the same false causal claim this whole
-      // mechanism exists to remove, pointed the other way.
-      if (baseline.ran && baseline.exitCode !== 0) {
-        wizardWarn(
-          ctx,
-          `${service.testCommand} does not pass yet, so it cannot verify the instrumentation either; this run will say so rather than blame the changes`,
-        );
-      }
-    }
 
     // npm's cache, for a Codex run whose task installs with npm. Codex's
     // sandbox confines writes to the workspace and the cache is outside it: in
@@ -3742,8 +3673,7 @@ const instrument: StageDefinition = {
           //
           // Starting in the service makes the default working set the right
           // one. Nothing is fenced off — an agent that genuinely needs the root
-          // can still walk up, and `verify_application` has always run here
-          // (see the verify stage below), so this makes the two agree.
+          // can still walk up.
           cwd: agentCwd,
           parentEnv: deps.env,
           credential: credential.key,
@@ -3870,9 +3800,8 @@ const instrument: StageDefinition = {
       // reports the block in its completion block and still exits 0.
       //
       // Without this the run carries on as though the service were
-      // instrumented. `verify_application` passes, because nothing about the
-      // application changed; the SDK probe below says nothing at all for a Node
-      // service, because there is no import to check; and the run then spends
+      // instrumented. The SDK probe below says nothing at all for a Node
+      // service, because there is no import to check, and the run then spends
       // the entire trace timeout before `verify_trace` reports that the
       // instrumented code path never ran — which is true, and names the symptom
       // rather than the cause the agent had already stated.
@@ -3915,7 +3844,7 @@ const instrument: StageDefinition = {
       // that finishes without emitting one is not covered by it at all — which
       // is what the run that prompted this did. No completion block, the SDK
       // installed into `.venv`, not one line of `main.py` touched, the stage
-      // recorded as done, `verify_application` passing on untouched code, and
+      // recorded as done, setup's own check passing on untouched code, and
       // then two minutes of trace spinner before the failure blamed the
       // instrumented path for never running. Every one of those was true and
       // none of them was the answer, which had been available the moment the
@@ -4108,26 +4037,15 @@ function keptOnCancel(ctx: SetupContext): string {
   return kept.length === 0 ? "" : ` Setup kept ${kept.join(" and ")}.`;
 }
 
-// ── VERIFY_APPLICATION ──────────────────────────────────────────────────────
-
-/**
- * The tail of a failing run's output: enough to see the error, little enough
- * that a chatty test suite does not bury the remedy underneath it.
- */
-function outputTail(output: string): string {
-  return output.split("\n").slice(-25).join("\n").trim();
-}
-
 /**
  * Every file the application could read this run's credential out of.
  *
- * Not "the file this run wrote", which is what the credential-free run used to
- * be told. `configure_repository` writes nothing when the key already resolved
- * from the project's own `.env` — `applicationCanResolve` returns true and the
- * stage is satisfied before it runs — so there is no file of ours to name,
- * while the file the entry point loads sits on disk holding the key. The
- * credential-free run then had the credential and the check passed without
- * being made.
+ * Not "the file this run wrote". `configure_repository` writes nothing when the
+ * key already resolved from the project's own `.env` — `applicationCanResolve`
+ * returns true and the stage is satisfied before it runs — so there is no file
+ * of ours to name, while the file the entry point loads sits on disk holding
+ * the key. Told only about the file this run wrote, the launch would hand the
+ * agent the key in its environment as well.
  *
  * A candidate earns its place by holding *this* credential, which is the test
  * {@link credentialEnvFile} already applies before naming a file to the agent.
@@ -4155,157 +4073,6 @@ function applicationCredentialFiles(ctx: SetupContext): string[] {
   }
   return files;
 }
-
-const verifyApplicationStage: StageDefinition = {
-  stage: "verify_application",
-  // An inconclusive result is settled, not pending. Re-running a suite that was
-  // already failing produces the same answer and costs the same minutes, so a
-  // resume takes the recorded one.
-  isSatisfied: (ctx) =>
-    ctx.application?.outcome === "passed" || ctx.application?.outcome === "inconclusive",
-  restore(ctx) {
-    if (ctx.checkpoint.application !== undefined) {
-      ctx.application = ctx.checkpoint.application;
-    }
-  },
-  async run(ctx, deps) {
-    const service = requireService(ctx);
-    const credential = requireCredential(ctx);
-    const command = service.testCommand;
-
-    if (command === null) {
-      ctx.application = {
-        command: null,
-        baseline: null,
-        run: { ran: false, exitCode: null, durationMs: 0 },
-        outcome: "skipped",
-        passed: false,
-        skippedReason: "no test or health command was detected",
-      };
-      ctx.checkpoint.application = ctx.application;
-      // Nothing is printed. There is nothing here for the user to fix — this
-      // repository has no test script, which is a fact about it rather than a
-      // fault — and a run that says so out loud spends a line reporting that a
-      // step it never promised did not happen. It survives where it matters:
-      // `skippedReason` above rides into the JSON result, and the trace-wait
-      // failure path below says it in the one place it explains something.
-      return "skipped";
-    }
-
-    wizardProgress(ctx, `Verifying the application: ${command}`);
-    const { verification, failure } = await verifyApplication({
-      command,
-      // What the same command did before anything was instrumented, or null on
-      // a route that instrumented nothing. Absent is not "it passed": it is
-      // "nobody looked", and the failure path below says so rather than naming
-      // a cause it cannot establish.
-      baseline: ctx.checkpoint.applicationBaseline ?? null,
-      cwd: service.path === "." ? ctx.root : join(ctx.root, service.path),
-      parentEnv: deps.env,
-      // The same virtualenv the baseline measured in. `detect_stack` names the
-      // check as the project documents it — `pytest`, not `.venv/bin/pytest` —
-      // and that command resolves for the user because their shell has the
-      // virtualenv activated. Without this the check below spawns against the
-      // CLI's own environment and fails with ENOENT after the instrumentation
-      // itself had succeeded, which reads to the user as changes that broke
-      // their suite. It is also the comparison's premise: a baseline taken in
-      // one environment and a verification taken in another are not the same
-      // measurement, so the two must not disagree about where `pytest` is.
-      //
-      // Resolved here rather than carried over from `instrument`. Creating the
-      // virtualenv is one of the things the agent is told to do, so an answer
-      // from before the launch is null in exactly the case this matters; and
-      // this stage also runs on a resume, where nothing instrumented anything
-      // in this process and there is no earlier answer to carry. The import
-      // check resolves it again for the first of those reasons.
-      interpreter:
-        service.language === "python"
-          ? detectPythonEnvironment(ctx.root, service.path, deps.env).interpreter
-          : null,
-      credential: credential.key,
-      // The credential-free run is only credential-free if the key goes out of
-      // every file the entry point loads for itself, not just the one this run
-      // wrote — see {@link applicationCredentialFiles}. An empty list is an
-      // answer rather than an omission: a key that reaches the application only
-      // through the environment is withheld by building that environment
-      // without it.
-      credentialFiles: applicationCredentialFiles(ctx),
-      runProcess: deps.runProcess,
-      signal: ctx.signal,
-    });
-    ctx.application = verification;
-    ctx.checkpoint.application = verification;
-
-    // A command that never started is not "inconclusive" in the sense this
-    // branch means. `outcome` is inconclusive whenever nothing baselined the
-    // check, and a command that cannot spawn cannot be baselined either, so
-    // without the second half of this condition it is unconditionally true for
-    // exactly the case a spawn failure is: the run warns that the suite "does
-    // not pass" — which asserts it ran — and then carries on as though the
-    // check had been made.
-    //
-    // Third incarnation of one bug, which is why this is spelled out rather
-    // than left to the next reader. cli#153 was "instrumentation blamed for a
-    // suite that was already failing". The fix for that warned on the
-    // baseline's exit code, which fired when the baseline had not run at all.
-    // The fix for *that* is the branch below, and it swallowed a command that
-    // could not be started. All three conflated "did not run" with "ran and
-    // failed"; a fourth will too unless the distinction is made here.
-    if (verification.outcome === "inconclusive") {
-      // Not a failure of this run, by one of two routes, and the sentence has
-      // to say which. Measured and already red is a finding about the project.
-      // Never measured is the absence of one, and it carries the failing output
-      // because nothing else in the run explains it. Said once, plainly, and
-      // then the run carries on to the thing it can still establish: whether a
-      // trace arrives.
-      wizardWarn(
-        ctx,
-        verification.baseline?.ran === true
-          ? `${command} does not pass on this project yet. It was failing before setup changed anything, so it cannot show whether the instrumentation is correct — nothing here is evidence against the changes.`
-          : `This run could not establish whether ${command} passes: nothing ran it before the code was instrumented, and the run after did not succeed either.${failure === null ? "" : `\n\n${outputTail(failure.output)}`}`,
-      );
-      return "skipped";
-    }
-
-    if (!verification.passed) {
-      const tail = failure === null ? "" : `\n\n${outputTail(failure.output)}`;
-      // Only one of these three is a claim this run can support. "Failed after
-      // instrumentation" was printed whether or not anything had established
-      // that it passed before — which on a suite that was already red sent the
-      // user looking for a fault in work that had just been done correctly.
-      const measuredBefore = verification.baseline?.ran === true;
-      const message = measuredBefore
-        ? `\`${command}\` passed before this run instrumented anything, and fails now.${tail}`
-        : `\`${command}\` failed. Setup did not run it beforehand, so whether the instrumentation caused this is not established.${tail}`;
-      // Paused, which is what this remedy has always promised and what the
-      // rollback used to contradict: the run revoked the key and took the
-      // credential back out of the env file, and then told the user to resume
-      // with it.
-      throw new PausedSetupError({
-        stage: "verify_application",
-        code: "APP_VERIFICATION_FAILED",
-        message,
-        remedy: `Nothing was reverted. Fix the failure, then rerun \`${setupCommand()} --resume\` to finish verification.`,
-      });
-    }
-
-    // What ran, and only then what it shows. The check ran with TraceRoot
-    // switched off, so a pass says the application does not depend on TraceRoot
-    // being configured — when the code it ran was the agent's instrumentation.
-    // A route that hands the task over edits nothing and takes no baseline, and
-    // its check ran on code setup had not touched, so the line says that and
-    // nothing about TraceRoot: any claim about it there would be about
-    // instrumentation the check never saw. The report reads the same field and
-    // says the same thing.
-    wizardProgress(
-      ctx,
-      verification.baseline === null
-        ? "Application passes its checks. Setup made no edits itself, so this checked your code as it is."
-        : "Application passes its checks with TraceRoot switched off, so it doesn't depend on TraceRoot being configured.",
-    );
-    return "ok";
-  },
-};
 
 // ── VERIFY_TRACE ────────────────────────────────────────────────────────────
 
@@ -4335,8 +4102,7 @@ const verifyTrace: StageDefinition = {
     });
 
     // How long to wait is a question about what can still send a trace — see
-    // {@link traceCanArrive}, and note that setup's own check is not one of
-    // those things.
+    // {@link traceCanArrive}.
     //
     // When something can, the whole budget. Ingest lags the run that sent the
     // trace, and the agent's run of the application may have ended a second
@@ -4507,8 +4273,7 @@ const verifyTrace: StageDefinition = {
       // Say the actual reason rather than reporting a timeout that never
       // really elapsed. Nothing in this run could have sent a trace, so there
       // is nothing to have waited for — and the reason is about what runs the
-      // application, not about whether setup found a test command, because
-      // setup's own check sends nothing either way.
+      // application, not about whether setup found a test command.
       throw new PausedSetupError({
         stage: "verify_trace",
         code: "TRACE_TIMEOUT",
@@ -4591,7 +4356,6 @@ export const SETUP_PIPELINE: readonly StageDefinition[] = [
   selectAgentStage,
   installAgentContext,
   instrument,
-  verifyApplicationStage,
   verifyTrace,
   complete,
 ];
@@ -5049,28 +4813,6 @@ function stageData(ctx: SetupContext, stage: SetupStage): Record<string, unknown
             files_changed: ctx.instrumentation.observedChangedFiles,
             sdk_version: ctx.checkpoint.sdkVersion,
           };
-    case "verify_application":
-      return ctx.application === undefined
-        ? undefined
-        : {
-            command: ctx.application.command,
-            // `passed` is kept for the consumers that already read it, and is
-            // true only for an outright pass. `outcome` is what distinguishes
-            // the two false cases, which a reader acts on differently.
-            passed: ctx.application.passed,
-            outcome: ctx.application.outcome,
-            // Both, because the exit code alone cannot say which kind of
-            // nothing it is: a baseline that was never taken and one that
-            // could not be spawned both report a null code, and only the
-            // second is a fact about this run.
-            baseline_ran: ctx.application.baseline?.ran ?? false,
-            baseline_exit_code: ctx.application.baseline?.exitCode ?? null,
-            // The check itself, which runs once and with TraceRoot switched
-            // off. It replaced a pair, and `ran_without_credentials` was the
-            // pair's second half.
-            ran: ctx.application.run.ran,
-            skipped_reason: ctx.application.skippedReason,
-          };
     case "verify_trace":
       return ctx.trace === undefined
         ? undefined
@@ -5097,10 +4839,6 @@ function resultData(ctx: SetupContext): Record<string, unknown> {
     service: ctx.stack?.selected?.path ?? null,
     agent: ctx.agent?.id ?? null,
     sdk_version: ctx.checkpoint.sdkVersion ?? null,
-    application_passed: ctx.application?.passed ?? null,
-    // Four values, because "did not pass" and "could not say" are different
-    // answers and a consumer branches on them differently.
-    application_outcome: ctx.application?.outcome ?? null,
     trace_id: ctx.trace?.traceId ?? null,
     trace_url: ctx.trace?.traceUrl ?? null,
     checkpoint_path: join(".traceroot", "setup.json"),

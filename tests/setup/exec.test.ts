@@ -491,10 +491,10 @@ describe("resolving what to spawn on Windows", () => {
   });
 
   it("refuses a command line cmd.exe would re-interpret rather than escaping it", () => {
-    // The point of `splitCommand` is that a manifest field never reaches a
-    // shell. Quoting does not undo that on its own: cmd.exe expands `%VAR%`
-    // inside quotes and a `"` ends the quoted run. Refused, so a value out of
-    // the customer's repository cannot become part of the command.
+    // The point of spawning without a shell is that a manifest field never
+    // reaches one. Quoting does not undo that on its own: cmd.exe expands
+    // `%VAR%` inside quotes and a `"` ends the quoted run. Refused, so a value
+    // out of the customer's repository cannot become part of the command.
     expect(onWindows("npm", ["run", "test & whoami"], [SHIM])).toBe(null);
     expect(onWindows("npm", ["run", "%USERPROFILE%"], [SHIM])).toBe(null);
     expect(onWindows("npm", ["run", 'say"hi'], [SHIM])).toBe(null);

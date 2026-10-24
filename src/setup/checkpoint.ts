@@ -5,13 +5,7 @@ import { getVersion } from "../version.js";
 import { ensureGitignore } from "./artifacts.js";
 import { SETUP_EXIT_CODES, type SetupErrorCode } from "./errors.js";
 import { findGitRoot } from "./git.js";
-import {
-  SETUP_STAGES,
-  type SetupCheckpoint,
-  type SetupStage,
-  type VerificationOutcome,
-  type VerificationRun,
-} from "./types.js";
+import { SETUP_STAGES, type SetupCheckpoint, type SetupStage } from "./types.js";
 
 /**
  * The checkpoint lives beside the config the CLI already owns, so the existing
@@ -138,21 +132,10 @@ export function readCheckpoint(root: string): SetupCheckpoint | null {
     checkpoint.instrumentHandover = obj.instrumentHandover;
   }
   // Validated per shape rather than "is an object": adopting these unchecked let a
-  // corrupt or hand-edited file satisfy `verify_application`, or report a trace
-  // that was never seen, on a resumed run.
+  // corrupt or hand-edited file report a trace that was never seen on a resumed
+  // run.
   if (isService(obj.service)) {
     checkpoint.service = obj.service;
-  }
-  const application = readApplication(obj.application);
-  if (application !== null) {
-    checkpoint.application = application;
-  }
-  // The pre-instrumentation measurement. Kept even when the verification above
-  // is absent: a run that instrumented and then died before verifying has one,
-  // and it is the only thing that lets the resumed verification attribute a
-  // failure.
-  if (isRun(obj.applicationBaseline)) {
-    checkpoint.applicationBaseline = obj.applicationBaseline as VerificationRun;
   }
   // Per entry rather than all-or-nothing: this list is the only record that a
   // key was created, so one malformed row must not take the others with it.
@@ -179,68 +162,6 @@ function isSetupErrorCode(value: unknown): value is SetupErrorCode {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isRun(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.ran === "boolean" &&
-    (value.exitCode === null || typeof value.exitCode === "number") &&
-    typeof value.durationMs === "number"
-  );
-}
-
-function isApplication(value: unknown): value is Record<string, unknown> {
-  return (
-    isRecord(value) &&
-    (value.command === null || typeof value.command === "string") &&
-    isRun(value.run) &&
-    typeof value.passed === "boolean" &&
-    (value.skippedReason === null || typeof value.skippedReason === "string")
-  );
-}
-
-function isOutcome(value: unknown): value is VerificationOutcome {
-  return (
-    value === "passed" || value === "failed" || value === "inconclusive" || value === "skipped"
-  );
-}
-
-/**
- * Reads the application verification, filling in what a checkpoint written by
- * an older CLI does not carry.
- *
- * `outcome` and `baseline` arrived after this file shipped, so requiring them
- * would make every checkpoint from a previous version fail the guard and have
- * its whole verification dropped — turning a `--resume` into a second full run
- * of the user's test suite. Derived instead: `passed` and `skippedReason`
- * already distinguish the three outcomes that existed, and `inconclusive` is
- * not among them, so nothing can be mistaken for it.
- *
- * `run` is required, and has no such fallback. It replaced a pair of runs, one
- * of them with the key, before setup was ever released; a checkpoint that still
- * carries the pair was written by a build nobody shipped, and running its check
- * again is the honest answer to it.
- */
-function readApplication(value: unknown): NonNullable<SetupCheckpoint["application"]> | null {
-  if (!isApplication(value)) {
-    return null;
-  }
-  const outcome: VerificationOutcome = isOutcome(value.outcome)
-    ? value.outcome
-    : value.passed === true
-      ? "passed"
-      : typeof value.skippedReason === "string"
-        ? "skipped"
-        : "failed";
-  return {
-    command: (value.command as string | null) ?? null,
-    baseline: isRun(value.baseline) ? (value.baseline as VerificationRun) : null,
-    run: value.run as VerificationRun,
-    outcome,
-    passed: value.passed === true,
-    skippedReason: typeof value.skippedReason === "string" ? value.skippedReason : null,
-  };
 }
 
 function isMintedKey(value: unknown): value is NonNullable<SetupCheckpoint["mintedKeys"]>[number] {
