@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TraceList } from "../../src/api/client.js";
 import { BackendUnavailableError, SetupApiError, createSetupApi } from "../../src/api/setup.js";
-import { pollForTrace } from "../../src/setup/trace.js";
+import { type TraceLister, pollForTrace } from "../../src/setup/trace.js";
 import { listTracesFrom, traceRow } from "./helpers.js";
 
 /** A `fetch` stand-in that replies from a queue and records every request. */
@@ -40,6 +40,17 @@ describe("setup API client", () => {
     await api.listApiKeys("p_1");
     expect(calls[0]?.url).toBe("https://api.example.test/api/v1/public/api-keys");
     expect(calls[0]?.url).not.toContain("project_id");
+  });
+
+  it("sends each trace bound it is given under the API's own name", async () => {
+    const { fetchImpl, calls } = stubFetch([{ status: 200, body: { data: [], meta: {} } }]);
+    const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
+    await api.listTraces({ limit: 1, endBefore: "2026-07-26T12:00:00.000Z" });
+    const url = new URL(calls[0]?.url ?? "");
+    expect(url.pathname).toBe("/api/v1/public/traces");
+    expect(url.searchParams.get("limit")).toBe("1");
+    expect(url.searchParams.get("end_before")).toBe("2026-07-26T12:00:00.000Z");
+    expect(url.searchParams.has("start_after")).toBe(false);
   });
 
   it("treats 501 as a missing endpoint too", async () => {
@@ -413,14 +424,18 @@ describe("trace polling", () => {
 
   it("keeps polling through a transient error", async () => {
     let calls = 0;
+    const poll = listTracesFrom(() => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("request to host failed: fetch failed");
+      }
+      return [traceRow()];
+    });
     const client = {
-      listTraces: listTracesFrom(() => {
-        calls += 1;
-        if (calls === 1) {
-          throw new Error("request to host failed: fetch failed");
-        }
-        return [traceRow()];
-      }),
+      // Only the poll's own reads are counted. The look for earlier traffic
+      // that follows a found trace is not a retry.
+      listTraces: (params: Parameters<TraceLister["listTraces"]>[0]) =>
+        params.endBefore === undefined ? poll(params) : listTracesFrom([])(params),
     };
     const result = await pollForTrace({
       client,

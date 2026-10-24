@@ -274,6 +274,17 @@ function paintedLink(url: string, paint: (text: string) => string, hyperlinks: b
 }
 
 /**
+ * Backend text with its control characters stripped, for a line of prose.
+ *
+ * Third-party for the same reason as the URLs above, and a trace's name more so:
+ * it is whatever the sending process chose. ESC opens a terminal sequence, and
+ * a newline inside a warning starts what reads as a line of the CLI's own.
+ */
+export function withoutControlChars(text: string): string {
+  return text.replace(CONTROL_CHARS, "");
+}
+
+/**
  * The name of an environment variable, in prose.
  *
  * The same light blue as a link, deliberately. In these blocks a variable name

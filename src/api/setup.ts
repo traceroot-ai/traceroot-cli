@@ -124,7 +124,11 @@ export interface SetupApi {
    * not depend on which operations the tool registry chooses to expose. It is
    * the same public endpoint either way.
    */
-  listTraces(params?: { limit?: number; startAfter?: string }): Promise<TraceList>;
+  listTraces(params?: {
+    limit?: number;
+    startAfter?: string;
+    endBefore?: string;
+  }): Promise<TraceList>;
   /** The workspaces this user belongs to. Account-scope; needs a user credential. */
   listWorkspaces(): Promise<WorkspaceSummary[]>;
   /** The projects this user can reach, optionally narrowed to one workspace. */
@@ -309,6 +313,9 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
       }
       if (params?.startAfter !== undefined) {
         query.set("start_after", params.startAfter);
+      }
+      if (params?.endBefore !== undefined) {
+        query.set("end_before", params.endBefore);
       }
       const suffix = query.toString() === "" ? "" : `?${query.toString()}`;
       return request<TraceList>({ method: "GET", path: `/api/v1/public/traces${suffix}` });

@@ -1264,6 +1264,42 @@ describe("reading a checkpoint that cannot be trusted", () => {
     expect(checkpoint?.applicationBaseline).toBeUndefined();
   });
 
+  it("reads a trace written before its attribution was recorded, as unknown", async () => {
+    // Missing is "not known", never "someone else's": the resumed report must
+    // not start doubting a trace the first run had no reason to doubt.
+    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
+    const root = dir;
+    mkdirSync(join(root, ".traceroot"), { recursive: true });
+    writeFileSync(
+      join(root, ".traceroot", "setup.json"),
+      JSON.stringify({
+        version: 1,
+        startedAt: "2026-07-26T12:00:00.000Z",
+        completedStages: ["verify_trace"],
+        trace: {
+          traceId: "t_1",
+          traceUrl: "https://app.example.test/trace/t_1",
+          observedAt: "2026-07-26T12:00:30.000Z",
+          waitedMs: 4000,
+          spanCount: 7,
+        },
+      }),
+      "utf8",
+    );
+
+    const checkpoint = readCheckpoint(root);
+    expect(checkpoint?.trace?.traceId).toBe("t_1");
+    expect(checkpoint?.trace?.attributed).toBeUndefined();
+    const md = renderSetupReport(
+      { root, checkpoint, trace: checkpoint?.trace } as unknown as Parameters<
+        typeof renderSetupReport
+      >[0],
+      new Date("2026-07-26T12:01:00.000Z"),
+    );
+    expect(md).toContain("**First trace.** `t_1` — 7 spans\n");
+    expect(md).not.toContain("Not confirmed");
+  });
+
   it("keeps the pre-instrumentation measurement, verification or not", async () => {
     // A run that instrumented and then died before verifying has a baseline and
     // no verification, and that baseline is the only thing that lets the

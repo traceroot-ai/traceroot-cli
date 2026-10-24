@@ -236,6 +236,21 @@ describe("what the report says about the trace it found", () => {
     expect(firstTrace(text)).toBe("**First trace.** `t_1`");
   });
 
+  it("says a trace is not confirmed to be this service's when the project had earlier traffic", () => {
+    const text = renderSetupReport(ctx({ trace: trace({ spanCount: 7, attributed: false }) }), NOW);
+
+    expect(verdict(text)).toBe(RECEIVED);
+    expect(firstTrace(text)).toBe(
+      "**First trace.** `t_1` — 7 spans. Not confirmed to come from this service: the project already had traces before setup started.",
+    );
+  });
+
+  it("adds nothing when the project had no earlier traffic", () => {
+    const text = renderSetupReport(ctx({ trace: trace({ spanCount: 7, attributed: true }) }), NOW);
+
+    expect(firstTrace(text)).toBe("**First trace.** `t_1` — 7 spans");
+  });
+
   it("still says plainly that no trace has arrived", () => {
     const text = renderSetupReport(ctx(), NOW);
 
