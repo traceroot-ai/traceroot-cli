@@ -82,6 +82,10 @@ export function buildProgram(overrides: BuildOverrides = {}): Command {
       "  4  not_found  the requested resource does not exist",
       "  5  network    network failure or timeout (retryable)",
       "",
+      "Those five belong to every command. setup has outcomes of its own, which it",
+      "returns as 10-16 (the README gives each one), and 130 when a prompt is",
+      "interrupted: the shell's own status for a run ended by Ctrl+C.",
+      "",
       'Under --json, failures also print {"error":{"code","message"}} to stderr.',
     ].join("\n"),
   );

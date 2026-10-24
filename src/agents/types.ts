@@ -23,6 +23,8 @@ export interface AgentAdapter {
   id: AgentId;
   /** Human-readable name, e.g. "Claude Code". */
   displayName: string;
+  /** CLI binary name to look for on PATH, when the agent has one. */
+  binary?: string;
   /**
    * Absolute install directory for a skill. Project-local agents resolve it
    * under `cwd`; global agents (e.g. Codex) ignore `cwd`.
