@@ -415,7 +415,20 @@ function pythonService(dir: string, repoRoot: string): DetectedService | null {
     manifest.toLowerCase().includes("pytest") ||
     existsSync(join(dir, "pytest.ini")) ||
     existsSync(join(dir, "tox.ini"));
-  const testCommand = hasPytest ? (manager === "uv" ? "uv run pytest" : "pytest") : null;
+  // Through the project's own manager when it has one that owns the
+  // environment. `uv` and `poetry` both put the virtualenv somewhere this
+  // process cannot be expected to find — poetry's default is a hashed
+  // directory under its own cache, which `detectPythonEnvironment` does not
+  // look at — so a bare `pytest` there is not on PATH, and fails as a missing
+  // test runner that is in fact installed. `installCommand` and `importCheck`
+  // already go through Poetry for the same reason.
+  const testCommand = hasPytest
+    ? manager === "uv"
+      ? "uv run pytest"
+      : manager === "poetry"
+        ? "poetry run pytest"
+        : "pytest"
+    : null;
 
   return {
     path: relPath,
