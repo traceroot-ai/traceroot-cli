@@ -102,8 +102,7 @@ describe("a typed answer", () => {
   });
 
   it("leaves a question asked outside the pipeline as `readLine` has it", async () => {
-    // The closing acknowledgements name no stage, and are not this change's to
-    // alter: Ctrl+C there still closes the question without an answer.
+    // A question that names no stage: Ctrl+C still closes it without an answer.
     const t = terminal();
     const answer = readAnswer(t, "Press Enter: ");
     await asked(t, "Press Enter: ");

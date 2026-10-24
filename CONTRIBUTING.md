@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## Development Requirements
 
-- Node.js 20.19+ or 22.12+ (the test toolchain needs it; the published CLI runs on Node 20.12+ as declared in `package.json` engines)
+- Node.js 20.19+ or 22.12+ (the test toolchain needs it; the published CLI runs on Node 20.3+ as declared in `package.json` engines — except `traceroot setup`, whose prompts need 20.12+ and say so when they do not have it)
 - `npm`: Node.js package manager
 - `git`
 

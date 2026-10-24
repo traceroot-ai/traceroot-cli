@@ -48,7 +48,14 @@ import { createActivityParser } from "./activity.js";
 import { detectAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
-import { chooseCredentialEnvFile, removeEnvKeys, upsertEnvFile } from "./envWrite.js";
+import {
+  HOST_ENV,
+  KEY_ENV,
+  applicationEnvKeys,
+  chooseCredentialEnvFile,
+  removeEnvKeys,
+  upsertEnvFile,
+} from "./envWrite.js";
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
@@ -98,9 +105,6 @@ import {
   wizardWarn,
 } from "./wizard.js";
 
-/** The environment variable an instrumented application reads its key from. */
-const KEY_ENV = "TRACEROOT_API_KEY";
-const HOST_ENV = "TRACEROOT_HOST_URL";
 /**
  * The credential goes into a file the project already loads.
  *
@@ -156,7 +160,8 @@ export interface SetupDeps {
   openBrowser: (url: string) => Promise<boolean>;
   /**
    * A typed answer. `stage` is the one an interrupt is blamed on, as a `select`
-   * names its own; a question asked outside the pipeline names none.
+   * names its own; the closing acknowledgements, asked after the pipeline, name
+   * `complete`.
    */
   prompt: (question: string, stage?: SetupStage) => Promise<string>;
   promptHidden: (question: string, stage: SetupStage) => Promise<string>;
@@ -2248,8 +2253,14 @@ const configureRepository: StageDefinition = {
       }
     }
 
+    // Which variables go in, asked of the one function that decides — the same
+    // one the closing notice asks when it tells the user which to carry. The
+    // host rule lived here alone, and the notice named the key and nothing
+    // else, which is how a non-default host came to be written down and never
+    // mentioned again.
+    const keys = applicationEnvKeys(session.host);
     const updates: Record<string, string> = { [KEY_ENV]: credential.key.reveal() };
-    if (session.host !== DEFAULT_HOST) {
+    if (keys.includes(HOST_ENV)) {
       updates[HOST_ENV] = session.host;
     }
     // What the file said first, because a rerun writes over the project's own

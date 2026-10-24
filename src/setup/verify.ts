@@ -1,19 +1,11 @@
 import { chmodSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { removeEnvContent } from "./envWrite.js";
+import { KEY_ENV, removeEnvContent } from "./envWrite.js";
 import { type RunProcess, splitCommand } from "./exec.js";
 import { withVenvOnPath } from "./python.js";
 import type { Secret } from "./secret.js";
 import type { ApplicationVerification, VerificationRun } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
-/**
- * The one variable the credential-free run does without.
- *
- * Named here because it is taken out of a file as well as out of the child
- * environment, and the two have to be the same variable.
- */
-const KEY_ENV = "TRACEROOT_API_KEY";
 
 /**
  * Where the credential file is kept while the application runs without it.

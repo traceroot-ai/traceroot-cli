@@ -1,5 +1,6 @@
 import type { Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
+import { HOST_ENV, KEY_ENV, applicationEnvKeys } from "./envWrite.js";
 import type { StackLanguage } from "./types.js";
 import {
   settleAcknowledgement,
@@ -35,9 +36,14 @@ import {
  * says the SDK does not, and names what would.
  */
 
-/** The environment variable an instrumented application reads its key from. */
-const KEY_ENV = "TRACEROOT_API_KEY";
-/** Where the credential lands when the caller does not say. */
+/**
+ * Where the credential lands when the caller does not say.
+ *
+ * A default rather than a constant filename: the run chooses between the
+ * project's own env files, so the notice is told which one it picked. `KEY_ENV`
+ * and `HOST_ENV` come from `envWrite.ts`, which is the one place that decides
+ * which variables the file holds.
+ */
 const DEFAULT_ENV_FILE = "./.env";
 
 export interface ProductionNoticeInput {
@@ -53,6 +59,30 @@ export interface ProductionNoticeInput {
    * `.env`. Naming the wrong one sends the user to a file they do not have.
    */
   credentialEnvFile?: string;
+  /**
+   * The host this run authenticated against, which is what decides how many
+   * variables the user has to carry.
+   *
+   * The notice used to name `TRACEROOT_API_KEY` and nothing else, while
+   * `configure_repository` wrote a second line for any host but the default.
+   * Taking the host and asking {@link applicationEnvKeys} is what keeps the two
+   * in step — and is why a third variable would need no change here at all.
+   * Undefined when the run never settled a host, where the key alone is the
+   * only honest answer.
+   */
+  host?: string;
+}
+
+/**
+ * Names in a sentence: `A`, `A and B`, `A, B and C`.
+ *
+ * No Oxford comma, matching the rest of the wizard's copy.
+ */
+function nameList(names: readonly string[]): string {
+  if (names.length <= 1) {
+    return names[0] ?? "";
+  }
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /**
@@ -66,7 +96,15 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
   // machine the user has to go and open, so it takes bold: it is the noun the
   // sentence turns on, and colouring it the same as the variable made the line
   // read as one long token rather than an instruction with a subject.
-  const key = wizardEnvVar(KEY_ENV);
+  const keys = applicationEnvKeys(input.host);
+  const named = nameList(keys.map((name) => wizardEnvVar(name)));
+  // `token` for one and `variables` for several, because with the host in the
+  // list they are not all tokens. The singular sentence is unchanged, which is
+  // the sentence almost every run prints.
+  const noun = keys.length === 1 ? "token" : "variables";
+  // The file as the caller named it, whole. It used to be a directory joined to
+  // a constant filename; the name is now whichever of the project's own env
+  // files the run chose, so the caller passes the path and this does not guess.
   const path = input.credentialEnvFile ?? DEFAULT_ENV_FILE;
   const file = wizardEmphasis(path);
 
@@ -81,12 +119,25 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
     // marker already does — and it pushed the verb far enough right that the
     // line wrapped in the middle of the instruction on an ordinary window.
     // What is left starts with the thing to do.
-    `Add the ${key} token from your local ${file} file to your production environment.`,
+    `Add the ${named} ${noun} from your local ${file} file to your production environment.`,
     // The caveat, compressed to a line, because it is true and it bites
     // locally rather than only on deploy: neither SDK carries a dotenv
     // dependency, so the file reaches the process environment only if the
     // project loads it.
-    wizardAside(localCaveat(input.language, path)),
+    wizardAside(localCaveat(input.language, path, keys)),
+    // And the clause that would have saved the user who found this.
+    //
+    // A sentence of its own rather than another dependent clause on the line
+    // above, which is already as long as a line in this block gets. It is the
+    // only failure in the run that is completely silent: a key exported without
+    // its host authenticates nowhere, and the SDK says so to nobody.
+    ...(keys.includes(HOST_ENV)
+      ? [
+          wizardAside(
+            `Exporting only ${KEY_ENV} leaves the SDK on its default host, which is not the one this key is for.`,
+          ),
+        ]
+      : []),
   ];
 }
 
@@ -103,24 +154,38 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
  * So it says the part that stays true for everyone: the SDK itself reads only
  * the process environment. Whether the file gets there is the project's
  * loader's job, and each language gets the remedy that actually applies.
+ *
+ * The fallback remedy names every variable the file holds, not just the key.
+ * "Export the key" is the instruction that misroutes a non-default host, and it
+ * misroutes it here on the user's own machine exactly as it does on deploy.
  */
-function localCaveat(language: StackLanguage | null, file: string): string {
+function localCaveat(
+  language: StackLanguage | null,
+  file: string,
+  keys: readonly string[],
+): string {
+  // Space-separated rather than through `nameList`: this list is pasted into a
+  // shell, and `export A and B` exports a variable named `and` while leaving
+  // both of TraceRoot's unset — the precise failure the sentence exists to
+  // prevent. `export A B` is what a shell accepts. `nameList` stays for the
+  // prose elsewhere in this file, where "A and B" is what a reader wants.
+  const exports = keys.join(" ");
   if (language === "python") {
     // The one that surprises people: `traceroot/env.py` reads `os.environ` and
     // nothing else, so a plain `python main.py` with no `load_dotenv()` call
     // starts with no key and sends nothing, on the very machine where setup
     // just succeeded.
-    return `Locally too: the SDK reads os.environ, so ${file} only reaches it if your app loads it — call python-dotenv's load_dotenv(), or export ${KEY_ENV} in your shell.`;
+    return `Locally too: the SDK reads os.environ, so ${file} only reaches it if your app loads it — call python-dotenv's load_dotenv(), or export ${exports} in your shell.`;
   }
   if (language === null) {
     // No language settled, so no runtime to name. Says the true general thing
     // rather than guessing at a remedy that might not apply.
-    return `Locally too: the SDK reads the process environment, so ${file} only reaches it if your app loads it — export ${KEY_ENV} in your shell if it does not.`;
+    return `Locally too: the SDK reads the process environment, so ${file} only reaches it if your app loads it — export ${exports} in your shell if it does not.`;
   }
   // Next.js by name, because "my framework loads .env files" is the belief a
   // reader arrives with — and for this file it is usually right. The line's job
   // is now to mark the case where it is not, which is a plain entry point.
-  return `Locally too: the SDK reads process.env, so ${file} only reaches it if your app loads it — a framework such as Next.js does, a plain node entry point needs dotenv or export ${KEY_ENV} in your shell.`;
+  return `Locally too: the SDK reads process.env, so ${file} only reaches it if your app loads it — a framework such as Next.js does, a plain node entry point needs dotenv or export ${exports} in your shell.`;
 }
 
 export interface AcknowledgeProductionInput extends ProductionNoticeInput {
@@ -152,11 +217,13 @@ export async function acknowledgeProduction(input: AcknowledgeProductionInput): 
   // "this is the thing you just did" where a second blue would only repeat the
   // sentence above.
   //
-  // Named once, because it is written twice: live, then greyed over itself.
-  const ack = `I have added ${wizardEmphasis(KEY_ENV)} to my production env.`;
-  await input.prompt(`${wizardAcknowledgement(ack)} `);
+  // It names every variable too. This is the line the user says back, and a
+  // line that claims less than the instruction asked for is how someone
+  // confirms they have done a thing they have half done.
+  const said = `I have added ${nameList(applicationEnvKeys(input.host).map((name) => wizardEmphasis(name)))} to my production env.`;
+  await input.prompt(`${wizardAcknowledgement(said)} `);
   // The variable stays bold in the settled copy too. Dimming a line that
   // already carries a bold span would end the dim where the bold ends, so the
   // weight is re-applied inside rather than composed around.
-  settleAcknowledgement(input.writers, ack);
+  settleAcknowledgement(input.writers, said);
 }

@@ -10,8 +10,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import {
   ENV_FILE_HEADER,
+  HOST_ENV,
+  KEY_ENV,
+  applicationEnvKeys,
   chooseCredentialEnvFile,
   upsertEnvContent,
   upsertEnvFile,
@@ -181,5 +185,31 @@ describe("the header on a credential file this run created", () => {
     expect(existing.content).not.toContain(ENV_FILE_HEADER[0] ?? "");
     // And the user's own line survives untouched above ours.
     expect(existing.content).toBe("APP=1\n\nTRACEROOT_API_KEY=k\n");
+  });
+});
+
+describe("which variables an instrumented application needs", () => {
+  // One definition for two callers that used to disagree:
+  // `configure_repository` wrote the host for a non-default deployment, and
+  // the closing notice told the user to carry the key. Everything either of
+  // them knows about the set now comes from here.
+  it("is the key alone for the hosted product", () => {
+    expect(applicationEnvKeys(DEFAULT_HOST)).toEqual([KEY_ENV]);
+  });
+
+  it("adds the host for any other deployment", () => {
+    for (const host of ["https://staging.traceroot.ai", "http://localhost:8000"]) {
+      expect(applicationEnvKeys(host)).toEqual([KEY_ENV, HOST_ENV]);
+    }
+  });
+
+  it("claims nothing extra for a host it was not given", () => {
+    // An unknown host cannot imply a second variable, and naming one the user
+    // has no value for would send them looking for a line that is not there.
+    expect(applicationEnvKeys(undefined)).toEqual([KEY_ENV]);
+  });
+
+  it("puts the key first, because that is the order the file reads in", () => {
+    expect(applicationEnvKeys("https://staging.traceroot.ai")[0]).toBe(KEY_ENV);
   });
 });
