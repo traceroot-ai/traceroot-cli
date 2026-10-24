@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ExitCode } from "../../src/output.js";
+import { createSetupApi } from "../../src/api/setup.js";
 import type { RunProcessOptions, RunProcessResult } from "../../src/setup/exec.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import { pollForTrace, spanPhrase } from "../../src/setup/trace.js";
@@ -667,22 +667,36 @@ describe("polling for the first trace", () => {
     expect(seen[0]?.limit).toBe(200);
   });
 
-  it("stops on an authentication failure instead of waiting it out", async () => {
+  it.each([
+    [401, "Invalid API key"],
+    [401, "API key has expired"],
+    [401, "Project has been deleted"],
+    [401, "Authentication failed"],
+    [401, "Invalid token"],
+    [403, "No access to project 'p1'"],
+  ])("stops on the server's %i %s instead of waiting it out", async (status, detail) => {
     // A bad key does not become a good one by waiting, so retrying until the
-    // timeout spends the user's whole trace budget on a fixed error. The class
-    // comes off the thrown error's exit code, because the message is the
-    // backend's own wording and no regex over it can be trusted.
+    // timeout spends the user's whole trace budget on a fixed error. Built
+    // through the real client, whose message is the server's own `detail`: the
+    // class has to come off the error's exit code, and a faked error carrying
+    // one hid that the client never set it.
     let calls = 0;
-    // A clock that advances, so a version that treats this as transient runs out
-    // of budget and fails the call count rather than looping forever.
+    const client = createSetupApi({
+      host: "https://api.example.test",
+      apiKey: "tr-revoked",
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ detail }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof globalThis.fetch,
+    });
+    // A clock that advances, so a version that treats this as transient runs
+    // out of budget and fails the call count rather than looping forever.
     let clock = 0;
     const result = await pollForTrace({
-      client: {
-        listTraces: async () => {
-          calls += 1;
-          throw Object.assign(new Error("Invalid API key"), { exitCode: ExitCode.auth });
-        },
-      },
+      client,
       startedAt: new Date("2026-07-26T12:00:00.000Z"),
       timeoutMs: 5_000,
       sleep: async () => undefined,
@@ -693,7 +707,7 @@ describe("polling for the first trace", () => {
     });
 
     expect(calls).toBe(1);
-    expect(result.found).toBe(false);
+    expect(result).toMatchObject({ found: false, lastError: detail });
   });
 
   it("holds the schedule's last step rather than a ceiling it never reaches", async () => {

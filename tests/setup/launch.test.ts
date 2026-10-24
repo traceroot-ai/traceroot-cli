@@ -19,6 +19,7 @@ import {
   launchAgent,
   prepareWritableDir,
   resolveNpmCacheDir,
+  shadowingApiKey,
 } from "../../src/setup/launch.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import { buildSetupTask, taskPrograms } from "../../src/setup/task.js";
@@ -891,5 +892,47 @@ describe("where the credential is allowed to appear", () => {
     // which is the property the list above never depended on.
     expect(launched?.args.join(" ")).not.toContain(KEY);
     expect(launched?.stdin ?? "").not.toContain(KEY);
+  });
+
+  it("drops an inherited TRACEROOT_ENABLED and leaves the parent's untouched", () => {
+    // Exported as `false`, it switched off the application run the task asks
+    // for, and the trace wait then blamed the code path.
+    const parentEnv: NodeJS.ProcessEnv = { PATH: "/usr/bin", TRACEROOT_ENABLED: "false" };
+    const env = buildAgentEnv({
+      parentEnv,
+      credential: makeSecret(KEY),
+      credentialFiles: ["/repo/.env"],
+      host: "https://api.example.test",
+    });
+
+    expect("TRACEROOT_ENABLED" in env).toBe(false);
+    expect(env.PATH).toBe("/usr/bin");
+    expect(parentEnv.TRACEROOT_ENABLED).toBe("false");
+  });
+});
+
+describe("an exported key that would beat the env file", () => {
+  const KEY = "tr-this-runs-own-credential";
+  const OTHER = "tr-another-projects-credential";
+
+  it("is named by its hint when a file carries this run's key", () => {
+    // dotenv does not override a variable that is already set, so the
+    // application would send its traces with the exported key.
+    expect(
+      shadowingApiKey({
+        parentEnv: { TRACEROOT_API_KEY: OTHER },
+        credential: makeSecret(KEY),
+        credentialFiles: ["/repo/.env"],
+      }),
+    ).toBe("tr-…tial");
+  });
+
+  it.each([
+    ["nothing is exported", {}, ["/repo/.env"]],
+    ["the exported key is this run's", { TRACEROOT_API_KEY: KEY }, ["/repo/.env"]],
+    // Setup's own copy goes into the agent's environment over it.
+    ["no file carries the key", { TRACEROOT_API_KEY: OTHER }, []],
+  ])("is null when %s", (_, parentEnv, credentialFiles) => {
+    expect(shadowingApiKey({ parentEnv, credential: makeSecret(KEY), credentialFiles })).toBeNull();
   });
 });

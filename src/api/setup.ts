@@ -1,5 +1,6 @@
 import { CliError } from "../output.js";
 import {
+  exitCodeForStatus,
   normalizeBaseUrl,
   redactSecret,
   statusFallbackMessage,
@@ -38,12 +39,18 @@ export class BackendUnavailableError extends Error {
   }
 }
 
-/** A non-2xx response that is not an "endpoint missing" signal. */
+/**
+ * A non-2xx response that is not an "endpoint missing" signal.
+ *
+ * Carries the exit-code class of its status, as the generated client's errors
+ * do: the message is the server's own `detail`, so the class is the only
+ * reliable way to tell a rejected credential from anything else.
+ */
 export class SetupApiError extends CliError {
   readonly status: number;
 
   constructor(message: string, status: number) {
-    super(message);
+    super(message, exitCodeForStatus(status));
     this.name = "SetupApiError";
     this.status = status;
   }
@@ -54,6 +61,11 @@ export interface WorkspaceSummary {
   id: string;
   name: string;
   role: string;
+  /**
+   * The public TraceRoot demo, which every account joins as a viewer. A server
+   * that predates it sends nothing, which reads as no.
+   */
+  is_demo?: boolean;
 }
 
 export interface ProjectSummary {
@@ -61,6 +73,8 @@ export interface ProjectSummary {
   project_name: string;
   workspace_id: string;
   workspace_name?: string | null;
+  /** Whether the project belongs to the demo; see {@link WorkspaceSummary.is_demo}. */
+  workspace_is_demo?: boolean;
 }
 
 /** Key metadata. The plaintext `key` is only ever present on creation. */
@@ -304,7 +318,10 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
         method: "GET",
         path: "/api/v1/public/workspaces",
       });
-      return unwrap<WorkspaceSummary>(response, "data");
+      return unwrap<WorkspaceSummary>(response, "data").map((workspace) => ({
+        ...workspace,
+        is_demo: workspace.is_demo === true,
+      }));
     },
     async listProjects(workspaceId) {
       const query =
@@ -321,6 +338,7 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
         project_name: String(item.name ?? item.project_name ?? ""),
         workspace_id: String(item.workspace_id ?? ""),
         workspace_name: typeof item.workspace_name === "string" ? item.workspace_name : null,
+        workspace_is_demo: item.workspace_is_demo === true,
       }));
     },
     createProject(name, workspaceId) {

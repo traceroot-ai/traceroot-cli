@@ -117,11 +117,11 @@ describe("redeemHandoff", () => {
     expect((err as CliError).message).toContain("503");
   });
 
-  it("maps a 404 to notFound, naming the deployment that has no such route", async () => {
-    const err = await caught(redeemWith(() => jsonResponse({}, 404)).run);
-    expect(err).toBeInstanceOf(CliError);
-    expect((err as CliError).exitCode).toBe(ExitCode.notFound);
-    expect((err as CliError).message).toContain("https://ui");
+  it("returns the same rejection on 404, from a deployment without the route", async () => {
+    // Ending the run there left a user who could still sign in the ordinary way
+    // with nothing to do but rerun without the code.
+    const { run } = redeemWith(() => jsonResponse({}, 404));
+    expect(await run()).toEqual({ kind: "rejected" });
   });
 
   it("maps a transport failure to a network error", async () => {
@@ -255,7 +255,7 @@ describe("redeemHandoff", () => {
   it("never names the code in any error it raises, whatever the server does", async () => {
     // One assertion over every failure the route can produce, so a future
     // branch that interpolates the code has somewhere to fail.
-    const statuses = [400, 404, 429, 500, 503];
+    const statuses = [400, 429, 500, 503];
     for (const status of statuses) {
       const err = await caught(redeemWith(() => jsonResponse({ detail: CODE }, status)).run);
       expect(err, `status ${status} raises a CliError`).toBeInstanceOf(CliError);

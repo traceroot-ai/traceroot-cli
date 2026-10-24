@@ -123,7 +123,13 @@ describe("setup API client", () => {
     const projects = await api.listProjects();
 
     expect(projects).toEqual([
-      { project_id: "p_1", project_name: "demo", workspace_id: "w_1", workspace_name: "acme" },
+      {
+        project_id: "p_1",
+        project_name: "demo",
+        workspace_id: "w_1",
+        workspace_name: "acme",
+        workspace_is_demo: false,
+      },
     ]);
     expect(calls[0]?.url).toBe("https://api.example.test/api/v1/public/projects");
   });
@@ -136,7 +142,13 @@ describe("setup API client", () => {
     const projects = await api.listProjects();
 
     expect(projects).toEqual([
-      { project_id: "p_1", project_name: "demo", workspace_id: "w_1", workspace_name: null },
+      {
+        project_id: "p_1",
+        project_name: "demo",
+        workspace_id: "w_1",
+        workspace_name: null,
+        workspace_is_demo: false,
+      },
     ]);
   });
 
@@ -157,8 +169,40 @@ describe("setup API client", () => {
     const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
     const workspaces = await api.listWorkspaces();
 
-    expect(workspaces).toEqual([{ id: "w_1", name: "acme", role: "owner" }]);
+    expect(workspaces).toEqual([{ id: "w_1", name: "acme", role: "owner", is_demo: false }]);
     expect(calls[0]?.url).toBe("https://api.example.test/api/v1/public/workspaces");
+  });
+
+  it("carries the flags that mark the TraceRoot demo workspace and its projects", async () => {
+    // Read strictly: only `true` marks the demo, so a server that predates it,
+    // or sends something else, leaves both lists as they were.
+    const { fetchImpl } = stubFetch([
+      {
+        status: 200,
+        body: {
+          data: [
+            { id: "w_1", name: "acme", role: "owner" },
+            { id: "w_demo", name: "TraceRoot Demo", role: "viewer", is_demo: true },
+          ],
+        },
+      },
+      {
+        status: 200,
+        body: {
+          data: [
+            { id: "p_1", name: "web", workspace_id: "w_1", workspace_is_demo: "true" },
+            { id: "p_demo", name: "demo", workspace_id: "w_demo", workspace_is_demo: true },
+          ],
+        },
+      },
+    ]);
+    const api = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
+
+    const workspaces = await api.listWorkspaces();
+    const projects = await api.listProjects();
+
+    expect(workspaces.map((w) => w.is_demo)).toEqual([false, true]);
+    expect(projects.map((p) => p.workspace_is_demo)).toEqual([false, true]);
   });
 
   it("sends the documented key-creation body", async () => {
@@ -327,14 +371,9 @@ describe("trace polling", () => {
     expect(result.found && result.trace.traceId).toBe("unreadable");
   });
 
-  it("stops immediately on an auth failure", async () => {
-    let calls = 0;
-    const client = {
-      listTraces: listTracesFrom(() => {
-        calls += 1;
-        throw new Error("401 unauthorized");
-      }),
-    };
+  it("stops immediately on an auth failure with no detail", async () => {
+    const { fetchImpl, calls } = stubFetch([{ status: 401 }]);
+    const client = createSetupApi({ host: "https://api.example.test", apiKey: "k", fetchImpl });
     const result = await pollForTrace({
       client,
       startedAt,
@@ -342,7 +381,34 @@ describe("trace polling", () => {
       sleep: async () => undefined,
     });
     expect(result.found).toBe(false);
-    expect(calls).toBe(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps polling an unreachable host whose port contains 403", async () => {
+    // The transport failure's message names the host, and the auth check used
+    // to match "403" in `localhost:4030` and give up on the first attempt.
+    let calls = 0;
+    const client = createSetupApi({
+      host: "http://localhost:4030",
+      apiKey: "k",
+      fetchImpl: (async () => {
+        calls += 1;
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof globalThis.fetch,
+    });
+    let clock = 0;
+    const result = await pollForTrace({
+      client,
+      startedAt,
+      timeoutMs: 10_000,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+    });
+    expect(result.found).toBe(false);
+    expect(calls).toBeGreaterThan(1);
+    expect(result.found === false && result.lastError).toContain("localhost:4030");
   });
 
   it("keeps polling through a transient error", async () => {
