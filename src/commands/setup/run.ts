@@ -33,7 +33,7 @@ import {
   setupRoot,
   writeCheckpoint,
 } from "../../setup/checkpoint.js";
-import { acknowledgeTraces } from "../../setup/ending.js";
+import { acknowledgeTraces, skippedTraceNotice } from "../../setup/ending.js";
 import { applicationEnvKeys } from "../../setup/envWrite.js";
 import type { SetupError } from "../../setup/errors.js";
 import {
@@ -52,7 +52,13 @@ import {
 import { acknowledgeProduction, nameList } from "../../setup/production.js";
 import type { SelectInput } from "../../setup/select.js";
 import type { SetupCheckpoint, SetupContext, SetupFlags, SetupResult } from "../../setup/types.js";
-import { wizardIntro, wizardLine, wizardOutro, wizardProgress } from "../../setup/wizard.js";
+import {
+  wizardIntro,
+  wizardLine,
+  wizardNote,
+  wizardOutro,
+  wizardProgress,
+} from "../../setup/wizard.js";
 
 /**
  * Whether the CLI may ask the user anything.
@@ -83,7 +89,7 @@ export function canPrompt(input: {
  * names the step it stopped on; the error itself follows, rendered by the CLI's
  * central handler like every other error.
  */
-export function closingLine(result: SetupResult): string {
+export function closingLine(result: SetupResult, ending: SetupEnding = {}): string {
   if (!result.ok) {
     // A user who declined a question did not hit a failure, and the frame must
     // not tell them they did.
@@ -95,15 +101,36 @@ export function closingLine(result: SetupResult): string {
       ? "Setup stopped."
       : `Setup stopped at: ${STAGE_LABELS[stage].toLowerCase()}.`;
   }
-  return result.trace === null
-    ? "Setup paused — rerun `traceroot setup --resume` to finish."
-    : // Scoped, because what finished is scoped. This said "TraceRoot setup
-      // complete." one line under a block that had just told the user their
-      // production environment still needs the key — a line that claims the
-      // whole job is done directly above the half that is not. The run
-      // configured this machine; that is the thing to claim, and naming it as
-      // local is also what makes the sentence below it legible as the rest.
-      "TraceRoot local setup complete.";
+  // Scoped, because what finished is scoped. This said "TraceRoot setup
+  // complete." one line under a block that had just told the user their
+  // production environment still needs the key — a line that claims the whole
+  // job is done directly above the half that is not. The run configured this
+  // machine; that is the thing to claim, and naming it as local is also what
+  // makes the sentence below it legible as the rest.
+  if (result.trace !== null) {
+    return "TraceRoot local setup complete.";
+  }
+  // Two different endings share "ok, and no trace", and the frame must not
+  // describe one as the other. A user who stopped the wait themselves has a
+  // finished run; a run that stopped before the wait has work outstanding, and
+  // "paused" is the word for that one only.
+  return ending.traceWaitSkipped === true
+    ? "TraceRoot local setup complete — no trace seen yet."
+    : "Setup paused — rerun `traceroot setup --resume` to finish.";
+}
+
+/**
+ * What the machine recorded about *how* a run ended, beyond whether it did.
+ *
+ * Separate from {@link SetupResult} because it is a presentation detail of this
+ * invocation rather than part of the machine's result: nothing is checkpointed,
+ * nothing is in the `--json` envelope, and `--resume` starts from a clean one.
+ * Optional throughout, so the two closing functions keep their old meaning when
+ * nothing is passed.
+ */
+export interface SetupEnding {
+  /** The user ended the trace wait early; see `SetupContext.traceWaitSkipped`. */
+  traceWaitSkipped?: boolean;
 }
 
 /**
@@ -124,6 +151,10 @@ export function closingSentence(result: SetupResult): string | null {
   // the user to go and put the key in their production environment, and an
   // unattended run has nobody to even read that. The condition is the whole
   // content of the sentence, so the sentence carries it.
+  //
+  // A skipped wait does not change this either: the sentence is earned by a
+  // trace that actually arrived, and a run that has not seen one has not
+  // established that the instrumentation works.
   //
   // The variables come from `applicationEnvKeys`, like every other place the
   // run names them, so a non-default host's second variable is named here too
@@ -351,21 +382,37 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   const result = await runSetupMachine(ctx, deps.setupDeps);
   writeCheckpoint(ctx.artifactDir, result.checkpoint);
 
+  // The two ways a run ends ok with no trace, as one decision: they are
+  // mutually exclusive answers to the same question, and the block each one
+  // prints is the wrong one for the other.
   if (!json && result.ok && result.trace === null) {
-    // A run that ended without a trace but without an error: a hand-over —
-    // `--no-instrument`, `--manual` or either menu answer that edits nothing —
-    // that nothing has acted on yet. Say what happens next rather than implying
-    // success, and only the half the closing line does not: that line already
-    // says to rerun with `--resume`, and a third copy of it is noise.
-    const task = ctx.instrumentation?.promptPath ?? null;
-    wizardLine(
-      { writers, json },
-      `\nNo trace yet: setup changed no code, so the service has no TraceRoot in it. ${
-        task === null
-          ? "Apply the steps above."
-          : `${runTaskSentence(ctx, displaySkillPath(ctx.root, task))}.`
-      }`,
-    );
+    if (ctx.traceWaitSkipped !== true) {
+      // A run that ended without a trace but without an error: a hand-over —
+      // `--no-instrument`, `--manual` or either menu answer that edits nothing —
+      // that nothing has acted on yet. Say what happens next rather than implying
+      // success, and only the half the closing line does not: that line already
+      // says to rerun with `--resume`, and a third copy of it is noise.
+      const task = ctx.instrumentation?.promptPath ?? null;
+      wizardLine(
+        { writers, json },
+        `\nNo trace yet: setup changed no code, so the service has no TraceRoot in it. ${
+          task === null
+            ? "Apply the steps above."
+            : `${runTaskSentence(ctx, displaySkillPath(ctx.root, task))}.`
+        }`,
+      );
+    } else {
+      // The other way to end without a trace: the user stopped the wait. The
+      // sentence above is the wrong one for it twice over — it tells somebody
+      // who just watched an agent instrument their service that it has no
+      // TraceRoot in it, and sends them off to do an instrumentation task that
+      // is already done.
+      wizardNote(
+        writers,
+        skippedTraceNotice({ uiBaseUrl: result.checkpoint.uiBaseUrl ?? null }, writers.err),
+        { settled: true },
+      );
+    }
   }
 
   // The two blocks that close a successful run, in the order a user acts on
@@ -401,7 +448,9 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   }
 
   if (!json) {
-    wizardOutro(writers, closingLine(result), { closing: closingSentence(result) });
+    wizardOutro(writers, closingLine(result, { traceWaitSkipped: ctx.traceWaitSkipped }), {
+      closing: closingSentence(result),
+    });
   }
 
   return result;

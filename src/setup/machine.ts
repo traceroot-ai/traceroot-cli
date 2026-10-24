@@ -61,7 +61,7 @@ import {
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
-import { buildInvocation, launchAgent } from "./launch.js";
+import { buildInvocation, launchAgent, prepareWritableDir, resolveNpmCacheDir } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
 import { writeSetupReport } from "./report.js";
 import {
@@ -84,7 +84,7 @@ import {
 } from "./stack.js";
 import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters } from "./task.js";
 import { pollForTrace, spanPhrase } from "./trace.js";
-import { discardTypeAhead } from "./tty.js";
+import { discardTypeAhead, waitForEnter } from "./tty.js";
 import type {
   ApplicationKeyLocation,
   DetectedAgent,
@@ -195,6 +195,16 @@ export interface SetupDeps {
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Interactive single choice; injected so stages stay testable without a TTY. */
   select: SelectFn;
+  /**
+   * Starts listening for the user asking to stop waiting, and returns the
+   * function that stops listening.
+   *
+   * Only the trace wait uses it. Injected for the same reason `select` is: a
+   * test must be able to press the key without a terminal, and the production
+   * implementation resumes `process.stdin`, which a suite running the whole
+   * CLI in one process must never have resumed under it.
+   */
+  watchForSkip: (onSkip: () => void) => () => void;
   /** Temp directory for the agent task; removed when the run ends. */
   makeTempDir: () => string;
   /**
@@ -258,6 +268,7 @@ export function defaultSetupDeps(resolvedAuth: ResolvedAuth): SetupDeps {
     restoreConfigText: (text) => realRestoreConfigText(text),
     sleep,
     select: interactiveSelect,
+    watchForSkip: (onSkip) => waitForEnter({ input: process.stdin, onEnter: onSkip }),
     makeTempDir: () => mkdtempSync(join(tmpdir(), "traceroot-setup-")),
     readCredential: (host) => readCredential(host),
     writeCredential: (host, entry) => writeCredential(host, entry),
@@ -3074,9 +3085,26 @@ export function runTaskSentence(ctx: SetupContext, subject: string): string {
  * because none is on PATH — an option that was never available presented as
  * though it were.
  *
- * So the runnable agents *are* the run options. One installed agent means one
- * such option and no follow-up question; none installed means the option is
- * simply not there, which is the honest rendering of that machine.
+ * So the runnable agents *are* the run options, one option each, and the three
+ * cases fall out of that rather than being special-cased:
+ *
+ * - none runnable — there is no run option, which is the honest rendering of
+ *   that machine. The question is still worth asking: the remaining two answers
+ *   are genuinely different, and neither edits any code.
+ * - one runnable — one option, and it names the agent ("Run Claude Code for
+ *   me"), so answering it is answering both halves of the decision at once.
+ * - two or more runnable — one option each, still named. The alternative is a
+ *   single "use a locally installed coding agent" option followed by a second
+ *   question about which one, which is the split this function exists to avoid:
+ *   the names are two words each, they fit on the line, and a user who came
+ *   here to have Codex do it should not have to pick a category first. The
+ *   agents' own registry order decides the order, so it is stable across runs
+ *   rather than a function of which binary resolved first.
+ *
+ * `--method agent` is the one route that reaches the "or ask" form, because a
+ * flag that says to run *an* agent has not said which: there `selectAgent`'s
+ * own ladder asks, auto-selects a single agent, or names `--agent` when nobody
+ * can be asked.
  *
  * The default when nobody can be asked is deliberately NOT "run an agent". A CI
  * job, a `--json` consumer, or a piped invocation must never discover after the
@@ -3534,6 +3562,34 @@ const instrument: StageDefinition = {
       }
     }
 
+    // npm's cache, for a Codex run whose task installs with npm. Codex's
+    // sandbox confines writes to the workspace and the cache is outside it: in
+    // a recorded run `npm install` failed with EPERM on `~/.npm/_cacache` and
+    // nothing was instrumented until the cache was named. Codex only, because
+    // Claude Code's recorded npm runs wrote the cache with nothing named, so a
+    // Claude run neither asks npm nor launches any differently.
+    //
+    // Decided from the install command the task hands the agent, so the two
+    // cannot disagree. pip needed nothing. pnpm, yarn, bun, uv and poetry keep
+    // their caches elsewhere and were not tested with Codex, so nothing is
+    // added for them on a guess.
+    //
+    // Settled here, before the agent's feed starts, so the one line said when
+    // the cache cannot be created is not drawn over by the spinner.
+    const npmCache =
+      agent.id === "codex" &&
+      installCommand(sdk, service, service.language, pythonInterpreter).startsWith("npm ")
+        ? await resolveNpmCacheDir({ cwd: agentCwd, env: deps.env, runProcess: deps.runProcess })
+        : null;
+    const writableNpmCache = npmCache === null ? null : prepareWritableDir(npmCache);
+    if (npmCache !== null && writableNpmCache === null) {
+      wizardWarn(
+        ctx,
+        `could not create npm's cache directory ${npmCache}, so Codex starts without it and \`npm install\` may fail`,
+      );
+    }
+    const writableDirs = writableNpmCache === null ? [] : [writableNpmCache];
+
     const tempDir = deps.makeTempDir();
     try {
       // This is the longest step of the run by a wide margin, and the only one
@@ -3569,43 +3625,50 @@ const instrument: StageDefinition = {
       // "Starting agent..." was always the first line written.
       const parseActivity = createActivityParser();
 
+      // Built before the launch rather than inline in it, because the launch
+      // now has to ask the invocation a question: not every agent's captured
+      // stdout is a stream this CLI can read, and the one that answers that is
+      // the argv.
+      const invocation = buildInvocation({
+        agentId: agent.id,
+        task,
+        interactive: false,
+        // The repository root, whenever the agent is standing somewhere
+        // else. That is where the skill and its reference files live.
+        readableDirs: agentCwd === ctx.root ? [] : [ctx.root],
+        writableDirs,
+        // Exactly the programs this task names, plus the manifest tools
+        // it will reach for. An interpreter it cannot execute leaves it
+        // able to write instrumentation and unable to prove any of it.
+        allowedPrograms: [
+          // Every spelling the task names, not only the absolute one.
+          //
+          // The task names a service-local interpreter relatively in the
+          // command it tells the agent to run, because an absolute path
+          // under a directory with spaces and parentheses is a quoting
+          // problem the agent has to solve on the first try. A permission
+          // rule matches the start of a command literally, so allowing only
+          // the absolute path refuses exactly the command the task gave.
+          ...taskInterpreters(pythonInterpreter, ctx.root, service.path),
+          "python3",
+          "python",
+          "uv",
+          "npm",
+          "pnpm",
+          "yarn",
+          "node",
+          "ls",
+          "cat",
+          "grep",
+        ],
+      });
+
       let result: Awaited<ReturnType<typeof launchAgent>>;
       let observedChangedFiles: string[];
       try {
         result = await launchAgent({
           credentialFiles: applicationCredentialFiles(ctx),
-          invocation: buildInvocation({
-            agentId: agent.id,
-            task,
-            interactive: false,
-            // The repository root, whenever the agent is standing somewhere
-            // else. That is where the skill and its reference files live.
-            readableDirs: agentCwd === ctx.root ? [] : [ctx.root],
-            // Exactly the programs this task names, plus the manifest tools
-            // it will reach for. An interpreter it cannot execute leaves it
-            // able to write instrumentation and unable to prove any of it.
-            allowedPrograms: [
-              // Every spelling the task names, not only the absolute one.
-              //
-              // The task names a service-local interpreter relatively in the
-              // command it tells the agent to run, because an absolute path
-              // under a directory with spaces and parentheses is a quoting
-              // problem the agent has to solve on the first try. A permission
-              // rule matches the start of a command literally, so allowing only
-              // the absolute path refuses exactly the command the task gave.
-              ...taskInterpreters(pythonInterpreter, ctx.root, service.path),
-              "python3",
-              "python",
-              "uv",
-              "npm",
-              "pnpm",
-              "yarn",
-              "node",
-              "ls",
-              "cat",
-              "grep",
-            ],
-          }),
+          invocation,
           task,
           // The service, not the repository root.
           //
@@ -3625,8 +3688,13 @@ const instrument: StageDefinition = {
           signal: ctx.signal,
           host: session.host,
           runProcess: deps.runProcess,
+          // Only for an agent whose output format this parser was written
+          // against. Handing it another agent's stdout would render whichever
+          // fragments happened to match its shape — a feed that is wrong is
+          // worse than a spinner that is quiet, because it reads as a record
+          // of what the agent did.
           onData:
-            feed === null
+            feed === null || invocation.activityFormat !== "claude-stream-json"
               ? undefined
               : (chunk) => {
                   for (const line of parseActivity(chunk)) {
@@ -4218,14 +4286,49 @@ const verifyTrace: StageDefinition = {
     // nothing to wait for no line is drawn at all, and a `--json` run has no
     // frame for one to sit in, so either way the gap would be a blank line with
     // nothing under it.
+    // Whether the user may end this wait early.
+    //
+    // All three conditions matter. `canArrive === false` means no wait is
+    // happening at all — the poll takes one look and returns — and offering to
+    // skip a wait that is not running would be an instruction to press a key
+    // that does nothing. `ctx.json` owns stdout for its event stream and has no
+    // human reading it. And `canPrompt` is the same answer the rest of the
+    // wizard uses for "is there somebody at a terminal": a CI job, a pipe or
+    // `--no-input` must behave exactly as it did before this existed.
+    //
+    // Deliberately not a flag. The reason to stop waiting is that the browser
+    // page is already watching for the same trace, which is a fact about a
+    // human with a browser open; a flag would also have to mean something under
+    // `--json` and in CI, where it would turn the one check that proves the
+    // instrumentation works into an opt-out — a run that reports success having
+    // verified nothing. `--trace-timeout` already serves anyone who wants a
+    // shorter wait, and it keeps a timeout a timeout.
+    const canSkip = !ctx.json && canArrive && ctx.canPrompt;
+
     let waiting: LineSpinner | null = null;
     if (!ctx.json && canArrive) {
       wizardLine(ctx, "");
       waiting = startLineSpinner({
         sink: ctx.writers.err,
-        message: `Waiting for your first trace (up to ${ctx.flags.traceTimeoutSec}s)`,
+        // One sentence with the offer appended, not two sentences that happen
+        // to share a prefix: the timeout and the wording belong to every run,
+        // and only the clause about the key is conditional.
+        message: `Waiting for your first trace (up to ${ctx.flags.traceTimeoutSec}s${canSkip ? " — Enter to stop waiting" : ""})`,
       });
     }
+
+    // The run's own cancellation and the user's "that's enough" are different
+    // events with the same effect on the poll, so the poll is given one signal
+    // that is either of them. Which of the two it was is answered by `skipped`,
+    // not by the signal: a cancelled run must still fail, and this must not.
+    const skip = new AbortController();
+    let skipped = false;
+    const stopWatching = canSkip
+      ? deps.watchForSkip(() => {
+          skipped = true;
+          skip.abort();
+        })
+      : null;
 
     let outcome: Awaited<ReturnType<typeof pollForTrace>>;
     try {
@@ -4233,13 +4336,18 @@ const verifyTrace: StageDefinition = {
         client,
         startedAt: new Date(ctx.checkpoint.startedAt),
         timeoutMs,
-        signal: ctx.signal,
+        signal: stopWatching === null ? ctx.signal : AbortSignal.any([ctx.signal, skip.signal]),
         sleep: deps.sleep,
         now: () => deps.now().getTime(),
       });
     } catch (err) {
       waiting?.stop("Stopped waiting for a trace.");
       throw err;
+    } finally {
+      // Always, and before anything below can return or throw: a listener left
+      // on a resumed `process.stdin` eats the keystrokes belonging to the two
+      // acknowledgements that close the run.
+      stopWatching?.();
     }
     // The size, whatever it is. This is the one line in the run where the
     // application's own output arrives, and the count is the one thing a list
@@ -4251,8 +4359,36 @@ const verifyTrace: StageDefinition = {
         ? `First trace received (${spanPhrase(outcome.attribution.spanCount)}).`
         : "First trace received.";
     waiting?.stop(
-      outcome.found ? received : `No trace after ${Math.round(outcome.waitedMs / 1000)}s.`,
+      outcome.found
+        ? received
+        : skipped
+          ? "Stopped waiting for your first trace."
+          : `No trace after ${Math.round(outcome.waitedMs / 1000)}s.`,
     );
+
+    // The user asked to stop waiting, and no trace had turned up by the time
+    // the poll noticed. That is a success: everything this run was asked to do
+    // is done, and the one thing left is an observation nobody can hurry.
+    //
+    // Ordered before every failure below, because each of those is a diagnosis
+    // of a wait that ran out, and this wait did not run out. The "nothing has
+    // run your application" branch needs `!canArrive`, which is never true
+    // where a skip was offered — `canArrive` is a precondition of the offer —
+    // and an un-run hand-over cannot be skipped at all.
+    //
+    // A trace that arrived in the request already in flight when the key was
+    // pressed still counts, and falls through to the normal success below:
+    // `outcome.found` is the stronger answer and the skip does not override it.
+    if (!outcome.found && skipped) {
+      // Recorded on the context rather than the checkpoint. It is a fact about
+      // how this run ended, not a durable one: `--resume` finds `verify_trace`
+      // unsatisfied (nothing wrote `ctx.trace`) and waits again, which is
+      // exactly right, and a flag persisted to disk would have to be cleared
+      // there to avoid a later run closing with a sentence about a key nobody
+      // pressed.
+      ctx.traceWaitSkipped = true;
+      return "skipped";
+    }
 
     if (!outcome.found && unrunHandover !== null) {
       // Named before "nothing ran it", because it is the cause underneath it —

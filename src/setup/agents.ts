@@ -88,14 +88,45 @@ function launchRefusal(
  * headless through install, edit, run and report asks for a writable workspace,
  * network access, a package-manager cache the agent is allowed to write, and an
  * environment this CLI controls rather than one the user's shell profile
- * re-exports over the top of. A place here is earned by a recorded run of this
- * pipeline that reached a trace, for each package manager the language has —
- * not by the agent being installable.
+ * re-exports over the top of.
+ *
+ * The two entries are not on this list on the same evidence, and the comment
+ * that used to stand here claimed otherwise. It said a place was "earned by a
+ * recorded run of this pipeline that reached a trace, for each package manager
+ * the language has". That is still the bar Claude Code cleared, and it is not
+ * the bar Codex cleared:
+ *
+ * - `claude` — recorded runs of this pipeline, through to a trace, per package
+ *   manager. The strong case, and the one the sentence above described.
+ * - `codex` — recorded runs of this pipeline on codex-cli 0.162.1, through to a
+ *   trace, for two package managers: pip into a venv for Python, and npm for
+ *   JavaScript. Each needed a setting the first invocation lacked: shell
+ *   snapshots off, so a key exported in the user's shell profile cannot replace
+ *   the one setup injects, and on the npm run a writable npm cache. Both are in
+ *   `buildInvocation` (./launch.ts), with what each fixed. Not yet run: pnpm,
+ *   yarn, bun, uv and poetry; a directory that is not a git repository; and the
+ *   browser sign-in path, which writes the key into a `.env`. Those runs also
+ *   passed `--ignore-user-config`, which setup does not, so a user's own
+ *   `config.toml` is untested as well.
+ *
+ * It is here anyway because the alternative is worse for the user it is about.
+ * A wizard that finds `codex` on PATH and offers nothing but "run it yourself"
+ * is not being careful on their behalf — it is declining to try the thing they
+ * installed, on a machine where the one agent it does offer is absent. The run
+ * stays safe to attempt rather than certain to work: the sandbox is explicit,
+ * no bypass switch is ever passed, a failure pauses the run without reverting
+ * the user's worktree, and `--no-instrument` still writes the task out for
+ * whichever agent they prefer.
+ *
+ * So the rule going forward is that an entry here carries its own basis in this
+ * comment. Promoting Codex's to the first kind takes recorded runs on the
+ * package managers still missing, not a second reading of the same
+ * documentation.
  *
  * An agent that is not on this list is still a first-class skill target, and
  * `--no-instrument` still writes the instrumentation task out for it.
  */
-const LAUNCHABLE_AGENT_IDS: readonly AgentId[] = ["claude"];
+const LAUNCHABLE_AGENT_IDS: readonly AgentId[] = ["claude", "codex"];
 
 /** {@link LAUNCHABLE_AGENT_IDS} as adapters, in the registry's stable order. */
 export const LAUNCHABLE_AGENTS: readonly AgentAdapter[] = ALL_AGENTS.filter((adapter) =>
@@ -117,8 +148,11 @@ export interface DetectAgentsOptions {
  * it only checks directories — would let setup select an agent it cannot start.
  *
  * {@link LAUNCHABLE_AGENTS} rather than every adapter the CLI knows: an agent
- * reported here becomes a run option, and offering one whose headless run has
- * not been established is the same error one step earlier.
+ * reported here becomes a run option, which is a different thing from an agent
+ * the CLI merely installs a skill for. What earns a place on that list is
+ * recorded with the list itself, entry by entry, because the two entries are
+ * not there on the same evidence and a single sentence here would have to
+ * misdescribe one of them.
  *
  * Each signal carries a human-readable reason so `setup doctor` can explain
  * itself rather than printing a bare boolean.

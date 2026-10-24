@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -14,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 /** `git status --porcelain -z` record separator. */
 const NUL = String.fromCharCode(0);
 import type { ApiClientOptions } from "../../src/api/client.js";
-import { BackendUnavailableError, SetupApiError } from "../../src/api/setup.js";
+import { BackendUnavailableError, type SetupApi, SetupApiError } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
@@ -34,6 +35,7 @@ import {
   runSetupMachine,
   uniqueKeyName,
 } from "../../src/setup/machine.js";
+import type { TraceLister } from "../../src/setup/trace.js";
 import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import { sleep } from "../../src/util/sleep.js";
@@ -5367,30 +5369,44 @@ describe("how to instrument", () => {
     expect(ctx.instrumentation?.promptPath).not.toBeNull();
   });
 
+  /** A PATH carrying real, statable agent binaries, so detection finds them. */
+  function withAgentsInstalled(...names: string[]): NodeJS.ProcessEnv {
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    for (const name of names) {
+      const binary = join(dir, "bin", name);
+      writeFileSync(binary, "#!/bin/sh\n");
+      // Executable, because that is what "installed" means: resolution checks
+      // the execute bit, so a plain file here is not an agent anyone could run.
+      chmodSync(binary, 0o755);
+    }
+    return { PATH: join(dir, "bin") };
+  }
+
   /** A PATH with a real, statable `claude` on it, so detection finds one. */
   function withClaudeInstalled(): NodeJS.ProcessEnv {
-    mkdirSync(join(dir, "bin"), { recursive: true });
-    const binary = join(dir, "bin", "claude");
-    writeFileSync(binary, "#!/bin/sh\n");
-    // Executable, because that is what "installed" means: resolution checks the
-    // execute bit, so a plain file here is not an agent anyone could run.
-    chmodSync(binary, 0o755);
-    return { PATH: join(dir, "bin") };
+    return withAgentsInstalled("claude");
   }
 
   /** Records every question, so the *number* of them can be asserted. */
   function recordingSelect(deps: SetupDeps): {
     deps: SetupDeps;
-    asked: Array<{ message: string; options: string[] }>;
+    asked: Array<{ message: string; options: string[]; labels: string[] }>;
   } {
-    const asked: Array<{ message: string; options: string[] }> = [];
+    const asked: Array<{ message: string; options: string[]; labels: string[] }> = [];
     const inner = deps.select;
     return {
       asked,
       deps: {
         ...deps,
         select: async (input) => {
-          asked.push({ message: input.message, options: input.options.map((o) => o.value) });
+          asked.push({
+            message: input.message,
+            options: input.options.map((o) => o.value),
+            // The labels as well, because with two runnable agents the value is
+            // no longer the whole of what the user reads: the option has to name
+            // which agent it means.
+            labels: input.options.map((o) => o.label),
+          });
           return inner(input);
         },
       },
@@ -5447,6 +5463,106 @@ describe("how to instrument", () => {
     expect(result.ok).toBe(true);
     const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
     expect(how?.options).toEqual(["task-file", "manual"]);
+  });
+
+  it("names each installed agent in the one question, and launches the one chosen", async () => {
+    // Two launchable agents, so the run option cannot say "a coding agent" and
+    // leave the user to find out which. One option each, each naming itself,
+    // and still no second question about which — that split is the thing this
+    // question exists to avoid.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const { deps, asked } = recordingSelect(
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: process.run,
+        env: withAgentsInstalled("claude", "codex"),
+        answers: ["agent:codex"],
+      }),
+    );
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: undefined } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    // The registry's order, so it is the same on every machine rather than a
+    // function of which binary happened to resolve first.
+    expect(how?.options).toEqual(["agent:claude", "agent:codex", "task-file", "manual"]);
+    expect(how?.labels).toEqual([
+      "Run Claude Code for me",
+      "Run Codex for me",
+      "Write the task — I'll run my own agent",
+      "Show me manual instructions",
+    ]);
+    expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
+    expect(ctx.agent?.id).toBe("codex");
+    expect(ctx.method).toBe("agent");
+
+    // Launched with Codex's own invocation, not Claude's: the headless
+    // subcommand, the sandbox that can write, and the task on stdin.
+    const launched = process.runs.find((r) => r.program === "codex");
+    expect(launched).toBeDefined();
+    expect(launched?.args[0]).toBe("exec");
+    expect(launched?.args).toContain("workspace-write");
+    expect(launched?.args.at(-1)).toBe("-");
+    expect(launched?.stdin).toContain("Instrument this service with TraceRoot");
+    expect(launched?.args.join(" ")).not.toContain("--permission-mode");
+    // And Claude Code, which is equally installed here, was never started.
+    expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+  });
+
+  it("offers only the installed one when just Codex is there", async () => {
+    // One launchable agent means one run option and no follow-up question —
+    // the same shape the single-Claude machine gets, with the other name.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const { deps, asked } = recordingSelect(
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: process.run,
+        env: withAgentsInstalled("codex"),
+        answers: ["agent:codex"],
+      }),
+    );
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: undefined } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    expect(how?.options).toEqual(["agent:codex", "task-file", "manual"]);
+    expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
+    expect(process.runs.filter((r) => r.program === "codex")).toHaveLength(1);
+  });
+
+  it("launches Codex on --agent codex without asking anything", async () => {
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const { deps, asked } = recordingSelect(
+      makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [traceRow()] }),
+        runProcess: process.run,
+        env: withAgentsInstalled("claude", "codex"),
+      }),
+    );
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "codex" } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(asked.filter((q) => q.message.includes("How should TraceRoot be added"))).toEqual([]);
+    expect(process.runs.filter((r) => r.program === "codex")).toHaveLength(1);
+    expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+    // The suite's fake agent instruments the entry point of whichever agent
+    // program is launched, and the instrument stage fails the run when the
+    // entry point still has no `initialize()` in it. So reaching `ok` already
+    // proves the fake ran for `codex`; this says it in one line rather than
+    // leaving it to be inferred from the absence of a failure.
+    expect(readFileSync(join(dir, "main.py"), "utf8")).toContain("traceroot.initialize(");
   });
 
   it("says why it does not offer an installed agent it cannot launch", async () => {
@@ -5513,6 +5629,145 @@ describe("how to instrument", () => {
 
     expect(asked.filter((q) => q.message.includes("How should TraceRoot be added"))).toEqual([]);
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(1);
+  });
+});
+
+describe("the npm cache a Codex run has to write", () => {
+  /**
+   * Where the fake npm says its cache is: outside the repository, and not
+   * `~/.npm`, so a fallback would show. Real, since setup names the real path.
+   */
+  let cacheBase: string;
+  beforeEach(() => {
+    cacheBase = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-cache-")));
+  });
+  afterEach(() => {
+    rmSync(cacheBase, { recursive: true, force: true });
+  });
+
+  /** A JavaScript service, with the lockfile that names its package manager. */
+  function nodeRepo(lockfile: string): void {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "app", dependencies: { express: "^4" } }),
+    );
+    writeFileSync(join(dir, lockfile), "{}\n");
+    writeFileSync(join(dir, "index.js"), "console.log('hi');\n");
+  }
+
+  async function runWith(agent: "claude" | "codex", entryPoint: string, npmCache: string) {
+    initGit();
+    const process = fakeRunProcess({
+      gitStatus: ["", ` M ${entryPoint}`],
+      results: { npm: { output: `${npmCache}\n` } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent } });
+    const result = await runSetupMachine(ctx, deps);
+    const cacheQueries = process.runs.filter(
+      (r) => r.program === "npm" && r.args.slice(0, 3).join(" ") === "config get cache",
+    );
+    const launched = process.runs.find((r) => r.program === agent);
+    return { result, runs: process.runs, cacheQueries, launched, stderr: plain(err.data) };
+  }
+
+  it("names npm's own cache to Codex as a directory it may write", async () => {
+    // A recorded run had `npm install` fail with EPERM on `~/.npm/_cacache`
+    // under Codex's sandbox, and nothing was instrumented until it was named.
+    nodeRepo("package-lock.json");
+    const cache = join(cacheBase, "npm-cache");
+    mkdirSync(join(cache, "_cacache"), { recursive: true });
+    writeFileSync(join(cache, "_cacache", "index"), "kept");
+    const { result, runs, cacheQueries, launched } = await runWith("codex", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(cacheQueries).toHaveLength(1);
+    // Asked where the agent will stand, since a project `.npmrc` can move it.
+    expect(cacheQueries[0]?.cwd).toBe(dir);
+    // Asked before the agent starts, so the answer can be in its argv.
+    const queried = runs.findIndex((r) => r.program === "npm");
+    expect(queried).toBeGreaterThanOrEqual(0);
+    expect(queried).toBeLessThan(runs.findIndex((r) => r.program === "codex"));
+    expect(launched?.args.slice(-3)).toEqual(["--add-dir", cache, "-"]);
+    // An existing cache is used as it is.
+    expect(readFileSync(join(cache, "_cacache", "index"), "utf8")).toBe("kept");
+  });
+
+  it("creates a cache that does not exist yet, since the sandboxed npm cannot", async () => {
+    // A fresh machine has no cache until npm's first run, which is the
+    // sandboxed one. Codex takes a missing `--add-dir` silently, and on Linux
+    // drops it, so the directory has to exist before the launch.
+    nodeRepo("package-lock.json");
+    const cache = join(cacheBase, "fresh-home", ".npm");
+    const { result, launched, stderr } = await runWith("codex", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(existsSync(cache)).toBe(true);
+    expect(launched?.args.slice(-3)).toEqual(["--add-dir", cache, "-"]);
+    expect(stderr).not.toContain("npm's cache directory");
+  });
+
+  it("launches without the cache, and says so once, when it cannot be created", async () => {
+    nodeRepo("package-lock.json");
+    // A file where a parent directory of the cache would have to be.
+    writeFileSync(join(cacheBase, "blocker"), "");
+    const cache = join(cacheBase, "blocker", ".npm");
+    const { result, launched, stderr } = await runWith("codex", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(launched?.args.at(-1)).toBe("-");
+    // One line, whole. Matched from `warning:` on, so the glyph in front of it
+    // can be whatever the terminal supports.
+    const said = stderr.split("\n").filter((line) => line.includes("npm's cache directory"));
+    expect(said).toHaveLength(1);
+    expect(said[0]?.slice(said[0].indexOf("warning:"))).toBe(
+      `warning: could not create npm's cache directory ${cache}, so Codex starts without it and \`npm install\` may fail`,
+    );
+  });
+
+  it("asks npm nothing and adds nothing for a Python service", async () => {
+    // pip needed nothing in the recorded runs.
+    pythonRepo();
+    const cache = join(cacheBase, ".npm");
+    const { cacheQueries, launched } = await runWith("codex", "main.py", cache);
+
+    expect(launched).toBeDefined();
+    expect(cacheQueries).toEqual([]);
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(existsSync(cache)).toBe(false);
+  });
+
+  it("adds nothing for a package manager no Codex run has been recorded on", async () => {
+    // pnpm keeps its store somewhere else entirely, and naming npm's cache for
+    // it would be a guess that looks like a fix.
+    nodeRepo("pnpm-lock.yaml");
+    const cache = join(cacheBase, ".npm");
+    const { cacheQueries, launched } = await runWith("codex", "index.js", cache);
+
+    expect(launched).toBeDefined();
+    expect(cacheQueries).toEqual([]);
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(existsSync(cache)).toBe(false);
+  });
+
+  it("leaves a Claude Code run on npm exactly as it was", async () => {
+    // Its recorded npm runs wrote the cache with nothing named. So it does not
+    // ask npm, creates nothing, and its argv gains nothing.
+    nodeRepo("package-lock.json");
+    const cache = join(cacheBase, ".npm");
+    const { result, cacheQueries, launched } = await runWith("claude", "index.js", cache);
+
+    expect(result.error).toBeNull();
+    expect(launched).toBeDefined();
+    expect(cacheQueries).toEqual([]);
+    expect(launched?.args).not.toContain("--add-dir");
+    expect(launched?.args.join(" ")).not.toContain(cache);
+    expect(existsSync(cache)).toBe(false);
   });
 });
 
@@ -6323,6 +6578,211 @@ describe("why no trace arrived", () => {
     expect(ctx.checkpoint.instrumentHandover).toBe("task-file");
     expect(result.ok).toBe(true);
     expect(plain(err.data)).not.toContain("nothing has run your application");
+  });
+});
+
+describe("letting the user stop waiting for the first trace", () => {
+  /** A Python service with no test or health command for setup to run. */
+  function uninstrumentable(): void {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi"]\n');
+    writeFileSync(join(dir, "main.py"), "print('hi')\n");
+  }
+
+  /** A repository whose entry point is already instrumented, so a trace could arrive. */
+  function waitable(): void {
+    pythonRepo();
+    writeFileSync(
+      join(dir, "main.py"),
+      'import traceroot\n\nif __name__ == "__main__":\n    traceroot.initialize()\n',
+    );
+  }
+
+  /** A run where no trace ever turns up, so only the waiting is under test. */
+  function traceless(options: { skip?: boolean } = {}): SetupDeps {
+    return makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      skipTraceWait: options.skip,
+    });
+  }
+
+  it("finishes the run successfully when the user stops waiting", async () => {
+    // The point of the whole change: the browser page is already watching for
+    // this trace, so a blocked terminal adds nothing a user can act on — and
+    // stopping the wait must be a finished run, not a failed one.
+    waitable();
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.trace).toBeNull();
+    expect(ctx.traceWaitSkipped).toBe(true);
+    // Said as a stop, not as a timeout: nothing ran out.
+    const said = plain(err.data);
+    expect(said).toContain("Stopped waiting for your first trace.");
+    expect(said).not.toContain("No trace after");
+    // And none of the three diagnoses of a wait that *did* run out.
+    expect(said).not.toContain("this service is not instrumented");
+    expect(said).not.toContain("nothing has run your application");
+    expect(said).not.toContain("No trace arrived within");
+  });
+
+  it("leaves nothing on the checkpoint, so --resume waits again", async () => {
+    // A skip describes how this invocation ended. Persisting it would have to
+    // be cleared on the next run, and a run that inherited it would close with
+    // a sentence about a key nobody pressed.
+    waitable();
+    const { ctx } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    expect(result.checkpoint.trace).toBeUndefined();
+    expect(JSON.stringify(result.checkpoint)).not.toContain("traceWaitSkipped");
+  });
+
+  it("offers the skip on the waiting line, where there is somebody to press it", async () => {
+    waitable();
+    const { err } = await (async () => {
+      const made = makeCtx({
+        canPrompt: true,
+        flags: { instrument: false, traceTimeoutSec: 1 },
+      });
+      await runSetupMachine(made.ctx, traceless());
+      return made;
+    })();
+
+    expect(plain(err.data)).toContain("Enter to stop waiting");
+  });
+
+  it("says nothing about a key when there is nobody at a terminal", async () => {
+    // A CI job, a pipe, `--no-input`. The offer would be an instruction to
+    // press something that is not being listened for.
+    waitable();
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    const said = plain(err.data);
+    expect(said).toContain("Waiting for your first trace");
+    expect(said).not.toContain("Enter to stop waiting");
+    // And the skip was never even offered, so the wait ran out as it always did.
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+  });
+
+  it("does not offer to skip a wait that is not happening", async () => {
+    // `canArrive === false`: the service is not instrumented and nothing can
+    // arrive, so the poll takes one look and returns. Offering to stop a wait
+    // that is not running would be an instruction to press a key that does
+    // nothing — and the short-circuit itself must survive.
+    uninstrumentable();
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    const said = plain(err.data);
+    expect(said).not.toContain("Waiting for your first trace");
+    expect(said).not.toContain("Enter to stop waiting");
+    // The hand-over's own ending, unchanged: no two-minute spinner in front of
+    // an answer that was available immediately, and a pause rather than a wait
+    // the user stopped.
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+  });
+
+  it("prefers a trace that landed while the key was being pressed", async () => {
+    // The press and the request in flight race, and the trace is the stronger
+    // answer: a run that saw one must report it rather than closing on "not
+    // seen yet" because the keystroke won by a millisecond.
+    waitable();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    let press: (() => void) | null = null;
+    deps.watchForSkip = (onSkip) => {
+      press = onSkip;
+      return () => undefined;
+    };
+    // The press lands while the response that carries the trace is in flight:
+    // the read is already answered, and the poll has not looked at it yet.
+    // Staging it any earlier would not be the race — it would be a user who
+    // stopped waiting before the trace existed, which is the case above.
+    let pressedDuringRead = false;
+    const createApi = deps.createSetupApi;
+    deps.createSetupApi = (options) => {
+      const api = createApi(options);
+      return {
+        ...api,
+        // Typed as the poll calls it: `pollForTrace` reads through
+        // `TraceLister`.
+        listTraces: async (params: Parameters<TraceLister["listTraces"]>[0]) => {
+          const response = await api.listTraces(params);
+          // The press has to land on the read that carries THIS run's trace.
+          // `listTraces` answers with the real `{ data, meta }` envelope, so
+          // measuring the envelope's own `length` was `undefined > 0` — false
+          // on every call, the key never pressed, and the test quietly became
+          // the plain success path above. Every read is the same look at the
+          // traces since setup started, so the first one that returns the
+          // trace is the read to press on.
+          if (response.data.length > 0) {
+            pressedDuringRead = true;
+            press?.();
+          }
+          return response;
+        },
+      } as SetupApi;
+    };
+
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, traceTimeoutSec: 120 },
+    });
+    const result = await runSetupMachine(ctx, deps);
+
+    // First, that the race was staged at all: without this the assertions below
+    // are the ordinary "a trace arrived" path, and the precedence they are
+    // here for is never exercised.
+    expect(pressedDuringRead).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.trace).not.toBeNull();
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+    expect(plain(err.data)).toContain("First trace received");
+  });
+
+  it("neither offers nor mentions a skip in --json", async () => {
+    // stdout belongs to the event stream there, and a machine consumer has
+    // nobody to ask. The run has to behave exactly as it did before this
+    // existed, down to the absence of a frame for the waiting line to sit in.
+    waitable();
+    const { ctx, out, err } = makeCtx({
+      json: true,
+      flags: { instrument: false, traceTimeoutSec: 1 },
+    });
+
+    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+
+    for (const stream of [out.data, err.data]) {
+      expect(stream).not.toContain("Enter to stop waiting");
+      expect(stream).not.toContain("Stopped waiting");
+      expect(stream).not.toContain("Waiting for your first trace");
+    }
+    expect(ctx.traceWaitSkipped).toBeUndefined();
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
   });
 });
 

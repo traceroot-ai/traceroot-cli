@@ -64,3 +64,81 @@ export async function discardTypeAhead(input: InputStream): Promise<void> {
   }
   input.pause();
 }
+
+/** The input side of the terminal, narrowed to what waiting on a keypress needs. */
+export interface WatchableInput extends InputStream {
+  on: (event: "data", listener: (chunk: unknown) => void) => unknown;
+  off: (event: "data", listener: (chunk: unknown) => void) => unknown;
+  isTTY?: boolean;
+}
+
+export interface WaitForEnterInput {
+  input: WatchableInput;
+  /** Called once, when the user presses Enter. Never called after `stop`. */
+  onEnter: () => void;
+}
+
+/**
+ * Lets the user end a wait by pressing Enter, and returns the function that
+ * stops listening.
+ *
+ * Enter, and line-buffered stdin, on purpose. The obvious implementation is raw
+ * mode and "press any key", and raw mode takes the terminal's own interrupt
+ * character with it: `Ctrl+C` stops being a signal and starts being a `0x03`
+ * byte this process has to recognise and re-raise itself. Getting that wrong
+ * during a two-minute wait means a user who wants out cannot get out, and a
+ * process that dies before restoring the mode leaves their shell with echo off.
+ * Line discipline costs a key the user has to look for and buys the signal back
+ * untouched — this function cannot break `Ctrl+C` because it never touches the
+ * setting that governs it.
+ *
+ * Any line counts, not just an empty one. Somebody who typed while waiting and
+ * then hit Enter has still asked to stop waiting, and reading their keystrokes
+ * to decide whether they meant it would be a worse guess than taking them at
+ * their word.
+ *
+ * Type-ahead is drained first, for the reason {@link discardTypeAhead} exists:
+ * the Enter pressed at the confirmation prompt several minutes ago is still in
+ * the tty's buffer, and attaching a reader hands it over on the next tick. That
+ * keystroke was an answer to a question that had been asked; this one is not,
+ * and a wait that skipped itself before it was ever offered would read as the
+ * feature being broken.
+ *
+ * A sink with no tty gets nothing at all: there is nobody to press anything, and
+ * resuming stdin in a pipeline would consume input that belongs to whatever is
+ * on the other end of it.
+ */
+export function waitForEnter(input: WaitForEnterInput): () => void {
+  const stream = input.input;
+  if (stream.isTTY !== true) {
+    return () => undefined;
+  }
+
+  let stopped = false;
+  const listener = (): void => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    input.onEnter();
+  };
+
+  // Drained before the listener attaches, so the backlog goes to the floor
+  // rather than to `onEnter`. Fire-and-forget: `discardTypeAhead` resumes the
+  // stream itself, and the listener below is attached after it settles.
+  void discardTypeAhead(stream).then(() => {
+    if (stopped) {
+      return;
+    }
+    stream.on("data", listener);
+    stream.resume();
+  });
+
+  return () => {
+    stopped = true;
+    stream.off("data", listener);
+    // Back to how the wizard leaves stdin between questions, so clack can
+    // attach to it cleanly for whatever is asked next.
+    stream.pause();
+  };
+}

@@ -353,6 +353,29 @@ describe("the line that closes the wizard", () => {
     expect(closingSentence({ ...base, ok: false, trace: null })).toBeNull();
   });
 
+  it("does not call a wait the user ended a pause", () => {
+    // Two endings share "ok, and no trace". One has work outstanding and the
+    // other does not, and "paused — rerun to finish" is the word for the first
+    // only: a user who stopped the wait themselves has a finished run.
+    const line = closingLine({ ...base, ok: true, trace: null }, { traceWaitSkipped: true });
+    expect(line).toContain("complete");
+    expect(line).not.toContain("paused");
+    // And it still does not claim the trace was seen.
+    expect(line).toContain("no trace seen yet");
+  });
+
+  it("ties the production sentence to the trace, not to how the wait ended", () => {
+    // The sentence below the frame is earned by an observed trace. A skipped
+    // wait has not established that the instrumentation works, which is the
+    // whole of what that sentence would be claiming — so unlike `closingLine`
+    // above, `closingSentence` takes no ending at all, and the pair below is
+    // what says the skip cannot reach it.
+    expect(closingSentence({ ...base, ok: true, trace })).toBe(
+      "You can use TraceRoot in production once TRACEROOT_API_KEY is in its environment.",
+    );
+    expect(closingSentence({ ...base, ok: true, trace: null })).toBeNull();
+  });
+
   it("does not call a cancellation a failure", () => {
     // Declining the uncommitted-changes gate is a decision the tool asked for.
     const error = new SetupError({
@@ -402,6 +425,52 @@ describe("runSetup", () => {
     expect(err.data).toContain("https://app.example.test/trace/t_1");
     expect(out.data).toBe("");
     expect(readCheckpoint(dir)?.completedStages).toContain("complete");
+  });
+
+  it("closes a skipped wait by saying where the trace will appear", async () => {
+    // The run is finished: the service is instrumented and the only unobserved
+    // fact is a trace arriving. So the closing block says where it will show up
+    // — and must not send somebody who just watched an agent instrument their
+    // service off to "finish the instrumentation task".
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(
+      join(dir, "main.py"),
+      'import traceroot\n\nif __name__ == "__main__":\n    traceroot.initialize()\n',
+    );
+    const { writers, out, err } = makeWriters();
+
+    const result = await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ instrument: false, traceTimeoutSec: 120 }),
+      writers,
+      // The wait is only offered where there is somebody to press a key.
+      canPrompt: true,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        client: fakeApiClient({ traces: [] }),
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        skipTraceWait: true,
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.trace).toBeNull();
+    const said = plain(err.data);
+    expect(said).toContain("your first trace just has not been seen yet");
+    // The UI this session belongs to, as the backend reported it — never a URL
+    // this CLI assembled, which on a self-hosted deployment 404s.
+    expect(said).toContain("It will appear here:");
+    expect(said).toContain("https://app.example.test");
+    expect(said).toContain("traceroot traces list");
+    expect(said).toContain("traceroot setup --resume");
+    // Not the sentence for a run that stopped before the instrumentation was
+    // done, which is the other way to end with no trace.
+    expect(said).not.toContain("Finish the instrumentation task");
+    // Nor the claim that the instrumentation has been shown to work.
+    expect(said).not.toContain("You can now use TraceRoot in production");
+    // Still nothing on stdout: the closing blocks live inside the frame.
+    expect(out.data).toBe("");
   });
 
   it("emits JSON events on stdout and human progress on stderr", async () => {

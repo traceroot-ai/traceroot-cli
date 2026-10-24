@@ -415,6 +415,20 @@ export interface SetupContext {
   instrumentation?: InstrumentationResult;
   application?: ApplicationVerification;
   trace?: TraceVerification;
+  /**
+   * True when the user ended the trace wait themselves and no trace had arrived.
+   *
+   * The difference between "setup stopped early and something is outstanding"
+   * and "setup finished, and the last fact is an observation nobody can hurry".
+   * Both leave {@link SetupContext.trace} undefined, so without this the
+   * closing output has to guess, and it guessed the first — sending a user who
+   * had just watched an agent instrument their service off to "finish the
+   * instrumentation task".
+   *
+   * Deliberately not on the checkpoint: it describes how this invocation ended,
+   * and `--resume` re-runs the wait rather than inheriting the decision.
+   */
+  traceWaitSkipped?: boolean;
 }
 
 export interface SetupStageOutcome {

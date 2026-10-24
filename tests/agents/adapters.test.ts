@@ -118,10 +118,12 @@ describe("agent binaries", () => {
   // stopped asking.
   it("names the binary to look for on PATH", () => {
     expect(claudeAdapter.binary).toBe("claude");
+    expect(codexAdapter.binary).toBe("codex");
   });
 
   it("leaves the binary unset for an agent setup does not launch", () => {
-    expect(codexAdapter.binary).toBeUndefined();
+    // `generic` is the tool-neutral skill target. There is no one binary behind
+    // it, so a name here would be a guess at whichever agent the user runs.
     expect(genericAdapter.binary).toBeUndefined();
   });
 });

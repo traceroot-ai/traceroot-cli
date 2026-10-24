@@ -165,7 +165,7 @@ export function registerSetup(program: Command): void {
     .allowExcessArguments(false)
     .option(
       "--agent <agent>",
-      "coding agent to run: claude; for any other agent use --no-instrument",
+      "coding agent to run: claude, codex; for any other agent use --no-instrument",
     )
     .option("--language <language>", "language to instrument: python or typescript")
     .option("--service <path>", "path of the service to instrument (disambiguates a monorepo)")
