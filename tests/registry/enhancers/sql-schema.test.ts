@@ -6,7 +6,10 @@ import { CliError, ExitCode } from "../../../src/output.js";
 import { renderSqlSchema } from "../../../src/registry/enhancers/sql-schema.js";
 import { GROUPS, PLACEMENTS } from "../../../src/registry/naming.js";
 import { createFakeFetch, errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
+import { withoutForcedColor } from "../../helpers/plainColor.js";
 import { StringSink } from "../../helpers/stringSink.js";
+
+withoutForcedColor();
 
 /** Shaped like the server's curated schema, abbreviated. */
 function makeSchema(): SqlSchema {
@@ -88,8 +91,8 @@ describe("traceroot sql schema", () => {
     const h = harness(jsonResponse(makeSchema()));
     await h.run("sql", "schema");
     expect(h.fake.calls).toHaveLength(1);
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/sql/schema");
-    expect(h.fake.calls[0].init.method?.toUpperCase() ?? "GET").toBe("GET");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sql/schema");
+    expect(h.fake.calls[0]?.init.method?.toUpperCase() ?? "GET").toBe("GET");
     expect(h.out.data).toMatch(/^TABLE\s+COLUMN\s+TYPE/);
   });
 
@@ -104,7 +107,7 @@ describe("traceroot sql schema", () => {
     };
     const h = harness(jsonResponse(result));
     await h.run("sql", "SELECT count() AS n FROM spans", "--json");
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/sql");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sql");
     expect(JSON.parse(h.out.data)).toEqual(result);
   });
 

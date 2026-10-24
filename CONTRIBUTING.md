@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## Development Requirements
 
-- Node.js 20.19+ or 22.12+ (the test toolchain needs it; the published CLI still runs on Node 20.3+ as declared in `package.json` engines)
+- Node.js 20.19+ or 22.12+ (the test toolchain needs it; the published CLI runs on Node 20.3+ as declared in `package.json` engines — except `traceroot setup`, whose prompts need 20.12+ and say so when they do not have it)
 - `npm`: Node.js package manager
 - `git`
 
@@ -31,7 +31,7 @@ Run the CLI from your local build with `node ./bin/traceroot.mjs --help`, or `np
 | Command | Description |
 |---------|-------------|
 | `npm run build` | Compile TypeScript from `src/` to `dist/`. |
-| `npm run typecheck` | Type-check the project without emitting output. |
+| `npm run typecheck` | Type-check the source and the tests without emitting output. |
 | `npm run lint` | Lint the codebase with Biome. |
 | `npm run format` | Format the codebase with Biome. Use `npm run format:check` to check without writing. |
 | `npm test` | Run the test suite with Vitest. Use `npm run test:watch` for watch mode. |

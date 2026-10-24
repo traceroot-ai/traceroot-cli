@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderDefault } from "../../src/registry/render.js";
+import { withoutForcedColor } from "../helpers/plainColor.js";
 import { StringSink } from "../helpers/stringSink.js";
+
+withoutForcedColor();
 
 function writers() {
   const out = new StringSink();

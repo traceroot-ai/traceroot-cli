@@ -46,6 +46,24 @@ describe("subcommand help: native Options vs Global Options", () => {
     });
   }
 
+  it("offers --handoff in no `--help`, setup's included", () => {
+    // Declared on the subcommand rather than the program, so a one-shot
+    // onboarding credential is not advertised by every other command, and
+    // hidden on `setup` itself while the web app prints no code to pass.
+    for (const cmd of [
+      ["setup"],
+      ["traces", "list"],
+      ["status"],
+      ["skills", "list"],
+      ["instrument"],
+    ]) {
+      const { stdout } = runCli(...cmd, "--help");
+      expect(stdout, `\`${cmd.join(" ")} --help\` does not mention --handoff`).not.toContain(
+        "--handoff",
+      );
+    }
+  });
+
   it("keeps native flags (e.g. --agent) in the command's own Options section", () => {
     const { stdout } = runCli("skills", "install", "--help");
     const beforeGlobal = stdout.split("Global Options:")[0] ?? "";

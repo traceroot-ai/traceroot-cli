@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { normalizeBaseUrl } from "../api/client.js";
 import { CliError, ExitCode, type Writers, logInfo, logWarn } from "../output.js";
+import { sleep } from "../util/sleep.js";
 import { getVersion } from "../version.js";
 
 /** The allowlisted OAuth client id for this CLI (server-side allowlist). */
@@ -45,7 +46,7 @@ export interface DeviceFlowDeps {
   fetchImpl?: typeof globalThis.fetch;
   /** Optional per-request timeout in milliseconds (each poll is one request). */
   timeoutMs?: number;
-  /** Injectable for tests; defaults to a real timer sleep. */
+  /** Injectable for tests; defaults to the shared timer in `util/sleep`. */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable for tests; defaults to `Date.now`. */
   now?: () => number;
@@ -88,7 +89,7 @@ interface TokenPollBody {
  */
 export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowResult> {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const wait = deps.sleep ?? sleep;
   const now = deps.now ?? Date.now;
   const openBrowser = deps.openBrowser ?? openBrowserForPlatform;
   const env = deps.env ?? process.env;
@@ -213,7 +214,7 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
       writers,
     );
   }
-  logInfo(`Confirm this code in your browser: ${userCode}`, writers);
+  logInfo(`Confirm this code in your browser: ${formatUserCode(userCode)}`, writers);
   logInfo(`Open ${verifyUrl}`, writers);
   let opened = false;
   try {
@@ -238,7 +239,7 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
   while (true) {
     // Sleep no longer than the time left in the window: a poll interval longer
     // than expires_in must fail at expiry, not interval-many seconds later.
-    await sleep(Math.min(intervalS * 1000, Math.max(deadline - now(), 0)));
+    await wait(Math.min(intervalS * 1000, Math.max(deadline - now(), 0)));
     // Re-check AFTER sleeping: an interval that steps past the deadline must not
     // send one more poll that could accept a token after expiry.
     if (now() >= deadline) {
@@ -292,6 +293,37 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
       res.status >= 500 ? ExitCode.network : ExitCode.auth,
     );
   }
+}
+
+/** Characters in the code the auth host issues, and where its hyphen goes. */
+const USER_CODE_LENGTH = 8;
+const USER_CODE_GROUP = 4;
+
+/**
+ * The user code as the browser shows it: `XXXX-XXXX`.
+ *
+ * Display only, and that is the whole of the contract. The hyphen is not part
+ * of the code: the raw value is what goes into the verification URL's
+ * `user_code` parameter, and the auth host stores and compares the code without
+ * it — its device-verify, device-approve and device-deny lookups strip hyphens
+ * before querying. So the separator exists for a person reading eight
+ * characters off a screen and nowhere else, which is why only the printed
+ * string goes through here.
+ *
+ * The browser grouped the characters and the terminal did not, leaving a user
+ * to work out for themselves that the two codes in front of them were the same
+ * one.
+ *
+ * Anything that is not the eight-character code this flow expects — a different
+ * length, or a code the server grouped itself — is printed exactly as it
+ * arrived. Regrouping an unfamiliar shape would put a separator somewhere the
+ * browser does not, which is the fault this fixes wearing the other hat.
+ */
+export function formatUserCode(raw: string): string {
+  if (raw.length !== USER_CODE_LENGTH || raw.includes("-")) {
+    return raw;
+  }
+  return `${raw.slice(0, USER_CODE_GROUP)}-${raw.slice(USER_CODE_GROUP)}`;
 }
 
 function asString(value: unknown): string | undefined {
@@ -388,8 +420,15 @@ export async function spawnOpener(cmd: string, args: string[]): Promise<boolean>
   }
 }
 
-/** Opens `url` with the platform opener; see {@link spawnOpener}. */
-async function openBrowserForPlatform(url: string): Promise<boolean> {
+/**
+ * Opens `url` with the platform opener; see {@link spawnOpener}.
+ *
+ * Exported so `setup` opens a browser the same way `login` does. It had its own
+ * copy, which disagreed with this one on Windows — and `cmd /c start` is the
+ * form this one deliberately avoids, for the injection reason
+ * {@link browserOpenCommand} describes.
+ */
+export async function openBrowserForPlatform(url: string): Promise<boolean> {
   const [cmd, args] = browserOpenCommand(process.platform, url);
   return spawnOpener(cmd, args);
 }

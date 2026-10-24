@@ -67,7 +67,11 @@ ${facts}
 1. **Use the installed TraceRoot skill if available.** If \`${skillPath}/SKILL.md\` exists, follow it — it is the source of truth for SDK details. (Install it with \`traceroot skills install traceroot-instrument-repo --agent ${agentId}\`.)
 2. **Detect the stack.** Confirm the language, framework, and package manager from the manifests above and the actual imports in use.
 3. **Add the TraceRoot SDK.** Python → the \`traceroot\` package; TypeScript/Node.js → \`@traceroot-ai/traceroot\` (Mastra apps → \`@traceroot-ai/mastra\`). Use the detected package manager.
-4. **Initialize auto-instrumentation as early as possible** in app startup — before the LLM/agent libraries are imported.
+4. **Initialize on the path that runs the application.** Put the credential load and \`initialize()\` where they run when the application is *run*, and not at module scope — in Python the \`if __name__ == "__main__":\` block, in Node the function the entry point calls to start itself. Module scope runs on import, and a project's test suite imports its entry point: a module that initializes on import makes every test that touches an instrumented function export a trace of its own, each one indistinguishable from the application's afterwards.
+   - The order that matters is not the import order. \`initialize()\` has to run before the first model call and before the first instrumented function runs: \`observe\` starts the SDK itself when nothing else has, and a second \`initialize()\` after that is skipped with a warning, so the integrations you named would never be applied. Auto-instrumentation patches the provider library's own methods, which works whether or not that library has already been imported — so leave its imports where they are.
+   - Two shapes cannot do this. A module another process imports in order to run it — uvicorn, gunicorn, a queue worker — has no such place, so initialize at the framework's own startup hook instead. And an application that needs its own credentials while it is still being imported has to keep the load at module scope.
+   - Whatever the shape, the run path does not on its own keep the project's tests from exporting: \`observe\` starts the SDK by itself whenever \`TRACEROOT_API_KEY\` is in the environment, however it got there. Run the project's own checks with \`TRACEROOT_ENABLED=false\` in the environment — \`TRACEROOT_ENABLED=false pytest\`, \`TRACEROOT_ENABLED=false npm test\` — so that they do not export.
+   - None of this belongs in the project's test configuration — not a \`conftest.py\`, not a fixture, not a \`pytest.ini\`. Those are the user's files, and the variable on the command line does the job without touching them.
 5. **Add manual spans** around the meaningful boundaries:
    - agents
    - tools
@@ -76,11 +80,11 @@ ${facts}
    - external API calls
    - important workflow boundaries
 6. **Preserve existing behavior.** The app must run unchanged when \`TRACEROOT_API_KEY\` is absent — warn, never crash.
-7. **Minimize changes.** Touch the fewest files needed; do not refactor unrelated code.
+7. **Cover the functions this repository's own code calls.** Where this application runs its own tool loop — reads the tool calls out of the model's reply and dispatches to its own functions — each of those functions gets a span, and so does the step that dispatches between them. Where a tool is only registered, passed in a \`tools=[…]\` list or declared with the framework's own decorator, the framework owns the call and its integration already emits a span per execution, so decorating it reports one call as two. The question is answerable from the source: does a line in this repository call this function? **If you cannot tell, leave it undecorated** — a span you left out reads as an absence in the trace, which is recoverable, while a doubled span misreports what the application did. Do not refactor unrelated code.
 8. **Never print or hardcode API keys.** Do not write the literal key into source or echo it back.
 9. **Read credentials from the environment/config** (\`TRACEROOT_API_KEY\`, optional \`TRACEROOT_HOST_URL\`) — never from inline literals.
-10. **Run the existing tests or a smoke check** to confirm nothing broke.
-11. **Verify with the TraceRoot CLI** after running the app/tests:
+10. **Run the existing tests or a smoke check with \`TRACEROOT_ENABLED=false\`** in front of the command, to confirm nothing broke without sending the tests' traces to the project.
+11. **Verify with the TraceRoot CLI** after running the app itself — the one run here with TraceRoot on:
     - \`traceroot status\`
     - \`traceroot traces list --limit 5\`
     - \`traceroot traces get <trace-id>\`

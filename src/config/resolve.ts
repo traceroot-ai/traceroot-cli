@@ -87,8 +87,12 @@ function normalizeHostUrl(value: string): string {
  * the UI yields `TRACEROOT_API_KEY=tr_...`; if a user pastes that whole string
  * (e.g. into `--api-key`), strip the `TRACEROOT_API_KEY=` (optionally
  * `export `-prefixed) and any surrounding quotes so the bare key is used.
+ *
+ * Exported because the resolution chain is not the only place a key is typed:
+ * `setup`'s paste prompt takes the same string from the same clipboard and owes
+ * the user the same tolerance.
  */
-function normalizeApiKey(value: string): string {
+export function normalizeApiKey(value: string): string {
   let key = value.trim();
   const assignment = key.match(/^(?:export\s+)?TRACEROOT_API_KEY\s*=\s*(.*)$/i);
   if (assignment?.[1] !== undefined) {

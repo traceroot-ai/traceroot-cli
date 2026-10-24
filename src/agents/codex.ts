@@ -23,6 +23,10 @@ function codexHome(): string {
  */
 export const codexAdapter: AgentAdapter = {
   id: "codex",
+  // The launcher probes PATH through this field, so without it setup reports
+  // Codex as not runnable however it is installed and the run option it is
+  // meant to offer never appears.
+  binary: "codex",
   displayName: "Codex",
   getSkillInstallPath(_cwd: string, skillName: string): string {
     return join(codexHome(), SKILLS_SUBDIR, skillName);

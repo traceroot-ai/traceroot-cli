@@ -63,7 +63,7 @@ describe("requireApiClient", () => {
     const ctx = makeContext(keyCredential("tr_present"), "https://h", 5000);
     let captured: RequestInit | undefined;
     const original = globalThis.fetch;
-    globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       captured = init;
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
@@ -108,7 +108,7 @@ describe("requireAuthedClient (session)", () => {
   it("mints via the auth host and sends the JWT (not the session token) on reads", async () => {
     const calls: Array<{ url: string; auth: string | null }> = [];
     const original = globalThis.fetch;
-    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       calls.push({ url: String(url), auth: headers.get("authorization") });
       if (String(url).endsWith("/api/cli/token")) {
