@@ -82,7 +82,7 @@ import {
   normalizeLanguage,
   serviceEntryPath,
 } from "./stack.js";
-import { buildSetupTask, manualInstructions, parseCompletion, taskInterpreters } from "./task.js";
+import { buildSetupTask, manualInstructions, parseCompletion, taskPrograms } from "./task.js";
 import { pollForTrace, spanPhrase } from "./trace.js";
 import { discardTypeAhead, waitForEnter } from "./tty.js";
 import type {
@@ -3641,7 +3641,9 @@ const instrument: StageDefinition = {
         // it will reach for. An interpreter it cannot execute leaves it
         // able to write instrumentation and unable to prove any of it.
         allowedPrograms: [
-          // Every spelling the task names, not only the absolute one.
+          // Every program the task names, in every spelling it names it in —
+          // read off the task rather than restated here, so the command the
+          // agent is told to run cannot stop being a command it may run.
           //
           // The task names a service-local interpreter relatively in the
           // command it tells the agent to run, because an absolute path
@@ -3649,7 +3651,14 @@ const instrument: StageDefinition = {
           // problem the agent has to solve on the first try. A permission
           // rule matches the start of a command literally, so allowing only
           // the absolute path refuses exactly the command the task gave.
-          ...taskInterpreters(pythonInterpreter, ctx.root, service.path),
+          ...taskPrograms({
+            service,
+            root: ctx.root,
+            sdk,
+            pythonInterpreter,
+            // The same value the task is built with, a few lines above.
+            verifyCommand: service.testCommand,
+          }),
           "python3",
           "python",
           "uv",

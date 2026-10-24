@@ -21,9 +21,26 @@ import {
   resolveNpmCacheDir,
 } from "../../src/setup/launch.js";
 import { makeSecret } from "../../src/setup/secret.js";
-import { buildSetupTask, taskInterpreters } from "../../src/setup/task.js";
+import { buildSetupTask, taskPrograms } from "../../src/setup/task.js";
 import type { DetectedService } from "../../src/setup/types.js";
 import { fakeRunProcess } from "./helpers.js";
+
+/**
+ * The rules `--allowedTools` carries, as argv presents them.
+ *
+ * The flag is variadic, so its value is every token up to the next flag — which
+ * is also the reason the tests below read it as a slice rather than looking for
+ * a single argument.
+ */
+function allowRules(args: readonly string[]): string[] {
+  const at = args.indexOf("--allowedTools");
+  if (at === -1) {
+    return [];
+  }
+  const rest = args.slice(at + 1);
+  const end = rest.findIndex((arg) => arg.startsWith("-"));
+  return end === -1 ? [...rest] : rest.slice(0, end);
+}
 
 describe("reaching a skill that lives outside the working directory", () => {
   it("passes each readable directory as its own --add-dir", () => {
@@ -273,6 +290,8 @@ describe("Claude Code, which the writable directories do not reach", () => {
       "--add-dir",
       "/repo",
       "--allowedTools",
+      "Read(**)",
+      "Edit(**)",
       "Bash(python3:*)",
       "Bash(TRACEROOT_ENABLED=false python3:*)",
       "-p",
@@ -487,31 +506,109 @@ describe("letting the agent run what it was told to run", () => {
     expect(args).toContain(`Bash(${assignment} ${program}:*)`);
   });
 
-  it("adds no allowlist flag when there is nothing to allow", () => {
+  it("still allows the file tools when there is no program to allow", () => {
+    // The flag used to be dropped entirely here, which tied the agent's ability
+    // to edit the service to whether that service happened to come with an
+    // interpreter worth naming.
     const { args } = buildInvocation({ agentId: "claude", task: "t", interactive: false });
-    expect(args).not.toContain("--allowedTools");
+    expect(args).toContain("--allowedTools");
+    expect(allowRules(args)).toEqual(["Read(**)", "Edit(**)"]);
+  });
+});
+
+describe("letting the agent edit the service it was pointed at", () => {
+  it("permits the file tools, not only the named programs", () => {
+    // Regression. Two consecutive live runs ended identically: `Claude Code
+    // finished.`, exit 0, the SDK installed into the service's `.venv`, and
+    // `main.py` untouched — an agent that had run Bash and never changed a
+    // file. Every command it needed was pinned by a rule; the one capability
+    // the whole stage exists for was the only thing in the argv that nothing
+    // stated, and it held only while `--permission-mode acceptEdits` did.
+    //
+    // Asserting that the `Bash(...)` rules are present is what let that
+    // through, so this asserts the part whose absence was the failure — and
+    // asserts the programs in the same breath, so the fix cannot be read as
+    // trading one for the other.
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: ["./.venv/bin/python", "python3"],
+    });
+    const rules = allowRules(args);
+    // `Edit(path)` is the matcher that covers Edit, Write and NotebookEdit.
+    // There is no `Write(path)` rule to write: one written for `Write` is
+    // accepted and never consulted.
+    expect(rules).toContain("Edit(**)");
+    expect(rules).toContain("Read(**)");
+    expect(rules).toContain("Bash(./.venv/bin/python:*)");
+    expect(rules).toContain("Bash(python3:*)");
+  });
+
+  it("permits them in an interactive run too", () => {
+    const rules = allowRules(
+      buildInvocation({
+        agentId: "claude",
+        task: "t",
+        interactive: true,
+        allowedPrograms: ["python3"],
+      }).args,
+    );
+    expect(rules).toContain("Edit(**)");
+    expect(rules).toContain("Read(**)");
+  });
+
+  it("keeps the file rules scoped to the service and never restricts the toolset", () => {
+    const { args } = buildInvocation({
+      agentId: "claude",
+      task: "t",
+      interactive: false,
+      allowedPrograms: ["python3"],
+    });
+    // `**` anchors at the working directory, which is the service. A bare
+    // `Edit` or `Write` would pre-approve a write anywhere on the disk —
+    // wider than the `acceptEdits` mode these rules exist to back up.
+    expect(args).not.toContain("Edit");
+    expect(args).not.toContain("Write");
+    expect(args).not.toContain("NotebookEdit");
+    // `--allowedTools` pre-approves and takes nothing away. `--tools` is the
+    // flag that would cut the agent down to a list, and it is never passed.
+    expect(args).not.toContain("--tools");
   });
 });
 
 describe("the interpreter the task recommends and the one the agent may run", () => {
   const ROOT = "/repo";
   const SERVICE_PATH = "api";
+  const SDK = { package: "traceroot", version: "1.2.3", source: "registry" } as const;
 
-  function task(pythonInterpreter: string | null): string {
+  /** A Python service on pip unless a case says otherwise. */
+  function service(overrides: Partial<DetectedService> = {}): DetectedService {
+    return {
+      path: SERVICE_PATH,
+      language: "python",
+      framework: null,
+      entryPoint: "main.py",
+      packageManager: "pip",
+      testCommand: null,
+      evidence: [],
+      ...overrides,
+    } as unknown as DetectedService;
+  }
+
+  function task(
+    pythonInterpreter: string | null,
+    overrides: Partial<DetectedService> = {},
+  ): string {
+    const detected = service(overrides);
     return buildSetupTask({
-      service: {
-        path: SERVICE_PATH,
-        language: "python",
-        framework: null,
-        entryPoint: "main.py",
-        packageManager: "pip",
-        testCommand: null,
-        evidence: [],
-      } as unknown as DetectedService,
+      service: detected,
       root: ROOT,
-      sdk: { package: "traceroot", version: "1.2.3", source: "registry" },
+      sdk: SDK,
       skillPath: ".claude/skills/traceroot-instrument-repo",
-      verifyCommand: null,
+      // From the service, as the instrument stage takes it, so a fixture's
+      // check reaches the task and the rules by the same route.
+      verifyCommand: detected.testCommand,
       interactive: false,
       existingInstrumentation: [],
       pythonInterpreter,
@@ -519,12 +616,24 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     });
   }
 
-  function rules(pythonInterpreter: string | null): string[] {
+  function rules(
+    pythonInterpreter: string | null,
+    overrides: Partial<DetectedService> = {},
+  ): string[] {
+    const detected = service(overrides);
     return buildInvocation({
       agentId: "claude",
       task: "t",
       interactive: false,
-      allowedPrograms: taskInterpreters(pythonInterpreter, ROOT, SERVICE_PATH),
+      // The call the instrument stage makes, so a program the task names is
+      // asserted against the rules the launched agent is actually given.
+      allowedPrograms: taskPrograms({
+        service: detected,
+        root: ROOT,
+        sdk: SDK,
+        pythonInterpreter,
+        verifyCommand: detected.testCommand,
+      }),
     }).args;
   }
 
@@ -540,6 +649,37 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     return (command as string).split(" ")[0];
   }
 
+  /** The same, for the one command step 2 of the task hands over in full. */
+  function programInInstallCommand(text: string): string {
+    const command = /### 2\. Install the SDK[\s\S]*?```bash\n([^\n]+)\n```/.exec(text)?.[1];
+    expect(command).toBeDefined();
+    return (command as string).split(" ")[0];
+  }
+
+  /**
+   * The interpreter word step 2's pip command starts with, as written — quotes,
+   * escapes and any space in the path included, which `split(" ")` would cut.
+   */
+  function interpreterInPipInstall(text: string): string {
+    const command = /### 2\. Install the SDK[\s\S]*?```bash\n([^\n]+)\n```/.exec(text)?.[1] ?? "";
+    const at = command.indexOf(" -m pip install ");
+    expect(at, "step 2 is a pip install through a named interpreter").toBeGreaterThan(0);
+    return command.slice(0, at);
+  }
+
+  /** And for the check the task tells the agent to run once, when one exists. */
+  /**
+   * How the check in step 5 starts, as a rule has to name it: the
+   * `TRACEROOT_ENABLED=false` the task puts in front of it, then the program.
+   */
+  function programInCheckCommand(text: string): string {
+    const command = /1\. Run `([^`]+)` once and confirm it passes\./.exec(text)?.[1];
+    expect(command).toBeDefined();
+    const [assignment, program] = (command as string).split(" ");
+    expect(assignment).toBe("TRACEROOT_ENABLED=false");
+    return `${assignment} ${program}`;
+  }
+
   it("allows the relative spelling the run command uses for a virtualenv in the tree", () => {
     const interpreter = "/repo/api/.venv/bin/python";
     const named = programInRunCommand(task(interpreter));
@@ -547,9 +687,25 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     // the one a caller has in hand, and it is not the one the task gives.
     expect(named).not.toBe(interpreter);
     expect(rules(interpreter)).toContain(`Bash(${named}:*)`);
-    // And the absolute path as well: the install step names it that way,
-    // quotes included, because there the quoting is written for the agent.
+    // And the install step's spelling: absolute, and single-quoted for the
+    // shell. A rule matches the start of a command literally, so the quotes are
+    // part of what it has to name — the unquoted rule does not cover it.
+    const installed = interpreterInPipInstall(task(interpreter));
+    expect(installed).toBe(`'${interpreter}'`);
+    expect(rules(interpreter)).toContain(`Bash(${installed}:*)`);
+    // The unquoted absolute path stays allowed beside it.
     expect(rules(interpreter)).toContain(`Bash(${interpreter}:*)`);
+  });
+
+  it("allows the quoted interpreter whole when its path has a space or a quote", () => {
+    // A repository path routinely contains a space, and the pip command closes
+    // and re-opens its quoting around a `'`. Split on whitespace, the word is
+    // cut in two and the rule names a path that is not the interpreter.
+    const interpreter = "/opt/it's here/bin/python3";
+    const installed = interpreterInPipInstall(task(interpreter));
+    expect(installed).toContain(" ");
+    expect(installed).toContain("'\\''");
+    expect(rules(interpreter)).toContain(`Bash(${installed}:*)`);
   });
 
   it("allows the absolute spelling when the interpreter sits outside the repository", () => {
@@ -566,6 +722,82 @@ describe("the interpreter the task recommends and the one the agent may run", ()
     const named = /run the application with `([^`]+)` throughout/.exec(task(null))?.[1];
     expect(named).toBeDefined();
     expect(rules(null)).toContain(`Bash(${named}:*)`);
+  });
+
+  it("allows the program the run command names for a TypeScript entry point", () => {
+    // `npx tsx <entry>`, which is the run line for 8 of the 13 entry points in
+    // `NODE_ENTRY_POINTS`. Unallowed, a headless run has nobody to ask, so the
+    // call is refused: the service is instrumented, never once executed, and
+    // the trace wait ends up reporting that the instrumented path never ran —
+    // true, and the symptom rather than the denial.
+    const ts: Partial<DetectedService> = {
+      language: "typescript",
+      entryPoint: "src/index.ts",
+      packageManager: "npm",
+    };
+    const named = programInRunCommand(task(null, ts));
+    expect(named).toBe("npx");
+    expect(rules(null, ts)).toContain("Bash(npx:*)");
+  });
+
+  it("allows the package manager the install step names", () => {
+    // Step 2 is the first command of the run and it is handed over in full,
+    // for whichever manager was detected. Two that no rule used to cover.
+    const poetry: Partial<DetectedService> = { packageManager: "poetry" };
+    expect(programInInstallCommand(task(null, poetry))).toBe("poetry");
+    expect(rules(null, poetry)).toContain("Bash(poetry:*)");
+
+    const bun: Partial<DetectedService> = {
+      language: "typescript",
+      entryPoint: "index.js",
+      packageManager: "bun",
+    };
+    expect(programInInstallCommand(task(null, bun))).toBe("bun");
+    expect(rules(null, bun)).toContain("Bash(bun:*)");
+  });
+
+  it("allows the check the task tells the agent to run once", () => {
+    // Step 5 is handed over in full, like step 2, and `pytest` is the bare
+    // string `detectStack` produces for a Python project on pip or Poetry. A
+    // refused check costs the agent the single attempt the task is written to
+    // buy it, and its recovery — `./.venv/bin/python -m pytest` — only works
+    // where a virtualenv was found.
+    //
+    // The task hands it over behind `TRACEROOT_ENABLED=false`, so the suite
+    // sends no traces of its own, and the prefixed rule `buildInvocation`
+    // writes for every program is the one that matches — beside the file rules
+    // this pull request adds, not instead of them.
+    const pip: Partial<DetectedService> = { testCommand: "pytest" };
+    expect(programInCheckCommand(task(null, pip))).toBe("TRACEROOT_ENABLED=false pytest");
+    expect(rules(null, pip)).toContain("Bash(TRACEROOT_ENABLED=false pytest:*)");
+    expect(rules(null, pip)).toContain("Bash(pytest:*)");
+    expect(rules(null, pip)).toContain("Edit(**)");
+
+    // `uv` runs it through its own environment, which was already allowed —
+    // asserted so the two spellings cannot be mistaken for one case.
+    const uv: Partial<DetectedService> = { packageManager: "uv", testCommand: "uv run pytest" };
+    expect(programInCheckCommand(task(null, uv))).toBe("TRACEROOT_ENABLED=false uv");
+    expect(rules(null, uv)).toContain("Bash(TRACEROOT_ENABLED=false uv:*)");
+  });
+
+  it("allows no check when none was detected", () => {
+    // There the task tells the agent to find the project's own check, which is
+    // a command nobody here can name — so there is nothing to allow, and an
+    // empty rule would be a rule matching everything.
+    const named = rules(null);
+    expect(named).not.toContain("Bash(:*)");
+    expect(named).not.toContain("Bash(pytest:*)");
+  });
+
+  it("names no program the task did not, and never widens to every command", () => {
+    // Scoped per run: a Python service's rules must not carry the Node
+    // manager's program, and the whole point of an allow list is lost if a
+    // bare `Bash(*)` ever reaches the argv.
+    const python = rules("/repo/api/.venv/bin/python");
+    expect(python).not.toContain("Bash(bun:*)");
+    expect(python).not.toContain("Bash(npx:*)");
+    expect(python).not.toContain("Bash(*)");
+    expect(python).not.toContain("Bash");
   });
 });
 

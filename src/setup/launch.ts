@@ -117,6 +117,32 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
   // recipe, comes back "requested permissions ... but you haven't granted it
   // yet" and the agent falls back to guessing from the summary.
   const extraDirs = (input.readableDirs ?? []).flatMap((dir) => ["--add-dir", dir]);
+  // The allow list, which pre-approves rather than restricts.
+  //
+  // `--allowedTools` names the calls that run without asking; it does not take
+  // anything away. Claude Code's own help says "list of tool names to allow"
+  // and its CLI reference says, of this flag, "To restrict which tools are
+  // available, use `--tools` instead" — so the agent keeps its whole toolset
+  // whatever is listed here, and `--tools` is deliberately never passed.
+  //
+  // Two kinds of rule, because this run needs two different things approved and
+  // the mode on its own covers only one of them.
+  //
+  // `Edit(**)` and `Read(**)` — the files. `acceptEdits` already accepts edits,
+  // so this is not what makes editing possible; it is what stops editing from
+  // being the one load-bearing capability in the run that nothing states. Every
+  // command the agent must run is pinned by a rule below, while its ability to
+  // change a line of the service rested entirely on a mode staying in force —
+  // and a mode is the part of this a user's own settings can move. Said as a
+  // rule it survives that, and the regression test can assert it.
+  //
+  // Path-scoped on purpose, and `**` anchors at the working directory: setup
+  // starts the agent in the service, so these grant the service and nothing
+  // above it. Bare `Edit`/`Write` would approve a write anywhere on the disk,
+  // which is wider than the mode they are backing up. A path rule written for
+  // `Edit` is the documented way to cover `Write` and `NotebookEdit` too —
+  // there is no `Write(…)` matcher — so one rule says "the files here".
+  //
   // `Bash(prog:*)` — one allow rule per program the agent has to execute, and a
   // second with `TRACEROOT_ENABLED=false` in front of it.
   //
@@ -136,14 +162,18 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
   // nothing the bare rule does not, beyond that one variable set to `false`:
   // the program is still named after the assignment, and the assignment is
   // never a rule on its own, which would let anything at all follow it.
+  //
+  // Unconditional, where the Bash rules are not. There is always a service to
+  // edit; there is not always an interpreter to name, and hanging the file rules
+  // off `allowedPrograms` being non-empty would tie the agent's ability to edit
+  // to whether this particular service happened to come with one.
   const allowed = input.allowedPrograms ?? [];
-  const allowRules =
-    allowed.length > 0
-      ? [
-          "--allowedTools",
-          ...allowed.flatMap((p) => [`Bash(${p}:*)`, `Bash(${TRACEROOT_OFF} ${p}:*)`]),
-        ]
-      : [];
+  const allowRules = [
+    "--allowedTools",
+    "Read(**)",
+    "Edit(**)",
+    ...allowed.flatMap((p) => [`Bash(${p}:*)`, `Bash(${TRACEROOT_OFF} ${p}:*)`]),
+  ];
 
   switch (agentId) {
     case "claude":
@@ -285,10 +315,17 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //
       // NOT mirrored, because the mechanism does not exist on this side:
       //
-      //   `allowedPrograms` — Codex has no per-program allow list. Claude needs
-      //   one because `acceptEdits` accepts edits and refuses execution; under
-      //   `workspace-write` Codex runs commands inside the sandbox instead, so
-      //   the thing those rules buy is already the default here.
+      //   The whole allow list — the `Bash(prog:*)` rules and the `Edit(**)` and
+      //   `Read(**)` rules alike. Codex has no per-tool allow list of any kind:
+      //   `codex exec --help` offers no `--allowed-tools`, and what the agent may
+      //   touch is set by `-s, --sandbox`, whose values are `read-only`,
+      //   `workspace-write` and `danger-full-access`. Claude needs the rules
+      //   because its permissions are per tool and its mode covers only some of
+      //   them; `--sandbox workspace-write` below grants reads, writes and
+      //   execution across the workspace in one, so there is nothing left for a
+      //   rule to add. Whether the agent stops to ask before touching any of it
+      //   is a separate control, and the `approval_policy` override above is
+      //   where this launch settles that one.
       //
       //   `readableDirs` — Claude's `--add-dir` exists because Claude Code
       //   scopes file *reads* to the working directory and the skill installs

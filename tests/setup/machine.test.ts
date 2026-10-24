@@ -3675,6 +3675,57 @@ describe("stack and agent selection", () => {
     expect(named).not.toBe(join(dir, ".venv", "bin", "python"));
     expect(launch?.args).toContain(`Bash(${named}:*)`);
   });
+
+  it("permits the program the task names for a TypeScript service as well", async () => {
+    // The same guarantee on the stack the end-to-end run never exercised. A
+    // `.ts` entry point's run line is `npx tsx <entry>`, and `npx` was not on
+    // the list: in a headless run there is nobody to ask, so every attempt to
+    // run the service would be refused and the agent would exit 0 having
+    // instrumented the code and never once executed it.
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { next: "^14" } }));
+    writeFileSync(join(dir, "index.ts"), "export {};\n");
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M index.ts"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    const named = /run it with: `([^` ]+)/.exec(launch?.stdin ?? "")?.[1];
+    expect(named).toBe("npx");
+    expect(launch?.args).toContain("Bash(npx:*)");
+  });
+
+  it("permits the check the task told the agent to run once", async () => {
+    // The third command the task hands over in full. `pythonRepo` declares
+    // pytest, which is what makes `detectStack` name the bare string `pytest`
+    // here — and the allow rule has to come from the same value the task was
+    // built with, which only a real run can show.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    // Behind the `TRACEROOT_ENABLED=false` the task puts in front of it, which
+    // is why the prefixed rule is the one that has to be there.
+    const named = /1\. Run `(TRACEROOT_ENABLED=false [^` ]+)/.exec(launch?.stdin ?? "")?.[1];
+    expect(named).toBe("TRACEROOT_ENABLED=false pytest");
+    expect(launch?.args).toContain(`Bash(${named}:*)`);
+    expect(launch?.args).toContain("Bash(pytest:*)");
+  });
 });
 
 describe("failure handling", () => {
