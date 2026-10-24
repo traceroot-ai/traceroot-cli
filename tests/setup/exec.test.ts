@@ -505,13 +505,16 @@ describe("resolving what to spawn on Windows", () => {
   it("ignores a shim sitting in the repository rather than on the child's PATH", () => {
     // `CreateProcess` searches the current directory, which here is the
     // customer's repository: an `npm.cmd` checked into it must never be run in
-    // preference to the real one. Nothing on PATH answers, so the name is
-    // passed through and the spawn reports the ENOENT it always did.
-    expect(onWindows("npm", ["test"], ["C:\\repo\\npm.cmd"])).toEqual({
-      program: "npm",
-      args: ["test"],
-      windowsVerbatimArguments: false,
+    // preference to the real one. Nothing on PATH answers, so nothing is
+    // spawned: handing Node the bare name would let its own search find it.
+    const target = resolveSpawnTarget("npm", ["test"], {
+      platform: "win32",
+      env: { Path: `${NODEJS};C:\\Windows\\system32`, PATHEXT: ".exe;.cmd", ComSpec: COMSPEC },
+      cwd: "C:\\repo",
+      isFile: (path) => path.toLowerCase() === "c:\\repo\\npm.cmd",
     });
+
+    expect(target).toBe(null);
   });
 
   it("searches the child's own PATH, not this process's", () => {

@@ -303,10 +303,12 @@ function resolveWindowsProgram(
  * A bare name is resolved against PATH × PATHEXT here rather than left to the
  * spawn, because Node's own search on Windows looks in the child's working
  * directory first, and that directory is the customer's repository: a shim
- * checked into it must never be run in preference to the real one. The search
- * uses the child's PATH, not this process's, because the caller composes that
- * PATH to decide what resolves: a virtualenv prepended so `pytest` is the one
- * inside it is exactly why a caller composes that environment at all.
+ * checked into it must never be run in preference to the real one. A name
+ * nothing on PATH answers to therefore returns null, and the caller reports a
+ * failed spawn, rather than reaching Node's search at all. The search uses the
+ * child's PATH, not this process's, because the caller composes that PATH to
+ * decide what resolves: a virtualenv prepended so `pytest` is the one inside it
+ * is exactly why a caller composes that environment at all.
  *
  * A name that resolves to a batch shim is then spawned through `ComSpec` with
  * `/d /s /c` and a command line built here, because Node refuses to start one
@@ -331,9 +333,10 @@ export function resolveSpawnTarget(
   const env = lookup.env ?? process.env;
   const resolved = resolveWindowsProgram(program, env, lookup.cwd, lookup.isFile ?? isRegularFile);
   if (resolved === null) {
-    // Nothing on PATH answers to it. Passed through so the spawn reports the
-    // ENOENT it always did, rather than this inventing a different failure.
-    return unchanged;
+    // Nothing on PATH answers to it. Refused rather than passed through: given
+    // the bare name, Node's own search tries the repository first, and would
+    // run the very shim the search above exists to skip.
+    return null;
   }
   if (!BATCH_EXTENSIONS.has(windowsPath.extname(resolved).toLowerCase())) {
     return { program: resolved, args, windowsVerbatimArguments: false };
@@ -409,7 +412,7 @@ export const runProcess: RunProcess = (options) =>
       cwd: options.cwd,
     });
     if (target === null) {
-      // Refused rather than approximated: see `CMD_UNSAFE_ARGUMENT`. Reported as a failed
+      // Refused rather than approximated: see `resolveSpawnTarget`. Reported as a failed
       // spawn, which is what it is — the command was never run.
       return resolve(spawnFailure());
     }
@@ -586,7 +589,34 @@ export const runProcess: RunProcess = (options) =>
       child.stdin?.end(options.stdin);
     }
 
-    child.on("error", () => finish(127, true));
+    child.on("error", () => {
+      if (!hasProcess()) {
+        // A failure to start. `spawn` reports EACCES, EAGAIN, EMFILE, ENFILE
+        // and ENOENT on this event rather than throwing, and the child it hands
+        // back for those never gets a pid — which is what tells them apart from
+        // everything below.
+        finish(127, true);
+        return;
+      }
+      // This child started, so whatever went wrong is not a failure to start.
+      // Node emits `error` for a `kill` the kernel refused as well — EPERM for
+      // a child that re-execed something setuid, say — and the timeout and
+      // abort paths here both kill. Recording that as a spawn failure told the
+      // user their command was not installed while it was still running.
+      if (exited) {
+        // `exit` has already fired and the real status is on its way out
+        // through the drain path below. Settling here would replace it with a
+        // failure that did not happen.
+        return;
+      }
+      // Still running, and now known to be unsignallable: `exit` is the only
+      // other way out of this promise, so settling is what keeps a child that
+      // cannot be stopped from hanging the run. `timedOut` still says why the
+      // signal was sent, and `spawnFailed` stays false, so no caller reports a
+      // command that never ran. The escalation to SIGKILL is already queued and
+      // may still land.
+      finish(1);
+    });
     child.on("exit", (code, signalName) => {
       exited = true;
       const status = statusFor(code, signalName);
