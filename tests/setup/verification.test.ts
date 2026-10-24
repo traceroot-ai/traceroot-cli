@@ -8,13 +8,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ExitCode } from "../../src/output.js";
 import type { RunProcessOptions, RunProcessResult } from "../../src/setup/exec.js";
 import { makeSecret } from "../../src/setup/secret.js";
 import { pollForTrace, spanPhrase } from "../../src/setup/trace.js";
-import { verifyApplication } from "../../src/setup/verify.js";
+import { runBaselineCheck, verifyApplication } from "../../src/setup/verify.js";
 import { fakeRunProcess } from "./helpers.js";
 
 const KEY = "tr-a-long-enough-value";
@@ -79,6 +79,31 @@ describe("running the project's own check", () => {
     expect(result.verification.passed).toBe(true);
     // The switch is the child's. The CLI's own environment keeps its key.
     expect(parentEnv.TRACEROOT_API_KEY).toBe(KEY);
+  });
+
+  it("puts the virtualenv on PATH for the check, as for the baseline", async () => {
+    // `detect_stack` names the project's check the way the project documents it
+    // — `pytest`, not `.venv/bin/pytest` — and that command exists only inside
+    // the virtualenv. The baseline was given the virtualenv and the
+    // verification was not, so a project whose check is a repo-local `pytest`
+    // measured its baseline fine and then ended the run, after the application
+    // had been instrumented correctly, on "`pytest` could not be run".
+    const { run, runs } = fakeRunProcess();
+    await verifyApplication({
+      command: "pytest",
+      cwd: "/repo/api",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: [],
+      interpreter: "/repo/api/.venv/bin/python",
+      runProcess: run,
+    });
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.env.PATH).toBe(`/repo/api/.venv/bin${delimiter}/usr/bin`);
+    // And the virtualenv changes nothing about TraceRoot being off.
+    expect("TRACEROOT_API_KEY" in (runs[0]?.env ?? {})).toBe(false);
+    expect(runs[0]?.env.TRACEROOT_ENABLED).toBe("false");
   });
 
   it("reports a failing check with its output", async () => {
@@ -148,10 +173,38 @@ describe("proving the application runs without the credential", () => {
     });
 
     expect(result.verification.passed).toBe(false);
+    // No baseline was taken, so this run cannot say the instrumentation is
+    // why: with one run, and that one with TraceRoot off, "passed with the key
+    // and broke without it" is no longer something it observed. The next test
+    // is the case where it can.
+    expect(result.verification.outcome).toBe("inconclusive");
     expect(result.failure?.output).toContain("TRACEROOT_API_KEY is not set");
     // Gone for the only run there is.
     expect(fileWasThere).toEqual([false]);
     expect(result.withheld).toEqual([file]);
+  });
+
+  it("blames the instrumentation for it when the check passed beforehand", async () => {
+    // The agent route measures the check before anything is edited. A suite
+    // that passed then and fails with TraceRoot off now is an application that
+    // came to depend on TraceRoot being configured, which is the regression
+    // this run exists to stop.
+    const { file } = repoWithCredentialFile();
+    const { run } = appThatLoadsTheCredentialFile(file);
+
+    const result = await verifyApplication({
+      command: "npm test",
+      baseline: { ran: true, exitCode: 0, durationMs: 10 },
+      cwd: "/repo",
+      parentEnv: {},
+      credential: makeSecret(KEY),
+      credentialFiles: [file],
+      interpreter: null,
+      runProcess: run,
+    });
+
+    expect(result.verification.outcome).toBe("failed");
+    expect(result.failure?.output).toContain("TRACEROOT_API_KEY is not set");
   });
 
   it("withholds every file the key can be read out of, not only the one it wrote", async () => {
@@ -369,6 +422,217 @@ describe("proving the application runs without the credential", () => {
     expect(result.verification.passed).toBe(true);
     expect(result.withheld).toEqual([]);
     expect(readdirSync(root)).toEqual([]);
+  });
+});
+
+describe("telling a suite setup broke from one that was already broken", () => {
+  /** A runner whose every launch exits with `code`. */
+  function exiting(code: number) {
+    return fakeRunProcess({ results: { npm: { exitCode: code, output: "1 failed" } } });
+  }
+
+  it("measures the check once before anything is instrumented", async () => {
+    const { run, runs } = exiting(1);
+    const baseline = await runBaselineCheck({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      interpreter: null,
+      runProcess: run,
+    });
+
+    expect(baseline).toMatchObject({ ran: true, exitCode: 1 });
+    expect(runs).toHaveLength(1);
+    // TraceRoot off, exactly as the check has it. A repository that already
+    // carries TraceRoot exports from its suite the moment a key is reachable,
+    // and a baseline taken with TraceRoot in a different state than the check
+    // is not a baseline for it.
+    expect("TRACEROOT_API_KEY" in (runs[0]?.env ?? {})).toBe(false);
+    expect(runs[0]?.env.TRACEROOT_ENABLED).toBe("false");
+  });
+
+  it("reports no baseline for a command it could not parse or spawn", async () => {
+    const unparsable = await runBaselineCheck({
+      command: "   ",
+      cwd: "/repo",
+      parentEnv: {},
+      interpreter: null,
+      runProcess: fakeRunProcess().run,
+    });
+    expect(unparsable.ran).toBe(false);
+
+    // A missing binary is not evidence about the suite, and reading it as "this
+    // project was already broken" would excuse a real failure.
+    const missing = await runBaselineCheck({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: {},
+      interpreter: null,
+      runProcess: fakeRunProcess({ results: { npm: { spawnFailed: true, exitCode: 127 } } }).run,
+    });
+    expect(missing.ran).toBe(false);
+  });
+
+  it("runs the baseline with the virtualenv on PATH, as the real check does", async () => {
+    // `detect_stack` names the command the way the project documents it —
+    // `pytest`, not `.venv/bin/pytest` — because that is what a user types. It
+    // resolves for them because their shell has the virtualenv activated; the
+    // CLI's own environment does not. Without this the spawn fails with ENOENT
+    // before a single test runs, which is the commonest shape of Python project
+    // there is, and the measurement never happens at all.
+    const { run, runs } = fakeRunProcess();
+    const baseline = await runBaselineCheck({
+      command: "pytest",
+      cwd: "/repo/api",
+      parentEnv: { PATH: "/usr/bin" },
+      interpreter: "/repo/api/.venv/bin/python",
+      runProcess: run,
+    });
+
+    expect(baseline.ran).toBe(true);
+    expect(runs[0]?.env.PATH).toBe(`/repo/api/.venv/bin${delimiter}/usr/bin`);
+  });
+
+  it("runs the baseline without an ambient credential, and leaves the caller's own env alone", async () => {
+    // The assertion above covers a parent environment that had no key in it. A
+    // developer's shell commonly exports one, and a baseline that inherits it
+    // is no longer the run it gets compared against: this measurement exists to
+    // say what the project's check did before this run touched anything.
+    const { run, runs } = fakeRunProcess();
+    const activated = { PATH: "/usr/bin", TRACEROOT_API_KEY: "tr-ambient-shell-value" };
+    await runBaselineCheck({
+      command: "pytest",
+      cwd: "/repo/api",
+      parentEnv: activated,
+      interpreter: "/repo/api/.venv/bin/python",
+      runProcess: run,
+    });
+
+    // Deleted rather than blanked, the way the verification does it: an SDK
+    // commonly reads an empty string as "configured but blank" and takes a
+    // different path than it does for absent.
+    expect("TRACEROOT_API_KEY" in (runs[0]?.env ?? {})).toBe(false);
+    expect(runs[0]?.env.TRACEROOT_ENABLED).toBe("false");
+    expect(runs[0]?.env.PATH).toBe(`/repo/api/.venv/bin${delimiter}/usr/bin`);
+    expect(activated.TRACEROOT_API_KEY).toBe("tr-ambient-shell-value");
+
+    // Including on the path with no virtualenv to add, where the environment
+    // the baseline is handed is the caller's own object rather than a copy of
+    // it. Removing the key in place there would reach back into the run.
+    const bare = { PATH: "/usr/bin", TRACEROOT_API_KEY: "tr-ambient-shell-value" };
+    const plain = fakeRunProcess();
+    await runBaselineCheck({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: bare,
+      interpreter: null,
+      runProcess: plain.run,
+    });
+
+    expect("TRACEROOT_API_KEY" in (plain.runs[0]?.env ?? {})).toBe(false);
+    expect(bare.TRACEROOT_API_KEY).toBe("tr-ambient-shell-value");
+  });
+
+  it("calls a failure inconclusive when the suite was already failing", async () => {
+    // The end-to-end run this exists for ended on "pytest failed after
+    // instrumentation" for a suite that was red before setup started.
+    const { run, runs } = exiting(1);
+    const result = await verifyApplication({
+      command: "npm test",
+      baseline: { ran: true, exitCode: 1, durationMs: 10 },
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: [],
+      interpreter: null,
+      runProcess: run,
+    });
+
+    expect(result.verification.outcome).toBe("inconclusive");
+    expect(result.verification.passed).toBe(false);
+    // No failure to report, which is what stops the caller naming
+    // instrumentation as the cause.
+    expect(result.failure).toBeNull();
+    expect(result.verification.baseline).toMatchObject({ ran: true, exitCode: 1 });
+    expect(runs).toHaveLength(1);
+  });
+
+  it("still blames instrumentation when the suite was passing before", async () => {
+    const result = await verifyApplication({
+      command: "npm test",
+      baseline: { ran: true, exitCode: 0, durationMs: 10 },
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: [],
+      interpreter: null,
+      runProcess: exiting(1).run,
+    });
+
+    expect(result.verification.outcome).toBe("failed");
+    expect(result.failure?.output).toContain("1 failed");
+  });
+
+  it("names no cause when nothing measured the check beforehand", async () => {
+    // The routes that hand the instrumentation task over take no baseline, and
+    // a checkpoint written before baselines existed carries none. "Nobody
+    // looked" is a weaker statement than either answer a baseline gives, and
+    // reporting it as a failure of the instrumentation is the same invented
+    // cause this mechanism exists to remove, pointed the other way.
+    const result = await verifyApplication({
+      command: "npm test",
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: [],
+      interpreter: null,
+      runProcess: exiting(1).run,
+    });
+
+    expect(result.verification.baseline).toBeNull();
+    expect(result.verification.outcome).toBe("inconclusive");
+    expect(result.verification.passed).toBe(false);
+    // Not an excuse, though. Unlike a suite already known to be red, this one
+    // has explained nothing, so the output still comes back for the caller to
+    // show — it is the only diagnostic such a run has.
+    expect(result.failure?.output).toContain("1 failed");
+  });
+
+  it("treats a baseline that never ran as no baseline at all", async () => {
+    // `runBaselineCheck` reports an un-run result for a command it could not
+    // spawn, and an un-run result carries `exitCode: null`. Reading that as
+    // "did not exit 0" would turn a missing binary into evidence that the
+    // project was already broken.
+    const result = await verifyApplication({
+      command: "npm test",
+      baseline: { ran: false, exitCode: null, durationMs: 0 },
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: [],
+      interpreter: null,
+      runProcess: exiting(1).run,
+    });
+
+    expect(result.verification.outcome).toBe("inconclusive");
+    expect(result.failure?.output).toContain("1 failed");
+  });
+
+  it("passes with a baseline recorded beside the result", async () => {
+    const result = await verifyApplication({
+      command: "npm test",
+      baseline: { ran: true, exitCode: 0, durationMs: 10 },
+      cwd: "/repo",
+      parentEnv: { PATH: "/usr/bin" },
+      credential: makeSecret(KEY),
+      credentialFiles: [],
+      interpreter: null,
+      runProcess: fakeRunProcess().run,
+    });
+
+    expect(result.verification.outcome).toBe("passed");
+    expect(result.verification.passed).toBe(true);
+    expect(result.verification.baseline?.exitCode).toBe(0);
   });
 });
 
@@ -648,6 +912,30 @@ describe("how much of the application the trace covers", () => {
 
     expect(result.found).toBe(true);
     expect(result.found && result.attribution.spanCount).toBeNull();
+  });
+
+  it("copies the count onto the record the report reads, not only the attribution", async () => {
+    // The report's trace row reads the count off the verification, and the
+    // poll filled in only the attribution's copy, so the count never arrived.
+    // `--resume` renders the report from the checkpointed trace as well, which
+    // is the other half of why the count belongs on the record rather than
+    // only in the invocation that polled.
+    const single = await look([row(1)]);
+    expect(single.found && single.trace.spanCount).toBe(1);
+
+    const covered = await look([row(7)]);
+    expect(covered.found && covered.trace.spanCount).toBe(7);
+  });
+
+  it("leaves the count off the record when the response reported none", async () => {
+    // Absent and zero are different answers and have to stay different.
+    // `TraceVerification` spells "the response did not say" as a missing field,
+    // so a row without `span_count` leaves it missing rather than carrying a
+    // zero the report would print as "no spans".
+    const result = await look([row(undefined)]);
+
+    expect(result.found).toBe(true);
+    expect(result.found && "spanCount" in result.trace).toBe(false);
   });
 
   it("refuses a count that is not a whole number of spans", async () => {

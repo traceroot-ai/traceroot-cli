@@ -1,5 +1,6 @@
 import { existsSync, renameSync } from "node:fs";
 import { type RunProcess, splitCommand } from "./exec.js";
+import { withVenvOnPath } from "./python.js";
 import type { Secret } from "./secret.js";
 import type { ApplicationVerification, VerificationRun } from "./types.js";
 
@@ -17,8 +18,41 @@ const PARKED_SUFFIX = ".traceroot-setup-hidden";
 export interface VerifyApplicationInput {
   /** The project's own check, as detected. Null when it has none. */
   command: string | null;
+  /**
+   * The same command's result from before anything was instrumented, or null
+   * when no baseline was taken.
+   *
+   * A suite that was already red, or that needs a database or a network this
+   * machine does not have, fails here too — and used to be reported as broken
+   * by the instrumentation. With a baseline the two are distinguishable, and a
+   * failure that predates setup is reported as inconclusive rather than blamed
+   * on work that was done correctly.
+   *
+   * Null is not "it passed". It is "nobody looked", which is a weaker statement
+   * than either answer a baseline gives, and it is reported as such: a failing
+   * check with no baseline is inconclusive, never failed.
+   */
+  baseline?: VerificationRun | null;
   cwd: string;
   parentEnv: NodeJS.ProcessEnv;
+  /**
+   * The virtualenv interpreter the service runs on, or null when there is none.
+   *
+   * The check below spawns the project's own command, and `detect_stack` names
+   * that command the way the project documents it — `pytest`, not
+   * `.venv/bin/pytest` — because that is what a user types. It resolves for
+   * them because their shell has the virtualenv activated; this process's
+   * environment does not have it, so without this the spawn fails with ENOENT
+   * on the commonest shape of Python project there is, after the application
+   * has already been instrumented correctly.
+   *
+   * Required rather than optional, and for a reason this field has already
+   * earned: an optional one that defaults to null type-checks when the caller
+   * simply omits it, which is exactly how the baseline came to be the only run
+   * that had the virtualenv. Required, omitting it is a compile error at the
+   * call site rather than an ENOENT in front of a user.
+   */
+  interpreter: string | null;
   /**
    * The application's key. Never handed to the check: it is here so the
    * check's captured output is redacted, should the application print a key it
@@ -186,11 +220,15 @@ function withTraceRootOff(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export async function verifyApplication(
   input: VerifyApplicationInput,
 ): Promise<VerifyApplicationResult> {
+  const baseline = input.baseline ?? null;
+
   if (input.command === null || input.command.trim() === "") {
     return {
       verification: {
         command: null,
+        baseline,
         run: NOT_RUN,
+        outcome: "skipped",
         passed: false,
         skippedReason: "no test or health command was detected",
       },
@@ -204,7 +242,9 @@ export async function verifyApplication(
     return {
       verification: {
         command: input.command,
+        baseline,
         run: NOT_RUN,
+        outcome: "skipped",
         passed: false,
         skippedReason: `could not parse the verification command: ${input.command}`,
       },
@@ -213,7 +253,12 @@ export async function verifyApplication(
     };
   }
 
-  const env = withTraceRootOff(input.parentEnv);
+  // The virtualenv first, for the check and not only the baseline. The command
+  // is `pytest` as the project documents it, and it lives inside the
+  // virtualenv; a baseline that could spawn it and a verification that could
+  // not is how this ended a real run on "`pytest` could not be run" with the
+  // instrumentation already in place and correct.
+  const env = withTraceRootOff(withVenvOnPath(input.parentEnv, input.interpreter));
   const checked = await withoutCredentialFiles(input.credentialFiles, () =>
     input.runProcess({
       program: parsed.program,
@@ -231,18 +276,133 @@ export async function verifyApplication(
     exitCode: checked.result.exitCode,
     durationMs: checked.result.durationMs,
   };
-  const passed = checked.result.exitCode === 0;
+  if (checked.result.exitCode !== 0) {
+    // Two reasons this run cannot name a cause, and they are different claims.
+    //
+    // `alreadyBroken` is a measurement: the same command was run before
+    // anything changed and did not pass then either, so running it afterwards
+    // measured the project's own breakage.
+    //
+    // `unmeasured` is the absence of a measurement. It is not a rare edge: the
+    // routes that hand the instrumentation task over take no baseline at all,
+    // by a decision recorded where the baseline is taken, and they reach this
+    // function on a later resume. A baseline that could not be spawned lands
+    // here too.
+    //
+    // Neither is a finding, so neither is `failed`. `failed` means exactly one
+    // thing — it passed before this run and does not pass now — which is the
+    // only version of that sentence this function can support.
+    const alreadyBroken = baseline?.ran === true && baseline.exitCode !== 0;
+    const unmeasured = baseline === null || !baseline.ran;
+    return {
+      verification: {
+        command: input.command,
+        baseline,
+        run,
+        outcome: alreadyBroken || unmeasured ? "inconclusive" : "failed",
+        passed: false,
+        skippedReason: null,
+      },
+      // Output only where it is worth reading. A suite known to have been
+      // failing beforehand has already explained itself, and its output is the
+      // project's own business rather than something setup puts in front of the
+      // user. An unmeasured one has explained nothing, so the caller is handed
+      // the output to show — it is the only diagnostic that run has.
+      failure: alreadyBroken ? null : { output: checked.result.output },
+      withheld: checked.withheld,
+    };
+  }
 
   return {
     verification: {
       command: input.command,
+      baseline,
       run,
-      passed,
+      outcome: "passed",
+      passed: true,
       skippedReason: null,
     },
-    failure: passed ? null : { output: checked.result.output },
+    failure: null,
     withheld: checked.withheld,
   };
+}
+
+export interface BaselineCheckInput {
+  /** The project's own check. */
+  command: string;
+  cwd: string;
+  parentEnv: NodeJS.ProcessEnv;
+  /**
+   * The virtualenv interpreter the service runs on, when one was found.
+   *
+   * The same argument the real check takes, and for the same reason: the
+   * command is `pytest` as the project documents it, which resolves only
+   * because the user's shell has the virtualenv activated. Without this the
+   * baseline cannot spawn the command at all on the commonest shape of Python
+   * project there is, and a measurement that cannot run measures nothing.
+   */
+  interpreter: string | null;
+  runProcess: RunProcess;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Runs the project's own check once, before anything is instrumented.
+ *
+ * The one measurement that cannot be taken later. Afterwards the code is
+ * edited, and "the suite fails" no longer distinguishes a suite the
+ * instrumentation broke from one that needed a database, a network or a fix
+ * before setup ever ran — and a run that cannot tell those apart reports the
+ * second as the first, which sends the user looking for a fault in work that
+ * was done correctly.
+ *
+ * TraceRoot switched off, exactly as the check has it: no `TRACEROOT_API_KEY`,
+ * an ambient one from the user's shell included, and `TRACEROOT_ENABLED=false`.
+ * Nothing this run instrumented exists yet, but a repository that already
+ * carries TraceRoot does, and its suite exports through `@observe` the moment a
+ * key is reachable — from the shell, or from a file the project loads for
+ * itself. A baseline must not put traces in the user's project any more than
+ * the check may, and one taken with TraceRoot in a different state than the
+ * check is not a baseline for it. Everything else about the environment is the
+ * same, virtualenv included — a baseline that cannot find `pytest` where the
+ * real check finds it is comparing two different things. The output is not
+ * captured for reporting either: the exit code is the whole of what a baseline
+ * is for, and a suite's pre-existing failure output is not setup's to put in
+ * front of the user.
+ *
+ * Never throws for a failing command: a non-zero exit is the answer, not an
+ * error. A command that cannot be parsed returns an un-run result, which reads
+ * downstream as "no baseline" and leaves the verification behaving exactly as
+ * it did before baselines existed.
+ */
+export async function runBaselineCheck(input: BaselineCheckInput): Promise<VerificationRun> {
+  const parsed = splitCommand(input.command);
+  if (parsed === null) {
+    return NOT_RUN;
+  }
+  // The same environment the real check gets, built by the same function, so
+  // the two cannot drift apart over whether TraceRoot is on. It copies before
+  // it deletes, which matters here: `withVenvOnPath` hands back the very object
+  // it was given when there is no virtualenv to add, and deleting in place
+  // would reach into the caller's own environment.
+  const env = withTraceRootOff(withVenvOnPath(input.parentEnv, input.interpreter));
+  const result = await input.runProcess({
+    program: parsed.program,
+    args: parsed.args,
+    cwd: input.cwd,
+    env,
+    stdio: "capture",
+    timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    signal: input.signal,
+  });
+  // A command that could not be spawned at all is not evidence about the
+  // suite. Reported as un-run so the verification does not read a missing
+  // binary as "this project was already broken" and excuse a real failure.
+  if (result.spawnFailed) {
+    return NOT_RUN;
+  }
+  return { ran: true, exitCode: result.exitCode, durationMs: result.durationMs };
 }
 
 /**

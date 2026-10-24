@@ -313,6 +313,16 @@ export async function pollForTrace(input: PollForTraceInput): Promise<PollForTra
       traceUrl: row.traceUrl,
       observedAt: new Date(now()).toISOString(),
       waitedMs: now() - began,
+      // Onto the record and not only into the attribution beside it. The
+      // report's trace row reads the count off here, and the checkpoint carries
+      // this record rather than the attribution — so a count that stopped at
+      // the attribution left the report with nothing to print, and `--resume`
+      // with nothing at all.
+      //
+      // Spread away when the response did not report one, because absent and
+      // zero are different answers and `TraceVerification` spells the first as
+      // a missing field. A null here would read downstream as a number.
+      ...(row.spanCount === null ? {} : { spanCount: row.spanCount }),
     },
     attribution: {
       name: row.name,

@@ -142,15 +142,52 @@ export interface VerificationRun {
   durationMs: number;
 }
 
+/**
+ * What the application check established.
+ *
+ * `passed` and `failed` are claims about the instrumented application.
+ * `inconclusive` is a claim about the *check* — that its result afterwards
+ * says nothing about the instrumentation — and it covers the two ways that
+ * happens: the check was measured before anything changed and was failing
+ * then, or it was never measured, so there is nothing its result can be
+ * compared against. Reporting either as a failure sent users to look for a
+ * fault in work that had just been done correctly. `skipped` is no command to
+ * run at all.
+ *
+ * Four values rather than a boolean because the fourth has to survive into the
+ * report and the `--json` envelope, where a reader has only the field to go on.
+ */
+export type VerificationOutcome = "passed" | "failed" | "inconclusive" | "skipped";
+
 export interface ApplicationVerification {
   /** The command as run. Never contains a secret. */
   command: string | null;
   /**
+   * The same command before anything was instrumented, or null when no baseline
+   * was taken — a run that hands the task over edits nothing, and a checkpoint
+   * written before baselines existed carries none.
+   *
+   * This is what makes a later failure attributable. Without it, "the suite
+   * fails" and "the suite still fails" are indistinguishable.
+   */
+  baseline: VerificationRun | null;
+  /**
    * The command, run once with TraceRoot switched off: `TRACEROOT_API_KEY`
    * absent and `TRACEROOT_ENABLED=false`. A pass shows the application does not
    * depend on TraceRoot being configured, and the run itself can send no trace.
+   * The baseline runs with TraceRoot switched off too, so whether TraceRoot was
+   * on is never the difference between the two.
    */
   run: VerificationRun;
+  outcome: VerificationOutcome;
+  /**
+   * Whether the instrumented application passed its own check.
+   *
+   * Narrower than `outcome !== "failed"`: it is true only for `passed`. An
+   * inconclusive run did not establish that the application passes, so this is
+   * false there — `outcome` is what says that the reason lies with the project's
+   * own suite rather than with the instrumentation.
+   */
   passed: boolean;
   skippedReason: string | null;
 }
@@ -161,6 +198,20 @@ export interface TraceVerification {
   traceUrl: string;
   observedAt: string;
   waitedMs: number;
+  /**
+   * How many spans the trace holds; absent when the response did not say.
+   *
+   * The one thing a list row carries about how much of the application a trace
+   * covers, and the reason it is kept on the record rather than only printed
+   * once: `--resume` rehydrates the trace from the checkpoint and renders the
+   * report from it, so a count that lived only in the invocation that polled
+   * would leave a resumed run's report without the number the first run had.
+   *
+   * Absent rather than null, because a response that did not carry the field
+   * leaves exactly one thing to say and two spellings of it would both have to
+   * be handled by every reader.
+   */
+  spanCount?: number;
 }
 
 /**
@@ -219,13 +270,29 @@ export interface SetupContext {
   /** Repository root (git root when inside one, else `cwd`). */
   root: string;
   /**
-   * Where this run's own files go: `.env.traceroot` and `.traceroot/`.
+   * Where this run's own files go: the credential env file and `.traceroot/`.
    *
    * The service directory, not the repository root — see `artifacts.ts`. Fixed
    * before the pipeline starts, because `--resume` has to find the checkpoint
    * before any stage has run.
    */
   artifactDir: string;
+  /**
+   * The project env file that holds the credential, absolute.
+   *
+   * Not "the file this run wrote". `configure_repository` sets this whenever the
+   * file ends up holding the right key, and a file that already held it is not
+   * written at all — `upsertEnvFile` diffs first and reports nothing written.
+   * Callers use it to name the file the application loads, which is the same
+   * file either way, so narrowing the contract to "newly written" would make
+   * every one of them silent on a rerun.
+   *
+   * Undefined when no project file holds it: git tracks the one setup would have
+   * used, or the application already resolves the key from its own environment.
+   * Set by `configure_repository` so the closing notice and the report name the
+   * file the user actually has rather than one this tool would have invented.
+   */
+  credentialEnvFile?: string;
   json: boolean;
   /** True when the CLI may prompt: TTYs, not CI, not `--json`, not `--no-input`. */
   canPrompt: boolean;
