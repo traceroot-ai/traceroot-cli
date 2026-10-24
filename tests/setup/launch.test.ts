@@ -646,14 +646,14 @@ describe("the interpreter the task recommends and the one the agent may run", ()
   function programInRunCommand(text: string): string {
     const command = /run it with: `([^`]+)`/.exec(text)?.[1];
     expect(command).toBeDefined();
-    return (command as string).split(" ")[0];
+    return (command as string).split(" ")[0] ?? "";
   }
 
   /** The same, for the one command step 2 of the task hands over in full. */
   function programInInstallCommand(text: string): string {
     const command = /### 2\. Install the SDK[\s\S]*?```bash\n([^\n]+)\n```/.exec(text)?.[1];
     expect(command).toBeDefined();
-    return (command as string).split(" ")[0];
+    return (command as string).split(" ")[0] ?? "";
   }
 
   /**

@@ -33,6 +33,7 @@ function listItem(over: Partial<TraceList["data"][number]>): TraceList["data"][n
     total_cost: 0,
     total_input_tokens: 0,
     total_output_tokens: 0,
+    metadata_map: {},
     ...over,
   };
 }

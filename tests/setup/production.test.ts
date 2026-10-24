@@ -261,9 +261,10 @@ describe("acknowledging it", () => {
       },
     }).then(() => {
       expect(asked).toHaveLength(1);
-      expect(plain(asked[0])).toContain("│  I have added TRACEROOT_API_KEY to my production env.");
-      expect(plain(asked[0])).not.toContain("●");
-      expect(plain(asked[0])).toContain("(Press Enter to continue)");
+      const question = plain(asked[0] ?? "");
+      expect(question).toContain("│  I have added TRACEROOT_API_KEY to my production env.");
+      expect(question).not.toContain("●");
+      expect(question).toContain("(Press Enter to continue)");
       // A settled block, not a pending one: `◇` is what the transcript shows
       // once the acknowledgement under it has been given.
       expect(plain(err.data)).toContain("◇  Add the TRACEROOT_API_KEY token");
@@ -299,7 +300,7 @@ describe("acknowledging it", () => {
         return "";
       },
     });
-    expect(plain(asked[0])).toContain(
+    expect(plain(asked[0] ?? "")).toContain(
       "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
     );
     // And the notice above it asked for both, which is what makes the line

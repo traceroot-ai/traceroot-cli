@@ -26,7 +26,10 @@ jobs:
         # the codegen:check script exists.
         run: npm run codegen:check --if-present
 
-      - name: Typecheck
+      - name: Typecheck (source and tests)
+        # `tsconfig.json` is the build and excludes `tests`; the second pass,
+        # `tsconfig.test.json`, checks `tests/` against `src/`. Without it a test
+        # can call a method or pass a flag that no longer exists and still pass.
         run: npm run typecheck
 
       - name: Biome lint

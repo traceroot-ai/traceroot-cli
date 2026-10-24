@@ -157,7 +157,7 @@ describe("happy path", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, events, out } = makeCtx({ flags: { agent: "claude" } });
@@ -181,7 +181,7 @@ describe("happy path", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow({ trace_url: odd })] }),
+      traces: [traceRow({ trace_url: odd })],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -196,7 +196,7 @@ describe("happy path", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey("tr-live-project-key-abcd"),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -224,7 +224,7 @@ describe("happy path", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -247,7 +247,7 @@ describe("happy path", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey("tr-live-project-key-abcd"),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -270,7 +270,7 @@ describe("choosing what to instrument", () => {
     mkdirSync(join(dir, "scripts"), { recursive: true });
     writeFileSync(join(dir, "scripts", "run.py"), "import openai\n");
 
-    const deps = makeDeps({ auth: authWithKey(), client: fakeApiClient({ traces: [traceRow()] }) });
+    const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()] });
     const { ctx } = makeCtx({ canPrompt: false });
     const result = await runSetupMachine(ctx, deps);
 
@@ -284,7 +284,7 @@ describe("choosing what to instrument", () => {
     writeFileSync(join(dir, "error.py"), "import openai\n");
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M error.py"] }).run,
       answers: ["python"],
     });
@@ -308,7 +308,7 @@ describe("choosing what to instrument", () => {
 
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M svc/main.py"] }).run,
     });
     const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", method: "manual" } });
@@ -329,7 +329,7 @@ describe("choosing what to instrument", () => {
 
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M svc-a/main.py"] }).run,
     });
     const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude", method: "manual" } });
@@ -351,8 +351,8 @@ describe("authentication", () => {
           whoamiCalls += 1;
           return whoami();
         },
-        traces: [traceRow()],
       }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
@@ -416,7 +416,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       onWriteConfig: (config) => written.push(config),
     });
@@ -460,7 +460,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       // Stands in for the shared flow, which narrates itself through the
       // writers it is given.
@@ -520,7 +520,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     // The name on the line comes from the access token's `email` claim, which
@@ -556,11 +556,11 @@ describe("authentication", () => {
         key: "tr-browser-minted-key-1234",
       }),
     });
-    const saved: Array<[string, string, string | null]> = [];
+    const saved: Array<[string, string]> = [];
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       onWriteCredential: (host, entry) => saved.push([host, entry.session_token]),
       runDeviceFlow: async () => ({ sessionToken: "user-session-token-value" }),
@@ -605,7 +605,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       onWriteCredential: () => {
         throw new Error("EACCES: permission denied");
@@ -648,7 +648,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       onWriteConfig: (config) => written.push(config),
       // The prompt for a new project name; empty accepts the repo-name default.
@@ -664,12 +664,12 @@ describe("authentication", () => {
     expect(result.ok).toBe(true);
     expect(created).toHaveLength(1);
     // Named after the repository.
-    expect(created[0][0]).toBe(basename(ctx.root));
+    expect(created[0]?.[0]).toBe(basename(ctx.root));
     // The device flow hands back identity only — no workspace comes attached
     // the way the old fat handoff payload carried one — so the workspace is
     // resolved here instead, from `listWorkspaces`. A sole workspace is used
     // without asking.
-    expect(created[0][1]).toBe("w_1");
+    expect(created[0]?.[1]).toBe("w_1");
     expect(ctx.project?.projectId).toBe("p_new");
     expect(ctx.credential?.origin).toBe("minted");
     expect(written).toEqual([
@@ -708,7 +708,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       // The workspace choice, then the project name (empty accepts the default).
       answers: ["w_2", ""],
@@ -718,7 +718,7 @@ describe("authentication", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.ok).toBe(true);
-    expect(created[0][1]).toBe("w_2");
+    expect(created[0]?.[1]).toBe("w_2");
   });
 
   it("does not offer a workspace the user can only view", async () => {
@@ -749,7 +749,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       // Only the project name: filtering leaves one workspace, so nothing is asked.
       answers: [""],
@@ -759,7 +759,7 @@ describe("authentication", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.ok).toBe(true);
-    expect(created[0][1]).toBe("w_2");
+    expect(created[0]?.[1]).toBe("w_2");
   });
 
   it("says so when the account has no workspace the user can create in", async () => {
@@ -772,7 +772,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       answers: [""],
     });
     const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
@@ -794,7 +794,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi: fakeSetupApi({ listProjects: async () => [] }),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       storedCredential: { session_token: "saved-session-token" },
     });
     const { ctx } = makeCtx({ canPrompt: false });
@@ -825,7 +825,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       onWriteConfig: (config) => written.push(config),
       storedCredential: { session_token: "saved-session-token" },
@@ -891,7 +891,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       storedCredential: { session_token: "revoked-session-token" },
       onDeleteCredential: (host) => {
@@ -940,7 +940,7 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       storedCredential: { session_token: "tru-saved-token" },
     });
@@ -966,13 +966,13 @@ describe("authentication", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi: fakeSetupApi(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
     });
     const spied: SetupDeps = {
       ...deps,
       readCredential: (host) => {
         asked.push(host);
-        return undefined;
+        return null;
       },
     };
     const { ctx } = makeCtx({ canPrompt: false });
@@ -1112,12 +1112,12 @@ describe("the handoff code from browser-first onboarding", () => {
         }
         return whoami();
       },
-      traces: [traceRow()],
     });
     const deps = makeDeps({
       auth: options.auth ?? authEmpty(),
       setupApi: projectApi(),
       client,
+      traces: [traceRow()],
       runProcess: launched.run,
       storedCredential: options.stored ?? null,
       onWriteCredential: (host, entry) => {
@@ -1523,7 +1523,11 @@ describe("the handoff code from browser-first onboarding", () => {
       readCredential: () => null,
       configIsLocal: true,
     };
-    const cases = [
+    const cases: Array<{
+      flags: { host?: string };
+      autoEnv: Record<string, string>;
+      host: string;
+    }> = [
       { flags: {}, autoEnv: { TRACEROOT_HOST_URL: REPO }, host: DEFAULT_HOST },
       { flags: { host: SELF }, autoEnv: { TRACEROOT_AUTH_URL: REPO }, host: SELF },
     ];
@@ -1562,7 +1566,7 @@ describe("the pasted key", () => {
     const base = makeDeps({
       auth: authEmpty(),
       hiddenAnswers: [pasted],
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       onWriteConfig: (config) => savedToConfig.push(config.api_key),
     });
@@ -1697,7 +1701,7 @@ describe("the project picker's rows", () => {
     const base = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       // The second `test`, which is unreachable without something telling the
       // two apart.
@@ -1879,7 +1883,7 @@ describe("a repository that already reports to a project", () => {
               },
             }),
       }),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       answers: options.answers ?? [],
       storedCredential: { session_token: "saved-session-token" },
@@ -1949,7 +1953,6 @@ describe("a repository that already reports to a project", () => {
             const scope = world.scopes.get(key);
             return whoami({ ...project, ...(scope === undefined ? {} : { key_scope: scope }) });
           },
-          traces: [traceRow()],
         });
       },
       select: (input) => {
@@ -3048,7 +3051,8 @@ describe("project credential", () => {
     const deps = makeDeps({
       auth: authWithKey(),
       // Force the mint/reuse branch by making the user key resolve elsewhere.
-      client: fakeApiClient({ whoamiResult: whoami(), traces: [traceRow()] }),
+      client: fakeApiClient({ whoamiResult: whoami() }),
+      traces: [traceRow()],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -3077,8 +3081,8 @@ describe("project credential", () => {
       client: fakeApiClient({
         // The env key authenticates, but to a different project.
         whoamiResult: async () => whoami({ project_id: "p_other", project_name: "other" }),
-        traces: [traceRow()],
       }),
+      traces: [traceRow()],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -3101,8 +3105,8 @@ describe("project credential", () => {
       auth: authWithKey(),
       client: fakeApiClient({
         whoamiResult: async () => whoami({ project_id: "p_other" }),
-        traces: [traceRow()],
       }),
+      traces: [traceRow()],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -3187,7 +3191,7 @@ describe("the credential the instrumented application will read", () => {
     return makeDeps({
       auth,
       env,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
   }
@@ -3232,7 +3236,7 @@ describe("the credential the instrumented application will read", () => {
     const deps = makeDeps({
       auth: authFrom("env"),
       env: { PATH: "/usr/bin", TRACEROOT_API_KEY: KEY },
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, events } = makeCtx({ flags: { agent: "claude" } });
@@ -3394,7 +3398,7 @@ describe("the credential the instrumented application will read", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       hiddenAnswers: [pasted],
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const { ctx, events } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
@@ -3430,7 +3434,7 @@ describe("where the application's key ended up", () => {
     return makeDeps({
       auth,
       env,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
   }
@@ -3552,7 +3556,7 @@ describe("stack and agent selection", () => {
 
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", ""] }).run,
       // TypeScript is the only language in apps/web; then the task-file route.
       answers: ["typescript", "task-file"],
@@ -3595,7 +3599,7 @@ describe("stack and agent selection", () => {
       JSON.stringify({ dependencies: { next: "^15" } }),
     );
 
-    const deps = makeDeps({ auth: authWithKey(), client: fakeApiClient({ traces: [traceRow()] }) });
+    const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()] });
     const { ctx } = makeCtx({ canPrompt: false });
     const result = await runSetupMachine(ctx, deps);
 
@@ -3621,7 +3625,7 @@ describe("stack and agent selection", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       env: { PATH: "" },
     });
     const { ctx } = makeCtx({ canPrompt: false });
@@ -3661,7 +3665,7 @@ describe("stack and agent selection", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -3689,7 +3693,7 @@ describe("stack and agent selection", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M index.ts"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -3712,7 +3716,7 @@ describe("stack and agent selection", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -3775,7 +3779,7 @@ describe("failure handling", () => {
     };
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: wrapped,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -3791,7 +3795,7 @@ describe("failure handling", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [] }),
+      traces: [],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
@@ -3806,9 +3810,7 @@ describe("failure handling", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({
-        traces: [traceRow({ trace_start_time: "2020-01-01T00:00:00.000Z" })],
-      }),
+      traces: [traceRow({ trace_start_time: "2020-01-01T00:00:00.000Z" })],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
@@ -3822,7 +3824,7 @@ describe("failure handling", () => {
     writeFileSync(join(dir, "app.py"), "x = 1\n");
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", "", " M app.py"] }).run,
     });
     const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
@@ -3852,7 +3854,7 @@ describe("failure handling", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
@@ -3890,7 +3892,7 @@ describe("a suite that was already failing", () => {
     const process = redSuite();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
@@ -3919,7 +3921,7 @@ describe("a suite that was already failing", () => {
     initGit();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: redSuite().run,
     });
     const { ctx, events } = makeCtx({ json: true, flags: { agent: "claude" } });
@@ -3929,7 +3931,9 @@ describe("a suite that was already failing", () => {
     const stage = events.find(
       (e) => e.event === "stage" && e.stage === "verify_application" && e.status !== "start",
     );
-    expect(stage?.event === "stage" ? stage.data : undefined).toMatchObject({
+    expect(
+      stage?.event === "stage" && stage.status !== "start" ? stage.data : undefined,
+    ).toMatchObject({
       outcome: "inconclusive",
       passed: false,
       baseline_exit_code: 1,
@@ -3960,7 +3964,7 @@ describe("a suite that was already failing", () => {
     };
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -3984,7 +3988,7 @@ describe("a suite that was already failing", () => {
     initGit();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: redSuite().run,
     });
     const { ctx, err } = makeCtx({ flags: { agent: "claude", instrument: false } });
@@ -4015,7 +4019,7 @@ describe("a suite that was already failing", () => {
     initGit();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: redSuite().run,
     });
     const { ctx, err } = makeCtx({ flags: { agent: "claude", method: "manual" } });
@@ -4042,7 +4046,7 @@ describe("a suite that was already failing", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4086,7 +4090,7 @@ describe("a suite that was already failing", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
@@ -4118,7 +4122,7 @@ describe("a suite that was already failing", () => {
     const process = redSuite();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({
@@ -4197,7 +4201,7 @@ describe("the two keys a run mints", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       storedCredential: { session_token: "tru-saved-token" },
       onWriteConfig: (config) => configured.push(config),
@@ -4288,10 +4292,7 @@ describe("the two keys a run mints", () => {
       ...deps,
       resolvedAuth: authWithKey("tr-user-supplied-key"),
       createClient: () =>
-        fakeApiClient({
-          whoamiResult: async () => whoami({ project_id: "p_other" }),
-          traces: [traceRow()],
-        }),
+        fakeApiClient({ whoamiResult: async () => whoami({ project_id: "p_other" }) }),
     };
     const { ctx } = makeCtx({ flags: { agent: "claude", project: "demo" } });
 
@@ -4343,7 +4344,7 @@ describe("proving the agent installed the SDK", () => {
         : inner.run(o);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess,
       sdk: { ...PYTHON_SDK },
     });
@@ -4383,7 +4384,7 @@ describe("proving the agent installed the SDK", () => {
         : inner.run(o);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess,
       sdk: { ...PYTHON_SDK },
     });
@@ -4402,7 +4403,7 @@ describe("proving the agent installed the SDK", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       sdk: { ...PYTHON_SDK },
     });
@@ -4435,7 +4436,7 @@ describe("proving the agent installed the SDK", () => {
     };
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess,
       sdk: { ...PYTHON_SDK },
     });
@@ -4470,7 +4471,7 @@ describe("proving the agent installed the SDK", () => {
         : inner.run(o);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess,
       sdk: { ...PYTHON_SDK },
     });
@@ -4499,7 +4500,7 @@ describe("proving the agent installed the SDK", () => {
         : inner.run(o);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess,
       sdk: { ...PYTHON_SDK },
     });
@@ -4528,7 +4529,7 @@ describe("proving the agent installed the SDK", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       sdk: { ...PYTHON_SDK },
     });
@@ -4548,7 +4549,7 @@ describe("proving the agent installed the SDK", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M index.ts"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4593,7 +4594,7 @@ describe("proving the agent did something", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4628,7 +4629,7 @@ describe("proving the agent did something", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4658,7 +4659,7 @@ describe("proving the agent did something", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4688,7 +4689,7 @@ describe("proving the agent did something", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4725,7 +4726,7 @@ describe("proving the agent did something", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M src/main.ts"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4744,7 +4745,7 @@ describe("proving the agent did something", () => {
     const process = fakeRunProcess({ instrument: false });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4781,7 +4782,7 @@ describe("proving the agent did something", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4809,7 +4810,7 @@ describe("proving the agent did something", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4830,7 +4831,7 @@ describe("proving the agent did something", () => {
     const process = fakeRunProcess({ instrument: false });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4855,7 +4856,7 @@ describe("proving the agent did something", () => {
     const process = fakeRunProcess({ instrument: false });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude", service: "apps/api" } });
@@ -4899,7 +4900,7 @@ describe("the agent's own account of a failed run", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4932,7 +4933,7 @@ describe("the agent's own account of a failed run", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -4953,7 +4954,7 @@ describe("the agent's own account of a failed run", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -5020,7 +5021,7 @@ describe("the agent's own account of a failed run", () => {
         : inner.run(o);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess,
       sdk: { package: "traceroot", version: "0.3.0", source: "registry" },
     });
@@ -5058,7 +5059,7 @@ describe("the agent's own account of a failed run", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(key),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -5104,7 +5105,7 @@ describe("resume and rerun", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({
@@ -5125,8 +5126,8 @@ describe("resume and rerun", () => {
       auth: authWithKey(),
       client: fakeApiClient({
         whoamiResult: async () => whoami({ project_id: "p_other" }),
-        traces: [],
       }),
+      traces: [],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -5168,8 +5169,8 @@ describe("resume and rerun", () => {
       auth: authWithKey(),
       client: fakeApiClient({
         whoamiResult: async () => whoami({ project_id: "p_other" }),
-        traces: [],
       }),
+      traces: [],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -5208,8 +5209,8 @@ describe("resume and rerun", () => {
       auth: authWithKey(),
       client: fakeApiClient({
         whoamiResult: async () => whoami({ project_id: "p_other" }),
-        traces: [],
       }),
+      traces: [],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -5258,7 +5259,7 @@ describe("resume and rerun", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
 
@@ -5341,7 +5342,7 @@ describe("what a failed run takes back", () => {
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       storedCredential: { session_token: "tru-saved-token" },
     });
@@ -5456,7 +5457,9 @@ describe("what a failed run takes back", () => {
     // checkpoint is written at the mint rather than at the end of the stage,
     // and this reads it from disk from inside the run, four stages later.
     pythonRepo();
-    let midRun: ReturnType<typeof readCheckpoint> = null;
+    // Widened by hand: it is assigned in a callback, which the narrowing of
+    // `= null` cannot see, so every read below would otherwise be `never`.
+    let midRun = null as ReturnType<typeof readCheckpoint>;
     const { deps } = signInThenFail({
       atFailure: () => {
         midRun = readCheckpoint(dir);
@@ -5521,7 +5524,7 @@ describe("what a failed run takes back", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey("tr-the-users-own-key-value"),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const failing: SetupDeps = {
@@ -5565,7 +5568,7 @@ describe("how to instrument", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ canPrompt: false, flags: { agent: undefined } });
@@ -5582,7 +5585,7 @@ describe("how to instrument", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ canPrompt: false, flags: { agent: "claude" } });
@@ -5595,7 +5598,7 @@ describe("how to instrument", () => {
     const process = fakeRunProcess();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({
@@ -5616,7 +5619,7 @@ describe("how to instrument", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       answers: ["task-file"],
     });
@@ -5681,7 +5684,7 @@ describe("how to instrument", () => {
     const { deps, asked } = recordingSelect(
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: process.run,
         env: withClaudeInstalled(),
         answers: ["agent:claude"],
@@ -5709,7 +5712,7 @@ describe("how to instrument", () => {
     const { deps, asked } = recordingSelect(
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
         env: { PATH: join(dir, "empty-bin") },
         answers: ["task-file"],
@@ -5734,7 +5737,7 @@ describe("how to instrument", () => {
     const { deps, asked } = recordingSelect(
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: process.run,
         env: withAgentsInstalled("claude", "codex"),
         answers: ["agent:codex"],
@@ -5780,7 +5783,7 @@ describe("how to instrument", () => {
     const { deps, asked } = recordingSelect(
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: process.run,
         env: withAgentsInstalled("codex"),
         answers: ["agent:codex"],
@@ -5803,7 +5806,7 @@ describe("how to instrument", () => {
     const { deps, asked } = recordingSelect(
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: process.run,
         env: withAgentsInstalled("claude", "codex"),
       }),
@@ -5843,7 +5846,7 @@ describe("how to instrument", () => {
     const { deps, asked } = recordingSelect(
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
         env: { PATH: join(dir, "bin"), PATHEXT: ".EXE;.CMD" },
         answers: ["task-file"],
@@ -5877,7 +5880,7 @@ describe("how to instrument", () => {
     const { deps, asked } = recordingSelect(
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: process.run,
         env: withClaudeInstalled(),
       }),
@@ -5921,7 +5924,7 @@ describe("the npm cache a Codex run has to write", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({ flags: { agent } });
@@ -6036,7 +6039,7 @@ describe("the last word before an agent edits the code", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       answers,
     });
@@ -6137,7 +6140,7 @@ describe("watching the agent work", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
@@ -6157,7 +6160,7 @@ describe("watching the agent work", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
@@ -6185,7 +6188,7 @@ describe("watching the agent work", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
@@ -6221,7 +6224,7 @@ describe("watching the agent work", () => {
     const inner = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: async (o) => {
         if (o.program === "claude" && o.onData !== undefined) {
           streamed = true;
@@ -6241,7 +6244,7 @@ describe("--no-instrument", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [] }),
+      traces: [],
       runProcess: fakeRunProcess().run,
     });
     const { ctx, out, err } = makeCtx({
@@ -6295,7 +6298,7 @@ describe("the agent a hand-over targets", () => {
   function handoverDeps(answers: string[] = []): SetupDeps {
     return makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [] }),
+      traces: [],
       runProcess: fakeRunProcess().run,
       answers,
     });
@@ -6388,7 +6391,7 @@ describe("the agent a hand-over targets", () => {
       // the report — which is written only by a run that finishes.
       const deps = makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess().run,
       });
       const { ctx } = makeCtx({ flags: { instrument: false } });
@@ -6414,7 +6417,7 @@ describe("the agent a hand-over targets", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess().run,
     });
     const { ctx } = makeCtx({ flags: { instrument: false } });
@@ -6597,7 +6600,7 @@ describe("why no trace arrived", () => {
   function traceless(): SetupDeps {
     return makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [] }),
+      traces: [],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
   }
@@ -6663,8 +6666,8 @@ describe("why no trace arrived", () => {
       auth: authWithKey(),
       client: fakeApiClient({
         whoamiResult: async () => whoami({ project_id: "p_other" }),
-        traces: [],
       }),
+      traces: [],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -6796,7 +6799,7 @@ describe("why no trace arrived", () => {
       ctx,
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [traceRow()] }),
+        traces: [traceRow()],
         runProcess: fakeRunProcess().run,
       }),
     );
@@ -6859,7 +6862,7 @@ describe("letting the user stop waiting for the first trace", () => {
   function traceless(options: { skip?: boolean } = {}): SetupDeps {
     return makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [] }),
+      traces: [],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       skipTraceWait: options.skip,
     });
@@ -6968,7 +6971,7 @@ describe("letting the user stop waiting for the first trace", () => {
     waitable();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     let press: (() => void) | null = null;
@@ -7045,19 +7048,17 @@ describe("letting the user stop waiting for the first trace", () => {
 });
 
 describe("how long setup waits for the first trace", () => {
-  /** A client whose trace list is `rows` as it stands, counting every look. */
-  function countingClient(rows: unknown[] = []): {
-    client: ReturnType<typeof fakeApiClient>;
+  /** A trace read that answers with `rows` as they stand, counting every look. */
+  function countingTraces(rows: unknown[] = []): {
+    traces: () => unknown[];
     looks: () => number;
   } {
     let looks = 0;
-    const client = fakeApiClient({
-      traces: () => {
-        looks += 1;
-        return rows;
-      },
-    });
-    return { client, looks: () => looks };
+    const traces = () => {
+      looks += 1;
+      return rows;
+    };
+    return { traces, looks: () => looks };
   }
 
   it("waits the full budget after the agent ran, even with no test command", async () => {
@@ -7068,10 +7069,10 @@ describe("how long setup waits for the first trace", () => {
     // a trace that was a moment from arriving.
     writeFileSync(join(dir, "requirements.txt"), "flask\n");
     writeFileSync(join(dir, "app.py"), "x = 1\n");
-    const { client, looks } = countingClient();
+    const { traces, looks } = countingTraces();
     const deps = makeDeps({
       auth: authWithKey(),
-      client,
+      traces,
       runProcess: fakeRunProcess({ gitStatus: ["", "", " M app.py"] }).run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 5 } });
@@ -7091,10 +7092,10 @@ describe("how long setup waits for the first trace", () => {
     // minutes of a spinner for a trace nothing could produce. The look finds
     // nothing, and the hand-over ends as the pause it is.
     pythonRepo();
-    const { client, looks } = countingClient();
+    const { traces, looks } = countingTraces();
     const deps = makeDeps({
       auth: authWithKey(),
-      client,
+      traces,
       runProcess: fakeRunProcess().run,
     });
     const { ctx, err } = makeCtx({
@@ -7128,7 +7129,6 @@ describe("how long setup waits for the first trace", () => {
     const traceless = () =>
       makeDeps({
         auth: authWithKey(),
-        client: fakeApiClient({ traces: [] }),
         runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       });
     const first = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
@@ -7136,14 +7136,14 @@ describe("how long setup waits for the first trace", () => {
     expect(firstResult.error?.message).toContain("No trace arrived within");
     writeFileSync(join(dir, "main.py"), "print('hi')\n");
 
-    const { client, looks } = countingClient();
+    const { traces, looks } = countingTraces();
     const { ctx, err } = makeCtx({
       flags: { agent: "claude", traceTimeoutSec: 5, resume: true },
       resumeFrom: readCheckpoint(dir) ?? undefined,
     });
     const result = await runSetupMachine(ctx, {
       ...traceless(),
-      createSetupApi: makeDeps({ client }).createSetupApi,
+      createSetupApi: makeDeps({ traces }).createSetupApi,
     });
 
     expect(looks()).toBe(1);
@@ -7162,10 +7162,10 @@ describe("how long setup waits for the first trace", () => {
     // though setup launched nothing.
     pythonRepo();
     writeFileSync(join(dir, "main.py"), "import traceroot\n\ntraceroot.initialize()\n");
-    const { client, looks } = countingClient();
+    const { traces, looks } = countingTraces();
     const deps = makeDeps({
       auth: authWithKey(),
-      client,
+      traces,
       runProcess: fakeRunProcess().run,
     });
     const { ctx } = makeCtx({
@@ -7241,7 +7241,7 @@ describe("the first trace is the application's", () => {
     };
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: () => rows }),
+      traces: () => rows,
       runProcess,
     });
     const { ctx, err } = freshCtx();
@@ -7277,7 +7277,7 @@ describe("the first trace is the application's", () => {
     };
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: () => rows }),
+      traces: () => rows,
       runProcess,
     });
     const { ctx } = freshCtx();
@@ -7302,7 +7302,7 @@ describe("JSON mode", () => {
     const secret = "tr-live-project-key-abcd";
     const deps = makeDeps({
       auth: authWithKey(secret),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const { ctx, events } = makeCtx({ json: true, flags: { agent: "claude" } });
@@ -7349,7 +7349,7 @@ describe("JSON mode", () => {
     pythonRepo();
     return makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: [""] }).run,
     });
   }
@@ -7444,7 +7444,7 @@ describe("the uncommitted-changes gate", () => {
     const process = dirtyRepo([".DS_Store", "barebone.py"]);
     const base = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       answers: ["yes"],
     });
@@ -7475,7 +7475,7 @@ describe("the uncommitted-changes gate", () => {
     const process = dirtyRepo(["notes.md"]);
     const base = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       answers: ["yes"],
     });
@@ -7501,7 +7501,7 @@ describe("the uncommitted-changes gate", () => {
     const process = dirtyRepo(["notes.md"]);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
@@ -7520,7 +7520,7 @@ describe("the uncommitted-changes gate", () => {
     const process = dirtyRepo(["notes.md"]);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       answers: ["yes"],
     });
@@ -7536,7 +7536,7 @@ describe("the uncommitted-changes gate", () => {
     const process = dirtyRepo(files);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
       answers: ["yes"],
     });
@@ -7554,7 +7554,7 @@ describe("the uncommitted-changes gate", () => {
     const process = dirtyRepo(["notes.md"]);
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({ canPrompt: false, flags: { agent: "claude" } });
@@ -7571,7 +7571,7 @@ describe("the uncommitted-changes gate", () => {
     const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx, err } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
@@ -7593,7 +7593,7 @@ describe("worktree safety", () => {
     });
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: process.run,
     });
     const { ctx } = makeCtx({ flags: { agent: "claude" } });
@@ -7623,7 +7623,7 @@ describe("where you run it is what it instruments", () => {
 
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M test1/main.py"] }).run,
     });
     const { ctx } = makeCtx({
@@ -7644,7 +7644,7 @@ describe("where you run it is what it instruments", () => {
 
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const { ctx } = makeCtx({
@@ -7680,8 +7680,8 @@ describe("where a run leaves its files", () => {
       auth: authWithKey(),
       client: fakeApiClient({
         whoamiResult: async () => whoami({ project_id: "p_other" }),
-        traces: [traceRow()],
       }),
+      traces: [traceRow()],
       setupApi: fakeSetupApi({
         listProjects: async () => [
           { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
@@ -8052,7 +8052,7 @@ describe("the machine contract, whatever the human sees", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const { ctx, events } = makeCtx({ json: true, flags: { agent: "claude" } });
@@ -8118,7 +8118,7 @@ describe("a token configured in the environment rather than saved on disk", () =
         projectId: { value: undefined, source: "none" },
       },
       storedCredential: null,
-      client: fakeApiClient({ traces: [traceRow()] }),
+      traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       setupApi: fakeSetupApi({
         listWorkspaces: async () => [{ id: "w_1", name: "acme", role: "admin" }],
@@ -8152,7 +8152,7 @@ describe("how much of the application the first trace covers", () => {
     pythonRepo();
     const deps = makeDeps({
       auth: authWithKey(),
-      client: fakeApiClient({ traces: [traceRow(trace)] }),
+      traces: [traceRow(trace)],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const harness = makeCtx({ json: options.json ?? false, flags: { agent: "claude" } });

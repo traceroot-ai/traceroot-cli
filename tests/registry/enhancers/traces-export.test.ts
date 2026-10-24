@@ -17,6 +17,7 @@ function makeFinding(over: Partial<FindingDetail> = {}): FindingDetail {
     detectors: ["hallucination"],
     results: [],
     rca: { status: "done", result: "root cause text" },
+    run_ids: [],
     ...over,
   };
 }
@@ -41,6 +42,7 @@ function makeResponse(): TraceExport {
     spans: [
       {
         cost: null,
+        cost_details: {},
         input: null,
         input_tokens: null,
         metadata: null,
@@ -57,6 +59,7 @@ function makeResponse(): TraceExport {
         status_message: null,
         total_tokens: null,
         trace_id: "abc123",
+        usage_details: {},
       },
     ],
     git_context: {

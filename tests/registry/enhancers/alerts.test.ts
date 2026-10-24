@@ -13,21 +13,21 @@ function makeWriters(): { writers: Writers; out: StringSink; err: StringSink } {
   return { writers: { out, err }, out, err };
 }
 
+const ALERT = {
+  id: "alr-1",
+  name: "checkout p95",
+  status: "OK",
+  severity: "NONE",
+  aggregation: "p95",
+  measure: "duration_ms",
+  threshold_operator: ">",
+  threshold: 1500,
+  window: "5m",
+  last_evaluated_at: "2026-09-14T10:00:00Z",
+};
+
 const RES = {
-  data: [
-    {
-      id: "alr-1",
-      name: "checkout p95",
-      status: "OK",
-      severity: "NONE",
-      aggregation: "p95",
-      measure: "duration_ms",
-      threshold_operator: ">",
-      threshold: 1500,
-      window: "5m",
-      last_evaluated_at: "2026-09-14T10:00:00Z",
-    },
-  ],
+  data: [ALERT],
   meta: { limit: 50, page: 0, total: 1, capacity: { used: 1, max: 20 } },
 };
 
@@ -58,7 +58,7 @@ describe("alerts list rendering", () => {
 
   it("shows 'never' when an alert has not been evaluated", () => {
     const { writers, out } = makeWriters();
-    const res = { ...RES, data: [{ ...RES.data[0], last_evaluated_at: null }] };
+    const res = { ...RES, data: [{ ...ALERT, last_evaluated_at: null }] };
     renderAlertsList(res, { json: false, writers, timeZone: "UTC" });
     expect(out.data).toContain("never");
   });
@@ -82,7 +82,7 @@ describe("alerts list rendering", () => {
 });
 
 const DETAIL = {
-  ...RES.data[0],
+  ...ALERT,
   view: "SPANS",
   no_data_mode: "HOLD",
   renotify: { mode: "EVERY", interval_minutes: 30 },

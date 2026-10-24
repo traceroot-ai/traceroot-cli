@@ -31,7 +31,7 @@ Run the CLI from your local build with `node ./bin/traceroot.mjs --help`, or `np
 | Command | Description |
 |---------|-------------|
 | `npm run build` | Compile TypeScript from `src/` to `dist/`. |
-| `npm run typecheck` | Type-check the project without emitting output. |
+| `npm run typecheck` | Type-check the source and the tests without emitting output. |
 | `npm run lint` | Lint the codebase with Biome. |
 | `npm run format` | Format the codebase with Biome. Use `npm run format:check` to check without writing. |
 | `npm test` | Run the test suite with Vitest. Use `npm run test:watch` for watch mode. |

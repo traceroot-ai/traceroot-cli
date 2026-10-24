@@ -269,7 +269,7 @@ describe("datasets versions get", () => {
 });
 
 describe("evals runs get", () => {
-  const base = {
+  const base: Parameters<typeof renderRun>[0] = {
     evaluation_name: "support-triage",
     run_number: 12,
     status: "completed",
@@ -558,7 +558,7 @@ describe("wiring", () => {
   it("nests three deep: 'datasets versions get' maps its id onto the path parameter", async () => {
     const h = harness({ dataset_version_id: "dsv_1", items: [] });
     await h.run("datasets", "versions", "get", "dsv_1", "--limit", "10");
-    expect(h.fake.calls[0].url).toBe(
+    expect(h.fake.calls[0]?.url).toBe(
       "https://api.test/api/v1/public/dataset-versions/dsv_1?limit=10",
     );
   });
@@ -567,7 +567,7 @@ describe("wiring", () => {
     // Without a limit the server returns the whole version; the CLI reads one page.
     const h = harness({ dataset_version_id: "dsv_1", items: [], next_cursor: null });
     await h.run("datasets", "versions", "get", "dsv_1");
-    expect(h.fake.calls[0].url).toBe(
+    expect(h.fake.calls[0]?.url).toBe(
       "https://api.test/api/v1/public/dataset-versions/dsv_1?limit=200",
     );
   });
@@ -608,7 +608,7 @@ describe("wiring", () => {
   it("'evals list' filters by name and sends the limit", async () => {
     const h = harness({ evaluations: [], next_cursor: null });
     await h.run("evals", "list", "--name", "triage", "--limit", "5");
-    expect(h.fake.calls[0].url).toBe(
+    expect(h.fake.calls[0]?.url).toBe(
       "https://api.test/api/v1/public/evaluations?limit=5&name=triage",
     );
   });
@@ -616,7 +616,7 @@ describe("wiring", () => {
   it("'evals runs list' filters by evaluation and status", async () => {
     const h = harness({ runs: [], next_cursor: null });
     await h.run("evals", "runs", "list", "--evaluation-id", "ev_1", "--status", "completed");
-    const url = new URL(h.fake.calls[0].url);
+    const url = new URL(h.fake.calls[0]?.url ?? "");
     expect(url.pathname).toBe("/api/v1/public/evaluation-runs");
     expect(url.searchParams.get("evaluation_id")).toBe("ev_1");
     expect(url.searchParams.get("status")).toBe("completed");
@@ -633,7 +633,7 @@ describe("wiring", () => {
   it("'evals runs get' sends the run id and nothing else", async () => {
     const h = harness({ evaluation_name: "e", status: "completed" });
     await h.run("evals", "runs", "get", "r_1");
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/evaluation-runs/r_1");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/evaluation-runs/r_1");
   });
 
   it("'evals runs get' has no --baseline: comparison is not part of the read", async () => {

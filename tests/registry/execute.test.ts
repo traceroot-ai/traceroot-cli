@@ -27,8 +27,8 @@ describe("executeTool", () => {
     const fake = createFakeFetch(() => jsonResponse({ data: [] }));
     await executeTool(listSessions, { limit: 5, search_query: "abc" }, transport(fake.fetchImpl));
     const call = fake.calls[0];
-    expect(call.url).toBe("https://api.test/api/v1/public/sessions?limit=5&search_query=abc");
-    const headers = call.init.headers as Record<string, string>;
+    expect(call?.url).toBe("https://api.test/api/v1/public/sessions?limit=5&search_query=abc");
+    const headers = call?.init.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer sk-secret");
     expect(headers.accept).toBe("application/json");
   });
@@ -36,7 +36,7 @@ describe("executeTool", () => {
   it("URI-encodes path params", async () => {
     const fake = createFakeFetch(() => jsonResponse({}));
     await executeTool(getSession, { session_id: "a/b c" }, transport(fake.fetchImpl));
-    expect(fake.calls[0].url).toBe("https://api.test/api/v1/public/sessions/a%2Fb%20c");
+    expect(fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sessions/a%2Fb%20c");
   });
 
   it.each([
@@ -151,7 +151,7 @@ describe("executeTool session (token-provider) auth", () => {
         return `jwt-${minted}`;
       }),
     );
-    const headers = fake.calls[0].init.headers as Record<string, string>;
+    const headers = fake.calls[0]?.init.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer jwt-1");
     expect(headers["user-agent"]).toMatch(/^traceroot-cli\//);
   });
@@ -180,7 +180,7 @@ describe("executeTool session (token-provider) auth", () => {
     );
     expect(calls).toBe(2);
     expect(invalidated).toBe(1);
-    expect((fake.calls[1].init.headers as Record<string, string>).Authorization).toBe(
+    expect((fake.calls[1]?.init.headers as Record<string, string>).Authorization).toBe(
       "Bearer jwt-2",
     );
   });
@@ -236,13 +236,13 @@ describe("executeTool project scoping", () => {
   it("injects a resolved project_id into the query", async () => {
     const fake = createFakeFetch(() => jsonResponse({ data: [] }));
     await executeTool(listSessions, { limit: 5 }, scopedTransport(fake.fetchImpl, "p-1"));
-    expect(fake.calls[0].url).toContain("project_id=p-1");
+    expect(fake.calls[0]?.url).toContain("project_id=p-1");
   });
 
   it("omits project_id when none is resolved", async () => {
     const fake = createFakeFetch(() => jsonResponse({ data: [] }));
     await executeTool(listSessions, { limit: 5 }, scopedTransport(fake.fetchImpl));
-    expect(fake.calls[0].url).not.toContain("project_id");
+    expect(fake.calls[0]?.url).not.toContain("project_id");
   });
 
   it("leaves a caller-supplied project_id untouched", async () => {
@@ -252,8 +252,8 @@ describe("executeTool project scoping", () => {
       { project_id: "explicit" },
       scopedTransport(fake.fetchImpl, "p-1"),
     );
-    expect(fake.calls[0].url).toContain("project_id=explicit");
-    expect(fake.calls[0].url).not.toContain("p-1");
+    expect(fake.calls[0]?.url).toContain("project_id=explicit");
+    expect(fake.calls[0]?.url).not.toContain("p-1");
   });
 
   it("appends a projects-list hint to the missing-project_id 400, as a usage error", async () => {
@@ -357,15 +357,15 @@ describe("withProjectScope tenancy gating", () => {
   it("does not inject project_id into an account-tenancy write", async () => {
     const fake = createFakeFetch(() => jsonResponse({ id: "ws-1" }));
     await executeTool(createWorkspace, { name: "w" }, scoped(fake.fetchImpl, "p-1"));
-    const body = JSON.parse(String(fake.calls[0].init.body));
+    const body = JSON.parse(String(fake.calls[0]?.init.body));
     expect(body.project_id).toBeUndefined();
-    expect(fake.calls[0].url).not.toContain("project_id");
+    expect(fake.calls[0]?.url).not.toContain("project_id");
   });
 
   it("still injects project_id into a project-tenancy write", async () => {
     const fake = createFakeFetch(() => jsonResponse({ id: "alr-1" }));
     await executeTool(createAlert, { name: "a" }, scoped(fake.fetchImpl, "p-1"));
-    const body = JSON.parse(String(fake.calls[0].init.body));
+    const body = JSON.parse(String(fake.calls[0]?.init.body));
     expect(body.project_id).toBe("p-1");
   });
 

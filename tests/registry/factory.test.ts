@@ -59,7 +59,7 @@ describe("generated commands (zero-code path, sessions re-placed as test fixture
     const payload = { data: [{ session_id: "s-1" }], meta: { page: 1, limit: 50, total: 1 } };
     const h = harness(jsonResponse(payload));
     await h.run("sessions", "list", "--json", "--limit", "5", "--search-query", "abc");
-    expect(h.fake.calls[0].url).toBe(
+    expect(h.fake.calls[0]?.url).toBe(
       "https://api.test/api/v1/public/sessions?limit=5&search_query=abc",
     );
     expect(JSON.parse(h.out.data)).toEqual(payload);
@@ -68,7 +68,7 @@ describe("generated commands (zero-code path, sessions re-placed as test fixture
   it("sessions get fills the path param from the positional", async () => {
     const h = harness(jsonResponse({ session_id: "s-1" }));
     await h.run("sessions", "get", "s-1", "--json");
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/sessions/s-1");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sessions/s-1");
   });
 
   it("rejects a blank path-param positional as usage, before any network call", async () => {
@@ -285,13 +285,13 @@ describe("findings get (enhancer path)", () => {
   it("dispatches get_finding for a finding id", async () => {
     const h = harness(jsonResponse({ finding_id: "fnd-1" }));
     await h.run("findings", "get", "fnd-1", "--json");
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/detectors/findings/fnd-1");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/detectors/findings/fnd-1");
   });
 
   it("retargets to get_finding_by_trace for --trace", async () => {
     const h = harness(jsonResponse({ finding_id: "fnd-1", trace_id: "tr-9" }));
     await h.run("findings", "get", "--trace", "tr-9", "--json");
-    expect(h.fake.calls[0].url).toBe(
+    expect(h.fake.calls[0]?.url).toBe(
       "https://api.test/api/v1/public/detectors/traces/tr-9/finding",
     );
   });
@@ -358,7 +358,7 @@ describe("detectors get (zero-code path)", () => {
     const payload = { detector_id: "det-1", name: "latency", template: "logic" };
     const h = harness(jsonResponse(payload));
     await h.run("detectors", "get", "det-1");
-    expect(h.fake.calls[0].url).toBe("https://api.test/api/v1/public/detectors/det-1");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/detectors/det-1");
     expect(h.out.data).toContain("Detector id:  det-1");
     expect(h.out.data).toContain("Name:         latency");
   });
@@ -368,8 +368,8 @@ describe("a nested group that is also a command", () => {
   // `sessions runs` runs list_sessions and is also the group `sessions runs get`
   // hangs off, like `sql` / `sql schema` one level deeper. Fixture tools only.
   const groups = { ...GROUPS, sessions: "Work with sessions", "sessions runs": "Session runs" };
-  const group = { kind: "command", path: ["sessions", "runs"] } as const;
-  const leaf = { kind: "command", path: ["sessions", "runs", "get"] } as const;
+  const group: Placement = { kind: "command", path: ["sessions", "runs"] };
+  const leaf: Placement = { kind: "command", path: ["sessions", "runs", "get"] };
   // PLACEMENTS already has keys for these tools, and a spread keeps its key
   // order, so they are removed first to control which one registers first.
   const rest = Object.fromEntries(

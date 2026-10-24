@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncOptionsWithStringEncoding, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -413,7 +413,13 @@ describe("a cancelled run whose binary is missing", () => {
     );
 
     const started = Date.now();
-    const run = spawnSync(process.execPath, [harness], { encoding: "utf8", detached: true });
+    // Node's `spawnSync` honours `detached`, but @types/node leaves it out of
+    // the sync options; the intersection says so without a cast.
+    const options: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
+      encoding: "utf8",
+      detached: true,
+    };
+    const run = spawnSync(process.execPath, [harness], options);
     const elapsed = Date.now() - started;
 
     expect(run.signal).toBe(null);
