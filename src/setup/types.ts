@@ -309,6 +309,12 @@ export interface SetupFlags {
   language?: string;
   service?: string;
   project?: string;
+  /**
+   * A one-shot handoff code from browser-first onboarding, redeemed once at the
+   * start of `authenticate`. Never stored and never passed on: it enters as a
+   * flag, goes to one function, and is discarded.
+   */
+  handoff?: string;
   browser: boolean;
   instrument: boolean;
   /** Explicit method; when absent the run prompts, or defaults to `task-file`. */

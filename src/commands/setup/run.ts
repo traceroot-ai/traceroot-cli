@@ -16,9 +16,13 @@
  * module, or anything under `../../setup/` that renders — see
  * `tests/cli.node-floor.test.ts`, which walks the graph and fails if it does.
  */
+import { join, resolve } from "node:path";
 import type { Command } from "commander";
 import { displaySkillPath } from "../../agents/index.js";
-import type { Context } from "../../context.js";
+import { loadOptionalEnvFileFromDisk } from "../../config/envFile.js";
+import { configPath, loadConfigOrThrow } from "../../config/manager.js";
+import type { ResolvedAuth } from "../../config/resolve.js";
+import { type Context, type ContextDeps, type GlobalOptions, buildContext } from "../../context.js";
 import { type Writers, defaultWriters } from "../../output.js";
 import { relativeToRoot, serviceArtifactDir } from "../../setup/artifacts.js";
 import {
@@ -47,7 +51,6 @@ import { acknowledgeProduction } from "../../setup/production.js";
 import type { SelectInput } from "../../setup/select.js";
 import type { SetupCheckpoint, SetupContext, SetupFlags, SetupResult } from "../../setup/types.js";
 import { wizardIntro, wizardLine, wizardOutro, wizardProgress } from "../../setup/wizard.js";
-import { contextFromCommand } from "../shared.js";
 
 /**
  * Whether the CLI may ask the user anything.
@@ -387,6 +390,105 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   return result;
 }
 
+/** Sources for {@link setupContext}: the context's own, plus one fact about the config file. */
+export interface SetupContextDeps extends ContextDeps {
+  /**
+   * Whether the config file is this directory's own `./.traceroot/config.json`
+   * rather than one `TRACEROOT_CONFIG_PATH` names. Injectable for tests.
+   */
+  configIsLocal?: boolean;
+}
+
+export interface SetupRunContext {
+  context: Context;
+  /** The warning naming the repository-local hosts a `--handoff` run set aside. */
+  hostsSetAside?: string;
+}
+
+/**
+ * The context a `setup` run resolves.
+ *
+ * Without `--handoff` it is every command's context. With it, the hosts come
+ * only from flags, `--env-file`, the process environment or the default, and
+ * never from this directory's `.env` or `./.traceroot/config.json`. The code is
+ * a bearer credential minted by the real web page, and it redeems into a
+ * seven-day session: a cloned repository whose `.env` names a host would
+ * otherwise receive it, and whoever runs that host could redeem it at the real
+ * deployment. The hand-back command needs nothing from the repository anyway:
+ * it passes `--host` for every deployment but the hosted product, which is the
+ * default.
+ *
+ * For the whole run, not only the redemption, so the session is stored under
+ * the host it was redeemed at and every later stage talks to that host.
+ */
+export function setupContext(
+  opts: GlobalOptions & { handoff?: string },
+  deps: SetupContextDeps = {},
+): SetupRunContext {
+  const handoff = opts.handoff?.trim();
+  if (handoff === undefined || handoff === "") {
+    return { context: buildContext(opts, deps) };
+  }
+
+  // The repository's two files, read once so both resolutions below see the same contents.
+  const autoEnv = (
+    deps.loadAutoEnvFile ?? (() => loadOptionalEnvFileFromDisk(join(process.cwd(), ".env")))
+  )();
+  const config = (deps.readConfig ?? (() => loadConfigOrThrow()))();
+  const configIsLocal =
+    deps.configIsLocal ??
+    resolve(configPath()) === join(process.cwd(), ".traceroot", "config.json");
+  const read: ContextDeps = { ...deps, loadAutoEnvFile: () => autoEnv, readConfig: () => config };
+
+  // What every other command would resolve, kept only to say what was set aside.
+  const ambient = buildContext(opts, read).auth;
+  const {
+    TRACEROOT_HOST_URL: _host,
+    TRACEROOT_AUTH_URL: _authHost,
+    ...autoEnvWithoutHosts
+  } = autoEnv;
+  const context = buildContext(opts, {
+    ...read,
+    loadAutoEnvFile: () => autoEnvWithoutHosts,
+    readConfig: () =>
+      config !== null && configIsLocal ? { ...config, host_url: undefined } : config,
+  });
+
+  const setAside: string[] = [];
+  if (ambient.hostUrl.value !== context.auth.hostUrl.value) {
+    setAside.push(
+      ambient.hostUrl.source === "config"
+        ? "host_url in ./.traceroot/config.json"
+        : "TRACEROOT_HOST_URL in ./.env",
+    );
+  }
+  if (
+    ambient.authHost.source === "auto-env-file" &&
+    ambient.authHost.value !== context.auth.authHost.value
+  ) {
+    setAside.push("TRACEROOT_AUTH_URL in ./.env");
+  }
+  return {
+    context,
+    hostsSetAside:
+      setAside.length === 0
+        ? undefined
+        : `ignored ${setAside.join(" and ")} for --handoff; the hand-back command names its deployment with --host`,
+  };
+}
+
+/**
+ * What {@link runSetupCommand} otherwise takes from the process. Injectable so a
+ * test can drive the command itself: the line that hands `setupContext`'s hosts
+ * and warning to the run is where the `--handoff` protection lives.
+ */
+export interface SetupCommandDeps {
+  context?: SetupContextDeps;
+  setupDeps?: (auth: ResolvedAuth) => SetupDeps;
+  writers?: Writers;
+  cwd?: string;
+}
+
 /**
  * The body of the `setup` action, behind the lazy boundary.
  *
@@ -394,9 +496,13 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
  * argv, and a bad value must be rejected without loading this module or
  * touching the repository, the config or the network.
  */
-export async function runSetupCommand(command: Command, traceTimeoutSec: number): Promise<void> {
+export async function runSetupCommand(
+  command: Command,
+  traceTimeoutSec: number,
+  deps: SetupCommandDeps = {},
+): Promise<void> {
   const opts = command.optsWithGlobals();
-  const ctx = contextFromCommand(command);
+  const { context: ctx, hostsSetAside } = setupContext(opts, deps.context);
   const json = ctx.json;
   // `--json` implies `--no-input`: an event stream and an interactive prompt
   // cannot share stdout, and a machine consumer has nobody to ask.
@@ -407,6 +513,7 @@ export async function runSetupCommand(command: Command, traceTimeoutSec: number)
     language: opts.language as string | undefined,
     service: opts.service as string | undefined,
     project: opts.project as string | undefined,
+    handoff: opts.handoff as string | undefined,
     // commander maps `--no-x` to `x: false`, defaulting to true.
     // An explicit route wins over the prompt. Without one, an interactive run
     // asks and an unattended run writes the task file.
@@ -419,10 +526,10 @@ export async function runSetupCommand(command: Command, traceTimeoutSec: number)
 
   const result = await runSetup({
     ctx,
-    cwd: process.cwd(),
+    cwd: deps.cwd ?? process.cwd(),
     flags,
-    writers: defaultWriters,
-    setupDeps: defaultSetupDeps(ctx.auth),
+    writers: deps.writers ?? defaultWriters,
+    setupDeps: { ...(deps.setupDeps ?? defaultSetupDeps)(ctx.auth), hostsSetAside },
     canPrompt: canPrompt({
       json,
       noInput,

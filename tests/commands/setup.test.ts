@@ -15,15 +15,20 @@ import {
   resolveServiceOption,
   resolveTraceTimeoutSec,
 } from "../../src/commands/setup.js";
+import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import {
+  type SetupContextDeps,
   canPrompt,
   closingLine,
   resumeQuestion,
   runSetup,
+  runSetupCommand,
+  setupContext,
   setupFailureExit,
 } from "../../src/commands/setup/run.js";
+import { loadOptionalEnvFileFromDisk } from "../../src/config/envFile.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
-import type { Context } from "../../src/context.js";
+import { type Context, buildContext } from "../../src/context.js";
 import type { DoctorCheck } from "../../src/doctor/types.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
@@ -43,6 +48,7 @@ import {
   fakeApiClient,
   fakeInput,
   fakeRunProcess,
+  fakeSetupApi,
   makeDeps,
   makeWriters,
   traceRow,
@@ -157,6 +163,7 @@ describe("setup command registration", () => {
         "--language",
         "--service",
         "--project",
+        "--handoff",
         "--no-browser",
         "--no-instrument",
         "--resume",
@@ -173,6 +180,16 @@ describe("setup command registration", () => {
     // Deliberately absent: bypass-all-permissions and an arbitrary agent command.
     expect(flags).not.toContain("--yolo");
     expect(flags).not.toContain("--agent-cmd");
+  });
+
+  it("declares --handoff on `setup`, never on the program", () => {
+    // A program option is rendered in EVERY subcommand's "Global Options"
+    // section, and a one-shot onboarding credential has no business being
+    // offered by `traceroot traces list --help`.
+    const program = buildProgram();
+    const setup = program.commands.find((c) => c.name() === "setup");
+    expect((setup?.options ?? []).map((o) => o.long)).toContain("--handoff");
+    expect(program.options.map((o) => o.long)).not.toContain("--handoff");
   });
 
   it("refuses a stray operand at the parse, before any action runs", async () => {
@@ -689,6 +706,236 @@ describe("runSetup", () => {
       setupDeps: makeDeps({ auth: authWithKey(), client: fakeApiClient() }),
     });
     expect(err.data).toContain("No previous setup to resume");
+  });
+});
+
+describe("the hosts a --handoff run resolves", () => {
+  const CODE = `trh_${"A".repeat(43)}`;
+  /** A host only the repository names: what a cloned `.env` would point at. */
+  const REPO = "https://repo-chosen.example.test";
+  /** A self-hosted deployment, named the way the hand-back command names one. */
+  const SELF = "https://traceroot.self.example.test";
+  const REMEDY = "the hand-back command names its deployment with --host";
+
+  const hermetic: SetupContextDeps = {
+    env: {},
+    readConfig: () => null,
+    loadEnvFile: () => ({}),
+    loadAutoEnvFile: () => ({}),
+    readCredential: () => null,
+    configIsLocal: true,
+  };
+  const withEnv = (vars: Record<string, string>): SetupContextDeps => ({
+    ...hermetic,
+    loadAutoEnvFile: () => vars,
+  });
+
+  it("leaves a run without a code resolving exactly as every other command does", () => {
+    const deps = withEnv({ TRACEROOT_HOST_URL: REPO, TRACEROOT_AUTH_URL: REPO });
+    const run = setupContext({}, deps);
+
+    expect(run.context).toEqual(buildContext({}, deps));
+    expect(run.context.auth.hostUrl).toEqual({ value: REPO, source: "auto-env-file" });
+    expect(run.hostsSetAside).toBeUndefined();
+  });
+
+  it("resolves the two approved hand-backs exactly as before, and says nothing", () => {
+    // Cloud: the page omits --host, because the hosted product is the default.
+    const cloud = setupContext({ handoff: CODE }, hermetic);
+    expect(cloud.context).toEqual(buildContext({}, hermetic));
+    expect(cloud.context.auth.authHost).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(cloud.hostsSetAside).toBeUndefined();
+
+    // Self-hosted: the page passes --host.
+    const self = setupContext({ handoff: CODE, host: SELF }, hermetic);
+    expect(self.context).toEqual(buildContext({ host: SELF }, hermetic));
+    expect(self.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(self.hostsSetAside).toBeUndefined();
+  });
+
+  it("sends the code to the default host, not to a TRACEROOT_HOST_URL in this directory's .env", () => {
+    const run = setupContext({ handoff: CODE }, withEnv({ TRACEROOT_HOST_URL: REPO }));
+
+    expect(run.context.auth.hostUrl).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.context.auth.authHost).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.hostsSetAside).toBe(`ignored TRACEROOT_HOST_URL in ./.env for --handoff; ${REMEDY}`);
+  });
+
+  it("sends the code to the default host, not to a TRACEROOT_AUTH_URL in this directory's .env", () => {
+    const run = setupContext({ handoff: CODE }, withEnv({ TRACEROOT_AUTH_URL: REPO }));
+
+    expect(run.context.auth.hostUrl).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.context.auth.authHost).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.hostsSetAside).toBe(`ignored TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`);
+  });
+
+  it("names both in one line when the .env set both", () => {
+    const run = setupContext(
+      { handoff: CODE },
+      withEnv({ TRACEROOT_HOST_URL: REPO, TRACEROOT_AUTH_URL: `${REPO}:3000` }),
+    );
+
+    expect(run.context.auth.authHost.value).toBe(DEFAULT_HOST);
+    expect(run.hostsSetAside).toBe(
+      `ignored TRACEROOT_HOST_URL in ./.env and TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`,
+    );
+  });
+
+  it("ignores a host_url in this directory's ./.traceroot/config.json, and only the host", () => {
+    const run = setupContext(
+      { handoff: CODE },
+      { ...hermetic, readConfig: () => ({ host_url: REPO, api_key: "tr-config-key" }) },
+    );
+
+    expect(run.context.auth.hostUrl).toEqual({ value: DEFAULT_HOST, source: "default" });
+    expect(run.context.auth.authHost.value).toBe(DEFAULT_HOST);
+    // The key is still there for the ladder's ambient-key rung to set aside.
+    expect(run.context.auth.credential).toEqual({
+      kind: "api-key",
+      value: "tr-config-key",
+      source: "config",
+    });
+    expect(run.hostsSetAside).toBe(
+      `ignored host_url in ./.traceroot/config.json for --handoff; ${REMEDY}`,
+    );
+  });
+
+  it("honours a config file that TRACEROOT_CONFIG_PATH names", () => {
+    // Named by the process environment, which is an explicit source.
+    const run = setupContext(
+      { handoff: CODE },
+      { ...hermetic, configIsLocal: false, readConfig: () => ({ host_url: SELF }) },
+    );
+
+    expect(run.context.auth.hostUrl).toEqual({ value: SELF, source: "config" });
+    expect(run.hostsSetAside).toBeUndefined();
+  });
+
+  it("still lets an explicit --host win, and is quiet when the repository's host lost anyway", () => {
+    const run = setupContext({ handoff: CODE, host: SELF }, withEnv({ TRACEROOT_HOST_URL: REPO }));
+
+    expect(run.context.auth.hostUrl).toEqual({ value: SELF, source: "flag" });
+    expect(run.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(run.hostsSetAside).toBeUndefined();
+  });
+
+  it("does not let the .env's auth URL split a --host hand-back", () => {
+    const run = setupContext({ handoff: CODE, host: SELF }, withEnv({ TRACEROOT_AUTH_URL: REPO }));
+
+    expect(run.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(run.hostsSetAside).toBe(`ignored TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`);
+  });
+
+  it("keeps the hosts named by --auth-host, the process environment and --env-file", () => {
+    const repoEnv = { TRACEROOT_HOST_URL: REPO, TRACEROOT_AUTH_URL: REPO };
+
+    const authFlag = setupContext(
+      { handoff: CODE, host: SELF, authHost: `${SELF}:3000` },
+      withEnv(repoEnv),
+    );
+    expect(authFlag.context.auth.authHost).toEqual({ value: `${SELF}:3000`, source: "flag" });
+    expect(authFlag.hostsSetAside).toBeUndefined();
+
+    const fromEnv = setupContext(
+      { handoff: CODE },
+      {
+        ...withEnv(repoEnv),
+        env: { TRACEROOT_HOST_URL: SELF, TRACEROOT_AUTH_URL: `${SELF}:3000` },
+      },
+    );
+    expect(fromEnv.context.auth.hostUrl).toEqual({ value: SELF, source: "env" });
+    expect(fromEnv.context.auth.authHost).toEqual({ value: `${SELF}:3000`, source: "env" });
+    expect(fromEnv.hostsSetAside).toBeUndefined();
+
+    const fromFile = setupContext(
+      { handoff: CODE, envFile: "deploy.env" },
+      { ...withEnv(repoEnv), loadEnvFile: () => ({ TRACEROOT_HOST_URL: SELF }) },
+    );
+    expect(fromFile.context.auth.hostUrl).toEqual({ value: SELF, source: "env-file" });
+    // The .env's auth URL still loses: the file named only the API host.
+    expect(fromFile.context.auth.authHost).toEqual({ value: SELF, source: "default" });
+    expect(fromFile.hostsSetAside).toBe(
+      `ignored TRACEROOT_AUTH_URL in ./.env for --handoff; ${REMEDY}`,
+    );
+  });
+
+  it("looks up the saved sign-in under the host it will redeem at, not the repository's", () => {
+    // The whole run reads this resolution, so a session saved for the
+    // repository's host must not ride along to the default one.
+    const looked: string[] = [];
+    const run = setupContext(
+      { handoff: CODE },
+      {
+        ...withEnv({ TRACEROOT_HOST_URL: REPO }),
+        readCredential: (host) => {
+          looked.push(host);
+          return host === REPO
+            ? { session_token: "repo-session", created_at: "2026-10-01T00:00:00.000Z" }
+            : null;
+        },
+      },
+    );
+
+    expect(looked.at(-1)).toBe(DEFAULT_HOST);
+    expect(run.context.auth.credential.kind).toBe("none");
+  });
+
+  it("reaches the run through the setup command itself, warning included", async () => {
+    // Everything above holds only if `runSetupCommand` hands the run
+    // `setupContext`'s hosts and its warning. Drop either and a repository
+    // `.env` chooses where the code goes again, or does so without a word.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    writeFileSync(join(dir, ".env"), `TRACEROOT_HOST_URL=${REPO}\n`);
+
+    // The real `setup` command, its flags parsed by commander as on a command line.
+    const setup = buildProgram().commands.find((c) => c.name() === "setup");
+    if (setup === undefined) {
+      throw new Error("setup is not registered");
+    }
+    setup.parseOptions(["--handoff", CODE, "--no-input", "--agent", "claude"]);
+
+    const redeemedAt: string[] = [];
+    const { writers, err } = makeWriters();
+    await runSetupCommand(setup, 5, {
+      cwd: dir,
+      writers,
+      context: {
+        ...hermetic,
+        loadAutoEnvFile: () => loadOptionalEnvFileFromDisk(join(dir, ".env")),
+      },
+      setupDeps: (auth) =>
+        makeDeps({
+          auth,
+          client: fakeApiClient({ traces: [traceRow()] }),
+          setupApi: fakeSetupApi({
+            listProjects: async () => [
+              { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+            ],
+            createProjectApiKey: async (input) => ({
+              id: "ak_1",
+              name: input.name,
+              hint: "tr-4444-5555",
+              project_id: input.projectId,
+              scope: input.scope,
+              expires_at: null,
+              key: "tr-handoff-minted-key-1234",
+            }),
+          }),
+          runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+          redeemHandoff: async ({ authHost }) => {
+            redeemedAt.push(authHost);
+            return {
+              kind: "redeemed",
+              credential: { sessionToken: "handoff-session-token", email: "bob@new.example" },
+            };
+          },
+        }),
+    });
+
+    expect(redeemedAt).toEqual([DEFAULT_HOST]);
+    const warning = `warning: ignored TRACEROOT_HOST_URL in ./.env for --handoff; ${REMEDY}`;
+    expect(plain(err.data).split(warning)).toHaveLength(2);
   });
 });
 

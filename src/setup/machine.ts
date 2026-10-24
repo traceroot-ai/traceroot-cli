@@ -26,6 +26,7 @@ import {
   openBrowserForPlatform,
   runDeviceFlow,
 } from "../auth/deviceFlow.js";
+import { type HandoffOutcome, type HandoffRedeemOptions, redeemHandoff } from "../auth/handoff.js";
 import {
   type TokenProvider,
   type TokenProviderOptions,
@@ -147,6 +148,11 @@ const SKILL_NAME = "traceroot-instrument-repo";
  */
 export interface SetupDeps {
   resolvedAuth: ResolvedAuth;
+  /**
+   * The warning naming the repository-local hosts a `--handoff` run left out of
+   * `resolvedAuth`, said once when authentication starts. See `setupContext`.
+   */
+  hostsSetAside?: string;
   env: NodeJS.ProcessEnv;
   now: () => Date;
   runProcess: RunProcess;
@@ -199,6 +205,11 @@ export interface SetupDeps {
    * `login` sign a user in the same way rather than each having its own.
    */
   runDeviceFlow: (deps: DeviceFlowDeps) => Promise<DeviceFlowResult>;
+  /**
+   * Exchanges browser-first onboarding's one-shot code for a session. Owned by
+   * `src/auth/`, next to the device flow it stands in for.
+   */
+  redeemHandoff: (opts: HandoffRedeemOptions) => Promise<HandoffOutcome>;
   createTokenProvider: (opts: TokenProviderOptions) => TokenProvider;
 }
 
@@ -246,6 +257,7 @@ export function defaultSetupDeps(resolvedAuth: ResolvedAuth): SetupDeps {
     writeCredential: (host, entry) => writeCredential(host, entry),
     deleteCredential: (host) => deleteCredential(host),
     runDeviceFlow: (deviceDeps) => runDeviceFlow(deviceDeps),
+    redeemHandoff: (opts) => redeemHandoff(opts),
     createTokenProvider: (opts) => createTokenProvider(opts),
     probeHost: async (candidate) => {
       try {
@@ -543,12 +555,89 @@ function apiKeyFrom(auth: SetupDeps["resolvedAuth"]): string | undefined {
   return auth.credential.kind === "api-key" ? auth.credential.value : undefined;
 }
 
+/**
+ * The line that says an ambient API key was set aside for a handoff code.
+ *
+ * Named by where it came from, because "a key is configured" is not actionable
+ * when the reader cannot see *which* key — and the places differ in how
+ * surprising they are: a `.env` belongs to the repository the user is standing
+ * in, while the config and credentials files belong to the machine.
+ *
+ * The credentials file is in here because `resolveAuth` reclassifies a
+ * `tr_`-shaped value found in its session slot as an API key, source and all —
+ * so "an ambient API key" really can come from there, and naming the config
+ * file for it sends the reader to edit a file that has nothing in it.
+ */
+function ambientKeySetAside(source: ResolvedAuth["credential"]["source"]): string {
+  const where =
+    source === "auto-env-file"
+      ? "in this directory's .env"
+      : source === "credentials-file"
+        ? "in your TraceRoot credentials file"
+        : "in your TraceRoot config file";
+  return `A TraceRoot API key is configured ${where}; the sign-in code from the browser takes precedence.`;
+}
+
 const authenticate: StageDefinition = {
   stage: "authenticate",
   isSatisfied: (ctx) => ctx.session !== undefined,
   async run(ctx, deps) {
     const host = deps.resolvedAuth.hostUrl.value ?? DEFAULT_HOST;
     const existing = apiKeyFrom(deps.resolvedAuth);
+
+    // Said before anything is sent, because `host` above is already the
+    // deployment the code will go to.
+    if (deps.hostsSetAside !== undefined) {
+      wizardWarn(ctx, deps.hostsSetAside);
+    }
+
+    // Browser-first onboarding's one-shot code. It is redeemed at most once per
+    // run, from whichever of the two rungs below is reached first.
+    const handoffCode = ctx.flags.handoff?.trim();
+    const handoff = handoffCode === undefined || handoffCode === "" ? null : handoffCode;
+    let handoffTried = false;
+    const tryHandoff = async (): Promise<boolean> => {
+      if (handoff === null || handoffTried) {
+        return false;
+      }
+      handoffTried = true;
+      return await handoffSignIn(ctx, deps, host, handoff);
+    };
+
+    // Where the code sits relative to a configured API key — the one real
+    // precedence question this feature poses.
+    //
+    // An `--api-key` typed on this command line, named through `--env-file`, or
+    // exported in the environment is a deliberate instruction, and it keeps
+    // winning. An *ambient* key does not. One left in this directory's `.env`
+    // or in the config file by an earlier run is machine state, not intent, and
+    // letting it quietly defeat a code typed on the command line is the exact
+    // failure this feature exists to remove: the hand-back step says to run
+    // setup where the application lives, and a successful run writes
+    // `TRACEROOT_API_KEY` into that directory's `.env` — so the likeliest place
+    // to paste a handoff command is a directory already holding a key for some
+    // other account. Honouring it silently authenticates as that account and
+    // then dies three stages later, at project selection, with a message about
+    // a missing project rather than about the wrong account.
+    //
+    // The explicit/ambient line is `isExplicitSource`'s, not a second one
+    // invented here.
+    const keyIsAmbient =
+      existing !== undefined &&
+      existing !== "" &&
+      !isExplicitSource(deps.resolvedAuth.credential.source);
+    if (handoff !== null && keyIsAmbient) {
+      // Said before the redemption, not after: this is the decision, and it
+      // holds whether or not the code turns out to still be live.
+      wizardNote(ctx.writers, [ambientKeySetAside(deps.resolvedAuth.credential.source)], {
+        settled: true,
+      });
+      if (await tryHandoff()) {
+        return "ok";
+      }
+      // The code was refused, so the flag has had its say and the ordinary
+      // ladder resumes — ambient key included.
+    }
 
     if (existing !== undefined && existing !== "") {
       const client = deps.createClient({
@@ -597,6 +686,21 @@ const authenticate: StageDefinition = {
         }
         wizardWarn(ctx, "the existing TraceRoot credential was rejected; signing in again");
       }
+    }
+
+    // The code's other rung, reached when no key was configured at all or when
+    // an explicit one was rejected. Either way it runs before anything saved on
+    // disk is consulted: the code is intent to authenticate as the account
+    // whose browser printed the command, and the `--project` on that same line
+    // belongs to *that* account, so reusing a stored session would not merely
+    // be the wrong account — it would fail later and elsewhere, as a confusing
+    // project error rather than an auth one.
+    //
+    // A refusal falls through to the rungs below exactly as if the flag had not
+    // been passed: interactive and nothing stored means the device flow, which
+    // is one extra page and the status quo — never a dead end.
+    if (await tryHandoff()) {
+      return "ok";
     }
 
     // A stored credential means this user already signed in on this machine, so
@@ -793,6 +897,155 @@ function railWriters(ctx: SetupContext): Writers {
 }
 
 /**
+ * Stores a freshly minted session for the host, and returns the entry whether
+ * or not the store took it.
+ *
+ * Both ways a user can sign in end here — the browser approval and the one-shot
+ * code from the web app — with the same entry, the same fields and the same
+ * conditions on the optional two: `auth_host` only when the app and the API are
+ * not the same host, `email` only when the sign-in told us one. Written once so
+ * a later run cannot tell which way this machine signed in.
+ *
+ * Keeping it is what lets the next repository skip the browser entirely, and
+ * this is the only moment it is available — but a store that failed must not
+ * fail a sign-in that otherwise worked. So that is a warning, and the caller
+ * gets the entry back either way, because this run still needs it to mint a
+ * token.
+ */
+function storeSessionCredential(
+  ctx: SetupContext,
+  deps: SetupDeps,
+  session: { host: string; authHost: string; sessionToken: string; email: string | undefined },
+): CredentialEntry {
+  const { host, authHost, email } = session;
+  const entry: CredentialEntry = {
+    session_token: session.sessionToken,
+    created_at: deps.now().toISOString(),
+  };
+  if (authHost !== host) {
+    entry.auth_host = authHost;
+  }
+  if (email !== undefined) {
+    entry.email = email;
+  }
+  try {
+    deps.writeCredential(host, entry);
+  } catch {
+    wizardWarn(ctx, "could not save the TraceRoot sign-in for future runs");
+  }
+  return entry;
+}
+
+/**
+ * How a sign-in line names the account: with the email when one is known, and
+ * without pretending to one when it is not.
+ *
+ * One spelling for the three lines that announce a sign-in, because a user
+ * reading two of them in the same run is comparing accounts.
+ */
+function signedInAs(email: string | undefined): string {
+  return email === undefined ? "Signed in" : `Signed in as ${wizardValue(email)}`;
+}
+
+/**
+ * The one line that says a handoff is replacing a different account's sign-in.
+ *
+ * `writeCredential` *replaces* the host's entry, so redeeming a handoff logs
+ * this machine out of whatever was stored. Doing that silently is the bug this
+ * exists to close: a run that quietly reuses — or quietly discards — the wrong
+ * account fails much later, at project selection, where the message says
+ * nothing about which account it is for.
+ *
+ * Returns `undefined` only when there is nothing to say: no stored credential,
+ * or one provably for the same account. Sameness is *proved*, never assumed —
+ * when either side's email is missing the sentence degrades to a non-specific
+ * one rather than going quiet.
+ */
+function accountSwitchLine(
+  previous: CredentialEntry | null,
+  email: string | undefined,
+): string | undefined {
+  if (previous === null) {
+    return undefined;
+  }
+  if (previous.email === undefined || email === undefined) {
+    return `${signedInAs(email)}; the sign-in code from the browser replaced the TraceRoot sign-in already saved on this machine.`;
+  }
+  if (previous.email === email) {
+    return undefined;
+  }
+  return `${signedInAs(previous.email)}; the code from the browser is for ${wizardValue(email)} — switching.`;
+}
+
+/**
+ * Browser-first onboarding's handoff.
+ *
+ * The code was minted by the page the user is already looking at, so redeeming
+ * it here is what lets this run authenticate without a second browser page.
+ * What comes back is the same artifact a device-flow approval returns, written
+ * to the same store through the same shape — from `resolveAuth`'s point of view
+ * the result is an ordinary `credentials-file` session, with no new source and
+ * no new precedence rule.
+ *
+ * Returns false when the server refused the code, so the caller can fall back
+ * to the sign-in it would have used anyway. That is the *only* recoverable
+ * failure: a 429, a 5xx or a timeout is a reachability problem and is raised as
+ * one by `redeemHandoff`, because reporting "your code expired" for a network
+ * fault would send the user hunting for a new code they do not need.
+ */
+async function handoffSignIn(
+  ctx: SetupContext,
+  deps: SetupDeps,
+  host: string,
+  code: string,
+): Promise<boolean> {
+  // Redemption talks to the app, which is not always the API host — a split
+  // local stack runs them on different ports, and the code was minted by the
+  // app. Same resolution the device flow and the token mint already use.
+  const authHost = deps.resolvedAuth.authHost.value ?? host;
+
+  const outcome = await deps.redeemHandoff({ authHost, code });
+  if (outcome.kind === "rejected") {
+    // Unknown, expired and already-redeemed are one answer by design, so this
+    // says the true thing all three have in common rather than guessing.
+    wizardWarn(
+      ctx,
+      "the sign-in code from the browser is no longer valid (it expires after a few minutes, and works once); signing in the normal way",
+    );
+    return false;
+  }
+  const { sessionToken, email } = outcome.credential;
+
+  // Read before the write that replaces it: the announcement is about what is
+  // being lost, and after `writeCredential` there is nothing left to compare.
+  const switched = accountSwitchLine(deps.readCredential(host), email);
+
+  // Exactly the entry the browser path writes, because it is the same writer.
+  const entry = storeSessionCredential(ctx, deps, { host, authHost, sessionToken, email });
+
+  wizardNote(
+    ctx.writers,
+    [
+      switched ?? `${signedInAs(email)}.`,
+      "",
+      wizardAside("Used the sign-in code from the browser — no second page needed."),
+    ],
+    { settled: true },
+  );
+
+  const signedIn = await userCredentialSignIn(ctx, deps, host, entry, { announce: false });
+  if (!signedIn) {
+    throw new SetupError({
+      stage: "authenticate",
+      code: "NOT_AUTHENTICATED",
+      message: "The sign-in from the browser was not accepted.",
+      remedy: "Run `traceroot setup` again.",
+    });
+  }
+  return true;
+}
+
+/**
  * The browser handoff.
  *
  * The flow itself belongs to `src/auth/deviceFlow.ts`, shared with `login`, so
@@ -879,36 +1132,19 @@ async function browserSignIn(
     // next call will surface a real problem if there is one.
   }
 
-  // Keep the credential. This is the only moment it is available, and storing
-  // it is what lets the next repository skip this handoff. A failure to store
-  // must not fail a sign-in that otherwise worked — the cost is one more
-  // browser trip later.
-  const entry: CredentialEntry = {
-    session_token: credential.sessionToken,
-    created_at: deps.now().toISOString(),
-  };
-  if (authHost !== host) {
-    entry.auth_host = authHost;
-  }
-  if (email !== undefined) {
-    entry.email = email;
-  }
-  try {
-    deps.writeCredential(host, entry);
-  } catch {
-    wizardWarn(ctx, "could not save the TraceRoot sign-in for future runs");
-  }
+  const entry = storeSessionCredential(ctx, deps, {
+    host,
+    authHost,
+    sessionToken: credential.sessionToken,
+    email,
+  });
 
   // Not `wizardStepLine`: `wizardNote` puts the step glyph on the first row of
   // the block itself, so composing one in as well printed two markers in the
   // gutter — `◇  ◆  Signed in as …`. The glyph belongs to the block, and
   // `wizardStepLine` is for the one caller that has no block to hang it on: the
   // spinner, which needs the settled line in hand before it erases what it drew.
-  wizardNote(
-    ctx.writers,
-    [email === undefined ? "Signed in." : `Signed in as ${wizardValue(email)}.`],
-    { settled: true },
-  );
+  wizardNote(ctx.writers, [`${signedInAs(email)}.`], { settled: true });
 
   const signedIn = await userCredentialSignIn(ctx, deps, host, entry, { announce: false });
   if (!signedIn) {
@@ -2261,13 +2497,26 @@ const configureRepository: StageDefinition = {
     // mentioned again.
     const keys = applicationEnvKeys(session.host);
     const updates: Record<string, string> = { [KEY_ENV]: credential.key.reveal() };
-    if (keys.includes(HOST_ENV)) {
+    // A host line the file already holds for another deployment is replaced
+    // even on the hosted product, where the key alone is otherwise the whole
+    // set: the application reads that line, so the new key and its traces would
+    // go to a deployment the key does not belong to. The usual source is a
+    // repository `.env` whose host a `--handoff` run ignored.
+    const fileHost = envFileHost(envPath)?.trim().replace(/\/+$/, "");
+    const replacesHost = fileHost !== undefined && fileHost !== "" && fileHost !== session.host;
+    if (keys.includes(HOST_ENV) || replacesHost) {
       updates[HOST_ENV] = session.host;
     }
     // What the file said first, because a rerun writes over the project's own
     // file: undoing a value it replaced means putting that value back.
     const before = readIfPresent(envPath);
     const result = upsertEnvFile(envPath, updates);
+    if (replacesHost && result.written.includes(HOST_ENV)) {
+      wizardWarn(
+        ctx,
+        `replaced ${HOST_ENV} in ${envEntry} (${fileHost}) with ${session.host}, the deployment this run's key belongs to`,
+      );
+    }
     const held = before === null ? {} : parseEnvFile(before);
     // `created`, because undoing a write and undoing a file are different
     // things and only the writer knows which this was.
@@ -2403,6 +2652,15 @@ async function warnIfNotIgnored(ctx: SetupContext, deps: SetupDeps, entry: strin
 function envFileKey(path: string): string | undefined {
   try {
     return loadOptionalEnvFileFromDisk(path)[KEY_ENV];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The host a dotenv file points the application at, read the way {@link envFileKey} reads its key. */
+function envFileHost(path: string): string | undefined {
+  try {
+    return loadOptionalEnvFileFromDisk(path)[HOST_ENV];
   } catch {
     return undefined;
   }
