@@ -46,11 +46,17 @@ describe("subcommand help: native Options vs Global Options", () => {
     });
   }
 
-  it("offers --handoff in `setup --help` and nowhere else", () => {
-    // Declared on the subcommand rather than the program: a one-shot
-    // onboarding credential must not be advertised by every other command.
-    expect(runCli("setup", "--help").stdout).toContain("--handoff <code>");
-    for (const cmd of [["traces", "list"], ["status"], ["skills", "list"], ["instrument"]]) {
+  it("offers --handoff in no `--help`, setup's included", () => {
+    // Declared on the subcommand rather than the program, so a one-shot
+    // onboarding credential is not advertised by every other command, and
+    // hidden on `setup` itself while the web app prints no code to pass.
+    for (const cmd of [
+      ["setup"],
+      ["traces", "list"],
+      ["status"],
+      ["skills", "list"],
+      ["instrument"],
+    ]) {
       const { stdout } = runCli(...cmd, "--help");
       expect(stdout, `\`${cmd.join(" ")} --help\` does not mention --handoff`).not.toContain(
         "--handoff",

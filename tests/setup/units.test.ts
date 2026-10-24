@@ -26,9 +26,9 @@ import { renderSetupReport } from "../../src/setup/report.js";
 import { installCommand, resolveSdkVersion, sdkPackageFor } from "../../src/setup/sdk.js";
 import { makeSecret, redact, secretHint } from "../../src/setup/secret.js";
 import { detectStack } from "../../src/setup/stack.js";
-import { buildSetupTask, parseCompletion } from "../../src/setup/task.js";
+import { afterEchoedTask, buildSetupTask, parseCompletion } from "../../src/setup/task.js";
 import type { DetectedService } from "../../src/setup/types.js";
-import { TEST_SDK } from "./helpers.js";
+import { TEST_SDK, codexCapture } from "./helpers.js";
 
 let dir: string;
 
@@ -604,6 +604,53 @@ describe("completion parsing", () => {
     expect(parseCompletion("```json traceroot-setup-result\nnot json\n```")).toBeNull();
     expect(parseCompletion("no block at all")).toBeNull();
   });
+
+  describe("after the task Codex echoes", () => {
+    const task = buildSetupTask({
+      credentialFiles: [],
+      service: {
+        path: ".",
+        language: "python",
+        framework: null,
+        entryPoint: "main.py",
+        packageManager: "pip",
+        testCommand: null,
+        evidence: ["requirements.txt"],
+      },
+      root: "/repo",
+      sdk: TEST_SDK,
+      skillPath: "p",
+      verifyCommand: null,
+      interactive: false,
+      existingInstrumentation: [],
+    });
+
+    it("reads a reply with no block as no report, not as the task's template", () => {
+      const output = codexCapture(task, "I added initialize() to main.py and ran the app once.");
+      // The hazard: the template in the echoed task is a valid block.
+      expect(parseCompletion(output)?.notes).toBe("anything the user should know");
+      expect(parseCompletion(afterEchoedTask(output, task))).toBeNull();
+    });
+
+    it("still reads the block the reply carries", () => {
+      const reply = [
+        "Added initialize() to main.py.",
+        "```json traceroot-setup-result",
+        '{"files_changed":["main.py"],"sdk_version":"1.2.3","trace_id":null,"notes":"done"}',
+        "```",
+      ].join("\n");
+      expect(parseCompletion(afterEchoedTask(codexCapture(task, reply), task))).toEqual({
+        filesChanged: ["main.py"],
+        sdkVersion: "1.2.3",
+        traceId: null,
+        notes: "done",
+      });
+    });
+
+    it("leaves output that does not echo the task whole", () => {
+      expect(afterEchoedTask("some output", task)).toBe("some output");
+    });
+  });
 });
 
 describe("agent invocation", () => {
@@ -703,7 +750,9 @@ describe("setup report", () => {
     }) as unknown as Parameters<typeof renderSetupReport>[0];
 
   it("records what was connected, instrumented and verified", () => {
-    const md = renderSetupReport(baseCtx(), new Date("2026-07-30T00:02:00.000Z"));
+    const md = renderSetupReport(baseCtx(), new Date("2026-07-30T00:02:00.000Z"), {
+      kind: "environment",
+    });
 
     expect(md).toContain("a trace has been received");
     expect(md).toContain("checkout");
@@ -715,13 +764,13 @@ describe("setup report", () => {
   it("never contains a credential", () => {
     // This file is written to be pasted into pull requests, which is the last
     // place a key should be able to reach. Only the hint appears.
-    const md = renderSetupReport(baseCtx(), new Date());
+    const md = renderSetupReport(baseCtx(), new Date(), { kind: "environment" });
     expect(md).toContain("tr-a439-a3dc");
     expect(md).not.toMatch(/tr[_-][a-z0-9]{8,}/i);
   });
 
   it("makes no claim about the project's own tests, which setup never runs", () => {
-    const md = renderSetupReport(baseCtx(), new Date());
+    const md = renderSetupReport(baseCtx(), new Date(), { kind: "environment" });
 
     expect(md).not.toContain("Your checks");
     expect(md).not.toContain("TraceRoot switched off");
@@ -730,7 +779,9 @@ describe("setup report", () => {
   it("says what to do next when no trace arrived", () => {
     const ctx = baseCtx() as unknown as { trace?: unknown };
     ctx.trace = undefined;
-    const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date());
+    const md = renderSetupReport(ctx as Parameters<typeof renderSetupReport>[0], new Date(), {
+      kind: "environment",
+    });
 
     expect(md).toContain("no trace has been seen yet");
     expect(md).toContain("--resume");
@@ -1169,6 +1220,43 @@ describe("reading a checkpoint that cannot be trusted", () => {
     );
 
     expect(readCheckpoint(root)).toBeNull();
+  });
+
+  it("reads a trace written before its attribution was recorded, as unknown", async () => {
+    // Missing is "not known", never "someone else's": the resumed report must
+    // not start doubting a trace the first run had no reason to doubt.
+    const { readCheckpoint } = await import("../../src/setup/checkpoint.js");
+    const root = dir;
+    mkdirSync(join(root, ".traceroot"), { recursive: true });
+    writeFileSync(
+      join(root, ".traceroot", "setup.json"),
+      JSON.stringify({
+        version: 1,
+        startedAt: "2026-07-26T12:00:00.000Z",
+        completedStages: ["verify_trace"],
+        trace: {
+          traceId: "t_1",
+          traceUrl: "https://app.example.test/trace/t_1",
+          observedAt: "2026-07-26T12:00:30.000Z",
+          waitedMs: 4000,
+          spanCount: 7,
+        },
+      }),
+      "utf8",
+    );
+
+    const checkpoint = readCheckpoint(root);
+    expect(checkpoint?.trace?.traceId).toBe("t_1");
+    expect(checkpoint?.trace?.attributed).toBeUndefined();
+    const md = renderSetupReport(
+      { root, checkpoint, trace: checkpoint?.trace } as unknown as Parameters<
+        typeof renderSetupReport
+      >[0],
+      new Date("2026-07-26T12:01:00.000Z"),
+      { kind: "environment" },
+    );
+    expect(md).toContain("**First trace.** `t_1` — 7 spans\n");
+    expect(md).not.toContain("Not confirmed");
   });
 
   it("drops a stage and fields it does not know rather than the whole checkpoint", async () => {

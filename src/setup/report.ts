@@ -92,34 +92,25 @@ function skillRow(root: string, agentId: string): string {
  * paste into pull requests, which is the last place a secret should be able to
  * reach.
  *
- * `keyLocation` is where the key sits on this machine — see
- * {@link ApplicationKeyLocation}. Optional because the context alone answers
- * the question for every run that wrote a file, and a caller that has no run's
- * deps to hand gets that answer. A caller that does should pass
- * `applicationKeyLocation`, which is the only thing that can tell a key already
- * in the project's own `.env` from a key in no file at all: that run skips
- * `configure_repository` entirely, so `credentialEnvFile` stays unset over a
- * file the application genuinely loads.
+ * `keyLocation` is where the key sits on this machine, as
+ * `applicationKeyLocation` answers it (see {@link ApplicationKeyLocation}).
+ * Required, so that function stays the one rule for it. The context alone
+ * cannot answer: a key already in the project's own `.env` skips
+ * `configure_repository`, which leaves `credentialEnvFile` unset over a file
+ * the application genuinely loads.
  */
 export function renderSetupReport(
   ctx: SetupContext,
   now: Date,
-  keyLocation?: ApplicationKeyLocation,
+  keyLocation: ApplicationKeyLocation,
 ): string {
   const cp = ctx.checkpoint;
   const service = cp.service;
   const trace = ctx.trace;
   // The file to copy the value out of, or null when there is no file to name.
   // `relativeToRoot` has already made the location's path root-relative with
-  // `/` separators, which is what the fallback does for itself.
-  const keyFile =
-    keyLocation === undefined
-      ? ctx.credentialEnvFile === undefined
-        ? null
-        : slashPath(relative(ctx.root, ctx.credentialEnvFile))
-      : keyLocation.kind === "file"
-        ? keyLocation.path
-        : null;
+  // `/` separators.
+  const keyFile = keyLocation.kind === "file" ? keyLocation.path : null;
 
   const verdict =
     trace !== undefined
@@ -171,7 +162,7 @@ export function renderSetupReport(
     // who finds no number knows the deployment did not report one rather than
     // being left to read something into its absence.
     trace !== undefined
-      ? `**First trace.** \`${trace.traceId}\`${trace.spanCount === undefined ? "" : ` — ${spanPhrase(trace.spanCount)}`}\n\n${trace.traceUrl}`
+      ? `**First trace.** \`${trace.traceId}\`${trace.spanCount === undefined ? "" : ` — ${spanPhrase(trace.spanCount)}`}${trace.attributed === false ? ". Not confirmed to come from this service: the project already had traces before setup started." : ""}\n\n${trace.traceUrl}`
       : `**First trace.** None yet. Run the application, then \`${setupCommand()} --resume\`.`,
     "",
     "## Files this run touched",
@@ -240,8 +231,8 @@ export function renderSetupReport(
  */
 export function writeSetupReport(
   ctx: SetupContext,
-  now: Date = new Date(),
-  keyLocation?: ApplicationKeyLocation,
+  now: Date,
+  keyLocation: ApplicationKeyLocation,
 ): string | null {
   const target = join(ctx.root, REPORT_PATH);
   try {

@@ -935,6 +935,19 @@ export function parseCompletion(output: string): ParsedCompletion | null {
 }
 
 /**
+ * What an agent's output says after the task it echoed, or all of it when the
+ * task is not in it verbatim.
+ *
+ * `codex exec` prints the prompt it was given before its reply, and the task's
+ * report template is itself a valid completion block. Parsed whole, a reply
+ * without a block read as the template's placeholders.
+ */
+export function afterEchoedTask(output: string, task: string): string {
+  const at = output.lastIndexOf(task);
+  return at === -1 ? output : output.slice(at + task.length);
+}
+
+/**
  * Instructions for adding the SDK by hand.
  *
  * The third route exists because "run an agent over my code" and "write me a
@@ -946,34 +959,55 @@ export function manualInstructions(input: {
   service: DetectedService;
   sdk: ResolvedSdk;
   skillPath: string;
+  /** The list the agent's task is given; the snippet loads its head. */
+  envFiles: readonly string[];
+  /** The interpreter the service runs on, when one was found. */
+  pythonInterpreter: string | null;
 }): string {
-  const { service, sdk, skillPath } = input;
+  const { service, sdk, skillPath, envFiles } = input;
   // The project's own command when there is one, so the line can be copied.
   const testRun = `TRACEROOT_ENABLED=false ${service.testCommand ?? "<your test command>"}`;
-  // Inside the guard, not beside the import.
-  //
-  // A snippet showing `initialize()` at module scope is the instruction, and it
-  // contradicts the sentence above it: module scope runs on import, so a test
-  // suite that imports this entry point starts the SDK and every test reaching
-  // an instrumented function exports a trace of its own.
-  const init =
-    service.language === "python"
-      ? ["import traceroot", "", 'if __name__ == "__main__":', "    traceroot.initialize()"].join(
-          "\n",
-        )
-      : [
-          'import { initialize } from "@traceroot-ai/traceroot";',
+  // The agent's snippet, unfenced for a terminal, so the two cannot drift
+  // apart. This one used to leave out the env-file load, so an application
+  // changed exactly as shown started without its key and sent nothing. Only
+  // the code between the fences: the sentence after them is the task's prose,
+  // and indented here it would read as a line of the program.
+  const snippet = initSnippet(service, envFiles).split("\n");
+  const init = snippet.slice(1, snippet.lastIndexOf("```"));
+  // The package that load imports. Neither SDK depends on it.
+  const dotenv =
+    envFiles.length === 0 ? null : service.language === "python" ? "python-dotenv" : "dotenv";
+  const install = installCommand(sdk, service, service.language, input.pythonInterpreter);
+  // Named beside the load, as the agent's task does: that load anchors on
+  // `import.meta.url`, which a CommonJS entry point does not have, and which
+  // module system the entry point uses is not something detection establishes.
+  const commonJs =
+    dotenv === "dotenv"
+      ? [
           "",
-          "function main() {",
-          "  initialize();",
-          "}",
-        ].join("\n");
+          "     A CommonJS entry point has no import.meta.url. There, require() both",
+          '     packages and give the same path as join(__dirname, "...").',
+        ]
+      : [];
+  // The agent is told to pick the integration; someone copying the block is
+  // not, and detection does not establish which provider the service calls.
+  const python =
+    service.language === "python"
+      ? [
+          "",
+          "     Anthropic stands in for your provider: import and name the library",
+          "     your application calls. A short-lived script also calls",
+          "     traceroot.flush() before it exits.",
+        ]
+      : [];
 
   return [
     `Add TraceRoot to ${service.path} by hand:`,
     "",
-    "  1. Install the SDK, pinned:",
-    `       ${installCommand(sdk, service)}`,
+    dotenv === null
+      ? "  1. Install the SDK, pinned:"
+      : `  1. Install the SDK, pinned, and ${dotenv} for the load in step 2:`,
+    `       ${dotenv === null ? install : `${install} ${dotenv}`}`,
     "",
     `  2. Initialize it on the path that runs ${service.entryPoint ?? "your entry point"},`,
     service.language === "python"
@@ -982,7 +1016,9 @@ export function manualInstructions(input: {
     "     Module scope runs on import, and your test suite imports your entry",
     "     point, so initializing there starts the SDK in every test:",
     "",
-    ...init.split("\n").map((line) => (line === "" ? "" : `       ${line}`)),
+    ...init.map((line) => (line === "" ? "" : `       ${line}`)),
+    ...commonJs,
+    ...python,
     "",
     "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
     "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",

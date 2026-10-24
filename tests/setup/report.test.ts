@@ -17,7 +17,7 @@ import {
   slashPath,
   writeSetupReport,
 } from "../../src/setup/report.js";
-import type { SetupContext } from "../../src/setup/types.js";
+import type { ApplicationKeyLocation, SetupContext } from "../../src/setup/types.js";
 
 /** Only the fields the report reads; everything else is unreachable from here. */
 function ctx(overrides: Record<string, unknown> = {}): SetupContext {
@@ -39,6 +39,11 @@ function ctx(overrides: Record<string, unknown> = {}): SetupContext {
 
 const NOW = new Date("2026-07-26T12:00:00.000Z");
 
+/** Where the key is, for the tests that are not about it: in no file. */
+const NO_FILE: ApplicationKeyLocation = { kind: "environment" };
+/** The key in the `.env` a test's `credentialEnvFile` names. */
+const AT_ENV: ApplicationKeyLocation = { kind: "file", path: ".env" };
+
 /** Every root this file makes, so none is left in the system tmpdir. */
 const roots: string[] = [];
 
@@ -53,13 +58,13 @@ describe("the report table", () => {
     // Values here are detected, not authored: a framework string or a command
     // with a pipe in it would otherwise split the row and shift every later
     // column, and a newline would end the table outright.
-    const text = renderSetupReport(ctx({ method: "run | tee log" }), NOW);
+    const text = renderSetupReport(ctx({ method: "run | tee log" }), NOW, NO_FILE);
     const row = text.split("\n").find((l) => l.startsWith("| Method |"));
     expect(row).toBe("| Method | run \\| tee log |");
   });
 
   it("keeps a multi-line value on one row", () => {
-    const text = renderSetupReport(ctx({ method: "first\nsecond" }), NOW);
+    const text = renderSetupReport(ctx({ method: "first\nsecond" }), NOW, NO_FILE);
     expect(text).toContain("| Method | first second |");
   });
 
@@ -110,14 +115,14 @@ describe("what the report says about the trace it found", () => {
     // qualified it had opened a unit test's trace by mistake. One span is the
     // whole truth for a single-function script, and nothing the report knows
     // says which case it is in, so it prints the count and leaves it there.
-    const text = renderSetupReport(ctx({ trace: trace({ spanCount: 1 }) }), NOW);
+    const text = renderSetupReport(ctx({ trace: trace({ spanCount: 1 }) }), NOW, NO_FILE);
 
     expect(verdict(text)).toBe(RECEIVED);
     expect(firstTrace(text)).toBe("**First trace.** `t_1` — a single span");
   });
 
   it("reports the size of a trace with more than one span", () => {
-    const text = renderSetupReport(ctx({ trace: trace({ spanCount: 7 }) }), NOW);
+    const text = renderSetupReport(ctx({ trace: trace({ spanCount: 7 }) }), NOW, NO_FILE);
 
     expect(verdict(text)).toBe(RECEIVED);
     expect(firstTrace(text)).toBe("**First trace.** `t_1` — 7 spans");
@@ -125,14 +130,37 @@ describe("what the report says about the trace it found", () => {
 
   it("claims no size at all when the deployment did not report one", () => {
     // Silence is not evidence of anything, so nothing is said about the size.
-    const text = renderSetupReport(ctx({ trace: trace() }), NOW);
+    const text = renderSetupReport(ctx({ trace: trace() }), NOW, NO_FILE);
 
     expect(verdict(text)).toBe(RECEIVED);
     expect(firstTrace(text)).toBe("**First trace.** `t_1`");
   });
 
+  it("says a trace is not confirmed to be this service's when the project had earlier traffic", () => {
+    const text = renderSetupReport(
+      ctx({ trace: trace({ spanCount: 7, attributed: false }) }),
+      NOW,
+      NO_FILE,
+    );
+
+    expect(verdict(text)).toBe(RECEIVED);
+    expect(firstTrace(text)).toBe(
+      "**First trace.** `t_1` — 7 spans. Not confirmed to come from this service: the project already had traces before setup started.",
+    );
+  });
+
+  it("adds nothing when the project had no earlier traffic", () => {
+    const text = renderSetupReport(
+      ctx({ trace: trace({ spanCount: 7, attributed: true }) }),
+      NOW,
+      NO_FILE,
+    );
+
+    expect(firstTrace(text)).toBe("**First trace.** `t_1` — 7 spans");
+  });
+
   it("still says plainly that no trace has arrived", () => {
-    const text = renderSetupReport(ctx(), NOW);
+    const text = renderSetupReport(ctx(), NOW, NO_FILE);
 
     expect(verdict(text)).toBe("TraceRoot is configured, but no trace has been seen yet.");
     expect(firstTrace(text)).toBe(
@@ -155,7 +183,11 @@ describe("what the report says production still needs", () => {
     ctx({ checkpoint: { ...ctx().checkpoint, host: DEFAULT_HOST }, ...overrides });
 
   it("names the variable and where the value is", () => {
-    const text = renderSetupReport(hosted({ credentialEnvFile: "/repo/apps/api/.env.local" }), NOW);
+    const text = renderSetupReport(
+      hosted({ credentialEnvFile: "/repo/apps/api/.env.local" }),
+      NOW,
+      { kind: "file", path: "apps/api/.env.local" },
+    );
 
     expect(section(text)).toContain("`TRACEROOT_API_KEY` in your deployment's own environment.");
     expect(section(text)).toContain(
@@ -171,23 +203,15 @@ describe("what the report says production still needs", () => {
       ...ctx().checkpoint,
       host: "https://traceroot.internal.example",
     };
-    const text = renderSetupReport(ctx({ checkpoint, credentialEnvFile: "/repo/.env" }), NOW);
+    const text = renderSetupReport(
+      ctx({ checkpoint, credentialEnvFile: "/repo/.env" }),
+      NOW,
+      AT_ENV,
+    );
 
     expect(section(text)).toContain(
       "`TRACEROOT_API_KEY` and `TRACEROOT_HOST_URL` in your deployment's own environment.",
     );
-  });
-
-  it("points at no file when the run wrote none", () => {
-    // `configure_repository` refuses a file git tracks and does not run at all
-    // when the application already resolves the key, so the pointer has to be
-    // able to not be there — naming a file anyway sends a reader looking
-    // through the repository for something that was never in it.
-    const text = renderSetupReport(hosted(), NOW);
-
-    expect(section(text)).toContain("`TRACEROOT_API_KEY` in your deployment's own environment.");
-    expect(section(text)).toContain("This run wrote the value to no file in the project");
-    expect(section(text)).not.toContain("The value is in");
   });
 
   it("points at the project's own file when the run wrote none itself", () => {
@@ -205,6 +229,10 @@ describe("what the report says production still needs", () => {
   });
 
   it("points at no file when the key reached none, refusal included", () => {
+    // `configure_repository` refuses a file git tracks and does not run at all
+    // when the application already resolves the key, so the pointer has to be
+    // able to not be there — naming a file anyway sends a reader looking
+    // through the repository for something that was never in it.
     for (const location of [
       { kind: "environment" } as const,
       { kind: "refused", path: ".env" } as const,
@@ -222,7 +250,11 @@ describe("what the report says production still needs", () => {
     // this file ever holds, it belongs in the row that identifies the key in a
     // settings list, and it has no business being repeated here.
     const checkpoint = { ...ctx().checkpoint, projectKeyHint: "tr-…abcd" };
-    const text = renderSetupReport(ctx({ checkpoint, credentialEnvFile: "/repo/.env" }), NOW);
+    const text = renderSetupReport(
+      ctx({ checkpoint, credentialEnvFile: "/repo/.env" }),
+      NOW,
+      AT_ENV,
+    );
 
     expect(text).toContain("tr-…abcd");
     expect(section(text)).not.toContain("tr-…abcd");
@@ -266,7 +298,7 @@ describe("the report as Markdown", () => {
       // GFM continues a table until a blank line: without the one above it, the
       // closing note rendered as a row of the last table. A blank line inside a
       // table ends it instead, and the rows below it render as bare text.
-      const tables = blocks(renderSetupReport(context, NOW)).filter((block) =>
+      const tables = blocks(renderSetupReport(context, NOW, NO_FILE)).filter((block) =>
         block.some((l) => l.startsWith("|")),
       );
 
@@ -281,7 +313,7 @@ describe("the report as Markdown", () => {
       // The verdict is the line a reader skims and the one pasted into a pull
       // request; it ran into the "Generated" line below it as one paragraph, and
       // the checks, the command and the first trace read as one sentence.
-      const text = renderSetupReport(context, NOW);
+      const text = renderSetupReport(context, NOW, NO_FILE);
       const paragraphs = blocks(text).filter((block) => !block[0]?.startsWith("|"));
 
       expect(paragraphs.slice(0, 3)).toEqual([
@@ -309,7 +341,10 @@ describe("writing the report", () => {
     // The row used to be a constant naming `.env.traceroot`. The file is one of
     // the project's own now, so its name varies — `.env.local` as readily as
     // `.env` — and a run in a monorepo wrote it beside the service.
-    const text = renderSetupReport(ctx({ credentialEnvFile: "/repo/apps/api/.env.local" }), NOW);
+    const text = renderSetupReport(ctx({ credentialEnvFile: "/repo/apps/api/.env.local" }), NOW, {
+      kind: "file",
+      path: "apps/api/.env.local",
+    });
 
     expect(text).toContain("| `apps/api/.env.local` | `TRACEROOT_API_KEY` for the application. |");
   });
@@ -318,7 +353,7 @@ describe("writing the report", () => {
     // `configure_repository` refuses a file git tracks, and does not run at all
     // when the application already resolves the key from its own environment.
     // The old constant row claimed a file this run never touched.
-    const text = renderSetupReport(ctx(), NOW);
+    const text = renderSetupReport(ctx(), NOW, NO_FILE);
 
     expect(text).not.toContain("TRACEROOT_API_KEY` for the application");
   });
@@ -335,7 +370,7 @@ describe("writing the report", () => {
     mkdirSync(join(dir, ".traceroot"), { recursive: true, mode: 0o700 });
     symlinkSync(outside, target);
 
-    expect(writeSetupReport(ctx({ root: dir }), NOW)).toBe(REPORT_PATH);
+    expect(writeSetupReport(ctx({ root: dir }), NOW, NO_FILE)).toBe(REPORT_PATH);
     expect(readFileSync(outside, "utf8")).toBe("untouched");
     expect(statSync(target).isSymbolicLink()).toBe(false);
     expect(readFileSync(target, "utf8")).toContain("| Project | demo |");

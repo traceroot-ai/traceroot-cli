@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ExitCode } from "../../src/output.js";
+import { createSetupApi } from "../../src/api/setup.js";
 import { pollForTrace, spanPhrase } from "../../src/setup/trace.js";
 
 describe("polling for the first trace", () => {
@@ -23,22 +23,36 @@ describe("polling for the first trace", () => {
     expect(seen[0]?.limit).toBe(200);
   });
 
-  it("stops on an authentication failure instead of waiting it out", async () => {
+  it.each([
+    [401, "Invalid API key"],
+    [401, "API key has expired"],
+    [401, "Project has been deleted"],
+    [401, "Authentication failed"],
+    [401, "Invalid token"],
+    [403, "No access to project 'p1'"],
+  ])("stops on the server's %i %s instead of waiting it out", async (status, detail) => {
     // A bad key does not become a good one by waiting, so retrying until the
-    // timeout spends the user's whole trace budget on a fixed error. The class
-    // comes off the thrown error's exit code, because the message is the
-    // backend's own wording and no regex over it can be trusted.
+    // timeout spends the user's whole trace budget on a fixed error. Built
+    // through the real client, whose message is the server's own `detail`: the
+    // class has to come off the error's exit code, and a faked error carrying
+    // one hid that the client never set it.
     let calls = 0;
-    // A clock that advances, so a version that treats this as transient runs out
-    // of budget and fails the call count rather than looping forever.
+    const client = createSetupApi({
+      host: "https://api.example.test",
+      apiKey: "tr-revoked",
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ detail }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof globalThis.fetch,
+    });
+    // A clock that advances, so a version that treats this as transient runs
+    // out of budget and fails the call count rather than looping forever.
     let clock = 0;
     const result = await pollForTrace({
-      client: {
-        listTraces: async () => {
-          calls += 1;
-          throw Object.assign(new Error("Invalid API key"), { exitCode: ExitCode.auth });
-        },
-      },
+      client,
       startedAt: new Date("2026-07-26T12:00:00.000Z"),
       timeoutMs: 5_000,
       sleep: async () => undefined,
@@ -49,7 +63,7 @@ describe("polling for the first trace", () => {
     });
 
     expect(calls).toBe(1);
-    expect(result.found).toBe(false);
+    expect(result).toMatchObject({ found: false, lastError: detail });
   });
 
   it("holds the schedule's last step rather than a ceiling it never reaches", async () => {
@@ -231,6 +245,90 @@ describe("choosing which trace the run produced", () => {
 
     expect(result.found).toBe(true);
     expect(result.found && result.trace.traceId).toBe("ours");
+  });
+});
+
+describe("whether the project had traces before setup started", () => {
+  const STARTED = new Date("2026-07-26T12:00:00.000Z");
+  const OURS = {
+    trace_id: "ours",
+    trace_url: "https://app.example.test/trace/ours",
+    trace_start_time: "2026-07-26T12:00:30.000000",
+    name: "demo.run",
+  };
+
+  /** The poll over one trace since setup started, with `earlier` answering the look before it. */
+  function look(earlier: unknown[] | Error) {
+    const seen: Array<Record<string, unknown>> = [];
+    const result = pollForTrace({
+      client: {
+        listTraces: async (params) => {
+          seen.push({ ...params });
+          if (params.endBefore === undefined) {
+            return { data: [OURS], meta: { limit: 200 } } as never;
+          }
+          if (earlier instanceof Error) {
+            throw earlier;
+          }
+          return { data: earlier, meta: { limit: 1 } } as never;
+        },
+      },
+      startedAt: STARTED,
+      timeoutMs: 5_000,
+      sleep: async () => undefined,
+      now: () => 0,
+    });
+    return { seen, result };
+  }
+
+  it("asks once, after the trace is found, for one trace from before setup started", async () => {
+    const { seen, result } = look([]);
+    await result;
+
+    expect(seen).toEqual([
+      { limit: 200, startAfter: "2026-07-26T12:00:00.000Z" },
+      { limit: 1, endBefore: "2026-07-26T12:00:00.000Z" },
+    ]);
+  });
+
+  it("calls the trace attributed when the project had none", async () => {
+    const outcome = await look([]).result;
+
+    expect(outcome.found && outcome.attribution.attributed).toBe(true);
+    expect(outcome.found && outcome.trace).toMatchObject({
+      name: "demo.run",
+      candidates: 1,
+      truncated: false,
+      attributed: true,
+    });
+  });
+
+  it("calls it unattributed when the project already had traffic", async () => {
+    const outcome = await look([
+      { ...OURS, trace_id: "old", trace_start_time: "2026-07-25T09:00:00.000000" },
+    ]).result;
+
+    expect(outcome.found && outcome.trace.traceId).toBe("ours");
+    expect(outcome.found && outcome.attribution.attributed).toBe(false);
+    expect(outcome.found && outcome.trace.attributed).toBe(false);
+  });
+
+  it("leaves it unknown, and the trace found, when that look fails", async () => {
+    // The run has its trace. A second read that fails must neither undo that
+    // nor be read as "someone else sent it".
+    const outcome = await look(new Error("request to host failed: fetch failed")).result;
+
+    expect(outcome.found).toBe(true);
+    expect(outcome.found && outcome.attribution.attributed).toBeNull();
+    expect(outcome.found && "attributed" in outcome.trace).toBe(false);
+  });
+
+  it("leaves it unknown when the backend ignored the bound", async () => {
+    // A row from after setup started can only mean `end_before` was not
+    // applied, which says nothing about what came before.
+    const outcome = await look([OURS]).result;
+
+    expect(outcome.found && outcome.attribution.attributed).toBeNull();
   });
 });
 

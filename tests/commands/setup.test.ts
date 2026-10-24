@@ -194,6 +194,15 @@ describe("setup command registration", () => {
     expect(program.options.map((o) => o.long)).not.toContain("--handoff");
   });
 
+  it("still parses --handoff with it hidden from the help", () => {
+    const setup = buildProgram().commands.find((c) => c.name() === "setup");
+    if (setup === undefined) {
+      throw new Error("setup is not registered");
+    }
+    expect(setup.parseOptions(["--handoff", "trh_code"]).unknown).toEqual([]);
+    expect(setup.opts().handoff).toBe("trh_code");
+  });
+
   it("refuses a stray operand at the parse, before any action runs", async () => {
     // `traceroot setup doctr` used to run the whole wizard: commander 12 allows
     // excess arguments by default, so the typo reached `setup`'s own action as
@@ -1120,6 +1129,45 @@ describe("a hand-over nothing has acted on yet", () => {
       "A previous setup for this service did not finish. It is waiting for the instrumentation it handed over. Continue from there?",
     );
   });
+
+  it.each([
+    [
+      "the task file",
+      { agent: "claude", instrument: false },
+      "│  No trace yet, and setup cannot tell whether the task was done. Run .traceroot/prompts/setup-instrument.md in Claude Code if not, or run your application once if so.\n",
+    ],
+    [
+      "the manual steps",
+      { agent: "claude", method: "manual" },
+      "│  No trace yet, and setup cannot tell whether the manual steps were applied. Apply them if not, or run your application once if so.\n",
+    ],
+  ] as const)(
+    "does not say the service has no TraceRoot on a resume after %s",
+    async (_, flags, line) => {
+      // Detection reads only the entry point, and the task done in the user's
+      // own agent may put `initialize()` in a module the entry point imports.
+      // The resume's one look finds no trace yet, and "setup changed no code,
+      // so the service has no TraceRoot in it" over that is false.
+      await handover(flags);
+      writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
+      writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
+      const { writers, err } = makeWriters();
+      const result = await runSetup({
+        ctx: ctxWith(false),
+        cwd: dir,
+        flags: defaultFlags({ ...flags, resume: true }),
+        writers,
+        canPrompt: false,
+        setupDeps: makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+      });
+      const said = plain(err.data);
+
+      expect(result.ok).toBe(true);
+      expect(said).toContain(line);
+      expect(said).not.toContain("has no TraceRoot in it");
+      expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+    },
+  );
 });
 
 describe("doctor reports setup state", () => {

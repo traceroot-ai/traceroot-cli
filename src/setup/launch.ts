@@ -1,9 +1,9 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentId } from "../agents/types.js";
 import type { RunProcess, RunProcessResult } from "./exec.js";
-import type { Secret } from "./secret.js";
+import { type Secret, secretHint } from "./secret.js";
 
 /**
  * The assignment the task puts in front of the project's own checks —
@@ -232,24 +232,6 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       // repository, so what could not be established is left out and said out
       // loud rather than approximated.
       //
-      // What is established, and on what. `codex exec --help` on codex-cli
-      // 0.163.0 confirms the flag spellings; it lists no config keys. Beyond
-      // that, recorded runs of this pipeline on codex-cli 0.162.1 reached a
-      // trace on staging: a Python service installed with pip into a venv, and
-      // a JavaScript one installed with npm. Those runs passed `exec`,
-      // `--sandbox workspace-write`, `--skip-git-repo-check`, the network and
-      // shell-snapshot overrides below and, on the npm run, `--add-dir` for the
-      // npm cache. They also passed `--ignore-user-config`, which this launch
-      // does not, so they show a stock install rather than a user's
-      // `config.toml`. `--color never` and the approval-policy override were
-      // not part of them; the stock install already started at `approval:
-      // never`.
-      //
-      // Still untested: pnpm, yarn, bun, uv and poetry; a run in a directory
-      // that is not a git repository; and the browser sign-in path, where
-      // `configure_repository` writes the key into a `.env`, because the
-      // recorded runs took the key from the environment.
-      //
       // `exec` is the non-interactive subcommand. The prompt is the positional
       // argument, and `-` is documented as "read it from stdin" — which is the
       // channel this launch already uses for Claude, for the same reason: a
@@ -274,8 +256,7 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //   `workspace-write` the sandbox has network access turned off by
       //   default. The first thing this task asks for is `pip install` or
       //   `npm install`, so the default turns the whole run into a long way of
-      //   discovering that the SDK could not be fetched. A stock run without
-      //   it could not resolve `pypi.org`.
+      //   discovering that the SDK could not be fetched.
       //
       //   `approval_policy="never"` — a non-interactive run has nobody to
       //   approve anything, and the policy otherwise comes from the user's own
@@ -286,12 +267,7 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //   `features.shell_snapshot=false` — Codex's shell snapshot, on by
       //   default, re-applies the exports in the user's shell profile to every
       //   command the agent runs, so a `TRACEROOT_API_KEY` exported in
-      //   `~/.zshrc` replaces the one `buildAgentEnv` hands the agent. In a
-      //   recorded run the profile exported a production key, the
-      //   application's exporter got a 401 from the staging host setup had
-      //   targeted, and no trace arrived; with the snapshot off the same run
-      //   reached one. A profile key for another project on the same host
-      //   would presumably send the trace there instead, which is untested.
+      //   `~/.zshrc` replaces the one `buildAgentEnv` hands the agent.
       //
       // `--color never` keeps ANSI escapes out of the captured stdout. The
       // completion block is recovered from that text by a fenced-block regex
@@ -305,13 +281,11 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
       //
       // `--add-dir` once per `writableDirs` entry, because `workspace-write`
       // confines writes to the working directory and a package manager's cache
-      // lives outside it. In a recorded npm run `npm install` failed with EPERM
-      // writing `~/.npm/_cacache`, and Codex changed nothing; with `--add-dir
-      // ~/.npm` the same run reached a trace. The flag rather than the
-      // `sandbox_workspace_write.writable_roots` key, because the flag is what
-      // that run passed and a path needs no TOML quoting. Which directories to
-      // pass is the instrument stage's decision, not this function's, and so
-      // is making sure each one exists; see `prepareWritableDir`.
+      // lives outside it. The flag rather than the
+      // `sandbox_workspace_write.writable_roots` key, because a path needs no
+      // TOML quoting. Which directories to pass is the instrument stage's
+      // decision, not this function's, and so is making sure each one exists;
+      // see `prepareWritableDir`.
       //
       // NOT mirrored, because the mechanism does not exist on this side:
       //
@@ -393,36 +367,44 @@ export function buildInvocation(input: BuildInvocationInput): AgentInvocation {
 const NPM_CACHE_QUERY_TIMEOUT_MS = 10_000;
 
 /**
- * Where npm will write its cache for a command run in `cwd`.
+ * Where npm will write its cache, for Codex's sandbox to open to writes.
  *
- * Asked of npm itself, because the answer is npm's to give: an `.npmrc` at the
- * user, global or project level can move the cache, and so can the
- * environment. It is one config read that runs no scripts and writes nothing
- * but npm's own debug log, as every npm command does. `--loglevel=silent`
- * because the runner returns stdout and stderr as one string, and a warning
- * about the user's `.npmrc` would otherwise be read as part of the path.
- * `--no-update-notifier` because the notifier's registry check is a network
- * request this question does not need.
+ * Asked of npm itself, because the answer is npm's to give: the user's and the
+ * global `.npmrc` can move the cache, and so can the environment. It is one
+ * config read that runs no scripts and writes nothing but npm's own debug log,
+ * as every npm command does. `--loglevel=silent` because the runner returns
+ * stdout and stderr as one string, and a warning about an `.npmrc` would
+ * otherwise be read as part of the path. `--no-update-notifier` because the
+ * notifier's registry check is a network request this question does not need.
  *
- * Anything but one absolute path falls back to `npm_config_cache`, then to
- * `~/.npm`. That covers npm missing from PATH, a shim that refuses to run here,
- * and npm 10 refusing the question ("The cache option is protected") when a
- * project `.npmrc` sets a relative cache, which then lives inside the project,
- * where the sandbox already allows writes. `~/.npm` is npm's default on macOS
- * and Linux; on Windows npm uses `%LocalAppData%\npm-cache`, and no Windows run
- * has been recorded.
+ * Asked from the home directory, never the project. npm also reads the
+ * `.npmrc` of the project it runs in, and that file is the repository's to
+ * write: one line of it chose a directory Codex could write to — `/`, or
+ * `~/.ssh` — in a run with the network on and no approval prompts. The sandbox
+ * is what stands between a hostile repository, or a prompt injection in one,
+ * and the machine, so nothing in the repository may widen it. A project that
+ * moves its own cache loses nothing: inside the project it is already
+ * writable, and outside it a sandboxed install was never going to be allowed.
+ *
+ * Only a directory strictly inside the home directory is taken, from npm or
+ * from `npm_config_cache`: never the home directory itself, an ancestor of it,
+ * or anywhere else on the disk, and not a link inside it that resolves out of
+ * it. Anything else falls back to `~/.npm`, and so does npm missing from PATH,
+ * a shim that refuses to run, or an answer that is not one absolute path.
+ * `~/.npm` is npm's default on macOS and Linux; on Windows npm uses
+ * `%LocalAppData%\npm-cache`, and no Windows run has been recorded.
  */
 export async function resolveNpmCacheDir(input: {
-  cwd: string;
   env: NodeJS.ProcessEnv;
   runProcess: RunProcess;
   /** Defaults to the real home directory; a test passes its own. */
   homeDir?: string;
 }): Promise<string> {
+  const home = input.homeDir ?? homedir();
   const result = await input.runProcess({
     program: "npm",
     args: ["config", "get", "cache", "--loglevel=silent", "--no-update-notifier"],
-    cwd: input.cwd,
+    cwd: home,
     env: input.env,
     stdio: "capture",
     timeoutMs: NPM_CACHE_QUERY_TIMEOUT_MS,
@@ -433,15 +415,63 @@ export async function resolveNpmCacheDir(input: {
     !result.timedOut &&
     !result.spawnFailed &&
     !answer.includes("\n") &&
-    isAbsolute(answer)
+    isInsideHome(answer, home)
   ) {
     return answer;
   }
   const fromEnv = input.env.npm_config_cache ?? input.env.NPM_CONFIG_CACHE;
-  if (fromEnv !== undefined && fromEnv !== "") {
+  if (fromEnv !== undefined && isInsideHome(fromEnv, home)) {
     return fromEnv;
   }
-  return join(input.homeDir ?? homedir(), ".npm");
+  return join(home, ".npm");
+}
+
+/**
+ * Whether `path` is an absolute path strictly inside `home`, both as written
+ * and as it resolves: the sandbox is handed the resolved path, so a link under
+ * the home directory that points at `/` is `/`.
+ *
+ * Resolved through the nearest part of it that exists, because the cache often
+ * does not exist yet and `prepareWritableDir` creates it. `~/link/npm-cache`,
+ * with `~/link` pointing at `/`, reads as inside the home directory until the
+ * directory is made, and then it is `/npm-cache`.
+ */
+function isInsideHome(path: string, home: string): boolean {
+  if (!isAbsolute(path) || !isStrictlyInside(resolve(home), resolve(path))) {
+    return false;
+  }
+  return isStrictlyInside(resolvedThroughExisting(home), resolvedThroughExisting(path));
+}
+
+function isStrictlyInside(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+function realpathIfExists(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** `path` with its longest existing prefix resolved, and the missing rest appended. */
+function resolvedThroughExisting(path: string): string {
+  let existing = resolve(path);
+  const missing: string[] = [];
+  for (;;) {
+    const real = realpathIfExists(existing);
+    if (real !== null) {
+      return join(real, ...missing);
+    }
+    const parent = dirname(existing);
+    if (parent === existing) {
+      return resolve(path);
+    }
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
 }
 
 /**
@@ -502,8 +532,9 @@ export interface LaunchAgentInput {
 }
 
 /**
- * Builds the child's environment: the parent's, the host, and the credential
- * only when no file the application loads already holds it.
+ * Builds the child's environment: the parent's without `TRACEROOT_ENABLED`, the
+ * host, and the credential only when no file the application loads already
+ * holds it.
  *
  * `credentialFiles` is every file the application can read this credential out
  * of, and it is the same list — settled in the same place, for the same reason —
@@ -530,7 +561,13 @@ export interface LaunchAgentInput {
  * Withholding means not adding it. A key the user's own shell exports is in
  * `parentEnv` already and stays there — the agent runs in the user's
  * environment, and taking a variable back out of it is a different decision
- * from declining to add one.
+ * from declining to add one. Where it would beat this run's key, setup warns
+ * before the launch: see {@link shadowingApiKey}.
+ *
+ * An inherited `TRACEROOT_ENABLED` is the one variable taken out. Exported as
+ * `false`, it switched off the application run the task asks for, and the
+ * trace wait then blamed the code path. Dropped rather than forced on: the
+ * agent's own checks set it on their command line, and are unaffected.
  *
  * When the credential does go here it goes here and nowhere else — not in
  * `argv` (visible in `ps`), not in the task file (which is written to disk),
@@ -548,14 +585,41 @@ export function buildAgentEnv(input: {
   credentialFiles: readonly string[];
   host: string;
 }): NodeJS.ProcessEnv {
+  const { TRACEROOT_ENABLED: _inherited, ...parentEnv } = input.parentEnv;
   const env: NodeJS.ProcessEnv = {
-    ...input.parentEnv,
+    ...parentEnv,
     TRACEROOT_HOST_URL: input.host,
   };
   if (input.credentialFiles.length === 0) {
     env.TRACEROOT_API_KEY = input.credential.reveal();
   }
   return env;
+}
+
+/**
+ * The hint of a `TRACEROOT_API_KEY` the parent exports over this run's key, or
+ * null when there is nothing to warn about.
+ *
+ * {@link buildAgentEnv} passes an exported key through, and dotenv never
+ * overrides a variable that is already set. So when the key reaches the
+ * application through a file, a different exported one beats it, and the
+ * application's traces go to that key's project. With no such file, setup's own
+ * copy goes into the environment over it.
+ */
+export function shadowingApiKey(input: {
+  parentEnv: NodeJS.ProcessEnv;
+  credential: Secret;
+  credentialFiles: readonly string[];
+}): string | null {
+  const exported = input.parentEnv.TRACEROOT_API_KEY;
+  if (
+    exported === undefined ||
+    input.credentialFiles.length === 0 ||
+    exported === input.credential.reveal()
+  ) {
+    return null;
+  }
+  return secretHint(exported);
 }
 
 /** Runs the agent with the task and a scoped environment. */

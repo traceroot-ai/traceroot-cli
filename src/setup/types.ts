@@ -165,6 +165,19 @@ export interface TraceVerification {
    * be handled by every reader.
    */
   spanCount?: number;
+  /** The trace's root span name; absent when the row carried none. */
+  name?: string;
+  /** How many traces since setup started were on the page this one was chosen from. */
+  candidates?: number;
+  /** That page came back full, so an earlier trace may have fallen off it. */
+  truncated?: boolean;
+  /**
+   * False when the project already had traces from before setup started, so
+   * this trace may come from another sender; true when it had none. Absent
+   * when that could not be learned, and on a checkpoint written before it was
+   * recorded: both are "unknown", and neither is printed as a doubt.
+   */
+  attributed?: boolean;
 }
 
 /**
@@ -358,6 +371,22 @@ export interface SetupContext {
    * and `--resume` re-runs the wait rather than inheriting the decision.
    */
   traceWaitSkipped?: boolean;
+  /**
+   * True when this invocation handed the instrumentation over — `--no-instrument`,
+   * `--manual` or a menu answer that edits nothing — rather than restoring a
+   * hand-over an earlier run recorded.
+   *
+   * The difference is whether anyone has had the chance to act on it. Straight
+   * after a hand-over nobody has, and the code is exactly as detection read it,
+   * so a run with no trace can say the service has no TraceRoot in it yet. A
+   * resumed hand-over may be the user back from the task, and detection reads
+   * only the entry point: an `initialize()` the task put in an imported module
+   * is not there to see, and saying "no TraceRoot" over it is false.
+   *
+   * Not on the checkpoint, for the reason {@link SetupContext.traceWaitSkipped}
+   * is not.
+   */
+  handedOverThisRun?: boolean;
 }
 
 export interface SetupStageOutcome {

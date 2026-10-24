@@ -14,7 +14,7 @@
  * but argv or the runtime. Anything that renders, prompts or runs a stage
  * belongs in `./setup/run.js`.
  */
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import { createApiClient } from "../api/client.js";
 import { createTokenProvider } from "../auth/token.js";
 import { configPath } from "../config/manager.js";
@@ -173,7 +173,15 @@ export function registerSetup(program: Command): void {
     // On `setup`, never on the program. Program options are rendered in every
     // subcommand's "Global Options" section, so a one-shot onboarding
     // credential declared there would appear in `traceroot traces list --help`.
-    .option("--handoff <code>", "one-shot sign-in code printed by the TraceRoot web app")
+    // Hidden from `setup --help` too: the web app does not print the code, so
+    // the help would offer a flag nobody has a value for. It still parses, so
+    // the web app can start printing it without a CLI release.
+    .addOption(
+      new Option(
+        "--handoff <code>",
+        "one-shot sign-in code printed by the TraceRoot web app",
+      ).hideHelp(),
+    )
     .option("--no-browser", "authenticate by pasting an API key instead of using a browser")
     .option("--no-instrument", "write the instrumentation task instead of running an agent")
     .option("--manual", "print manual instructions instead of running or writing a task")

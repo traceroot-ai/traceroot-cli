@@ -94,6 +94,8 @@ describe("every surface that says where to initialize", () => {
         service: PYTHON_SERVICE,
         sdk: SDK,
         skillPath: ".claude/skills/traceroot-instrument-repo",
+        envFiles: [],
+        pythonInterpreter: null,
       }),
     ],
   ];

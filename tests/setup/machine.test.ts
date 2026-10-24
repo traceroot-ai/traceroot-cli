@@ -15,9 +15,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 /** `git status --porcelain -z` record separator. */
 const NUL = String.fromCharCode(0);
 import type { ApiClientOptions } from "../../src/api/client.js";
-import { BackendUnavailableError, type SetupApi, SetupApiError } from "../../src/api/setup.js";
+import {
+  BackendUnavailableError,
+  type ProjectSummary,
+  type SetupApi,
+  SetupApiError,
+  type WorkspaceSummary,
+} from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
+import { redeemHandoff } from "../../src/auth/handoff.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
@@ -40,6 +47,7 @@ import type { TraceLister } from "../../src/setup/trace.js";
 import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import { sleep } from "../../src/util/sleep.js";
+import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
 import {
@@ -47,10 +55,12 @@ import {
   type RecordedRun,
   authEmpty,
   authWithKey,
+  codexCapture,
   defaultFlags,
   fakeApiClient,
   fakeRunProcess,
   fakeSetupApi,
+  listTracesFrom,
   makeDeps,
   makeWriters,
   traceRow,
@@ -219,6 +229,50 @@ describe("happy path", () => {
     expect(deps.env.TRACEROOT_API_KEY).toBeUndefined();
   });
 
+  it("warns before the launch when the shell exports another key, and drops its TRACEROOT_ENABLED", async () => {
+    // Both reach the agent through the inherited environment. The key beats
+    // the env file this run wrote, because dotenv does not override, and an
+    // exported `false` switched off the application run the task asks for.
+    pythonRepo();
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({
+      auth: authWithKey("tr-live-project-key-abcd"),
+      env: {
+        PATH: "/usr/bin",
+        TRACEROOT_API_KEY: "tr-shell-other-project-wxyz",
+        TRACEROOT_ENABLED: "false",
+      },
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    const said = plain(err.data);
+    const warning = said.indexOf(
+      "warning: your shell exports TRACEROOT_API_KEY (tr-…wxyz), which is not this run's key",
+    );
+    expect(warning).toBeGreaterThan(-1);
+    expect(warning).toBeLessThan(said.indexOf("Claude Code finished."));
+    const agentRun = process.runs.find((r) => r.program === "claude");
+    expect(agentRun).toBeDefined();
+    expect("TRACEROOT_ENABLED" in (agentRun?.env ?? {})).toBe(false);
+  });
+
+  it("says nothing about the shell's key when it is this run's", async () => {
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey("tr-live-project-key-abcd"),
+      env: { PATH: "/usr/bin", TRACEROOT_API_KEY: "tr-live-project-key-abcd" },
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude" } });
+    await runSetupMachine(ctx, deps);
+
+    expect(plain(err.data)).not.toContain("your shell exports TRACEROOT_API_KEY");
+  });
+
   it("runs none of the project's tests itself", async () => {
     // The suite is the agent's to run, behind `TRACEROOT_ENABLED=false`, and
     // the trace is what setup checks. So setup starts no test command of its
@@ -381,6 +435,29 @@ describe("authentication", () => {
     expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.UNSAFE_OVERWRITE);
     expect(result.error?.message).toContain("rather than replacing it");
+  });
+
+  it("refuses to replace a credential on an unreachable host whose port contains 403", async () => {
+    // The client's transport failure names the host. Matched against a
+    // pattern, `localhost:4030` read as a 403, and setup set out to replace a
+    // working key because the network was down.
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({
+        whoamiResult: async () => {
+          throw new CliError(
+            "request to http://localhost:4030 failed: fetch failed",
+            ExitCode.network,
+          );
+        },
+      }),
+    });
+    const { ctx, err } = makeCtx();
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
+    expect(plain(err.data)).not.toContain("credential was rejected");
   });
 
   it("fails with a flag hint when there are no credentials and no way to ask", async () => {
@@ -944,7 +1021,7 @@ describe("authentication", () => {
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
       storedCredential: { session_token: "tru-saved-token" },
     });
-    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+    const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
 
     const result = await runSetupMachine(ctx, deps);
 
@@ -956,7 +1033,49 @@ describe("authentication", () => {
     expect(attempted).toHaveLength(3);
     expect(attempted[1]).not.toBe(attempted[0]);
     expect(attempted[1]).toContain(attempted[0]);
+    // A 409 created nothing, so there is no key to go looking for.
+    expect(plain(err.data)).not.toContain("did not confirm");
   });
+
+  for (const [why, error] of [
+    ["a 5xx", new SetupApiError("Service Unavailable", 503)],
+    ["a reply that never arrived", new SetupApiError("fetch failed", 0)],
+  ] as const) {
+    it(`names the key a mint may have created on ${why}`, async () => {
+      // The server may have committed the key before the reply was lost, and
+      // the ledger never saw it, so the rollback cannot revoke it. Naming it is
+      // the only way the user learns there is a key to look for.
+      pythonRepo();
+      const attempted: string[] = [];
+      const setupApi = fakeSetupApi({
+        listProjects: async () => [
+          { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+        ],
+        createProjectApiKey: async (input) => {
+          attempted.push(input.name);
+          throw error;
+        },
+      });
+      const deps = makeDeps({
+        auth: authEmpty(),
+        setupApi,
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        storedCredential: { session_token: "tru-saved-token" },
+      });
+      const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(result.ok).toBe(false);
+      // Not retried under another name, which could only orphan a second key.
+      expect(attempted).toHaveLength(1);
+      expect(plain(err.data)).toContain(
+        `the server did not confirm the API key ${attempted[0]}, but it may have been created. If it shows up in the project's API keys at https://api.example.test, delete it, or ask a workspace admin to.`,
+      );
+      expect(ctx.checkpoint.mintedKeys ?? []).toEqual([]);
+    });
+  }
 
   it("does not use a saved credential belonging to a different host", async () => {
     // `readCredential` is keyed by host; this pins that the machine asks for
@@ -1200,6 +1319,8 @@ describe("the handoff code from browser-first onboarding", () => {
     expect(run.redeemed).toEqual([{ authHost: "https://api.example.test", code: CODE }]);
     expect(said(run.err.data)).toContain("Signed in as bob@new.example.");
     expect(said(run.err.data)).toContain("no second page needed");
+    // Single-use, so spent at sign-in and not kept for the rest of the run.
+    expect(run.ctx.flags.handoff).toBeUndefined();
   });
 
   it("writes a credential indistinguishable from the one a device flow writes", async () => {
@@ -1244,6 +1365,36 @@ describe("the handoff code from browser-first onboarding", () => {
     expect(text).toContain("signing in the normal way");
     // And the run ends up on the device flow's credential, not a half-written one.
     expect(run.written.map((e) => e.session_token)).toEqual(["device-session-token-value"]);
+  });
+
+  it("falls back to the device flow on a server without the handoff route", async () => {
+    // Through the real redemption, so the 404 is the server's answer and not a
+    // stubbed outcome.
+    const fake = createFakeFetch(() => jsonResponse({}, 404));
+    const run = handoffRun({
+      redeem: (opts) => redeemHandoff({ ...opts, fetchImpl: fake.fetchImpl }),
+    });
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(fake.calls).toHaveLength(1);
+    expect(result.ok).toBe(true);
+    expect(run.deviceFlows()).toBe(1);
+    expect(said(run.err.data)).toContain("signing in the normal way");
+  });
+
+  it("bounds the redemption the way whoami is bounded", async () => {
+    // Unbounded, a stalled app held the run until Node's own fetch defaults
+    // gave up, minutes later.
+    const timeouts: Array<number | undefined> = [];
+    const run = handoffRun({
+      redeem: async (opts) => {
+        timeouts.push(opts.timeoutMs);
+        return { kind: "redeemed", credential: { sessionToken: "handoff-session-token" } };
+      },
+    });
+    await runSetupMachine(run.ctx, run.deps);
+
+    expect(timeouts).toEqual([15_000]);
   });
 
   it("does not fall back when redemption fails for a network reason", async () => {
@@ -1726,6 +1877,236 @@ describe("the project picker's rows", () => {
     ]);
     expect(result.ok).toBe(true);
     expect(ctx.project?.projectId).toBe("p_2");
+  });
+});
+
+describe("the TraceRoot demo workspace", () => {
+  // Every account joins the public demo as a viewer, and the server lists it
+  // alongside the account's own workspaces. Its project is named to sort first,
+  // so a picker that offered it would open on it.
+  const OWN: ProjectSummary = {
+    project_id: "p_own",
+    project_name: "web",
+    workspace_id: "w_own",
+    workspace_name: "Acme",
+  };
+  const WORKER: ProjectSummary = {
+    project_id: "p_worker",
+    project_name: "worker",
+    workspace_id: "w_own",
+    workspace_name: "Acme",
+  };
+  const DEMO: ProjectSummary = {
+    project_id: "p_demo",
+    project_name: "agent-demo",
+    workspace_id: "w_demo",
+    workspace_name: "TraceRoot Demo",
+    workspace_is_demo: true,
+  };
+  const OWN_WORKSPACE: WorkspaceSummary = { id: "w_own", name: "Acme", role: "admin" };
+  const DEMO_WORKSPACE: WorkspaceSummary = {
+    id: "w_demo",
+    name: "TraceRoot Demo",
+    role: "viewer",
+    is_demo: true,
+  };
+
+  /** One `traceroot setup` on a saved sign-in, recording what it asked and created. */
+  function demoRun(options: {
+    projects: readonly ProjectSummary[];
+    workspaces?: readonly WorkspaceSummary[];
+    canPrompt?: boolean;
+    flags?: Partial<SetupFlags>;
+    answers?: string[];
+  }) {
+    const asked: Parameters<SetupDeps["select"]>[0][] = [];
+    const calls: string[] = [];
+    const base = makeDeps({
+      auth: authEmpty(),
+      setupApi: fakeSetupApi({
+        listProjects: async () => options.projects.map((p) => ({ ...p })),
+        listWorkspaces: async () => (options.workspaces ?? []).map((w) => ({ ...w })),
+        createProject: async (name, workspaceId) => {
+          calls.push(`create ${workspaceId}`);
+          return { project_id: "p_new", project_name: name, workspace_id: workspaceId ?? "" };
+        },
+        createProjectApiKey: async (input) => {
+          calls.push(`mint ${input.projectId}`);
+          return {
+            id: `ak_${calls.length}`,
+            name: input.name,
+            hint: "tr-4444-5555",
+            project_id: input.projectId,
+            scope: input.scope ?? "admin",
+            expires_at: null,
+            key: `tr-${input.scope}-${input.projectId}`,
+          };
+        },
+      }),
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      answers: options.answers ?? [],
+      storedCredential: { session_token: "saved-session-token" },
+    });
+    const deps: SetupDeps = {
+      ...base,
+      select: (input) => {
+        asked.push(input);
+        return base.select(input);
+      },
+    };
+    const harness = makeCtx({
+      canPrompt: options.canPrompt ?? true,
+      flags: { agent: "claude", ...options.flags },
+    });
+    return { ...harness, deps, asked, calls };
+  }
+
+  const projectQuestion = (asked: Parameters<SetupDeps["select"]>[0][]) =>
+    asked.find((input) => input.message.includes("Which project"));
+  const minted = (calls: string[]) => calls.filter((call) => call.startsWith("mint "));
+
+  it("takes the account's own project without asking when the other one is the demo's", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [OWN, DEMO] });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(projectQuestion(run.asked)).toBeUndefined();
+    expect(run.ctx.project?.projectId).toBe("p_own");
+    expect(minted(run.calls).length).toBeGreaterThan(0);
+    expect(minted(run.calls).every((call) => call === "mint p_own")).toBe(true);
+  });
+
+  it("takes it with nobody to ask, as an agent or CI run did before the demo", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO, OWN], canPrompt: false });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.ctx.project?.projectId).toBe("p_own");
+  });
+
+  it("says so when the account is only in the demo, before any key is minted", async () => {
+    // The demo's project used to be taken as the account's only one, and the
+    // key mint behind it answered 403.
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO], workspaces: [DEMO_WORKSPACE] });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message).toContain(
+      "This account is only in the TraceRoot demo workspace, which is view-only.",
+    );
+    expect(result.error?.remedy).toContain("Create a workspace and project");
+    expect(projectQuestion(run.asked)).toBeUndefined();
+    expect(run.calls).toEqual([]);
+  });
+
+  it("says so with nobody to ask as well, rather than to rerun interactively", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO], workspaces: [DEMO_WORKSPACE], canPrompt: false });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.AMBIGUOUS);
+    expect(result.error?.message).toContain(
+      "This account is only in the TraceRoot demo workspace, which is view-only.",
+    );
+    expect(run.calls).toEqual([]);
+  });
+
+  it("still sends an account with an empty workspace of its own to create a project", async () => {
+    pythonRepo();
+    const run = demoRun({
+      projects: [DEMO],
+      workspaces: [DEMO_WORKSPACE, OWN_WORKSPACE],
+      canPrompt: false,
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message).toContain("no projects yet");
+    expect(run.calls).toEqual([]);
+  });
+
+  it("creates the first project in the account's own workspace, not the demo", async () => {
+    // A demo admin, as on our own team: the role alone would offer the demo as
+    // somewhere to create a project.
+    pythonRepo();
+    const run = demoRun({
+      projects: [DEMO],
+      workspaces: [{ ...DEMO_WORKSPACE, role: "admin" }, OWN_WORKSPACE],
+      // Only the project name: leaving the demo out leaves one workspace.
+      answers: [""],
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.asked.find((input) => input.message.includes("Which workspace"))).toBeUndefined();
+    expect(run.calls[0]).toBe("create w_own");
+    expect(run.ctx.project?.projectId).toBe("p_new");
+  });
+
+  it("honours --project naming the demo's project by its id", async () => {
+    pythonRepo();
+    const run = demoRun({
+      projects: [OWN, DEMO],
+      canPrompt: false,
+      flags: { project: "p_demo" },
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(run.ctx.project?.projectId).toBe("p_demo");
+    expect(minted(run.calls).every((call) => call === "mint p_demo")).toBe(true);
+  });
+
+  it("does not resolve a --project name to the demo's project", async () => {
+    pythonRepo();
+    const run = demoRun({
+      projects: [OWN, WORKER, DEMO],
+      canPrompt: false,
+      flags: { project: "agent-demo" },
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.remedy).toBe("Available projects: web, worker");
+    expect(run.calls).toEqual([]);
+  });
+
+  it("offers only the account's own projects", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO, OWN, WORKER], answers: ["p_worker"] });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.ok).toBe(true);
+    expect(projectQuestion(run.asked)?.options.map((o) => o.value)).toEqual(["p_own", "p_worker"]);
+    expect(run.ctx.project?.projectId).toBe("p_worker");
+  });
+
+  it("counts and names only the account's own projects when it cannot ask", async () => {
+    pythonRepo();
+    const run = demoRun({ projects: [DEMO, OWN, WORKER], canPrompt: false });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message).toContain("has 2 projects");
+    expect(result.error?.remedy).toContain("--project web");
+    expect(result.error?.remedy).not.toContain("agent-demo");
+    expect(run.calls).toEqual([]);
   });
 });
 
@@ -4460,6 +4841,90 @@ describe("proving the agent did something", () => {
     expect(result.checkpoint.completedStages).toContain("instrument");
   });
 
+  it("accepts that module when Codex's reply has no block, though it echoed the task's template", async () => {
+    // `codex exec` prints the task before its reply, and the task's report
+    // template is a valid block. Parsed whole, the output read as a report
+    // naming the template's placeholder files, so the reading skipped the
+    // service's own folder and failed this run.
+    pythonRepo();
+    writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
+    writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
+    const base = fakeRunProcess({ instrument: false });
+    const run: SetupDeps["runProcess"] = async (o) => {
+      const result = await base.run(o);
+      return o.program === "codex"
+        ? { ...result, output: codexCapture(o.stdin ?? "", "Added TraceRoot to the service.") }
+        : result;
+    };
+    const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: run });
+    const { ctx } = makeCtx({ flags: { agent: "codex" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(base.runs.find((r) => r.program === "codex")?.stdin).toContain(
+      '"notes": "anything the user should know"',
+    );
+    expect(result.error?.message).toBeUndefined();
+    expect(ctx.instrumentation?.reported).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("does not fail a service started with arguments the reading cannot match", async () => {
+    // `initialize(integrations=[...])` after `from traceroot import initialize`
+    // is how the Python SDK is started with an integration, and the bare-call
+    // pattern only matches empty parentheses. With no report and no git, that
+    // read as no TraceRoot at all and failed a service that was instrumented.
+    pythonRepo();
+    writeFileSync(
+      join(dir, "main.py"),
+      "from traceroot import Integration, initialize\n\ninitialize(integrations=[Integration.ANTHROPIC])\n",
+    );
+    const process = fakeRunProcess({
+      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.existingInstrumentation.present).toBe(false);
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("does not fail a module deeper than the directory walk reaches", async () => {
+    // With no report and no git, the service's own directory is read two
+    // levels down. A module three levels down is never opened, which is not
+    // the same as finding no TraceRoot in it.
+    pythonRepo();
+    mkdirSync(join(dir, "app", "core", "telemetry"), { recursive: true });
+    writeFileSync(
+      join(dir, "app", "core", "telemetry", "tracing.py"),
+      "import traceroot\n\ntraceroot.initialize()\n",
+    );
+    writeFileSync(join(dir, "main.py"), "from app.core.telemetry import tracing\n\nprint('hi')\n");
+    const process = fakeRunProcess({
+      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
   it("says nothing when it could not identify an entry point to read", async () => {
     // Only ever a positive finding of absence. A service with no recognised
     // entry file gives the reading nowhere to look, and "I could not check"
@@ -4581,6 +5046,11 @@ describe("the agent's own account of a failed run", () => {
     expect(plain(result.error?.message ?? "")).toContain("still not instrumented");
     expect(transcript()).toContain("could not edit main.py");
     expect(plain(result.error?.remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+    // Only the TraceRoot key is scrubbed, so the line naming the file says so
+    // to whoever is deciding whether to send it.
+    expect(plain(result.error?.remedy ?? "")).toContain(
+      "It can quote your repository's files, secrets included, so check it before you share it.",
+    );
   });
 
   it("writes nothing on a run that worked", async () => {
@@ -5064,14 +5534,21 @@ describe("what a failed run takes back", () => {
     expect(ctx.checkpoint.mintedKeys).toEqual([]);
   });
 
-  for (const [why, error] of [
+  for (const [why, error, advice] of [
     [
       "a deployment without that route",
       new BackendUnavailableError("/api/v1/public/projects/p_1/api-keys/ak_1", 404),
+      "they are still live. Delete them from the project's API keys at https://api.example.test.",
     ],
-    ["a role that may not revoke", new SetupApiError("Your role cannot revoke these keys", 403)],
+    [
+      "a role that may not revoke",
+      new SetupApiError("Your role cannot revoke these keys", 403),
+      // A member cannot delete them in the dashboard either, so "delete them"
+      // would send them somewhere that refuses them again.
+      "this account may not revoke keys, so they are still live. A workspace admin has to delete them from the project's API keys at https://api.example.test.",
+    ],
   ] as const) {
-    it(`still names them as live, and where to delete them, on ${why}`, async () => {
+    it(`still names them as live, and who can delete them where, on ${why}`, async () => {
       pythonRepo();
       const { deps, revoked } = signInThenFail({ revokeError: error });
       const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true, agent: "claude" } });
@@ -5080,9 +5557,7 @@ describe("what a failed run takes back", () => {
 
       expect(revoked).toEqual([]);
       expect(plain(err.data)).toContain("could not revoke the 2 API keys traceroot-cli-");
-      expect(plain(err.data)).toContain(
-        "they are still live. Delete them from the project's API keys at https://api.example.test.",
-      );
+      expect(plain(err.data)).toContain(advice);
       expect(plain(err.data)).not.toContain("Revoked the");
       expect(ctx.checkpoint.mintedKeys?.map((key) => key.id)).toEqual(["ak_1", "ak_2"]);
     });
@@ -5248,6 +5723,33 @@ describe("how to instrument", () => {
     expect(err.data).toContain("Add TraceRoot to");
     expect(err.data).toContain("traceroot==");
     expect(err.data).toContain("traceroot setup --resume");
+  });
+
+  it("has the manual steps load the env file it wrote the key into", async () => {
+    // The steps used to leave the load out, so an application changed exactly
+    // as shown started without its key, and the resume timed out. And they
+    // installed with `python3`, which a PEP 668 Python refuses.
+    pythonRepo();
+    const venvPython = join(dir, ".venv", "bin", "python");
+    mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+    writeFileSync(venvPython, "");
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: fakeRunProcess().run,
+    });
+    const { ctx, err } = makeCtx({
+      canPrompt: false,
+      flags: { agent: "claude", method: "manual" },
+    });
+    await runSetupMachine(ctx, deps);
+
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("TRACEROOT_API_KEY=");
+    const said = plain(err.data);
+    expect(said).toContain(
+      `'${venvPython}' -m pip install @traceroot-ai/traceroot==1.2.3 python-dotenv\n`,
+    );
+    expect(said).toContain('load_dotenv(Path(__file__).resolve().parent / ".env")');
   });
 
   it("asks when it can, and honours the answer", async () => {
@@ -5534,12 +6036,31 @@ describe("the npm cache a Codex run has to write", () => {
   /**
    * Where the fake npm says its cache is: outside the repository, and not
    * `~/.npm`, so a fallback would show. Real, since setup names the real path.
+   * It is also the home directory for the test, because only a cache inside
+   * the home directory is ever opened to the sandbox.
    */
   let cacheBase: string;
+  // Both spellings: `os.homedir()` reads `HOME` on macOS and Linux and
+  // `USERPROFILE` on Windows.
+  const homeVars = ["HOME", "USERPROFILE"] as const;
+  let previousHome: Partial<Record<(typeof homeVars)[number], string>> = {};
   beforeEach(() => {
     cacheBase = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-cache-")));
+    previousHome = {};
+    for (const name of homeVars) {
+      previousHome[name] = process.env[name];
+      process.env[name] = cacheBase;
+    }
   });
   afterEach(() => {
+    for (const name of homeVars) {
+      const previous = previousHome[name];
+      if (previous === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = previous;
+      }
+    }
     rmSync(cacheBase, { recursive: true, force: true });
   });
 
@@ -5584,8 +6105,8 @@ describe("the npm cache a Codex run has to write", () => {
 
     expect(result.error).toBeNull();
     expect(cacheQueries).toHaveLength(1);
-    // Asked where the agent will stand, since a project `.npmrc` can move it.
-    expect(cacheQueries[0]?.cwd).toBe(dir);
+    // Asked from the home directory, so the project's `.npmrc` has no say.
+    expect(cacheQueries[0]?.cwd).toBe(cacheBase);
     // Asked before the agent starts, so the answer can be in its argv.
     const queried = runs.findIndex((r) => r.program === "npm");
     expect(queried).toBeGreaterThanOrEqual(0);
@@ -5626,6 +6147,16 @@ describe("the npm cache a Codex run has to write", () => {
     expect(said[0]?.slice(said[0].indexOf("warning:"))).toBe(
       `warning: could not create npm's cache directory ${cache}, so Codex starts without it and \`npm install\` may fail`,
     );
+  });
+
+  it("names ~/.npm instead of a cache npm puts outside the home directory", async () => {
+    // A cache at `/` opened the whole disk to a run with the network on and no
+    // approval prompts.
+    nodeRepo("package-lock.json");
+    const { result, launched } = await runWith("codex", "index.js", "/");
+
+    expect(result.error).toBeNull();
+    expect(launched?.args.slice(-3)).toEqual(["--add-dir", join(cacheBase, ".npm"), "-"]);
   });
 
   it("asks npm nothing and adds nothing for a Python service", async () => {
@@ -6744,43 +7275,76 @@ describe("how long setup waits for the first trace", () => {
     expect(plain(err.data)).not.toContain("Waiting for your first trace");
   });
 
-  it("says nothing has run the application on a resume with nothing to wait for", async () => {
-    // A hand-over that nothing has acted on ends as a pause of its own, and an
-    // agent run that left the service uninstrumented fails the instrument
-    // stage. What is left for this message is a resume over code that no
-    // longer carries TraceRoot — here the agent's edit was undone in between:
-    // no agent runs in this process and detection finds no `initialize()` — so
-    // one look, and a reason that names what runs the application rather than
-    // a test command.
-    pythonRepo();
-    const traceless = () =>
-      makeDeps({
-        auth: authWithKey(),
-        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
-      });
-    const first = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
-    const firstResult = await runSetupMachine(first.ctx, traceless());
-    expect(firstResult.error?.message).toContain("No trace arrived within");
-    writeFileSync(join(dir, "main.py"), "print('hi')\n");
-
-    const { traces, looks } = countingTraces();
-    const { ctx, err } = makeCtx({
-      flags: { agent: "claude", traceTimeoutSec: 5, resume: true },
-      resumeFrom: readCheckpoint(dir) ?? undefined,
-    });
-    const result = await runSetupMachine(ctx, {
-      ...traceless(),
-      createSetupApi: makeDeps({ traces }).createSetupApi,
-    });
-
-    expect(looks()).toBe(1);
-    expect(result.error?.code).toBe("TRACE_TIMEOUT");
-    expect(result.error?.message).toContain(
-      "No trace yet, and nothing has run your application: setup did not run it, and found no TraceRoot initialization in it, so nothing else could have sent a trace either.",
+  /** A TypeScript service whose entry point detection reads. */
+  function typescriptRepo(): void {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "svc", main: "src/index.ts", dependencies: { express: "^4" } }),
     );
-    expect(result.error?.remedy).toContain("traceroot setup --resume");
-    expect(plain(err.data)).not.toContain("Waiting for your first trace");
-  });
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "src", "index.ts"), "console.log('hi');\n");
+  }
+
+  it.each([
+    [
+      "in a module the entry point imports",
+      pythonRepo,
+      {
+        "main.py": "import tracing\n\nprint('hi')\n",
+        "tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
+      },
+    ],
+    [
+      "as a TypeScript `initialize({...})`",
+      typescriptRepo,
+      {
+        "src/index.ts":
+          'import { initialize } from "@traceroot-ai/traceroot";\n\ninitialize({ integrations: [] });\n',
+      },
+    ],
+    [
+      "with no entry point detection knows",
+      pythonRepo,
+      { "main.py": null, "worker.py": "import traceroot\n\ntraceroot.initialize()\n" },
+    ],
+  ])(
+    "waits the full budget on a resume after the agent ran, initialization %s",
+    async (_, repo, layout) => {
+      // The resume a trace timeout asks for: run the application, then
+      // `--resume`. No agent runs in this process, and detection reads only the
+      // entry point, so it cannot see these layouts. Waiting keyed off the agent
+      // having been launched in this process, so the resume took one look and
+      // said nothing had run the application.
+      repo();
+      const traceless = () => makeDeps({ auth: authWithKey(), runProcess: fakeRunProcess().run });
+      const first = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+      const firstResult = await runSetupMachine(first.ctx, traceless());
+      expect(firstResult.error?.message).toContain("No trace arrived within");
+      for (const [file, content] of Object.entries(layout)) {
+        if (content === null) {
+          rmSync(join(dir, file));
+        } else {
+          writeFileSync(join(dir, file), content);
+        }
+      }
+
+      const { traces, looks } = countingTraces();
+      const { ctx, err } = makeCtx({
+        flags: { agent: "claude", traceTimeoutSec: 5, resume: true },
+        resumeFrom: readCheckpoint(dir) ?? undefined,
+      });
+      const result = await runSetupMachine(ctx, {
+        ...traceless(),
+        createSetupApi: makeDeps({ traces }).createSetupApi,
+      });
+
+      expect(ctx.stack?.existingInstrumentation.present).toBe(false);
+      expect(looks()).toBeGreaterThan(1);
+      expect(result.error?.code).toBe("TRACE_TIMEOUT");
+      expect(result.error?.message).toMatch(/^No trace arrived within \ds\./);
+      expect(plain(err.data)).toContain("Waiting for your first trace");
+    },
+  );
 
   it("waits the full budget for a service that already carries TraceRoot", async () => {
     // Whoever runs an instrumented application next sends a trace — the user,
@@ -6866,7 +7430,12 @@ describe("the first trace is the application's", () => {
 
     expect(result.ok).toBe(true);
     expect(ctx.trace?.traceId).toBe("app");
-    expect(plain(err.data)).toContain("First trace received (21 spans).");
+    // The burst is counted beside it, as information: five traces since setup
+    // started is not, on its own, a reason to doubt the first.
+    expect(plain(err.data)).toContain(
+      "First trace received (21 spans) — first of 5 since setup started.",
+    );
+    expect(plain(err.data)).not.toContain("may not come from this service");
   });
 });
 
@@ -7802,5 +8371,146 @@ describe("how much of the application the first trace covers", () => {
         e.status === "ok",
     ) as unknown as { data: { span_count: number | null } };
     expect(stage.data.span_count).toBeNull();
+  });
+});
+
+describe("a project that already had traces before setup started", () => {
+  const EARLIER = traceRow({ trace_id: "t_old", trace_start_time: "2026-07-25T09:00:00.000000" });
+
+  /**
+   * A run that reaches a trace, with `earlier` answering the one read bounded
+   * by `end_before`: the question of whether anything else sends to this
+   * project.
+   */
+  function run(options: { earlier: unknown[] | Error; rows?: unknown[]; json?: boolean }) {
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: options.rows ?? [traceRow({ name: "demo.run", span_count: 7 })],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const createApi = deps.createSetupApi;
+    /** Every `end_before` the run asked with, so a test can check the bound itself. */
+    const bounds: string[] = [];
+    deps.createSetupApi = (o) => {
+      const api = createApi(o);
+      return {
+        ...api,
+        listTraces: async (params) => {
+          if (params?.endBefore === undefined) {
+            return api.listTraces(params);
+          }
+          bounds.push(params.endBefore);
+          if (options.earlier instanceof Error) {
+            throw options.earlier;
+          }
+          return listTracesFrom(options.earlier)(params);
+        },
+      };
+    };
+    const harness = makeCtx({ json: options.json ?? false, flags: { agent: "claude" } });
+    return { harness, bounds, result: runSetupMachine(harness.ctx, deps) };
+  }
+
+  function foundLine(err: StringSink): string | undefined {
+    return plain(err.data)
+      .split("\n")
+      .find((l) => l.includes("First trace received"));
+  }
+
+  function traceStage(events: SetupEvent[]): Record<string, unknown> {
+    const stage = events.find(
+      (e) =>
+        e.event === "stage" &&
+        (e as unknown as { stage: string }).stage === "verify_trace" &&
+        e.status === "ok",
+    ) as unknown as { data: Record<string, unknown> };
+    return stage.data;
+  }
+
+  it("says exactly what it always said when the project had none and one trace arrived", async () => {
+    // The onboarding case, and the approved core path: nothing about it changes.
+    const { harness, result } = run({ earlier: [] });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(foundLine(harness.err)).toBe("│  First trace received (7 spans).");
+    expect(plain(harness.err.data)).not.toContain("may not come from this service");
+    expect(outcome.checkpoint.trace?.attributed).toBe(true);
+  });
+
+  it("warns, names the trace and still succeeds when the project already had traffic", async () => {
+    const { harness, bounds, result } = run({ earlier: [EARLIER] });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    // Asked once, and bounded by this run's own start: a later bound would
+    // count the agent's own traces as another sender's.
+    expect(bounds).toEqual([new Date(outcome.checkpoint.startedAt).toISOString()]);
+    expect(foundLine(harness.err)).toBe("│  First trace received (7 spans).");
+    expect(plain(harness.err.data)).toContain(
+      'warning: this project already had traces before setup started, so the trace "demo.run" may not come from this service. Open it and check.',
+    );
+    // On the checkpoint, so a resumed run's report says the same.
+    expect(outcome.checkpoint.trace?.attributed).toBe(false);
+  });
+
+  it("strips control characters from the name it warns about", async () => {
+    // The name is the sending process's own text, and here that sender may be
+    // the other one: an escape or a newline in it must not reach the terminal.
+    const { harness, result } = run({
+      earlier: [EARLIER],
+      rows: [traceRow({ name: "demo.run\u001b[2J\nwarning: forged", span_count: 7 })],
+    });
+    await result;
+
+    expect(harness.err.data).not.toContain("\u001b[2J");
+    expect(plain(harness.err.data)).toContain(
+      'so the trace "demo.run[2Jwarning: forged" may not come from this service.',
+    );
+  });
+
+  it("puts the attribution on the JSON step", async () => {
+    const { harness, result } = run({ earlier: [EARLIER], json: true });
+    await result;
+
+    expect(traceStage(harness.events)).toMatchObject({
+      trace_name: "demo.run",
+      candidates: 1,
+      truncated: false,
+      trace_attributed: false,
+    });
+  });
+
+  it("counts several traces since setup started without doubting the first", async () => {
+    // An agent that runs the application twice sends two. Only earlier traffic
+    // shows another sender exists.
+    const { harness, result } = run({
+      earlier: [],
+      rows: [
+        traceRow({ trace_id: "t_2", trace_start_time: "2026-07-26T12:00:40.000000" }),
+        traceRow({ name: "demo.run", span_count: 7 }),
+      ],
+    });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(foundLine(harness.err)).toBe(
+      "│  First trace received (7 spans) — first of 2 since setup started.",
+    );
+    expect(plain(harness.err.data)).not.toContain("may not come from this service");
+  });
+
+  it("neither warns nor guesses when the look for earlier traffic fails", async () => {
+    const { harness, result } = run({
+      earlier: new Error("request to host failed: fetch failed"),
+      json: true,
+    });
+    const outcome = await result;
+
+    expect(outcome.ok).toBe(true);
+    expect(harness.err.data).not.toContain("may not come from this service");
+    expect(traceStage(harness.events)).toMatchObject({ trace_attributed: null });
+    expect(outcome.checkpoint.trace?.attributed).toBeUndefined();
   });
 });
