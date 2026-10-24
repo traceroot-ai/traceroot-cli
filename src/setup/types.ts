@@ -442,6 +442,22 @@ export interface SetupContext {
    * and `--resume` re-runs the wait rather than inheriting the decision.
    */
   traceWaitSkipped?: boolean;
+  /**
+   * True when this invocation handed the instrumentation over — `--no-instrument`,
+   * `--manual` or a menu answer that edits nothing — rather than restoring a
+   * hand-over an earlier run recorded.
+   *
+   * The difference is whether anyone has had the chance to act on it. Straight
+   * after a hand-over nobody has, and the code is exactly as detection read it,
+   * so a run with no trace can say the service has no TraceRoot in it yet. A
+   * resumed hand-over may be the user back from the task, and detection reads
+   * only the entry point: an `initialize()` the task put in an imported module
+   * is not there to see, and saying "no TraceRoot" over it is false.
+   *
+   * Not on the checkpoint, for the reason {@link SetupContext.traceWaitSkipped}
+   * is not.
+   */
+  handedOverThisRun?: boolean;
 }
 
 export interface SetupStageOutcome {

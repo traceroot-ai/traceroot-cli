@@ -5231,6 +5231,62 @@ describe("proving the agent did something", () => {
     expect(result.checkpoint.completedStages).toContain("instrument");
   });
 
+  it("does not fail a service started with arguments the reading cannot match", async () => {
+    // `initialize(integrations=[...])` after `from traceroot import initialize`
+    // is how the Python SDK is started with an integration, and the bare-call
+    // pattern only matches empty parentheses. With no report and no git, that
+    // read as no TraceRoot at all and failed a service that was instrumented.
+    pythonRepo();
+    writeFileSync(
+      join(dir, "main.py"),
+      "from traceroot import Integration, initialize\n\ninitialize(integrations=[Integration.ANTHROPIC])\n",
+    );
+    const process = fakeRunProcess({
+      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.existingInstrumentation.present).toBe(false);
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("does not fail a module deeper than the directory walk reaches", async () => {
+    // With no report and no git, the service's own directory is read two
+    // levels down. A module three levels down is never opened, which is not
+    // the same as finding no TraceRoot in it.
+    pythonRepo();
+    mkdirSync(join(dir, "app", "core", "telemetry"), { recursive: true });
+    writeFileSync(
+      join(dir, "app", "core", "telemetry", "tracing.py"),
+      "import traceroot\n\ntraceroot.initialize()\n",
+    );
+    writeFileSync(join(dir, "main.py"), "from app.core.telemetry import tracing\n\nprint('hi')\n");
+    const process = fakeRunProcess({
+      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
   it("says nothing when it could not identify an entry point to read", async () => {
     // Only ever a positive finding of absence. A service with no recognised
     // entry file gives the reading nowhere to look, and "I could not check"
@@ -6343,12 +6399,31 @@ describe("the npm cache a Codex run has to write", () => {
   /**
    * Where the fake npm says its cache is: outside the repository, and not
    * `~/.npm`, so a fallback would show. Real, since setup names the real path.
+   * It is also the home directory for the test, because only a cache inside
+   * the home directory is ever opened to the sandbox.
    */
   let cacheBase: string;
+  // Both spellings: `os.homedir()` reads `HOME` on macOS and Linux and
+  // `USERPROFILE` on Windows.
+  const homeVars = ["HOME", "USERPROFILE"] as const;
+  let previousHome: Partial<Record<(typeof homeVars)[number], string>> = {};
   beforeEach(() => {
     cacheBase = realpathSync(mkdtempSync(join(tmpdir(), "tr-npm-cache-")));
+    previousHome = {};
+    for (const name of homeVars) {
+      previousHome[name] = process.env[name];
+      process.env[name] = cacheBase;
+    }
   });
   afterEach(() => {
+    for (const name of homeVars) {
+      const previous = previousHome[name];
+      if (previous === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = previous;
+      }
+    }
     rmSync(cacheBase, { recursive: true, force: true });
   });
 
@@ -6393,8 +6468,8 @@ describe("the npm cache a Codex run has to write", () => {
 
     expect(result.error).toBeNull();
     expect(cacheQueries).toHaveLength(1);
-    // Asked where the agent will stand, since a project `.npmrc` can move it.
-    expect(cacheQueries[0]?.cwd).toBe(dir);
+    // Asked from the home directory, so the project's `.npmrc` has no say.
+    expect(cacheQueries[0]?.cwd).toBe(cacheBase);
     // Asked before the agent starts, so the answer can be in its argv.
     const queried = runs.findIndex((r) => r.program === "npm");
     expect(queried).toBeGreaterThanOrEqual(0);
@@ -6435,6 +6510,16 @@ describe("the npm cache a Codex run has to write", () => {
     expect(said[0]?.slice(said[0].indexOf("warning:"))).toBe(
       `warning: could not create npm's cache directory ${cache}, so Codex starts without it and \`npm install\` may fail`,
     );
+  });
+
+  it("names ~/.npm instead of a cache npm puts outside the home directory", async () => {
+    // A cache at `/` opened the whole disk to a run with the network on and no
+    // approval prompts.
+    nodeRepo("package-lock.json");
+    const { result, launched } = await runWith("codex", "index.js", "/");
+
+    expect(result.error).toBeNull();
+    expect(launched?.args.slice(-3)).toEqual(["--add-dir", join(cacheBase, ".npm"), "-"]);
   });
 
   it("asks npm nothing and adds nothing for a Python service", async () => {

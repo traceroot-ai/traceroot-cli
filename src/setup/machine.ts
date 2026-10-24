@@ -3454,6 +3454,7 @@ function recordHandover(
   route: "task-file" | "manual",
 ): void {
   ctx.checkpoint.instrumentHandover = route;
+  ctx.handedOverThisRun = true;
   ctx.instrumentation = {
     agentId,
     mode: "prompt-only",
@@ -3711,7 +3712,7 @@ const instrument: StageDefinition = {
     const npmCache =
       agent.id === "codex" &&
       installCommand(sdk, service, service.language, pythonInterpreter).startsWith("npm ")
-        ? await resolveNpmCacheDir({ cwd: agentCwd, env: deps.env, runProcess: deps.runProcess })
+        ? await resolveNpmCacheDir({ env: deps.env, runProcess: deps.runProcess })
         : null;
     const writableNpmCache = npmCache === null ? null : prepareWritableDir(npmCache);
     if (npmCache !== null && writableNpmCache === null) {
@@ -4013,7 +4014,11 @@ const instrument: StageDefinition = {
       //
       // Only ever a positive finding of absence. An entry point that could not
       // be identified is not evidence of anything, so there the stage says
-      // nothing and the run carries on.
+      // nothing and the run carries on. Nor is a reading that could not see
+      // everything: a directory walk the budget cut short, or a file that
+      // imports TraceRoot and starts it in a form the patterns miss, such as
+      // `initialize({ serviceName: "api" })`. Those answer `unknown`, and the
+      // trace wait is what settles them.
       const entryPoint = serviceEntryPath(service);
       if (ctx.stack?.existingInstrumentation.present !== true && entryPoint !== null) {
         //
@@ -4031,7 +4036,7 @@ const instrument: StageDefinition = {
           ...observedChangedFiles,
           ...(reported === null ? [service.path] : []),
         ]);
-        if (wiredIn === null) {
+        if (wiredIn.kind === "absent") {
           throw new PausedSetupError({
             stage: "instrument",
             code: "AGENT_FAILED",
@@ -4441,6 +4446,10 @@ const verifyTrace: StageDefinition = {
     //
     // Nothing on this route can send a trace, so `traceCanArrive` has already
     // given it one look rather than the budget; what this adds is the ending.
+    // On a resume that reading is no longer the whole story — the user may have
+    // done the task, with `initialize()` in a module the entry point imports —
+    // so the closing line in `commands/setup/run.ts` stops short of saying the
+    // service has no TraceRoot in it there.
     const unrunHandover =
       ctx.instrumentation?.mode === "prompt-only" &&
       ctx.stack?.existingInstrumentation.present !== true

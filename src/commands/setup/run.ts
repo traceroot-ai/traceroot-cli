@@ -390,18 +390,23 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
     if (ctx.traceWaitSkipped !== true) {
       // A run that ended without a trace but without an error: a hand-over —
       // `--no-instrument`, `--manual` or either menu answer that edits nothing —
-      // that nothing has acted on yet. Say what happens next rather than implying
+      // that nothing setup can see has acted on. Say what happens next rather than implying
       // success, and only the half the closing line does not: that line already
       // says to rerun with `--resume`, and a third copy of it is noise.
+      //
+      // "No TraceRoot in it" only in the run that made the hand-over. On a
+      // resume the user may have done the task, with `initialize()` in a module
+      // the entry point imports where detection cannot see it, so that claim
+      // would be false — and the steps are no longer "above".
       const task = ctx.instrumentation?.promptPath ?? null;
-      wizardLine(
-        { writers, json },
-        `\nNo trace yet: setup changed no code, so the service has no TraceRoot in it. ${
-          task === null
-            ? "Apply the steps above."
-            : `${runTaskSentence(ctx, displaySkillPath(ctx.root, task))}.`
-        }`,
-      );
+      const runTask = task === null ? null : runTaskSentence(ctx, displaySkillPath(ctx.root, task));
+      const said =
+        ctx.handedOverThisRun === true
+          ? `No trace yet: setup changed no code, so the service has no TraceRoot in it. ${runTask === null ? "Apply the steps above." : `${runTask}.`}`
+          : runTask === null
+            ? "No trace yet, and setup cannot tell whether the manual steps were applied. Apply them if not, or run your application once if so."
+            : `No trace yet, and setup cannot tell whether the task was done. ${runTask} if not, or run your application once if so.`;
+      wizardLine({ writers, json }, `\n${said}`);
     } else {
       // The other way to end without a trace: the user stopped the wait. The
       // sentence above is the wrong one for it twice over — it tells somebody

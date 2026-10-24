@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -187,7 +187,7 @@ describe("reading whether a service is wired up now", () => {
     // `git status --porcelain` without `-uall` reports a wholly untracked
     // directory as `telemetry/` rather than the files in it, so that is the
     // spelling this is handed when an agent puts the initialization in a new
-    // module — and reading it as a file answers null however instrumented the
+    // module — and reading it as a file finds nothing however instrumented the
     // module is, which failed runs that had worked.
     const root = repo({
       "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
@@ -195,9 +195,10 @@ describe("reading whether a service is wired up now", () => {
       "telemetry/tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
     });
 
-    expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toBe(
-      "telemetry/tracing.py",
-    );
+    expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toEqual({
+      kind: "found",
+      file: "telemetry/tracing.py",
+    });
   });
 
   it("does not certify a service from a compiled bundle in such a directory", () => {
@@ -210,17 +211,21 @@ describe("reading whether a service is wired up now", () => {
       "dist/bundle.js": "traceroot.initialize();\n",
     });
 
-    expect(findTraceRootInitialization(root, serviceIn(root), ["dist/"])).toBeNull();
+    expect(findTraceRootInitialization(root, serviceIn(root), ["dist/"])).toEqual({
+      kind: "absent",
+    });
   });
 
-  it("answers null for a directory that holds no initialization", () => {
+  it("answers absent for a directory it read through that holds no initialization", () => {
     const root = repo({
       "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
       "main.py": "print('hi')\n",
       "telemetry/tracing.py": "def start():\n    pass\n",
     });
 
-    expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toBeNull();
+    expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toEqual({
+      kind: "absent",
+    });
   });
 
   it("does not certify a service from a build artifact named as a file", () => {
@@ -235,7 +240,9 @@ describe("reading whether a service is wired up now", () => {
       "dist/app.js": "traceroot.initialize();\n",
     });
 
-    expect(findTraceRootInitialization(root, serviceIn(root), ["dist/app.js"])).toBeNull();
+    expect(findTraceRootInitialization(root, serviceIn(root), ["dist/app.js"])).toEqual({
+      kind: "absent",
+    });
   });
 
   it("refuses an absolute path outside the repository", () => {
@@ -248,9 +255,9 @@ describe("reading whether a service is wired up now", () => {
     });
     const elsewhere = repo({ "app.py": "import traceroot\n\ntraceroot.initialize()\n" });
 
-    expect(
-      findTraceRootInitialization(root, serviceIn(root), [join(elsewhere, "app.py")]),
-    ).toBeNull();
+    expect(findTraceRootInitialization(root, serviceIn(root), [join(elsewhere, "app.py")])).toEqual(
+      { kind: "absent" },
+    );
   });
 
   it("refuses a relative path that climbs out of the repository", () => {
@@ -263,7 +270,9 @@ describe("reading whether a service is wired up now", () => {
     const sibling = join(root, "..", "sibling-app.py");
     writeFileSync(sibling, "import traceroot\n\ntraceroot.initialize()\n");
     try {
-      expect(findTraceRootInitialization(root, serviceIn(root), ["../sibling-app.py"])).toBeNull();
+      expect(findTraceRootInitialization(root, serviceIn(root), ["../sibling-app.py"])).toEqual({
+        kind: "absent",
+      });
     } finally {
       rmSync(sibling, { force: true });
     }
@@ -284,8 +293,90 @@ describe("reading whether a service is wired up now", () => {
       throw new Error("the fixture produced no apps/api service");
     }
 
-    expect(findTraceRootInitialization(root, service, ["shared/tracing.py"])).toBe(
-      "shared/tracing.py",
-    );
+    expect(findTraceRootInitialization(root, service, ["shared/tracing.py"])).toEqual({
+      kind: "found",
+      file: "shared/tracing.py",
+    });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "answers unknown for a file it could not read",
+    () => {
+      // chmod 000 has no effect on win32 or when running as root.
+      const root = repo({
+        "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+        "main.py": "import telemetry\n\nprint('hi')\n",
+        "telemetry/tracing.py": "import traceroot\n\ntraceroot.initialize()\n",
+      });
+      const locked = join(root, "telemetry", "tracing.py");
+      chmodSync(locked, 0o000);
+      try {
+        expect(findTraceRootInitialization(root, serviceIn(root), ["telemetry/"])).toEqual({
+          kind: "unknown",
+        });
+      } finally {
+        chmodSync(locked, 0o644);
+      }
+    },
+  );
+
+  it("does not walk the agent's own skill directory", () => {
+    // Git reports `.claude/` when setup has installed the skill there. It is
+    // not the service's source, and walking it found its `references/` past
+    // the depth limit, so a service with no TraceRoot read as unknown.
+    const root = repo({
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "print('hi')\n",
+      ".claude/skills/traceroot-instrument-repo/references/python-instrument.md": "# Python\n",
+    });
+
+    expect(findTraceRootInitialization(root, serviceIn(root), [".claude/"])).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("answers unknown for a file that imports TraceRoot and starts it with arguments", () => {
+    // The TypeScript SDK takes its options in the call, and an agent writes
+    // them there. The bare-call pattern only matches empty parentheses, so this
+    // read as absent and the post-agent check failed a service that was
+    // instrumented.
+    const root = repo({
+      "package.json": JSON.stringify({ name: "api", dependencies: { express: "^4" } }),
+      "src/index.ts":
+        'import { initialize } from "@traceroot-ai/traceroot";\n\ninitialize({ serviceName: "api" });\n',
+    });
+
+    expect(findTraceRootInitialization(root, serviceIn(root))).toEqual({ kind: "unknown" });
+  });
+
+  it("answers unknown when the directory walk stops at the depth limit", () => {
+    // With no report and no diff, the service's own directory is what gets
+    // read, and the walk goes two levels down. A module three levels down is
+    // never opened, so nothing can be said about it either way.
+    const root = repo({
+      "package.json": JSON.stringify({ name: "api", dependencies: { express: "^4" } }),
+      "src/index.ts": 'import "./lib/telemetry/init";\n\nconsole.log("hi");\n',
+      "src/lib/telemetry/init.ts":
+        'import * as traceroot from "@traceroot-ai/traceroot";\n\ntraceroot.initialize();\n',
+    });
+
+    expect(findTraceRootInitialization(root, serviceIn(root), ["."])).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  it("answers unknown when the directory walk stops at the file budget", () => {
+    const files: Record<string, string> = {
+      "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
+      "main.py": "print('hi')\n",
+    };
+    for (let i = 0; i < 70; i += 1) {
+      files[`handlers/h${String(i).padStart(2, "0")}.py`] = "def handle():\n    pass\n";
+    }
+    const root = repo(files);
+
+    expect(findTraceRootInitialization(root, serviceIn(root), ["handlers/"])).toEqual({
+      kind: "unknown",
+    });
   });
 });
