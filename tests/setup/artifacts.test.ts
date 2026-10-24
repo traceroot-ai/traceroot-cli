@@ -1,8 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { relativeToRoot, serviceArtifactDir } from "../../src/setup/artifacts.js";
+import { ensureGitignore, relativeToRoot, serviceArtifactDir } from "../../src/setup/artifacts.js";
 import {
   ENV_FILE_HEADER,
   chooseCredentialEnvFile,
@@ -181,5 +189,65 @@ describe("a --service that points outside the repository", () => {
     const inside = join(root, "api");
     mkdirSync(inside, { recursive: true });
     expect(serviceArtifactDir({ root, cwd: root, service: inside })).toBe(inside);
+  });
+});
+
+describe("the `.gitignore` that covers setup's own files", () => {
+  it("writes `*` into a `.traceroot` directory that has none", () => {
+    const dir = join(root, ".traceroot");
+    mkdirSync(dir, { recursive: true });
+
+    ensureGitignore(dir);
+
+    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  it("never touches a directory the CLI does not own", () => {
+    // It is called with whatever directory an artefact landed in, so a wrong
+    // answer here would start ignoring a user's own source tree.
+    ensureGitignore(root);
+
+    expect(existsSync(join(root, ".gitignore"))).toBe(false);
+  });
+
+  it("owns the directory called `.traceroot`, not every name ending in it", () => {
+    // The one input the two predicates disagree about, and therefore the only
+    // one that says which is in force: `vendor.traceroot` is a directory whose
+    // name ends with ours and that nobody here owns. A test whose directory
+    // fails both is satisfied by either.
+    const dir = join(root, "vendor.traceroot");
+    mkdirSync(dir, { recursive: true });
+
+    ensureGitignore(dir);
+
+    expect(existsSync(join(dir, ".gitignore"))).toBe(false);
+  });
+
+  it("leaves an existing file alone", () => {
+    const dir = join(root, ".traceroot");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".gitignore"), "# mine\n");
+
+    ensureGitignore(dir);
+
+    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("# mine\n");
+  });
+
+  it("does nothing, rather than throwing, when the directory is not there", () => {
+    expect(() => ensureGitignore(join(root, "gone", ".traceroot"))).not.toThrow();
+  });
+
+  it("writes through no symlink planted at the path", () => {
+    // `existsSync` answers about the target, so a `.gitignore` symlinked
+    // somewhere else reads as absent — and a plain write would follow it and
+    // create that file with our content.
+    const dir = join(root, ".traceroot");
+    mkdirSync(dir, { recursive: true });
+    const elsewhere = join(root, "elsewhere.txt");
+    symlinkSync(elsewhere, join(dir, ".gitignore"));
+
+    expect(() => ensureGitignore(dir)).not.toThrow();
+
+    expect(existsSync(elsewhere)).toBe(false);
   });
 });

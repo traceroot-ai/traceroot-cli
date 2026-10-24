@@ -3,6 +3,7 @@ import { delimiter, join, win32 as windowsPath } from "node:path";
 import { ALL_AGENTS } from "../agents/index.js";
 import type { AgentAdapter, AgentId } from "../agents/types.js";
 import { SetupError } from "./errors.js";
+import { setupCommand } from "./invocation.js";
 import type { SelectFn } from "./select.js";
 import type { DetectedAgent } from "./types.js";
 
@@ -222,7 +223,7 @@ function requireLaunchableAgent(id: string): AgentAdapter {
       message: `Setup cannot run '${id}'. It can run: ${LAUNCHABLE_AGENTS.map((a) => a.id).join(", ")}.`,
       remedy: [
         "Name one of those, or write the instrumentation task out and run it with the agent you prefer:",
-        "  traceroot setup --no-instrument",
+        `  ${setupCommand()} --no-instrument`,
       ].join("\n"),
     });
   }
@@ -237,7 +238,7 @@ function unlaunchableError(message: string): SetupError {
     message,
     remedy: [
       "Or generate the instrumentation prompt and run it yourself:",
-      "  traceroot setup --no-instrument",
+      `  ${setupCommand()} --no-instrument`,
     ].join("\n"),
   });
 }
@@ -306,9 +307,9 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
       message: "No coding agent was found on PATH, so setup cannot run one for you.",
       remedy: [
         // Named from the list rather than spelled out, so the two cannot drift.
-        `Install ${LAUNCHABLE_AGENTS.map((a) => a.displayName).join(" or ")}, then rerun \`traceroot setup\`.`,
+        `Install ${LAUNCHABLE_AGENTS.map((a) => a.displayName).join(" or ")}, then rerun \`${setupCommand()}\`.`,
         "Or generate the instrumentation prompt and run it yourself:",
-        "  traceroot setup --no-instrument",
+        `  ${setupCommand()} --no-instrument`,
       ].join("\n"),
     });
   }
@@ -318,7 +319,7 @@ export async function selectAgent(input: SelectAgentInput): Promise<DetectedAgen
       stage: "select_agent",
       code: "AMBIGUOUS",
       message: `Several coding agents are available: ${runnable.map((a) => a.id).join(", ")}.`,
-      remedy: `Pick one with --agent, for example:\n  traceroot setup --agent ${only.id}`,
+      remedy: `Pick one with --agent, for example:\n  ${setupCommand()} --agent ${only.id}`,
     });
   }
 

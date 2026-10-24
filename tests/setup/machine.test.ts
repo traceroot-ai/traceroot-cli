@@ -35,6 +35,7 @@ import {
   runSetupMachine,
   uniqueKeyName,
 } from "../../src/setup/machine.js";
+import { AGENT_OUTPUT_PATH } from "../../src/setup/transcript.js";
 import type { TraceLister } from "../../src/setup/trace.js";
 import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
@@ -4864,6 +4865,212 @@ describe("proving the agent did something", () => {
     expect(result.error?.code).toBe("AGENT_FAILED");
     const message = plain(result.error?.message ?? "");
     expect(message).toContain("apps/api/main.py");
+  });
+});
+
+describe("the agent's own account of a failed run", () => {
+  /** An agent's completion block, as it arrives on stdout. */
+  function completion(body: Record<string, unknown>, prose = "done"): string {
+    return [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n");
+  }
+
+  /** The written transcript, or null when the run left none. */
+  function transcript(): string | null {
+    const path = join(dir, AGENT_OUTPUT_PATH);
+    return existsSync(path) ? readFileSync(path, "utf8") : null;
+  }
+
+  it("keeps the output of an agent that exited 0 having changed nothing", async () => {
+    // The whole point of the stage's post-checks is that exit 0 proves nothing,
+    // and until this existed the one account of what the agent had been doing
+    // was cleared off the screen before either check ran. A denied tool call
+    // appears in the stream and nowhere else.
+    pythonRepo();
+    initGit();
+    const stream = [
+      '{"type":"system","subtype":"init","tools":["Read","Edit","Write","Bash"]}',
+      '{"type":"user","message":"Bash(pip install traceroot) was denied"}',
+      completion({ files_changed: [], trace_id: null, notes: "a command was refused" }),
+    ].join("\n");
+    const process = fakeRunProcess({
+      gitStatus: ["", ""],
+      instrument: false,
+      results: { claude: { output: stream } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(plain(result.error?.message ?? "")).toContain("without changing any files");
+    // Whole, not tailed: the stop reason can be anywhere in the stream, and the
+    // `init` event at the top is what says which tools the agent was given.
+    const written = transcript();
+    expect(written).toContain("was denied");
+    expect(written).toContain('"subtype":"init"');
+    // And the error says where it is, or it is evidence nobody opens.
+    expect(plain(result.error?.remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+    // In a directory the existing `.gitignore` covers, so a transcript quoting
+    // whatever the agent read cannot land in somebody's commit.
+    expect(readFileSync(join(dir, ".traceroot", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  it("keeps the output of an agent that left the service uninstrumented", async () => {
+    // The other exit-0 failure, and the one the live runs hit: no completion
+    // block at all, so the guard above it cannot fire and the entry-point
+    // reading is what fails the run. Same evidence, same place.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      results: { claude: { output: "Installed traceroot. I could not edit main.py.\n" } },
+      gitStatus: ["", "?? .claude/"],
+      instrument: false,
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(plain(result.error?.message ?? "")).toContain("still not instrumented");
+    expect(transcript()).toContain("could not edit main.py");
+    expect(plain(result.error?.remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+  });
+
+  it("writes nothing on a run that worked", async () => {
+    // The success path is unchanged: what a working run changed is in `git
+    // diff` and in the setup report, and a transcript of it is litter.
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: { claude: { output: completion({ files_changed: ["main.py"], trace_id: null }) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(transcript()).toBeNull();
+  });
+
+  it("keeps the output of an agent that exited non-zero, under --json above all", async () => {
+    // The failure whose cause exists only in the agent's output. The block left
+    // on screen above is not a substitute: it holds the last few parsed
+    // activity lines and it goes when the terminal does — and under `--json`,
+    // which is how this is run in CI, there was never a feed at all. So this
+    // asserts the `--json` run, where the screen defence does not exist and the
+    // output would otherwise be discarded with the process.
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      results: {
+        claude: { exitCode: 3, output: "reading main.py\npanic: provider refused\n" },
+      },
+      gitStatus: ["", " M main.py"],
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient(),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ json: true, flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(plain(result.error?.message ?? "")).toContain("status 3");
+    expect(transcript()).toContain("panic: provider refused");
+    expect(plain(result.error?.remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+    // And it still says first the thing a user reading an aborted run needs
+    // first, which is that their worktree was left alone.
+    expect(plain(result.error?.remedy ?? "")).toContain("Nothing was reverted");
+  });
+
+  it("keeps the output of an agent that finished without installing the SDK", async () => {
+    // Exit 0, the entry point edited, and `import traceroot` still failing: the
+    // install was step 2 of the task and something stopped it. Which something
+    // is in the output, and the feed was cleared the moment the agent finished,
+    // several checks before this one runs.
+    pythonRepo();
+    initGit();
+    const inner = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      results: { claude: { output: "pip install traceroot: no write access to the cache\n" } },
+    });
+    const runProcess: SetupDeps["runProcess"] = async (o) =>
+      o.args[0] === "-c"
+        ? {
+            exitCode: 1,
+            output: "ModuleNotFoundError",
+            durationMs: 1,
+            timedOut: false,
+            spawnFailed: false,
+          }
+        : inner.run(o);
+    const deps = makeDeps({
+      auth: authWithKey(),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess,
+      sdk: { package: "traceroot", version: "0.3.0", source: "registry" },
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(plain(result.error?.message ?? "")).toContain("was not installed");
+    expect(transcript()).toContain("no write access to the cache");
+    expect(plain(result.error?.remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+    // The install command is still the first instruction, not displaced by it.
+    expect(plain(result.error?.remedy ?? "")).toContain("traceroot==0.3.0");
+  });
+
+  it("never writes the application credential to disk", async () => {
+    // An agent that echoes its own environment, or runs the application with
+    // the key in it, puts the credential in the stream this file is made of.
+    // `runProcess` scrubs it from the captured output already; the write site
+    // scrubs it again, because this is the copy that outlives the process.
+    const key = "tr-secret-key-abcdef";
+    pythonRepo();
+    initGit();
+    const process = fakeRunProcess({
+      gitStatus: ["", ""],
+      instrument: false,
+      results: {
+        claude: {
+          output: [
+            `{"type":"user","message":"TRACEROOT_API_KEY=${key}"}`,
+            completion({ files_changed: [], trace_id: null }),
+          ].join("\n"),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(key),
+      client: fakeApiClient({ traces: [traceRow()] }),
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(false);
+    expect(ctx.credential?.key.reveal()).toBe(key);
+    const written = transcript();
+    expect(written).not.toBeNull();
+    expect(written).not.toContain(key);
+    expect(written).toContain("<redacted>");
   });
 });
 

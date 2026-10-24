@@ -42,6 +42,7 @@ import {
   jsonEmitter,
   stageLineEmitter,
 } from "../../setup/events.js";
+import { setupCommand } from "../../setup/invocation.js";
 import {
   type SetupDeps,
   applicationKeyLocation,
@@ -116,7 +117,7 @@ export function closingLine(result: SetupResult, ending: SetupEnding = {}): stri
   // "paused" is the word for that one only.
   return ending.traceWaitSkipped === true
     ? "TraceRoot local setup complete — no trace seen yet."
-    : "Setup paused — rerun `traceroot setup --resume` to finish.";
+    : `Setup paused — rerun \`${setupCommand()} --resume\` to finish.`;
 }
 
 /**

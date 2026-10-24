@@ -2,6 +2,7 @@ import { join, relative, sep } from "node:path";
 import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import { writeFileSecure } from "../util/secureFile.js";
 import { applicationEnvKeys } from "./envWrite.js";
+import { setupCommand } from "./invocation.js";
 import { nameList } from "./production.js";
 import { spanPhrase } from "./trace.js";
 import type { ApplicationKeyLocation, SetupContext } from "./types.js";
@@ -212,7 +213,7 @@ export function renderSetupReport(
     // being left to read something into its absence.
     trace !== undefined
       ? `**First trace.** \`${trace.traceId}\`${trace.spanCount === undefined ? "" : ` — ${spanPhrase(trace.spanCount)}`}\n\n${trace.traceUrl}`
-      : "**First trace.** None yet. Run the application, then `traceroot setup --resume`.",
+      : `**First trace.** None yet. Run the application, then \`${setupCommand()} --resume\`.`,
     "",
     "## Files this run touched",
     "",
