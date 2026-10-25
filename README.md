@@ -1,8 +1,7 @@
 # TraceRoot CLI
 
-Set up [TraceRoot](https://traceroot.ai) in your repository with one command, then
-work with your traces, findings, detectors, alerts, dashboards and evaluations from
-the terminal.
+Set up [TraceRoot](https://traceroot.ai) in your repository, then work with your
+traces, findings, detectors and evaluations from the terminal.
 
 ## Set up a repository
 
@@ -12,78 +11,25 @@ Run this from the root of the repository you want to trace:
 npx -y traceroot-cli@latest setup
 ```
 
-One command takes a repository from a fresh account to a trace you can open:
+Setup signs you in, picks or creates a project, writes a project API key into your
+application's env file, has Claude Code or Codex add the TraceRoot SDK, and waits for
+the first trace. It needs Node.js 20.12 or later; every other command runs on 20.3.
 
-1. **Signs you in.** It reuses a configured API key or a `traceroot login` session;
-   otherwise it opens a browser sign-in, where you can also create an account.
-2. **Picks or creates a project.** One project is used automatically, several get a
-   picker, and none prompts for a name and creates it. `--project <name-or-id>`
-   selects an existing project instead.
-3. **Writes a key for your application.** It writes an ingest-scoped project API
-   key, one that can only send traces, as `TRACEROOT_API_KEY` to the service's
-   `.env.local` if it has one and `.env` otherwise, plus `TRACEROOT_HOST_URL` off
-   TraceRoot Cloud. It refuses an env file git tracks.
-4. **Hands the instrumentation to a coding agent.** It runs Claude Code or Codex
-   for you (`--agent claude`, `--agent codex`), or writes the task to
-   `.traceroot/prompts/setup-instrument.md` for any other agent (`--no-instrument`).
-   In a terminal, it asks before an agent edits anything.
-5. **Waits for the first trace**, then says what production still needs.
+- Using another coding agent? Pass `--no-instrument` and setup writes the change out
+  as a task for it to run.
+- Self-hosting? Point setup at your deployment with `--host` (the API origin) and
+  `--auth-host` (the web app origin).
 
-`npx` runs it without a global install. To keep the CLI, `npm install -g traceroot-cli`
-and run `traceroot setup`. Setup needs Node.js 20.12 or later; every other command
-runs on 20.3. The [setup guide](https://traceroot.ai/docs/tracing/get-started) walks
-through each step, the files it writes, and troubleshooting.
+See the [setup guide](https://traceroot.ai/docs/tracing/get-started) for each step and
+for troubleshooting, and the [CLI guide](https://traceroot.ai/docs/cli/get-started#run-without-prompts)
+to run it without prompts. `setup --help` lists every option.
+
+If a run stops partway, ask setup what went wrong, then continue from where it stopped:
 
 ```sh
-npx -y traceroot-cli@latest setup --no-instrument     # write the task for your own agent
-npx -y traceroot-cli@latest setup --manual            # print the steps instead
-npx -y traceroot-cli@latest setup doctor              # diagnose a run that stopped
-npx -y traceroot-cli@latest setup --resume            # continue from where it stopped
+npx -y traceroot-cli@latest setup doctor
+npx -y traceroot-cli@latest setup --resume
 ```
-
-| Option | Description |
-| :-- | :-- |
-| `--project <name-or-id>` | Existing project to send traces to. Setup does not create a project from it. |
-| `--agent <agent>` | Coding agent to run: `claude` or `codex`. |
-| `--no-instrument` | Write the instrumentation task instead of running an agent. |
-| `--manual` | Print manual instructions instead. Cannot be combined with `--no-instrument`. |
-| `--language <language>` | `python` or `typescript`, when the repository has both. |
-| `--service <path>` | The service to instrument in a monorepo. |
-| `--no-browser` | Sign in by pasting an API key instead of in the browser. |
-| `--resume` | Continue from the saved checkpoint. |
-| `--no-input` | Never prompt; fail with the flag to pass instead. |
-| `--trace-timeout <seconds>` | How long to wait for the first trace (default 120). |
-
-`--api-key`, `--host`, `--auth-host` and `--json` are global options and work on
-`setup` too.
-
-### Self-hosted
-
-The CLI defaults to TraceRoot Cloud. Point setup at your deployment with `--host`
-(the API origin) and, when sign-in is served from another origin, `--auth-host`
-(the web app origin). For a local deployment on the default ports:
-
-```sh
-npx -y traceroot-cli@latest setup --host "http://localhost:8000" --auth-host "http://localhost:3000"
-```
-
-`TRACEROOT_HOST_URL` and `TRACEROOT_AUTH_URL` work in place of the flags. Your
-deployment's Traces page prints the command with its origins filled in.
-
-### Without prompts
-
-Setup never prompts under `--no-input` or `--json`, when `CI` is set, or without a
-terminal. It cannot sign in through a browser there, so give it a key:
-
-```sh
-npx -y traceroot-cli@latest setup --no-input --api-key "$TRACEROOT_API_KEY"
-```
-
-With nobody to ask, setup writes the instrumentation task rather than running an
-agent; pass `--agent` to run one anyway, without the confirmation. A run with
-several projects to choose from needs `--project`, and a repository with both
-languages needs `--language`. Each stop names the flag to pass and exits with one
-of the codes in [Exit codes](#exit-codes).
 
 ## Install
 
@@ -165,8 +111,8 @@ need none of this.
 
 | Command | Description |
 | :-- | :-- |
-| `setup` | Connect this repository to TraceRoot and see your first trace. See [Set up a repository](#set-up-a-repository). |
-| `setup doctor` | Diagnose a setup run that did not complete (`pass`/`warn`/`fail`). `--service <path>` |
+| `setup` | Connect this repository to TraceRoot and see your first trace. `--project <name-or-id>`, `--agent <agent>`, `--no-instrument`, `--manual`, `--language <language>`, `--service <path>`, `--no-browser`, `--resume`, `--no-input`, `--trace-timeout <seconds>` |
+| `setup doctor` | Diagnose a setup run that did not complete: the `doctor` checks, plus how far the run got and what stopped it. `--service <path>` |
 | `login` | Sign in with the browser (device flow) and store the session credential; with `--api-key`, validate and save the key instead. |
 | `logout` | Revoke the session server-side (best-effort) and remove the local credential. |
 | `status` | Show the identity your credentials resolve to — email/workspaces (browser login) or workspace/project/key hint (API key), plus host and source. |
@@ -216,9 +162,10 @@ need none of this.
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
-| `doctor` | Diagnose credentials, repo shape, runtime env, and installed skills (`pass`/`warn`/`fail`). |
+| `doctor` | Diagnose credentials, repo shape, runtime env, installed skills, and any setup run (`pass`/`warn`/`fail`). `--service <path>` |
 
-Add `--json` to any command for a single machine-readable document on stdout.
+Add `--json` to any command for a single machine-readable document on stdout;
+`setup` writes one JSON event per line instead.
 Run `traceroot <command> --help` for the full flag list.
 
 ### Creating things

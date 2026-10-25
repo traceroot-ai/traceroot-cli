@@ -84,7 +84,7 @@ function normalizeHostUrl(value: string): string {
 
 /**
  * Tolerates an API key pasted in its env-assignment form. Copying the key from
- * the UI yields `TRACEROOT_API_KEY=tr_...`; if a user pastes that whole string
+ * the UI yields `TRACEROOT_API_KEY=tr-...`; if a user pastes that whole string
  * (e.g. into `--api-key`), strip the `TRACEROOT_API_KEY=` (optionally
  * `export `-prefixed) and any surrounding quotes so the bare key is used.
  *
