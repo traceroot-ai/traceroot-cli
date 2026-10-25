@@ -883,6 +883,66 @@ describe("authentication", () => {
     expect(result.error?.message).toContain("no projects yet");
   });
 
+  it("tells an account with no projects to run a command that creates one", async () => {
+    // `--project` only selects a project that already exists, so a remedy
+    // naming it led to a second error, "No project named '<name>' was found".
+    // The command is read out of the remedy and run as the user would run it,
+    // in a terminal that can ask, so the remedy cannot drift from what it names.
+    pythonRepo();
+    const created: Array<[string, string | undefined]> = [];
+    const account: MakeDepsOptions = {
+      auth: authEmpty(),
+      setupApi: fakeSetupApi({
+        listProjects: async () => [],
+        listWorkspaces: async () => [{ id: "w_1", name: "acme", role: "admin" }],
+        createProject: async (name, workspaceId) => {
+          created.push([name, workspaceId]);
+          return { project_id: "p_new", project_name: name, workspace_id: workspaceId ?? "w_1" };
+        },
+        createProjectApiKey: async (input) => ({
+          id: "ak_new",
+          name: input.name,
+          hint: "tr-4444-5555",
+          project_id: input.projectId,
+          scope: "admin",
+          expires_at: null,
+          key: "tr-key-for-the-new-project",
+        }),
+      }),
+      traces: [traceRow()],
+      storedCredential: { session_token: "saved-session-token" },
+    };
+
+    const stopped = await runSetupMachine(makeCtx({ canPrompt: false }).ctx, makeDeps(account));
+
+    expect(stopped.error?.code).toBe("AMBIGUOUS");
+    expect(stopped.error?.message).toContain("This workspace has no projects yet.");
+    const remedy = stopped.error?.remedy ?? "";
+    const command = /`([^`]+)`/.exec(remedy)?.[1] ?? "";
+    const project = /\s--project\s+(\S+)/.exec(command)?.[1];
+    // Nothing else on the command that this test would have to translate.
+    expect(command.replace(/\s--project\s+\S+/, "")).toBe("traceroot setup");
+
+    const followed = await runSetupMachine(
+      makeCtx({
+        canPrompt: true,
+        flags: { agent: "claude", ...(project === undefined ? {} : { project }) },
+      }).ctx,
+      makeDeps({
+        ...account,
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        // The new project's name; empty accepts the repository's.
+        answers: [""],
+      }),
+    );
+
+    expect(followed.error).toBeNull();
+    expect(created).toEqual([[basename(dir), "w_1"]]);
+    expect(remedy).toBe(
+      "Run `traceroot setup` in an interactive terminal, which asks for a name and creates the project, or create one in the TraceRoot dashboard and rerun setup.",
+    );
+  });
+
   it("signs in from a saved credential without opening a browser", async () => {
     pythonRepo();
     let deviceFlowCalls = 0;
