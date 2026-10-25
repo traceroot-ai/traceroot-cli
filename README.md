@@ -1,26 +1,100 @@
 # TraceRoot CLI
 
-Read your [TraceRoot](https://traceroot.ai) traces from the terminal: list,
-inspect, and export traces from the TraceRoot public API.
+Set up [TraceRoot](https://traceroot.ai) in your repository with one command, then
+work with your traces, findings, detectors, alerts, dashboards and evaluations from
+the terminal.
 
-## Install
+## Set up a repository
 
-```sh
-npx traceroot-cli --help        # run without installing
-npm install -g traceroot-cli    # or install the `traceroot` command
-```
-
-## Quick start
-
-New to TraceRoot? One command takes a repository from a fresh account to a trace you
-can open — it signs you in, mints a project key, instruments your service with your
-coding agent, and waits for the first trace to arrive:
+Run this from the root of the repository you want to trace:
 
 ```sh
 npx -y traceroot-cli@latest setup
 ```
 
-Already instrumented? The rest of the CLI:
+One command takes a repository from a fresh account to a trace you can open:
+
+1. **Signs you in.** It reuses a configured API key or a `traceroot login` session;
+   otherwise it opens a browser sign-in, where you can also create an account.
+2. **Picks or creates a project.** One project is used automatically, several get a
+   picker, and none prompts for a name and creates it. `--project <name-or-id>`
+   selects an existing project instead.
+3. **Writes a key for your application.** It writes an ingest-scoped project API
+   key, one that can only send traces, as `TRACEROOT_API_KEY` to the service's
+   `.env.local` if it has one and `.env` otherwise, plus `TRACEROOT_HOST_URL` off
+   TraceRoot Cloud. It refuses an env file git tracks.
+4. **Hands the instrumentation to a coding agent.** It runs Claude Code or Codex
+   for you (`--agent claude`, `--agent codex`), or writes the task to
+   `.traceroot/prompts/setup-instrument.md` for any other agent (`--no-instrument`).
+   In a terminal, it asks before an agent edits anything.
+5. **Waits for the first trace**, then says what production still needs.
+
+`npx` runs it without a global install. To keep the CLI, `npm install -g traceroot-cli`
+and run `traceroot setup`. Setup needs Node.js 20.12 or later; every other command
+runs on 20.3. The [setup guide](https://traceroot.ai/docs/tracing/get-started) walks
+through each step, the files it writes, and troubleshooting.
+
+```sh
+npx -y traceroot-cli@latest setup --no-instrument     # write the task for your own agent
+npx -y traceroot-cli@latest setup --manual            # print the steps instead
+npx -y traceroot-cli@latest setup doctor              # diagnose a run that stopped
+npx -y traceroot-cli@latest setup --resume            # continue from where it stopped
+```
+
+| Option | Description |
+| :-- | :-- |
+| `--project <name-or-id>` | Existing project to send traces to. Setup does not create a project from it. |
+| `--agent <agent>` | Coding agent to run: `claude` or `codex`. |
+| `--no-instrument` | Write the instrumentation task instead of running an agent. |
+| `--manual` | Print manual instructions instead. Cannot be combined with `--no-instrument`. |
+| `--language <language>` | `python` or `typescript`, when the repository has both. |
+| `--service <path>` | The service to instrument in a monorepo. |
+| `--no-browser` | Sign in by pasting an API key instead of in the browser. |
+| `--resume` | Continue from the saved checkpoint. |
+| `--no-input` | Never prompt; fail with the flag to pass instead. |
+| `--trace-timeout <seconds>` | How long to wait for the first trace (default 120). |
+
+`--api-key`, `--host`, `--auth-host` and `--json` are global options and work on
+`setup` too.
+
+### Self-hosted
+
+The CLI defaults to TraceRoot Cloud. Point setup at your deployment with `--host`
+(the API origin) and, when sign-in is served from another origin, `--auth-host`
+(the web app origin). For a local deployment on the default ports:
+
+```sh
+npx -y traceroot-cli@latest setup --host "http://localhost:8000" --auth-host "http://localhost:3000"
+```
+
+`TRACEROOT_HOST_URL` and `TRACEROOT_AUTH_URL` work in place of the flags. Your
+deployment's Traces page prints the command with its origins filled in.
+
+### Without prompts
+
+Setup never prompts under `--no-input` or `--json`, when `CI` is set, or without a
+terminal. It cannot sign in through a browser there, so give it a key:
+
+```sh
+npx -y traceroot-cli@latest setup --no-input --api-key "$TRACEROOT_API_KEY"
+```
+
+With nobody to ask, setup writes the instrumentation task rather than running an
+agent; pass `--agent` to run one anyway, without the confirmation. A run with
+several projects to choose from needs `--project`, and a repository with both
+languages needs `--language`. Each stop names the flag to pass and exits with one
+of the codes in [Exit codes](#exit-codes).
+
+## Install
+
+```sh
+npx -y traceroot-cli@latest --help   # run without installing
+npm install -g traceroot-cli         # or install the `traceroot` command
+```
+
+## Quick start
+
+Once your application sends traces, the rest of the CLI works with them:
 
 ```sh
 traceroot login                       # sign in with your browser (device flow)
@@ -40,7 +114,7 @@ repeating `--project`. With a project API key the project is fixed by the key,
 so `--project` is unnecessary:
 
 ```sh
-traceroot login --api-key tr_...      # key mode: validates, saves ./.traceroot/config.json
+traceroot login --api-key tr-...      # key mode: validates, saves ./.traceroot/config.json
 traceroot traces list --limit 10
 ```
 
@@ -48,7 +122,7 @@ traceroot traces list --limit 10
 
 The CLI authenticates with either a **browser login** (a session credential
 stored in `~/.config/traceroot/credentials.json`, exchanged for a short-lived
-access token before every request) or a **project API key** (`tr_...`, sent
+access token before every request) or a **project API key** (`tr-...`, sent
 directly). The credential resolves in this priority order:
 
 1. `--api-key` flag (API key)
@@ -71,7 +145,7 @@ Override the paths with `TRACEROOT_CREDENTIALS_PATH` / `TRACEROOT_CONFIG_PATH`.
 For CI or scripts, prefer a project API key via env vars or flags:
 
 ```sh
-export TRACEROOT_API_KEY=tr_...
+export TRACEROOT_API_KEY=tr-...
 export TRACEROOT_HOST_URL=https://app.traceroot.ai
 traceroot traces list
 ```
@@ -91,6 +165,8 @@ need none of this.
 
 | Command | Description |
 | :-- | :-- |
+| `setup` | Connect this repository to TraceRoot and see your first trace. See [Set up a repository](#set-up-a-repository). |
+| `setup doctor` | Diagnose a setup run that did not complete (`pass`/`warn`/`fail`). `--service <path>` |
 | `login` | Sign in with the browser (device flow) and store the session credential; with `--api-key`, validate and save the key instead. |
 | `logout` | Revoke the session server-side (best-effort) and remove the local credential. |
 | `status` | Show the identity your credentials resolve to — email/workspaces (browser login) or workspace/project/key hint (API key), plus host and source. |
@@ -100,6 +176,7 @@ need none of this.
 | `traces get <id>` | Show one trace: span tree, derived duration, and a link to open it. Defaults to the lightweight `skeleton` projection (no per-span input/output/metadata); pass `--fields full` (or `--fields io,metadata`) to fetch span I/O. `--fields <groups>` |
 | `traces export <id>` | Write a trace bundle (`trace.json`, `spans.json`, `git_context.json`, `manifest.json`) to a directory. Defaults to the `full` projection (span input/output/metadata included); pass `--fields <groups>` to narrow it. `--output <dir>`, `--force`, `--fields <groups>` |
 | `detectors list` | List your project's detectors, newest first. The `DETECTOR ID` column is what you pass to `findings list --detector`. `--limit <n>`, `--since <dur>`, `--from`/`--to` |
+| `detectors get <id>` | Show one detector. |
 | `findings list` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id>`, `--trace <id>` |
 | `findings get [id]` | Show one finding: per-detector results and its free-text RCA. Look it up by finding id or with `--trace <id>` (exactly one). |
 | `alerts list` | List the project's threshold alerts with their status, severity and rule. `--limit <n>`, `--page <n>`, `--search <q>` |
@@ -174,8 +251,8 @@ tool registry shipped in
 entry's input schema drives its flags, and its response type drives the default
 rendering. Adding a new backend endpoint to the CLI is a registry bump
 plus one placement line in `src/registry/naming.ts` — no hand-written command
-handler needed. `login`, `logout`, `status`, `skills`, `instrument`, and
-`doctor` stay hand-written: they are auth flows or local tooling with no
+handler needed. `setup`, `login`, `logout`, `status`, `skills`, `instrument`,
+and `doctor` stay hand-written: they are auth flows or local tooling with no
 registry entry.
 
 ```sh
