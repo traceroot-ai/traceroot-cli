@@ -6467,6 +6467,210 @@ describe("watching the agent work", () => {
   });
 });
 
+describe("who the instrumentation task is written for", () => {
+  // One task, two readers. Setup's own agent runs captured, under permissions
+  // the launch sets, in an environment `buildAgentEnv` builds and in the
+  // service directory. The task file is for an agent the user opens, where none
+  // of that holds. Both read out of real runs, so the route each task took is
+  // the one under test.
+
+  /** A Python service in `api/`, below the repository root. */
+  function apiService(): void {
+    mkdirSync(join(dir, "api"), { recursive: true });
+    writeFileSync(join(dir, "api", "pyproject.toml"), '[project]\ndependencies = ["fastapi"]\n');
+    writeFileSync(join(dir, "api", "main.py"), "print('hi')\n");
+  }
+
+  const services = [
+    { name: "a root service", make: pythonRepo, service: undefined, changed: " M main.py" },
+    { name: "a service in api/", make: apiService, service: "api", changed: " M api/main.py" },
+  ] as const;
+
+  /** What setup wrote for the user's own agent, and what it said about it. */
+  async function taskFile(service: string | undefined): Promise<{ task: string; said: string }> {
+    // `.claude/` makes the hand-over name Claude Code, as in the reproduction.
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1, service } });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    );
+    expect(result.error).toBeNull();
+    return {
+      task: readFileSync(join(dir, ".traceroot", "prompts", "setup-instrument.md"), "utf8"),
+      said: plain(err.data),
+    };
+  }
+
+  /** The task setup launched Claude Code with, and the launch itself. */
+  async function launched(
+    service: string | undefined,
+    changed: string,
+  ): Promise<{ task: string; launch: RecordedRun }> {
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", changed] });
+    const { ctx } = makeCtx({ flags: { agent: "claude", service } });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: process.run }),
+    );
+    expect(result.error).toBeNull();
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    return { task: launch?.stdin ?? "", launch: launch as RecordedRun };
+  }
+
+  for (const { name, make, service, changed } of services) {
+    it(`writes the task file for an agent the user runs, for ${name}`, async () => {
+      make();
+      const { task, said } = await taskFile(service);
+
+      expect(task).toContain("ask the user");
+      expect(task).not.toContain("cannot ask questions");
+      expect(task).not.toContain("Your permissions are already set");
+      // The env file this run wrote holds the key, and nothing took it out of
+      // the user's own environment, so the task says only that the file does.
+      expect(task).toContain("A file the application loads holds `TRACEROOT_API_KEY`");
+      expect(task).not.toContain("already set in your environment");
+      expect(task).not.toContain("**not** in your environment");
+      expect(task).not.toContain("**your** environment");
+      expect(task).not.toContain("skills install");
+
+      if (service === undefined) {
+        expect(task).not.toContain("Work from");
+        expect(said).toContain("Run it in Claude Code, then rerun");
+      } else {
+        // The task's commands and paths are relative to `api/`, and the user
+        // ran setup from the root.
+        expect(task).toContain("Work from `api`");
+        expect(said).toContain("Open Claude Code in api/ and run it there, then rerun");
+      }
+    });
+
+    it(`launches setup's own agent with the task written for it, for ${name}`, async () => {
+      make();
+      const { task, launch } = await launched(service, changed);
+
+      expect(launch.cwd).toBe(service === undefined ? dir : join(dir, service));
+      expect(task).toContain("You are running non-interactively and cannot ask questions.");
+      expect(task).toContain("Your permissions are already set for this task");
+      // `buildAgentEnv` withholds the key whenever a file holds it, and the
+      // task says that once.
+      expect(task).toContain("`TRACEROOT_API_KEY` is **not** in your environment");
+      expect(launch.env.TRACEROOT_API_KEY).toBeUndefined();
+      expect(task).not.toContain("**your** environment");
+      expect(task).not.toMatch(/ask the user|stop and ask/);
+      expect(task).not.toContain("Work from");
+      expect(task).not.toContain("skills install");
+    });
+  }
+
+  it("does not tell the user's agent the key is in its environment when git kept it out of every file", async () => {
+    // The tracked-env-file refusal. Setup's own agent gets the key from
+    // `buildAgentEnv` then; an agent the user opens gets nothing, because
+    // nothing set it in their shell.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), "# committed by mistake\n");
+    const { ctx } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({
+        auth: authWithKey(),
+        traces: [],
+        runProcess: fakeRunProcess({
+          git: (args) => (args.includes("ls-files") ? { output: ".env\n" } : {}),
+        }).run,
+      }),
+    );
+
+    expect(result.error).toBeNull();
+    expect(ctx.refusedCredentialEnvFile).toBe(join(dir, ".env"));
+    const task = readFileSync(join(dir, ".traceroot", "prompts", "setup-instrument.md"), "utf8");
+    expect(task).not.toContain("already set in your environment");
+    expect(task).toContain("did not put `TRACEROOT_API_KEY` in a file the application loads");
+  });
+
+  /**
+   * Every command the task hands over to be run as written: the run line, each
+   * fenced shell block, and the check step 5 names. Commands the task names in
+   * order to forbid them are not instructions and are left out.
+   */
+  function commandsTheTaskRuns(task: string): string[] {
+    const commands: string[] = [];
+    const runLine = /run it with: `([^`]+)`/.exec(task)?.[1];
+    if (runLine !== undefined) {
+      commands.push(runLine);
+    }
+    for (const [, block] of task.matchAll(/```bash\n([\s\S]*?)```/g)) {
+      for (const line of (block ?? "").split("\n")) {
+        commands.push(...line.split(" && ").filter((part) => part.trim() !== ""));
+      }
+    }
+    const check = /1\. Run `([^`]+)` once/.exec(task)?.[1];
+    if (check !== undefined) {
+      commands.push(check);
+    }
+    return commands.map((command) => command.trim());
+  }
+
+  /** The command prefixes the launch approves, read out of its `Bash(<prefix>:*)` rules. */
+  function approvedPrefixes(args: readonly string[]): string[] {
+    return args.flatMap((arg) => /^Bash\((.+):\*\)$/.exec(arg)?.[1] ?? []);
+  }
+
+  it.each([
+    [
+      "a Python service with a virtualenv and a test suite",
+      () => {
+        pythonRepo();
+        mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+        writeFileSync(join(dir, ".venv", "bin", "python"), "");
+      },
+      undefined,
+      " M main.py",
+    ],
+    ["a Python service in api/ with no virtualenv", apiService, "api", " M api/main.py"],
+    [
+      "a TypeScript service",
+      () => {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { next: "^14" } }));
+        writeFileSync(join(dir, "index.ts"), "export {};\n");
+      },
+      undefined,
+      " M index.ts",
+    ],
+  ] as const)(
+    "allows every program the launched task tells the agent to run, for %s",
+    async (_, make, service, changed) => {
+      // Both halves from one run: the task the agent was handed and the rules
+      // it was launched with. A rule matches the start of a command literally,
+      // which is how Claude Code applies it.
+      make();
+      const { task, launch } = await launched(service, changed);
+      const prefixes = approvedPrefixes(launch.args);
+      const commands = commandsTheTaskRuns(task);
+
+      expect(commands.length).toBeGreaterThan(1);
+      for (const command of commands) {
+        const allowed = prefixes.some(
+          (prefix) => command === prefix || command.startsWith(`${prefix} `),
+        );
+        expect({ command, allowed }).toEqual({ command, allowed: true });
+      }
+      // And the CLI's own commands are named only as things not to run.
+      expect(task).not.toContain("skills install");
+      const cliCommands = [...task.matchAll(/`(traceroot [^`]+)`/g)]
+        .map((match) => match[1])
+        .filter((command) => command !== "traceroot setup");
+      expect(cliCommands.sort()).toEqual(["traceroot traces get", "traceroot traces list"]);
+      expect(task).toContain(
+        "Do not query the API yourself — not with\n`traceroot traces list`, not with `traceroot traces get`",
+      );
+    },
+  );
+});
+
 describe("--no-instrument", () => {
   it("writes the task and stops short of claiming a trace", async () => {
     pythonRepo();
