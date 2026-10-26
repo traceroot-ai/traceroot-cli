@@ -51,7 +51,7 @@ import { sleep } from "../util/sleep.js";
 import { createActivityParser } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
-import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
+import { checkpointPath, hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
 import {
   HOST_ENV,
   KEY_ENV,
@@ -4960,7 +4960,7 @@ function resultData(ctx: SetupContext): Record<string, unknown> {
     sdk_version: ctx.checkpoint.sdkVersion ?? null,
     trace_id: ctx.trace?.traceId ?? null,
     trace_url: ctx.trace?.traceUrl ?? null,
-    checkpoint_path: join(".traceroot", "setup.json"),
+    checkpoint_path: relativeToRoot(ctx.root, checkpointPath(ctx.artifactDir)),
   };
 }
 
