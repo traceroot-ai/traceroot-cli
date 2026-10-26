@@ -1812,7 +1812,9 @@ async function chooseProject(
         stage,
         code: "AMBIGUOUS",
         message: "This workspace has no projects yet.",
-        remedy: `Create one with \`${setupCommand()} --project <name>\` in an interactive terminal.`,
+        // Not `--project <name>`: that flag only selects a project that exists.
+        // Run without it, setup can ask, and asks for the new project's name.
+        remedy: `Run \`${setupCommand()}\` in an interactive terminal, which asks for a name and creates the project, or create one in the TraceRoot dashboard and rerun setup.`,
       });
     }
     // Which workspace to create it in. The caller supplies one only when it
