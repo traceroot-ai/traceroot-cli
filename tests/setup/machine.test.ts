@@ -1204,6 +1204,8 @@ describe("authentication", () => {
     const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
     const result = await runSetupMachine(ctx, deps);
     expect(result.error?.message).not.toContain("localhost");
+    // TraceRoot Cloud serves sign-in and the API from one origin.
+    expect(result.error?.message).not.toContain("--auth-host");
   });
 
   it("names the manual fallback when browser sign-in is not deployed", async () => {
@@ -1220,6 +1222,86 @@ describe("authentication", () => {
     expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.BACKEND_UNSUPPORTED);
     expect(result.error?.message).toContain("--no-browser");
+  });
+
+  /** The real device flow, against a host with no device endpoint. Records where it asked. */
+  function noDeviceEndpoint(asked: string[]): SetupDeps["runDeviceFlow"] {
+    const { fetchImpl } = createFakeFetch((call) => {
+      asked.push(call.url);
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    return (flowDeps) => runDeviceFlow({ ...flowDeps, fetchImpl });
+  }
+
+  /** A self-hosted API on its own origin, with or without `--auth-host`. */
+  function selfHosted(authHost?: string): ResolvedAuth {
+    return {
+      ...authEmpty(),
+      hostUrl: { value: "http://localhost:8000", source: "flag" },
+      authHost:
+        authHost === undefined
+          ? { value: "http://localhost:8000", source: "default" }
+          : { value: authHost, source: "flag" },
+    };
+  }
+
+  it("offers --auth-host when browser sign-in went to the API host and found nothing", async () => {
+    // A self-hosted deployment with the web app on another origin answers
+    // exactly this way when only `--host` is given.
+    pythonRepo();
+    const asked: string[] = [];
+    const deps = makeDeps({ auth: selfHosted(), runDeviceFlow: noDeviceEndpoint(asked) });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(asked).toEqual(["http://localhost:8000/api/auth/device/code"]);
+    expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
+    expect(result.error?.message).toBe(
+      [
+        "Browser sign-in is not available at http://localhost:8000 yet.",
+        "",
+        "If the web app is on a different origin from the API, sign in there with --auth-host:",
+        `  ${setupCommand()} --host http://localhost:8000 --auth-host <web app origin>`,
+        "",
+        "If you meant a different deployment, point the CLI at it:",
+        `  ${setupCommand()} --host <url>        (or set TRACEROOT_HOST_URL)`,
+        "",
+        "Otherwise sign in with a key instead:",
+        `  ${setupCommand()} --no-browser`,
+        "or set TRACEROOT_API_KEY before running setup.",
+      ].join("\n"),
+    );
+  });
+
+  it("names the auth host, not the API host, when that is where sign-in found nothing", async () => {
+    pythonRepo();
+    const asked: string[] = [];
+    const deps = makeDeps({
+      auth: selfHosted("http://localhost:3000"),
+      runDeviceFlow: noDeviceEndpoint(asked),
+    });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(asked).toEqual(["http://localhost:3000/api/auth/device/code"]);
+    expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
+    expect(result.error?.message).toContain(
+      "Browser sign-in is not available at http://localhost:3000 yet.",
+    );
+    // An auth host was given; telling the user to add one would be wrong.
+    expect(result.error?.message).not.toContain("--auth-host");
+    expect(result.error?.remedy).toBe(
+      [
+        "If you meant a different deployment, point the CLI at it:",
+        `  ${setupCommand()} --host <url>        (or set TRACEROOT_HOST_URL)`,
+        "",
+        "Otherwise sign in with a key instead:",
+        `  ${setupCommand()} --no-browser`,
+        "or set TRACEROOT_API_KEY before running setup.",
+      ].join("\n"),
+    );
   });
 
   /**

@@ -856,8 +856,18 @@ const LOCAL_HOST_CANDIDATES = ["http://localhost:8000", "http://localhost:3000"]
  * still never switches hosts on its own: silently retargeting where a
  * credential gets minted is precisely the kind of helpfulness nobody wants from
  * a security-adjacent tool.
+ *
+ * When nothing named the web app, the sign-in went to the API host. A
+ * self-hosted deployment that serves the two on different origins answers
+ * exactly like this, and `--auth-host` is the whole fix, so the remedy leads
+ * with it. TraceRoot Cloud serves both from one origin, so it is not offered
+ * for the default host.
  */
-async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string> {
+async function signInFallbackHint(
+  host: string,
+  authHost: string,
+  deps: SetupDeps,
+): Promise<string> {
   const lines: string[] = [];
 
   if (host === DEFAULT_HOST) {
@@ -871,6 +881,14 @@ async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string
         break;
       }
     }
+  }
+
+  if (authHost === host && host !== DEFAULT_HOST) {
+    lines.push(
+      "If the web app is on a different origin from the API, sign in there with --auth-host:",
+      `  ${setupCommand()} --host ${host} --auth-host <web app origin>`,
+      "",
+    );
   }
 
   lines.push(
@@ -1123,14 +1141,15 @@ async function browserSignIn(
     // different problem from a sign-in that failed, and it has a different
     // answer: you are probably pointed at the wrong host. The shared flow
     // reports the status in its message rather than as a field, so that is what
-    // there is to match on.
+    // there is to match on. Names the auth host, because that is where the
+    // request went.
     const message = err instanceof Error ? err.message : String(err);
     if (/\(status (?:404|501)\)/.test(message)) {
       throw backendUnsupported(
         "authenticate",
         "Browser sign-in",
-        await signInFallbackHint(host, deps),
-        host,
+        await signInFallbackHint(host, authHost, deps),
+        authHost,
       );
     }
     // Denied, or the code expired first, which is also how a closed tab ends,
