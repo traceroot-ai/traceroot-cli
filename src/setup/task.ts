@@ -396,9 +396,47 @@ If that constructor already has an \`observability\` option, add the exporter to
 the config it already has rather than adding a second config.${placeholder}
 
 \`${MASTRA_SDK}\` exports the exporter and its config type, and does not install
-\`@traceroot-ai/traceroot\`: \`initialize\`, \`observe\` and \`usingAttributes\` are not available in
-this service, so do not import them. Mastra traces its own agent runs, tool calls and model calls
-through the exporter. If an import fails when you run the app, read the error and fix it then.`;
+\`@traceroot-ai/traceroot\`, so nothing from that package is available in this service: do not
+import from it. Mastra traces its own agent runs, tool calls and model calls through the exporter.
+If an import fails when you run the app, read the error and fix it then.`;
+}
+
+/**
+ * Step 4 for a Mastra service, in place of the span-by-span bar the other
+ * branch sets.
+ *
+ * That bar is met with `observe` and `usingAttributes`, which come from a
+ * package a Mastra service does not install, so asking for it there sends the
+ * agent to import one. Mastra emits the tree itself — agent run, workflow run
+ * and step, model generation, tool and MCP tool call — and the exporter
+ * converts every span it is handed, errors included. What it does not get is
+ * the user and the session: it reads them from `userId` and `sessionId` span
+ * metadata only, while Mastra puts `resourceId` and `threadId` there, and
+ * `tracingOptions.metadata` is how a run's caller adds to the root span's.
+ * Read from `@traceroot-ai/mastra` 0.1.1 and `@mastra/core` 1.22.0.
+ */
+function mastraSpans(): string {
+  return `Write no spans by hand in this service. Mastra traces its own work, and the exporter from step 3
+sends all of it: each agent run as the root of its trace, each workflow run and step, each model call
+with its provider, model and token usage, and each tool call, MCP tools included, with its input,
+output and any error. That is the tree this step builds by hand in other applications, and there is
+nothing to add to it: an external call made inside a tool or a workflow step is timed by that tool's
+or step's own span.
+
+The user and the session are the one thing to add. Mastra records each agent run's \`resourceId\` and
+\`threadId\`, but as plain metadata: the exporter reads the user and the session from \`userId\` and
+\`sessionId\` metadata only. Pass those where the application starts a run, and the exporter puts
+them on the run's root span:
+
+\`\`\`typescript
+await agent.generate(messages, {   // the call this application already makes
+  tracingOptions: { metadata: { userId, sessionId } },
+});
+\`\`\`
+
+\`agent.stream()\` and a workflow run's \`start()\` take the same option. The table in the skill's
+analyse step is for deciding what the two values are, not whether to attach them. That option is the
+only code this step adds.`;
 }
 
 /**
@@ -889,9 +927,12 @@ the error and fix it then.`
 }`
 }
 
-### 4. Cover this application's boundaries with spans
+### 4. ${mastra ? "Leave the spans to Mastra, and add the user and session" : "Cover this application's boundaries with spans"}
 
-A trace is read as a tree, so there has to be a tree. This step fails in both directions: a whole
+${
+  mastra
+    ? mastraSpans()
+    : `A trace is read as a tree, so there has to be a tree. This step fails in both directions: a whole
 run that arrives as one span names no tool, times nothing separately and gives a failure inside it
 no location — while a span wrapped around work something else already traces reports one call as
 two, and afterwards cannot be told from real nesting.
@@ -933,7 +974,8 @@ reader would recognise and the \`type\` the skill documents for it — a run or 
 
 Then read back what you added. One span and the attributes is the whole job for an application
 whose framework runs the loop; it is not, for one that runs its own, where every tool your code
-calls belongs in the trace.
+calls belongs in the trace.`
+}
 
 ### 5. Verify the application still works
 

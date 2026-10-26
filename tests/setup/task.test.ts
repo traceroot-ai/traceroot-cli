@@ -866,4 +866,24 @@ describe("the API each package's instructions name", () => {
     expect(text).toContain("there is no `initialize()` to call");
     expect(text).not.toContain("async function main()");
   });
+
+  it("asks a Mastra service for no span the core SDK would have to write", () => {
+    // Step 4's bar is met with `observe` and `usingAttributes`, which come from
+    // a package a Mastra service does not install. Mastra traces the run
+    // itself, so the step asks only for the user and the session, through
+    // Mastra's own tracing metadata.
+    const { task: text, manual } = render(variants[2]);
+    for (const rendered of [text, manual]) {
+      expect(rendered).not.toContain("observe(");
+      expect(rendered).not.toContain("usingAttributes");
+    }
+    const step4 = text.slice(text.indexOf("### 4."), text.indexOf("### 5."));
+    expect(step4).toContain("Write no spans by hand in this service");
+    expect(step4).toContain("tracingOptions: { metadata: { userId, sessionId } }");
+    expect(step4).not.toContain("One span per tool this application's own code calls");
+    // Every other service keeps the span-by-span bar.
+    for (const variant of variants.slice(0, 2)) {
+      expect(render(variant).task).toContain("One span per tool this application's own code calls");
+    }
+  });
 });
