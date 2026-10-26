@@ -20,6 +20,12 @@ export interface BuildSetupTaskInput {
    * Interactive agents may ask the user questions. Background agents must abort
    * instead of guessing — without this distinction a non-interactive agent
    * either hangs or invents an answer.
+   *
+   * False only for the agent setup launches itself, and that is the run every
+   * claim about the launch describes: it runs captured, under the permissions
+   * setup gave it, with the key in its environment when no file holds it. The
+   * task file is the same task handed to an agent the user opens, where none of
+   * that is true, so those claims are made only when this is false.
    */
   interactive: boolean;
   /** Evidence that TraceRoot is already present, so the agent extends rather than duplicates. */
@@ -428,6 +434,19 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
         "it instead, and the load you add in step 3 is what gets it to the SDK. Do not print it, " +
         "grep for it or copy it anywhere else. If the SDK reports at runtime that it is missing, " +
         "that load is the first thing to check.";
+  // Both of those describe the environment `buildAgentEnv` builds, and an agent
+  // the user opens has the user's own instead: nothing put the key there when
+  // no file holds it, and nothing took it out when one does. So the task file
+  // says only where the application gets the key from.
+  const handedOverKey =
+    input.credentialFiles.length === 0
+      ? "`traceroot setup` did not put `TRACEROOT_API_KEY` in a file the application loads, so " +
+        "the application has to read it from the environment it is started in. Do not print it, " +
+        "grep for it or write it into a file. If the SDK reports at runtime that it is missing, " +
+        "tell the user it has to be set there, and do not ask them to paste it to you."
+      : "A file the application loads holds `TRACEROOT_API_KEY`, and the load you add in step 3 " +
+        "is what gets it to the SDK. Do not print it, grep for it or copy it anywhere else. If " +
+        "the SDK reports at runtime that it is missing, that load is the first thing to check.";
 
   // Where "not at module scope" actually is, which differs by runtime: the
   // guard is a Python idiom with no Node counterpart.
@@ -443,6 +462,13 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
         "If a step needs a decision you cannot make safely, stop and explain exactly what is needed.",
         "Do not guess.",
       ].join(" ");
+
+  // Loading the file from the shell is something the launched agent's sandbox
+  // refuses. An agent the user opens may be allowed to, and loading in-process
+  // is still the better answer.
+  const shellLoad = interactive
+    ? "Do not do this in your shell instead, with `set -a`, `. file` or `$(...)`. Loading in-process\nis the better answer:"
+    : "Your shell cannot do this for you — `set -a`, `. file`, `$(...)` and multi-part pipelines are\nall refused by your own sandbox, and trying them costs minutes. Loading in-process is also the\nbetter answer:";
 
   // A bare command, never a shell that loads an env file first.
   //
@@ -587,7 +613,7 @@ ${bullet([
     "to that provider and nothing about the structure around them, while an agent framework's " +
     "also covers the tool calls and the loop that makes them. Step 4 says how to tell, and what " +
     "is left for you either way.",
-  whereTheKeyIs,
+  interactive ? handedOverKey : whereTheKeyIs,
   "Never print, log, echo or hardcode an API key.",
   "Do not write the key into any file — not source, not config, not a `.env`. You never write it " +
     "anywhere, so you never need to check what is tracked or gitignored.",
@@ -605,10 +631,16 @@ ${bullet([
     "do not go looking for the SDK's source tree — it is normally outside the directories you can " +
     "read. If an import fails when you run the app, read the error and fix it then; that is the " +
     "moment a wrong assumption actually costs something.",
-  "Your permissions are already set for this task: edits are accepted and the commands named " +
-    "here are allowed. Do not read `.claude/settings.json`, `.claude/settings.local.json` or " +
-    "`.claude/hooks/` to work out what you may run, and do not probe with throwaway commands. " +
-    "If a command is genuinely refused, name it in your report and carry on with what you can do.",
+  // Setup's own launch is what set these. An agent the user opens runs under
+  // the user's own settings, which this task knows nothing about.
+  ...(interactive
+    ? []
+    : [
+        "Your permissions are already set for this task: edits are accepted and the commands named " +
+          "here are allowed. Do not read `.claude/settings.json`, `.claude/settings.local.json` or " +
+          "`.claude/hooks/` to work out what you may run, and do not probe with throwaway commands. " +
+          "If a command is genuinely refused, name it in your report and carry on with what you can do.",
+      ]),
   "Do not create additional files for this setup run. The TraceRoot skill directory and the " +
     "task file were installed by `traceroot setup` on purpose — leave them alone. Do not add " +
     "your own scratch files, notes or task directories.",
@@ -818,9 +850,7 @@ what keeps tracing working once this run ends: the key is in **your** environmen
 it there for this run, and nothing hands it to the user's next one.
 
 `
-}Your shell cannot do this for you — \`set -a\`, \`. file\`, \`$(...)\` and multi-part pipelines are
-all refused by your own sandbox, and trying them costs minutes. Loading in-process is also the
-better answer: it is what makes the application runnable by a human afterwards, which a shell
+}${shellLoad} it is what makes the application runnable by a human afterwards, which a shell
 incantation in your scrollback does not. Add the dotenv package to the manifest if you import it.
 Never print, echo or cat the contents of these files.
 `

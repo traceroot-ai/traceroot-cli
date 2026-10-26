@@ -3573,7 +3573,10 @@ const instrument: StageDefinition = {
       // for the SDK's API and spends the run guessing.
       skillPath: displaySkillPath(agentCwd, adapter.getSkillInstallPath(ctx.root, SKILL_NAME)),
       verifyCommand: service.testCommand,
-      interactive: false,
+      // Only the agent launched below runs captured, under permissions this
+      // run sets and in an environment `buildAgentEnv` builds. The task file
+      // hands the same task to an agent the user opens, which can ask them.
+      interactive: method !== "agent",
       existingInstrumentation: ctx.stack?.existingInstrumentation.evidence ?? [],
       // Found here rather than by the agent. Working out which Python a
       // service runs on is slow for an agent to establish, and all of it

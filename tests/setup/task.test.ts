@@ -230,6 +230,44 @@ describe("where the task says the agent's own credential is", () => {
   });
 });
 
+describe("the task handed to an agent the user opens", () => {
+  // The task file. Setup's own agent runs captured, under permissions setup set
+  // and in an environment `buildAgentEnv` built. An agent the user opens has
+  // none of that, so it is told none of it.
+  const handedOver = (overrides: Record<string, unknown> = {}): string =>
+    task({ interactive: true, ...overrides });
+
+  it("does not say it cannot ask, or that its permissions are already set", () => {
+    const text = handedOver();
+    expect(text).toContain("ask the user");
+    expect(text).not.toContain("cannot ask questions");
+    expect(text).not.toContain("Your permissions are already set");
+    expect(text).not.toContain("commands named here are allowed");
+  });
+
+  it("says the application reads the key from its environment when no file holds it", () => {
+    const text = handedOver({ credentialFiles: [] });
+    expect(text).toContain("did not put `TRACEROOT_API_KEY` in a file the application loads");
+    expect(text).toContain("do not ask them to paste it to you");
+  });
+
+  it("does not describe a sandbox it is not in", () => {
+    const text = handedOver({ envFiles: ["./.env"] });
+    expect(text).not.toContain("refused by your own sandbox");
+    expect(text).toContain("Do not do this in your shell instead");
+  });
+});
+
+describe("the task setup launches its own agent with", () => {
+  it("keeps the claims that are true of the launch", () => {
+    const text = task({ envFiles: ["./.env"] });
+    expect(text).toContain("You are running non-interactively and cannot ask questions.");
+    expect(text).toContain("Your permissions are already set for this task");
+    expect(text).toContain("refused by your own sandbox");
+    expect(text).not.toContain("Work from");
+  });
+});
+
 describe("the definition of done", () => {
   it("promises no output the SDK does not produce", () => {
     // The step used to quote a `[traceroot] trace <id> → <url>` line and call
