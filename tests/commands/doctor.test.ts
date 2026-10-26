@@ -1,10 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { displaySkillPath } from "../../src/agents/index.js";
 import { runDoctor } from "../../src/commands/doctor.js";
+import { runSkillsInstall } from "../../src/commands/skills/install.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
+import { buildDoctorReport } from "../../src/doctor/checks.js";
 import type { Writers } from "../../src/output.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -128,6 +131,79 @@ describe("runDoctor", () => {
     const instrument = report.checks.find((c) => c.name === "skill_instrument");
     expect(instrument?.status).toBe("pass");
     expect(instrument?.message).toBe("Instrumentation skill installed for Claude Code, Codex");
+  });
+
+  describe("the instrumentation skill, from a service directory", () => {
+    // Setup installs the skill at the repository root wherever it is run from,
+    // and running it from the service is one of the two ways it supports a
+    // monorepo.
+    let api: string;
+    beforeEach(() => {
+      mkdirSync(join(cwd, ".git"));
+      api = join(cwd, "api");
+      mkdirSync(api);
+    });
+
+    const instrumentCheck = async (from: string) => {
+      const { writers } = makeWriters();
+      const report = await runDoctor({ ...baseDeps(from, writers), ctx: makeCtx({}) });
+      return report.checks.find((c) => c.name === "skill_instrument");
+    };
+
+    it("finds the copy setup installed at the repository root", async () => {
+      writeSkill(join(cwd, ".claude", "skills", "traceroot-instrument-repo"));
+      const instrument = await instrumentCheck(api);
+      expect(instrument?.status).toBe("pass");
+      expect(instrument?.message).toBe("Instrumentation skill installed for Claude Code");
+    });
+
+    it("does not count a copy beside the service as setup's", async () => {
+      writeSkill(join(api, ".claude", "skills", "traceroot-instrument-repo"));
+      expect((await instrumentCheck(api))?.status).toBe("warn");
+    });
+
+    it("sends the install to the repository root, where it lands as setup's copy", async () => {
+      const instrument = await instrumentCheck(api);
+      expect(instrument?.status).toBe("warn");
+      expect(instrument?.message).toBe(
+        `Instrumentation skill not installed. Run \`traceroot skills install traceroot-instrument-repo\` from the repository root, ${displaySkillPath(api, cwd)}`,
+      );
+
+      // Followed as printed: the install, run from the directory it names.
+      const { writers } = makeWriters();
+      await runSkillsInstall({
+        skillName: "traceroot-instrument-repo",
+        agentId: "claude",
+        cwd,
+        force: false,
+        dryRun: false,
+        json: false,
+        writers,
+        isInteractive: false,
+      });
+      expect(existsSync(join(api, ".claude"))).toBe(false);
+      expect((await instrumentCheck(api))?.status).toBe("pass");
+    });
+
+    it("keeps the remedy as it was when run from the repository root", async () => {
+      expect((await instrumentCheck(cwd))?.message).toBe(
+        "Instrumentation skill not installed. Run `traceroot skills install traceroot-instrument-repo`",
+      );
+    });
+
+    it("resolves the root itself for a caller that passes none", () => {
+      // Never a fall back to `cwd`, which is the lookup this replaced.
+      writeSkill(join(cwd, ".claude", "skills", "traceroot-instrument-repo"));
+      const report = buildDoctorReport({
+        cwd: api,
+        auth: makeCtx({}).auth,
+        credentialsValid: null,
+        configPath: join(api, ".traceroot", "config.json"),
+        detection,
+        env: {},
+      });
+      expect(report.checks.find((c) => c.name === "skill_instrument")?.status).toBe("pass");
+    });
   });
 
   it("uses concise, login-pointing wording for missing credentials and config", async () => {

@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { ALL_AGENTS, displaySkillPath } from "../agents/index.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
@@ -14,8 +14,9 @@ export interface DoctorInput {
   cwd: string;
   /**
    * The repository root as `setup` resolves it (`setupRoot(cwd)`), which is
-   * where setup writes its instrumentation task. From a service directory it
-   * is not `cwd`.
+   * where setup installs the instrumentation skill and writes its task. From a
+   * service directory it is not `cwd`. Resolved from `cwd` when absent, so a
+   * caller that leaves it out still gets setup's root and never `cwd` itself.
    */
   root?: string;
   auth: ResolvedAuth;
@@ -179,10 +180,23 @@ function installedFor(cwd: string, skillName: string): string[] {
  * `traceroot skills list`). The instrumentation skill is the one that matters for
  * getting started, so its absence is an actionable warning; the quickstart skill
  * is explicitly optional. A skill counts as present if installed for any agent.
+ *
+ * The instrumentation skill is looked for at the repository root, because that
+ * is where setup installs it and the copy its task names. From a service
+ * directory the two differ: looking in the current directory reported setup's
+ * copy as missing, with a remedy that installed a second one beside the service.
  */
 function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
-  const instrumentAgents = installedFor(input.cwd, "traceroot-instrument-repo");
+  const root = repositoryRoot(input);
+  const instrumentAgents = installedFor(root, "traceroot-instrument-repo");
   const quickstartAgents = installedFor(input.cwd, "traceroot-quickstart");
+  // `skills install` writes into the directory it is run from, so from a
+  // service directory the remedy says to run it at the root, where it installs
+  // the copy setup would have.
+  const fromRoot =
+    relative(input.cwd, root) === ""
+      ? ""
+      : ` from the repository root, ${displaySkillPath(input.cwd, root)}`;
 
   return [
     {
@@ -192,7 +206,7 @@ function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
       message:
         instrumentAgents.length > 0
           ? `Instrumentation skill installed for ${instrumentAgents.join(", ")}`
-          : "Instrumentation skill not installed. Run `traceroot skills install traceroot-instrument-repo`",
+          : `Instrumentation skill not installed. Run \`traceroot skills install traceroot-instrument-repo\`${fromRoot}`,
     },
     {
       name: "skill_quickstart",

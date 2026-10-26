@@ -1491,6 +1491,40 @@ describe("doctor on a run that ended without a trace", () => {
   });
 });
 
+describe("doctor's skill check after setup ran from a service directory", () => {
+  it("finds the skill setup installed at the repository root", async () => {
+    mkdirSync(join(dir, ".git"));
+    const api = join(dir, "api");
+    mkdirSync(api);
+    writeFileSync(join(api, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(api, "main.py"), "x = 1\n");
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: api,
+      flags: defaultFlags({ agent: "claude", instrument: false }),
+      writers: makeWriters().writers,
+      canPrompt: false,
+      setupDeps: makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    });
+    expect(
+      existsSync(join(dir, ".claude", "skills", "traceroot-instrument-repo", "SKILL.md")),
+    ).toBe(true);
+
+    const report = await runDoctor({
+      ctx: ctxWith(),
+      cwd: api,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out: new StringSink(), err: new StringSink() },
+      includeSetup: true,
+    });
+    expect(report.checks.find((c) => c.name === "skill_instrument")).toMatchObject({
+      status: "pass",
+      message: "Instrumentation skill installed for Claude Code",
+    });
+  });
+});
+
 describe("finding a previous, unfinished run", () => {
   it("offers to continue it rather than requiring a flag", async () => {
     // Requiring a flag to reach a checkpoint would mean the file is ignored,
