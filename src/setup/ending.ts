@@ -2,7 +2,7 @@ import type { Sink, Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import { setupCommand } from "./invocation.js";
 import {
-  DOCS_URL,
+  TROUBLESHOOTING_URL,
   settleAcknowledgement,
   wizardAcknowledgement,
   wizardAside,
@@ -68,7 +68,7 @@ export function tracesNotice(input: TracesNoticeInput, sink: Sink = process.stde
     // first-run tool loses people — but at full contrast it competes with the
     // permalink above, which is the line that matters when things did work.
     wizardAside("If traces do not show up, see the troubleshooting guide:", sink),
-    wizardMutedLink(DOCS_URL, sink),
+    wizardMutedLink(TROUBLESHOOTING_URL, sink),
   ];
 }
 

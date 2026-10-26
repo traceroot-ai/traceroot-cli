@@ -577,7 +577,7 @@ describe("runSetup", () => {
     expect(plain(err.data)).toContain(`┌  ${WIZARD_TITLE}`);
     expect(plain(err.data)).toContain("└  TraceRoot local setup complete.");
     // Where to go next, on the way out — the moment it is most likely to be read.
-    expect(plain(err.data)).toContain("https://docs.traceroot.ai");
+    expect(plain(err.data)).toContain("https://traceroot.ai/docs/cli/get-started");
     expect(err.data).toContain("https://github.com/traceroot-ai/traceroot-cli/issues");
     // Opened before anything the run prints, so the sign-in half is inside it.
     expect(plain(err.data).indexOf("┌")).toBe(0);

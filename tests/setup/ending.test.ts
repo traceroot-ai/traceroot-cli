@@ -12,7 +12,7 @@ describe("what the block says", () => {
     expect(text).toContain("Traces will appear here:");
     expect(text).toContain(TRACE_URL);
     expect(text).toContain("If traces do not show up, see the troubleshooting guide:");
-    expect(text).toContain("https://docs.traceroot.ai");
+    expect(text).toContain("https://traceroot.ai/docs/tracing/get-started#troubleshoot");
   });
 
   it("writes each sentence as one line and lets the terminal wrap it", () => {
@@ -28,7 +28,7 @@ describe("what the block says", () => {
     const prose = tracesNotice({ traceUrl: TRACE_URL })
       .map(plain)
       .filter(
-        (line) => line !== "" && !line.includes(TRACE_URL) && !line.includes("docs.traceroot.ai"),
+        (line) => line !== "" && !line.includes(TRACE_URL) && !line.includes("traceroot.ai/docs"),
       );
     for (const line of prose) {
       expect(line.trimEnd().endsWith(".") || line.trimEnd().endsWith(":")).toBe(true);
