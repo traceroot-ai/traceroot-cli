@@ -1,6 +1,8 @@
-import { join, relative, sep } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
 import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import { writeFileSecure } from "../util/secureFile.js";
+import { ensureGitignore } from "./artifacts.js";
 import { checkpointPath } from "./checkpoint.js";
 import { applicationEnvKeys } from "./envWrite.js";
 import { setupCommand } from "./invocation.js";
@@ -19,8 +21,8 @@ import type { ApplicationKeyLocation, SetupContext } from "./types.js";
  * Keeping it costs one file.
  *
  * Written as Markdown so it can be pasted into a PR description unedited, and
- * kept in `.traceroot/` where the existing `.gitignore` covers it — a report is
- * a local artefact, not something to commit.
+ * kept in `.traceroot/` behind the same `.gitignore` the checkpoint gets — a
+ * report is a local artefact, not something to commit.
  */
 
 /** Where the report lives, relative to the repository root. */
@@ -254,10 +256,15 @@ export function writeSetupReport(
 ): string | null {
   const target = join(ctx.root, REPORT_PATH);
   try {
-    // Creates `.traceroot/` 0700, writes a fresh temp file exclusively and
-    // renames it into place, so a symlink planted at the report's path is
-    // replaced rather than written through. Also makes the write atomic and
-    // leaves the file 0600, which is right for something in a 0700 directory.
+    // The root's `.traceroot/` holds the checkpoint only when the service is at
+    // the root, so this write can be the one that creates it. It gets the same
+    // net the checkpoint's does.
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+    ensureGitignore(dirname(target));
+    // Writes a fresh temp file exclusively and renames it into place, so a
+    // symlink planted at the report's path is replaced rather than written
+    // through. Also makes the write atomic and leaves the file 0600, which is
+    // right for something in a 0700 directory.
     writeFileSecure(target, renderSetupReport(ctx, now, keyLocation));
     return REPORT_PATH;
   } catch {

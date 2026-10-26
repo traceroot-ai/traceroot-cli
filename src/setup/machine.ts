@@ -50,7 +50,7 @@ import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
 import { createActivityParser } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
-import { relativeToRoot } from "./artifacts.js";
+import { ensureGitignore, relativeToRoot } from "./artifacts.js";
 import { checkpointPath, hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
 import {
   HOST_ENV,
@@ -3610,6 +3610,9 @@ const instrument: StageDefinition = {
       const promptPath = instrumentTaskPath(ctx.root);
       const { mkdirSync, writeFileSync } = await import("node:fs");
       mkdirSync(dirname(promptPath), { recursive: true });
+      // The root's `.traceroot/`, which nothing else creates when setup is run
+      // from the service directory.
+      ensureGitignore(join(ctx.root, ".traceroot"));
       writeFileSync(promptPath, task, "utf8");
       recordHandover(ctx, agent.id, "task-file");
       wizardLine(

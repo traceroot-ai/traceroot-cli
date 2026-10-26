@@ -397,6 +397,18 @@ describe("writing the report", () => {
     );
   });
 
+  it("git-ignores the root's `.traceroot/` when the report is what creates it", () => {
+    // Run from the service directory, the checkpoint and the config go beside
+    // the service, and the report is the first thing written in the root's own.
+    const dir = mkdtempSync(join(tmpdir(), "traceroot-report-"));
+    roots.push(dir);
+
+    expect(writeSetupReport(ctx({ root: dir, artifactDir: join(dir, "api") }), NOW, NO_FILE)).toBe(
+      REPORT_PATH,
+    );
+    expect(readFileSync(join(dir, ".traceroot", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
   it("replaces a symlink at its path instead of writing through it", () => {
     // `.traceroot/` is the run's own directory, but the report is the last thing
     // a run writes and the only file here written after an agent has been let
