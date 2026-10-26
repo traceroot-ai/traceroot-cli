@@ -257,6 +257,11 @@ describe("the task handed to an agent the user opens", () => {
     expect(text).toContain("have the user pick exactly one");
   });
 
+  it("names the directory to work from for a service below the repository root", () => {
+    expect(handedOver({ service: service({ path: "api" }) })).toContain("Work from `api`");
+    expect(handedOver()).not.toContain("Work from");
+  });
+
   it("does not describe a sandbox it is not in", () => {
     const text = handedOver({ envFiles: ["./.env"] });
     expect(text).not.toContain("refused by your own sandbox");

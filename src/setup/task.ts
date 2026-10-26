@@ -456,7 +456,17 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
       : "the function the entry point calls to start itself when it is run directly";
 
   const runMode = interactive
-    ? "You are running interactively. If something is genuinely ambiguous, ask the user."
+    ? [
+        "You are running interactively. If something is genuinely ambiguous, ask the user.",
+        // Setup starts its own agent in the service directory. An agent the
+        // user opens starts wherever they opened it, and nothing below says
+        // where its relative paths and commands are relative to.
+        ...(service.path === "."
+          ? []
+          : [
+              `Work from \`${service.path}\`, the service's directory under the repository root: every relative path and command in this task assumes you are standing there.`,
+            ]),
+      ].join(" ")
     : [
         "You are running non-interactively and cannot ask questions.",
         "If a step needs a decision you cannot make safely, stop and explain exactly what is needed.",

@@ -3126,10 +3126,23 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
  *
  * Shared by the hand-over itself and by the closing block that has to repeat it,
  * so the two cannot come to disagree about where the task is supposed to run.
+ *
+ * That includes the directory, for a service below the repository root. The
+ * task's paths and commands are written from the service, which is where setup
+ * starts its own agent; an agent the user opens starts wherever they open it.
+ * Named from the root, like the task file's own path beside it.
  */
 export function runTaskSentence(ctx: SetupContext, subject: string): string {
   const agent = ctx.agent;
-  return agent === undefined || agent.id === "generic"
+  const generic = agent === undefined || agent.id === "generic";
+  const service = ctx.stack?.selected?.path ?? ".";
+  if (service !== ".") {
+    const dir = `${service}/`;
+    return generic
+      ? `No coding agent is set up here, but the task is self-contained — open whichever agent you use in ${dir} and run ${subject} there`
+      : `Open ${agent.displayName} in ${dir} and run ${subject} there`;
+  }
+  return generic
     ? `No coding agent is set up here, but the task is self-contained — run ${subject} in whichever agent you use`
     : `Run ${subject} in ${agent.displayName}`;
 }
