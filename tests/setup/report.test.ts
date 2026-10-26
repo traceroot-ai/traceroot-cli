@@ -23,6 +23,7 @@ import type { ApplicationKeyLocation, SetupContext } from "../../src/setup/types
 function ctx(overrides: Record<string, unknown> = {}): SetupContext {
   return {
     root: "/repo",
+    artifactDir: "/repo",
     checkpoint: {
       cliVersion: "0.6.0",
       projectId: "p_1",
@@ -356,6 +357,44 @@ describe("writing the report", () => {
     const text = renderSetupReport(ctx(), NOW, NO_FILE);
 
     expect(text).not.toContain("TRACEROOT_API_KEY` for the application");
+  });
+
+  it("names the checkpoint where it was written, beside a service in a subdirectory", () => {
+    // The row was a constant naming the root's `.traceroot/setup.json`, which
+    // is not where the checkpoint goes once the service is in a subdirectory.
+    const text = renderSetupReport(ctx({ artifactDir: "/repo/apps/api" }), NOW, NO_FILE);
+
+    expect(text).toContain(
+      "| `apps/api/.traceroot/setup.json` | Checkpoint, so `--resume` can continue. |",
+    );
+    expect(text).not.toContain("| `.traceroot/setup.json` |");
+  });
+
+  it("names the CLI config where this run wrote it, and not at all when it wrote none", () => {
+    // The config goes to the directory setup was run from, and a run signed in
+    // with a key it already had writes none.
+    const wrote = renderSetupReport(
+      ctx({ artifactDir: "/repo/apps/api", configFile: "/repo/apps/api/.traceroot/config.json" }),
+      NOW,
+      NO_FILE,
+    );
+    expect(wrote).toContain(
+      "| `apps/api/.traceroot/config.json` | The CLI's own credential. Git-ignored. |",
+    );
+
+    const none = renderSetupReport(ctx(), NOW, NO_FILE);
+    expect(none).not.toContain("The CLI's own credential");
+  });
+
+  it("says so when the CLI config is outside the repository", () => {
+    // `TRACEROOT_CONFIG_PATH` can name any file. A path relative to the root
+    // would be a chain of `../`, and "Git-ignored" would be a claim about a
+    // repository the file is not in.
+    const text = renderSetupReport(ctx({ configFile: "/etc/traceroot/config.json" }), NOW, NO_FILE);
+
+    expect(text).toContain(
+      "| `/etc/traceroot/config.json` | The CLI's own credential, outside this repository. |",
+    );
   });
 
   it("replaces a symlink at its path instead of writing through it", () => {

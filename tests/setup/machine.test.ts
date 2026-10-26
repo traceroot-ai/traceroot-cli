@@ -2340,6 +2340,7 @@ describe("a repository that already reports to a project", () => {
               configured.push(config.api_key);
               // As `config/manager.ts` writes it.
               file.text = `${JSON.stringify(config, null, 2)}\n`;
+              return join(dir, ".traceroot", "config.json");
             },
             readConfig: () => (file.text === null ? null : JSON.parse(file.text)),
             readConfigText: () => file.text,

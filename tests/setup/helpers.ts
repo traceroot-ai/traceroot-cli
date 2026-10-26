@@ -416,7 +416,12 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     prompt: async () => answers.shift() ?? "",
     promptHidden: async () => hidden.shift() ?? "",
     resolveSdk: async () => options.sdk ?? TEST_SDK,
-    writeConfig: options.onWriteConfig ?? (() => undefined),
+    // Writes nothing. The path is only what the report names, so it is one no
+    // test repository contains.
+    writeConfig: (config) => {
+      options.onWriteConfig?.(config);
+      return join(tmpdir(), "traceroot-setup-test-config", "config.json");
+    },
     readConfig: () => options.config ?? null,
     // No file behind the config by default, so a rollback finds nothing to put back.
     readConfigText: () => null,

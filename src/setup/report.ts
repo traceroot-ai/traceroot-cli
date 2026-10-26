@@ -1,6 +1,7 @@
 import { join, relative, sep } from "node:path";
 import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import { writeFileSecure } from "../util/secureFile.js";
+import { checkpointPath } from "./checkpoint.js";
 import { applicationEnvKeys } from "./envWrite.js";
 import { setupCommand } from "./invocation.js";
 import { nameList } from "./production.js";
@@ -82,6 +83,20 @@ function skillRow(root: string, agentId: string): string {
   return isInsideDirectory(root, target)
     ? `| ${path} | The instrumentation skill. |`
     : `| ${path} | The instrumentation skill, outside this repository. |`;
+}
+
+/**
+ * The CLI config's row, at the path this run wrote it to.
+ *
+ * Not a constant: the config is written in the directory setup was run from,
+ * which in a monorepo is the service's, and `TRACEROOT_CONFIG_PATH` can put it
+ * outside the repository altogether.
+ */
+function configRow(root: string, target: string): string {
+  const path = `\`${cell(slashPath(displaySkillPath(root, target)))}\``;
+  return isInsideDirectory(root, target)
+    ? `| ${path} | The CLI's own credential. Git-ignored. |`
+    : `| ${path} | The CLI's own credential, outside this repository. |`;
 }
 
 /**
@@ -180,8 +195,11 @@ export function renderSetupReport(
           `| \`${cell(slashPath(relative(ctx.root, ctx.credentialEnvFile)))}\` | \`TRACEROOT_API_KEY\` for the application. |`,
         ]
       : []),
-    "| `.traceroot/config.json` | The CLI's own credential. Git-ignored. |",
-    "| `.traceroot/setup.json` | Checkpoint, so `--resume` can continue. |",
+    // Each where this run put it: the config in the directory setup was run
+    // from, the checkpoint beside the service. The config only when this run
+    // wrote one, which a run signed in with a key it already had does not.
+    ...(ctx.configFile !== undefined ? [configRow(ctx.root, ctx.configFile)] : []),
+    `| \`${cell(slashPath(relative(ctx.root, checkpointPath(ctx.artifactDir))))}\` | Checkpoint, so \`--resume\` can continue. |`,
     ...(ctx.agent !== undefined ? [skillRow(ctx.root, ctx.agent.id)] : []),
     "",
     "Application files changed by the agent are not listed here — `git diff` is the",

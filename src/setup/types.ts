@@ -339,6 +339,15 @@ export interface SetupContext {
    * closing notice needs and the reason a second field is worth having.
    */
   refusedCredentialEnvFile?: string;
+  /**
+   * The CLI's own config, absolute, when this run wrote it.
+   *
+   * Where `writeConfig` said it wrote, rather than a path derived here: the
+   * config goes to the directory setup was run from, or wherever
+   * `TRACEROOT_CONFIG_PATH` names, and neither is `artifactDir`. Undefined when
+   * the run signed in with a key it already had, which writes no config.
+   */
+  configFile?: string;
   json: boolean;
   /** True when the CLI may prompt: TTYs, not CI, not `--json`, not `--no-input`. */
   canPrompt: boolean;
