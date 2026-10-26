@@ -1843,7 +1843,7 @@ async function chooseProject(
       stage,
       code: "AMBIGUOUS",
       message: `This workspace has ${projects.length} projects, so setup cannot pick one for you.`,
-      remedy: `Choose one with --project, for example:\n  ${setupCommand()} --project ${first.project_name}`,
+      remedy: `Choose one by its id with --project, for example ${describeProject(first)}:\n  ${setupCommand()} --project ${first.project_id}`,
     });
   }
 
@@ -2408,7 +2408,7 @@ async function reuseExistingKey(
       message: `${envEntry} already contains a working TraceRoot key for project '${who.project_name ?? who.project_id}', but setup selected '${ctx.project?.projectName}'.`,
       remedy: [
         "Run setup for that project instead:",
-        `  ${setupCommand()} --project ${who.project_name ?? who.project_id}`,
+        `  ${setupCommand()} --project ${who.project_id}`,
         `or remove ${KEY_ENV} from ${envEntry} if it is stale.`,
       ].join("\n"),
     });

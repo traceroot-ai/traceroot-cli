@@ -2165,9 +2165,27 @@ describe("the TraceRoot demo workspace", () => {
 
     expect(result.error?.code).toBe("AMBIGUOUS");
     expect(result.error?.message).toContain("has 2 projects");
-    expect(result.error?.remedy).toContain("--project web");
+    expect(result.error?.remedy).toContain("--project p_own");
     expect(result.error?.remedy).not.toContain("agent-demo");
+    expect(result.error?.remedy).not.toContain("p_demo");
     expect(run.calls).toEqual([]);
+  });
+
+  it("names the project by its id in a remedy that reruns setup", async () => {
+    // A name is free text: `--project My App` reached setup as two operands, a
+    // usage error, and a name can belong to projects in two workspaces.
+    pythonRepo();
+    const run = demoRun({
+      projects: [{ ...OWN, project_name: "My App" }, WORKER],
+      canPrompt: false,
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.remedy).toBe(
+      "Choose one by its id with --project, for example 'My App' in Acme (w_own):\n  traceroot setup --project p_own",
+    );
   });
 });
 
@@ -3572,6 +3590,8 @@ describe("project credential", () => {
 
     expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
     expect(result.error?.message).toContain("other");
+    // By its id, which no name with a space, or a namesake, can get wrong.
+    expect(result.error?.remedy).toContain("\n  traceroot setup --project p_other\n");
     // The file must be untouched.
     expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-other-project-key-77");
   });
