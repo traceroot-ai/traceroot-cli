@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
-import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
+import { AGENT_IDS, displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import type { AgentAdapter } from "../agents/types.js";
 import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
 import {
@@ -3082,10 +3082,13 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
     // No question, and not a word of one: `--json` owns stdout for its event
     // stream and a CI job has nobody to read a prompt. The registry's order
     // decides, and the run then *reports* the decision and the flag that
-    // changes it — output after the fact, not a prompt.
+    // changes it — output after the fact, not a prompt. `--agent` on its own
+    // asks for a launch (see `chooseInstrumentation`), so the flag that made
+    // this a hand-over goes with it.
+    const handover = ctx.flags.method === "manual" ? "--manual" : "--no-instrument";
     wizardProgress(
       ctx,
-      `Agents set up here: ${present.map((a) => a.displayName).join(", ")}. Targeting ${first.displayName}; rerun with \`--agent <id>\` to target another.`,
+      `Agents set up here: ${present.map((a) => a.displayName).join(", ")}. Targeting ${first.displayName}; to target another, rerun with \`${handover} --agent <id>\`, where <id> is one of ${AGENT_IDS.join(", ")}.`,
     );
     return unlaunchedAgent(first, true);
   }

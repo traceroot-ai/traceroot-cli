@@ -6799,10 +6799,32 @@ describe("the agent a hand-over targets", () => {
     // Both are named, so the one it did not pick is not invisible.
     expect(said).toContain("Agents set up here: Claude Code, Codex");
     expect(said).toContain("Targeting Claude Code");
-    expect(said).toContain("--agent");
+    // With the flag that keeps it a hand-over: `--agent` alone launches the
+    // agent, with nobody there to confirm it. And by the ids the flag takes,
+    // which the list above does not show.
+    expect(said).toContain(
+      "to target another, rerun with `--no-instrument --agent <id>`, where <id> is one of claude, codex, generic.",
+    );
     // And not a word of the question itself.
     expect(said).not.toContain("Which coding agent");
     expect(ctx.agent?.id).toBe("claude");
+  });
+
+  it("keeps --manual in the flags that change the target of a manual hand-over", async () => {
+    pythonRepo();
+    withClaudeConfigured();
+    withCodexConfigured();
+    const { deps } = askRecorder(handoverDeps());
+    const { ctx, err } = makeCtx({
+      canPrompt: false,
+      flags: { method: "manual", traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    const said = plain(err.data);
+    expect(said).toContain("rerun with `--manual --agent <id>`");
+    expect(said).not.toContain("--no-instrument --agent");
   });
 
   it("keeps the choice out of a --json run's event stream", async () => {
