@@ -567,7 +567,10 @@ describe("the manual steps", () => {
         packageManager: "npm",
       }),
     });
-    expect(ts).not.toContain("stands in for your provider");
+    // Its own stand-in, named in `instrumentModules` rather than as an
+    // `Integration` member the Node package does not have.
+    expect(ts).toContain("OpenAI stands in for your provider");
+    expect(ts).not.toContain("Anthropic stands in for your provider");
     expect(ts).toMatch(/\n {7}\}\n/);
   });
 

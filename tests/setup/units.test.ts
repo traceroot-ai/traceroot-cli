@@ -1085,7 +1085,9 @@ describe("getting the credential setup wrote into the application", () => {
 
     expect(snippet).not.toContain('import "dotenv/config"');
     expect(snippet).toContain('config({ path: new URL(".env", import.meta.url) })');
-    expect(snippet.indexOf("config({ path:")).toBeLessThan(snippet.indexOf("initialize();"));
+    expect(snippet.indexOf("config({ path:")).toBeLessThan(
+      snippet.indexOf("TraceRoot.initialize("),
+    );
     expect(rendered).not.toContain("load_dotenv");
   });
 
@@ -1101,10 +1103,10 @@ describe("getting the credential setup wrote into the application", () => {
     const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
 
     expect(snippet).toContain("async function main() {");
-    expect(snippet).toContain("\n  initialize();");
+    expect(snippet).toContain("\n  TraceRoot.initialize({ instrumentModules:");
     expect(snippet).toContain('\n  config({ path: new URL(".env", import.meta.url) })');
     // Neither at the left margin, which is where both used to sit.
-    expect(snippet).not.toMatch(/\ninitialize\(\);/);
+    expect(snippet).not.toMatch(/\nTraceRoot\.initialize\(/);
     expect(snippet).not.toMatch(/\nconfig\(\{ path:/);
   });
 

@@ -174,6 +174,10 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
  * with `initialize()` correctly under the guard. So the task also has the agent
  * run the suite with `TRACEROOT_ENABLED=false`, which is what actually keeps it
  * out of the user's project.
+ *
+ * The snippet imports from the package step 2 installed, and only names that
+ * package exports. The Node one used to be the Python SDK's shape transcribed:
+ * a bare `initialize()` that instruments nothing in an ES module.
  */
 function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
   const [envFile] = envFiles;
@@ -203,6 +207,11 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     // this SDK: the instrumentors patch the provider's class methods through
     // `wrapt`, which does not care whether it was imported first. What it has to
     // precede is the first model call and the first `observe`.
+    //
+    // `instrumentModules`, naming the provider, because without it
+    // `initialize()` falls back to hooking `require()`, and an ES module — which
+    // this snippet is, anchored on `import.meta.url` — never goes through it. A
+    // bare `initialize()`, which is what this used to show, instrumented nothing.
     const load =
       envFile === undefined
         ? { imports: [] as string[], call: [] as string[] }
@@ -215,14 +224,17 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     return [
       "```typescript",
       ...load.imports,
-      'import { initialize, observe } from "@traceroot-ai/traceroot";',
+      'import { TraceRoot } from "@traceroot-ai/traceroot";',
+      'import OpenAI from "openai";   // the provider library, imported wherever it already was',
       "",
       "// The function this file calls when it is run directly — not module scope.",
       "async function main() {",
       ...load.call,
-      "  initialize();",
+      "  TraceRoot.initialize({ instrumentModules: { openAI: OpenAI } });   // name the library this app uses",
       "  await run();   // whatever this file already does",
       "}",
+      "",
+      "main();   // however this file already starts itself",
       "```",
     ].join("\n");
   }
@@ -250,6 +262,34 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     "",
     "and, for a short-lived script only, `traceroot.flush()` before exit.",
   ].join("\n");
+}
+
+/**
+ * Step 3's account of the TypeScript SDK, where the Python one lists its
+ * `Integration` members.
+ *
+ * The Python list used to render here for every language, under a "verified
+ * against" line naming the Node package — which exports neither `Integration`
+ * nor `using_attributes`, and has `flush` only as `TraceRoot.flush()`. These
+ * names are read from `@traceroot-ai/traceroot` 0.5.0 and 0.6.0, whose
+ * `InitializeOptions` take the same `instrumentModules` keys.
+ */
+function typescriptApi(): string {
+  return `\`instrumentModules\` is what instruments the provider. Name each library this application
+calls, set to the module it imports, and leave out the ones it does not. Without it, \`initialize()\`
+auto-instruments only modules loaded with \`require()\` — CommonJS — so in an ES module it
+instruments nothing. The keys it takes in \`@traceroot-ai/traceroot\`:
+
+\`\`\`
+openAI  anthropic  langchain  bedrock  typeSafe  claudeAgentSDK  openaiAgents  piCodingAgent
+piAgentCore
+\`\`\`
+
+LangChain's key takes \`@langchain/core/callbacks/manager\`, not the LangChain class, and the Vercel
+AI SDK needs no key at all; the skill's TypeScript reference covers both. For step 4, spans come
+from \`observe\`, user and session from \`usingAttributes\`, and a short-lived script awaits
+\`TraceRoot.flush()\` before it exits, all from \`@traceroot-ai/traceroot\`. If an import fails when
+you run the app, read the error and fix it then.`;
 }
 
 /**
@@ -682,10 +722,17 @@ they are.
 
 ${initSnippet(service, envFiles)}
 
-Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
+${
+  service.language === "python"
+    ? `Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
 gunicorn, a queue worker — has no such place to put it, so initialize where the framework starts
 up instead. And an application that needs its own credentials while it is still being imported — a
-client constructed at module scope — has to keep the load there.
+client constructed at module scope — has to keep the load there.`
+    : `Two shapes cannot do this. A module another process imports in order to run it — a server
+started by a process manager, a queue worker — has no such place to put it, so initialize where the
+framework starts up instead. And an application that needs its own credentials while it is still
+being imported — a client constructed at module scope — has to keep the load there.`
+}
 
 Whatever the shape, the run path does not on its own keep the project's tests from exporting.
 \`observe\` starts the SDK by itself whenever \`TRACEROOT_API_KEY\` is in the environment, and the key
@@ -693,11 +740,19 @@ can get there without the entry point's help — your own environment, a shell e
 loaded at import by code that was there before you. What keeps a test run out of the user's project
 is \`TRACEROOT_ENABLED=false\` on the command that runs it, which is how step 5 runs the suite.
 
-None of this belongs in the project's test configuration — not a \`conftest.py\`, not a fixture, not
+${
+  service.language === "python"
+    ? `None of this belongs in the project's test configuration — not a \`conftest.py\`, not a fixture, not
 a \`pytest.ini\`. Those are the user's files, and the variable on the command line does the job
-without touching them.
+without touching them.`
+    : `None of this belongs in the project's test configuration — not a test setup file, not a fixture,
+not the test runner's config. Those are the user's files, and the variable on the command line does
+the job without touching them.`
+}
 
-That is the whole API you need: \`initialize\`, \`observe\`, \`using_attributes\`, \`flush\`.
+${
+  service.language === "python"
+    ? `That is the whole API you need: \`initialize\`, \`observe\`, \`using_attributes\`, \`flush\`.
 
 \`Integration\` members, verified against \`${sdk.package}==${sdk.version}\`:
 
@@ -709,7 +764,9 @@ AGENT_FRAMEWORK
 
 Gemini is \`GOOGLE_GENAI\` and Bedrock is \`BEDROCK\`, which are the two people guess wrong.
 Nothing above needs verifying before you write it. If an import fails when you run the app, read
-the error and fix it then.
+the error and fix it then.`
+    : typescriptApi()
+}
 
 ### 4. Cover this application's boundaries with spans
 
@@ -985,7 +1042,7 @@ export function manualInstructions(input: {
     dotenv === "dotenv"
       ? [
           "",
-          "     A CommonJS entry point has no import.meta.url. There, require() both",
+          "     A CommonJS module has no import.meta.url. There, require() the",
           '     packages and give the same path as join(__dirname, "...").',
         ]
       : [];
@@ -1000,6 +1057,19 @@ export function manualInstructions(input: {
           "     traceroot.flush() before it exits.",
         ]
       : [];
+  // The same for Node, plus what leaving `instrumentModules` out would do,
+  // since that is the line someone copying this would trim.
+  const node =
+    service.language === "python"
+      ? []
+      : [
+          "",
+          "     OpenAI stands in for your provider: import the library your",
+          "     application calls and name it in instrumentModules. Leave",
+          "     instrumentModules out and initialize() instruments only modules",
+          "     loaded with require() (CommonJS), so an ES module gets no model spans.",
+          "     A short-lived script also awaits TraceRoot.flush() before it exits.",
+        ];
 
   return [
     `Add TraceRoot to ${service.path} by hand:`,
@@ -1019,6 +1089,7 @@ export function manualInstructions(input: {
     ...init.map((line) => (line === "" ? "" : `       ${line}`)),
     ...commonJs,
     ...python,
+    ...node,
     "",
     "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
     "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",
