@@ -5286,6 +5286,82 @@ describe("resume and rerun", () => {
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
   });
 
+  it("clears the error an earlier run stopped on once a resume ends normally", async () => {
+    // The timeout's own remedy is "run your application once, then --resume",
+    // and a user who then stops the wait has a finished run. The error stayed
+    // on the record, so `doctor` failed that run at the step it had completed.
+    pythonRepo();
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.completedStages.push(
+      "precheck",
+      "authenticate",
+      "select_context",
+      "acquire_project_key",
+      "configure_repository",
+      "detect_stack",
+      "select_agent",
+      "install_agent_context",
+      "instrument",
+    );
+    previous.lastError = { stage: "verify_trace", code: "TRACE_TIMEOUT", message: "no trace" };
+    previous.instrumentHandover = "agent";
+    writeCheckpoint(dir, previous);
+
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      skipTraceWait: true,
+    });
+    const { ctx } = makeCtx({
+      canPrompt: true,
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 120 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(ctx.traceWaitSkipped).toBe(true);
+    expect(result.checkpoint.lastError).toBeUndefined();
+    expect(readCheckpoint(dir)?.lastError).toBeUndefined();
+  });
+
+  it("keeps the error when the resume stops on one of its own", async () => {
+    pythonRepo();
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.completedStages.push(
+      "precheck",
+      "authenticate",
+      "select_context",
+      "acquire_project_key",
+      "configure_repository",
+      "detect_stack",
+      "select_agent",
+      "install_agent_context",
+      "instrument",
+    );
+    previous.lastError = { stage: "verify_trace", code: "TRACE_TIMEOUT", message: "no trace" };
+    previous.instrumentHandover = "agent";
+    writeCheckpoint(dir, previous);
+
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx } = makeCtx({
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(false);
+    expect(readCheckpoint(dir)?.lastError).toMatchObject({
+      stage: "verify_trace",
+      code: "TRACE_TIMEOUT",
+    });
+  });
+
   it("does not revoke a minted key when the failure leaves a run to resume", async () => {
     pythonRepo();
     let revoked = 0;

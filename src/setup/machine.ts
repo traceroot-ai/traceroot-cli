@@ -4531,6 +4531,14 @@ export async function runSetupMachine(ctx: SetupContext, deps: SetupDeps): Promi
     writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
   }
 
+  // Nor is the error an earlier run stopped on. A resume that gets past it
+  // used to leave it on the record, so `doctor` reported a run that had just
+  // finished as stopped at the step it had since completed.
+  if (ctx.checkpoint.lastError !== undefined) {
+    ctx.checkpoint.lastError = undefined;
+    writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
+  }
+
   ctx.emit({ event: "result", ok: true, data: resultData(ctx) });
   return {
     ok: true,
