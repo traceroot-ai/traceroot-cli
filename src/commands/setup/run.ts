@@ -29,6 +29,7 @@ import {
   clearCheckpoint,
   hasCompleted,
   newCheckpoint,
+  pendingHandover,
   readCheckpoint,
   setupRoot,
   writeCheckpoint,
@@ -210,16 +211,11 @@ export function setupFailureExit(result: SetupResult, json: boolean): SetupFailu
  * second API key and points a coding agent at code it has already edited, so it
  * is offered rather than taken on an unread keypress.
  *
- * Holding every stage is not quite enough, though. A hand-over nothing has acted
- * on ends normally, so it records the last stage too, with no trace and the
- * instrumentation still outstanding — the opposite of finished.
+ * Holding every stage is not quite enough, though: see {@link pendingHandover}.
  */
 export function resumeQuestion(found: SetupCheckpoint): SelectInput {
   const ranToTheEnd = hasCompleted(found, "complete");
-  const awaitingHandover =
-    ranToTheEnd &&
-    found.trace === undefined &&
-    (found.instrumentHandover === "task-file" || found.instrumentHandover === "manual");
+  const awaitingHandover = pendingHandover(found) !== null;
   if (ranToTheEnd && !awaitingHandover) {
     return {
       stage: "precheck",

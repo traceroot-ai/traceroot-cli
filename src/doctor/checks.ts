@@ -1,8 +1,10 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ALL_AGENTS } from "../agents/index.js";
+import { ALL_AGENTS, displaySkillPath } from "../agents/index.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
+import { instrumentTaskPath } from "../setup/artifacts.js";
+import { pendingHandover, setupRoot } from "../setup/checkpoint.js";
 import { setupCommand } from "../setup/invocation.js";
 import type { SetupCheckpoint } from "../setup/types.js";
 import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
@@ -10,6 +12,12 @@ import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
 /** Inputs for {@link buildDoctorReport}. All IO results are passed in pre-resolved. */
 export interface DoctorInput {
   cwd: string;
+  /**
+   * The repository root as `setup` resolves it (`setupRoot(cwd)`), which is
+   * where setup writes its instrumentation task. From a service directory it
+   * is not `cwd`.
+   */
+  root?: string;
   auth: ResolvedAuth;
   /** Network validation result; `null` when it was skipped (no credentials). */
   credentialsValid: boolean | null;
@@ -327,14 +335,24 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
   const stoppedByUser =
     checkpoint.lastError?.code === "CANCELLED" || checkpoint.lastError?.code === "INTERRUPTED";
   const failed = checkpoint.lastError !== undefined && !stoppedByUser;
+  // A run that reached its last stage with no trace and no error ended one of
+  // two ways, told apart as `setup` tells them apart (see `pendingHandover`): a
+  // hand-over still to be done, which setup calls paused, or a run whose wait
+  // the user ended, which it calls complete. Both were reported as stopped at
+  // 'complete', the stage every run ends on. An error outranks either: a run
+  // that ends normally clears it, so one on the record is a later run's.
+  const ended = !finished && completed.has("complete") && checkpoint.lastError === undefined;
+  const handover = ended ? pendingHandover(checkpoint) : null;
 
   checks.push({
     name: "setup_completed",
     category: "setup",
-    status: finished ? "pass" : failed ? "fail" : "warn",
+    status: finished || (ended && handover === null) ? "pass" : failed ? "fail" : "warn",
     message: finished
       ? `Setup completed on ${checkpoint.updatedAt}`
-      : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`${setupCommand()} --resume\`.`,
+      : ended
+        ? endedWithoutTrace(input, checkpoint, handover)
+        : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`${setupCommand()} --resume\`.`,
   });
 
   if (checkpoint.lastError !== undefined && !finished) {
@@ -394,6 +412,30 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
   });
 
   return checks;
+}
+
+/** {@link DoctorInput.root}, or the same root resolved from `cwd` when none was passed. */
+function repositoryRoot(input: DoctorInput): string {
+  return input.root ?? setupRoot(input.cwd);
+}
+
+/**
+ * How a run that reached its last stage without a trace ended, in setup's own
+ * words: paused on a hand-over, naming what is left to do, or complete.
+ */
+function endedWithoutTrace(
+  input: DoctorInput,
+  checkpoint: SetupCheckpoint,
+  handover: "task-file" | "manual" | null,
+): string {
+  if (handover === "task-file") {
+    const task = displaySkillPath(input.cwd, instrumentTaskPath(repositoryRoot(input)));
+    return `Setup is paused, waiting for the instrumentation it handed over. Run the task in ${task} in your coding agent.`;
+  }
+  if (handover === "manual") {
+    return "Setup is paused, waiting for the instrumentation it handed over. Apply the manual steps it printed.";
+  }
+  return `Setup completed on ${checkpoint.updatedAt} — no trace seen yet`;
 }
 
 /** The furthest stage a checkpoint recorded, for the "stopped at" message. */

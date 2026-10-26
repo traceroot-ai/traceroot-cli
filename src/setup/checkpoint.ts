@@ -248,3 +248,21 @@ export function markComplete(checkpoint: SetupCheckpoint, stage: SetupStage): vo
 export function hasCompleted(checkpoint: SetupCheckpoint, stage: SetupStage): boolean {
   return checkpoint.completedStages.includes(stage);
 }
+
+/**
+ * The hand-over a run that reached its last stage is still waiting on, or null.
+ *
+ * Holding every stage is not quite "finished". A hand-over nothing has acted on
+ * ends normally, so it records the last stage too, with no trace and the
+ * instrumentation still outstanding — the opposite of finished. Asked by
+ * `setup` before it offers to resume and by `doctor` before it reports the
+ * run, so the two cannot describe one checkpoint in different ways.
+ */
+export function pendingHandover(checkpoint: SetupCheckpoint): "task-file" | "manual" | null {
+  const route = checkpoint.instrumentHandover;
+  return hasCompleted(checkpoint, "complete") &&
+    checkpoint.trace === undefined &&
+    (route === "task-file" || route === "manual")
+    ? route
+    : null;
+}

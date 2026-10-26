@@ -49,7 +49,7 @@ import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
 import { createActivityParser } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
-import { relativeToRoot } from "./artifacts.js";
+import { instrumentTaskPath, relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
 import {
   HOST_ENV,
@@ -3422,17 +3422,6 @@ function keepAgentOutput(input: {
         // and a pattern scrub for those would miss some and read as a promise.
         "It can quote your repository's files, secrets included, so check it before you share it.",
       ];
-}
-
-/**
- * Where the task-file route writes the instrumentation task.
- *
- * Named once because two invocations have to agree on it: the run that writes
- * the file, and the `--resume` that restores the hand-over and has to name that
- * file again without having written it.
- */
-function instrumentTaskPath(root: string): string {
-  return join(root, ".traceroot", "prompts", "setup-instrument.md");
 }
 
 /**
