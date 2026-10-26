@@ -2566,10 +2566,14 @@ const configureRepository: StageDefinition = {
         // that the reason there is no credential file is this one and not "the
         // user's own environment already had the key" — the instruction it gives
         // differs between the two. See {@link ApplicationKeyLocation}.
+        //
+        // And the same instruction as that block. The key is never printed, so
+        // telling the user to copy it into another file asks for a value they
+        // were never shown.
         ctx.refusedCredentialEnvFile = envPath;
         wizardWarn(
           ctx,
-          `${envEntry} is tracked by git, so the API key was not written to it. The key is available to this setup run only; add it to an untracked env file to persist it.`,
+          `${envEntry} is tracked by git, so the API key was not written to it. The key is available to this setup run only. Give your deployment a key of its own, or untrack ${envEntry} and rerun setup to have one written to it.`,
         );
         return "skipped";
       }

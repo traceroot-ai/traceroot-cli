@@ -8201,6 +8201,31 @@ describe("where a run leaves its files", () => {
     expect(launch?.stdin ?? "").not.toContain("wrote `TRACEROOT_API_KEY` into");
   });
 
+  it("does not ask the user to copy a key it never showed them into another file", async () => {
+    // The refusal used to end "add it to an untracked env file to persist it",
+    // but the run never prints the key, so there was nothing to add. It now
+    // says what the closing block says, plus the one way to get a file written.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), "# committed by mistake\n");
+    const process = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      results: { git: { output: ".env\n" } },
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    expect(plain(err.data)).toContain(
+      ".env is tracked by git, so the API key was not written to it. The key is available to this setup run only. Give your deployment a key of its own, or untrack .env and rerun setup to have one written to it.",
+    );
+    expect(plain(err.data)).not.toContain("untracked env file");
+    // And the premise: the key really is nowhere in what the run printed.
+    const key = ctx.credential?.key.reveal();
+    expect(key).toBeDefined();
+    expect(err.data).not.toContain(key as string);
+  });
+
   it("survives a credential file it cannot read, rather than failing the stage", async () => {
     // Checking that the file holds this run's key means reading it, and the
     // reader swallows only a missing file — `EACCES`, a directory of that name
