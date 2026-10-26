@@ -342,6 +342,17 @@ describe("what either task says", () => {
       expect(text).not.toContain("skills install");
       expect(text).toMatch(/If it is missing, stop and (tell the\s+user|say so in\s+your report)/);
     });
+
+    it(`${which} points into the skill only for the steps it allows`, () => {
+      // The skill's verify step runs a flow, confirms the trace and logs its
+      // id. Step 7 forbids all three, so the pointer stops before it.
+      const text = task({ interactive });
+      expect(text).toContain("Read it for **steps 4 and 5**");
+      expect(text).not.toContain("step 4 onward");
+      expect(text).toContain(
+        "Its step 6, verify, does not apply here either: steps 6 and 7 of this task replace it",
+      );
+    });
   }
 });
 

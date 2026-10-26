@@ -678,10 +678,11 @@ ${bullet([
 \`${skillPath}/SKILL.md\` is installed and is the source of truth for SDK APIs, initialization
 order and framework integrations. Read it before writing code. ${missingSkill}
 
-Read it for **step 4 onward** — install, initialize, spans, verify. Its steps 1-3 (check the API
+Read it for **steps 4 and 5** — install and initialize, then spans. Its steps 1-3 (check the API
 key, analyse the repository, confirm which service) were done by \`traceroot setup\` before you
 started and their answers are the facts above. Do not redo them and do not put them on a
-checklist.
+checklist. Its step 6, verify, does not apply here either: steps 6 and 7 of this task replace it,
+and step 7 says why this run does not confirm the trace itself.
 
 One question inside them was not answered for you: setup does not know whether this application
 has a user or a session concept, so the table in the skill's analyse step is still yours to read

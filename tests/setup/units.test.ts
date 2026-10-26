@@ -919,7 +919,7 @@ describe("everything the task settles so the agent does not have to", () => {
   });
 
   it("tells the agent the skill's first three steps are already done", () => {
-    expect(task()).toContain("Read it for **step 4 onward**");
+    expect(task()).toContain("Read it for **steps 4 and 5**");
   });
 
   it("keeps every stated fact recoverable if it turns out wrong", () => {
