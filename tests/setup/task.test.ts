@@ -598,3 +598,272 @@ describe("the manual steps", () => {
     expect(text).toContain("python3 -m pip install traceroot==1.2.3\n");
   });
 });
+
+describe("the API each package's instructions name", () => {
+  // Read from each package's source at the version setup pins when the
+  // registry cannot be reached: `traceroot` 0.3.0, `@traceroot-ai/traceroot`
+  // 0.5.0 and `@traceroot-ai/mastra` 0.1.1. The first two have the same
+  // tracing names in 0.4.0 and 0.6.0, their current releases. Evaluation
+  // exports are left out, because no instruction names one.
+  //
+  // The Node instructions used to be the Python SDK's — `Integration`,
+  // `using_attributes`, a bare `initialize()` — under a line saying they were
+  // verified against the Node package, and the Mastra ones imported from
+  // `@traceroot-ai/traceroot`, which nothing had installed.
+  const EXPORTS: Readonly<Record<string, readonly string[]>> = {
+    traceroot: [
+      "__version__",
+      "initialize",
+      "get_client",
+      "flush",
+      "shutdown",
+      "observe",
+      "TracerootClient",
+      "Integration",
+      "get_current_trace_id",
+      "get_current_span_id",
+      "update_current_span",
+      "update_current_trace",
+      "using_attributes",
+    ],
+    "@traceroot-ai/traceroot": [
+      "TraceRoot",
+      "initialize",
+      "observe",
+      "updateCurrentSpan",
+      "updateCurrentTrace",
+      "getCurrentTraceId",
+      "getCurrentSpanId",
+      "getCurrentSpan",
+      "usingAttributes",
+      "SpanAttributes",
+      "OpenAIAgentsProcessor",
+      "startSpan",
+      "usingSpan",
+      "instrumentPiAgentCore",
+    ],
+    "@traceroot-ai/mastra": ["TraceRootExporter"],
+  };
+  // The Node SDK's `flush` is a static on `TraceRoot`, not an export.
+  const TRACEROOT_STATICS = [
+    "initialize",
+    "flush",
+    "shutdown",
+    "isInitialized",
+    "isTracingActive",
+    "resolveCredentials",
+  ];
+  const INSTRUMENT_MODULES = [
+    "openAI",
+    "anthropic",
+    "langchain",
+    "claudeAgentSDK",
+    "bedrock",
+    "typeSafe",
+    "openaiAgents",
+    "piCodingAgent",
+    "piAgentCore",
+  ];
+  const INTEGRATION_MEMBERS = [
+    "OPENAI",
+    "ANTHROPIC",
+    "LANGCHAIN",
+    "GOOGLE_GENAI",
+    "CREWAI",
+    "OPENAI_AGENTS",
+    "CLAUDE_AGENT_SDK",
+    "LLAMA_INDEX",
+    "AUTOGEN",
+    "AGNO",
+    "GROQ",
+    "DSPY",
+    "GOOGLE_ADK",
+    "MISTRAL",
+    "PYDANTIC_AI",
+    "BEDROCK",
+    "AGENT_FRAMEWORK",
+  ];
+
+  const variants = [
+    {
+      name: "Python",
+      sdk: { ...SDK, package: "traceroot" },
+      service: service({ testCommand: "pytest" }),
+      // What step 1 of the manual steps installs, and what else the code may import.
+      installs: ["traceroot==1.2.3", "python-dotenv"],
+      modules: ["traceroot", "dotenv", "pathlib", "anthropic"],
+    },
+    {
+      name: "TypeScript",
+      sdk: SDK,
+      service: service({
+        language: "typescript",
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+      }),
+      installs: ["@traceroot-ai/traceroot@1.2.3", "dotenv"],
+      modules: ["@traceroot-ai/traceroot", "dotenv", "openai"],
+    },
+    {
+      name: "Mastra",
+      sdk: { ...SDK, package: "@traceroot-ai/mastra" },
+      service: service({
+        language: "typescript",
+        framework: "mastra",
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+      }),
+      installs: ["@traceroot-ai/mastra@1.2.3", "dotenv", "npm install @mastra/observability"],
+      modules: ["@traceroot-ai/mastra", "@mastra/observability", "dotenv"],
+    },
+  ] as const;
+
+  function render(variant: (typeof variants)[number]): { task: string; manual: string } {
+    return {
+      task: task({ service: variant.service, sdk: variant.sdk, envFiles: ["./.env"] }),
+      manual: manualInstructions({
+        service: variant.service,
+        sdk: variant.sdk,
+        skillPath: ".claude/skills/traceroot-instrument-repo",
+        envFiles: ["./.env"],
+        pythonInterpreter: null,
+      }),
+    };
+  }
+
+  /** Every `[module, name]` an `import { … } from` or a `from … import` brings in. */
+  function importedNames(text: string): Array<[string, string]> {
+    const found: Array<[string, string]> = [];
+    for (const [, names = "", module = ""] of text.matchAll(
+      /import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g,
+    )) {
+      for (const name of names.split(",")) found.push([module, name.trim()]);
+    }
+    for (const [, module = "", names = ""] of text.matchAll(/^\s*from (\S+) import ([^#\n]+)/gm)) {
+      for (const name of names.split(",")) found.push([module, name.trim()]);
+    }
+    return found.filter(([, name]) => name !== "");
+  }
+
+  /** Every module the text imports, in either language. */
+  function importedModules(text: string): string[] {
+    return [
+      ...[...text.matchAll(/\bfrom\s+"([^"]+)"/g)].map((m) => m[1]),
+      ...[...text.matchAll(/^\s*from (\S+) import /gm)].map((m) => m[1]),
+      // Python's bare `import x`; a Node default import carries a `from`.
+      ...[...text.matchAll(/^\s*import ([\w.]+)[ \t]*(?:#.*)?$/gm)].map((m) => m[1]),
+    ].filter((m): m is string => m !== undefined);
+  }
+
+  /** The words of the fenced block that follows `marker`. */
+  function blockAfter(text: string, marker: string): string[] {
+    const at = text.indexOf(marker);
+    expect(at).toBeGreaterThan(-1);
+    const block = /```\n([\s\S]*?)```/.exec(text.slice(at))?.[1] ?? "";
+    return block.split(/\s+/).filter((word) => word !== "");
+  }
+
+  for (const variant of variants) {
+    it(`imports only names the installed package exports, for ${variant.name}`, () => {
+      for (const text of Object.values(render(variant))) {
+        for (const [module, name] of importedNames(text)) {
+          if (module in EXPORTS) {
+            expect(module).toBe(variant.sdk.package);
+            expect(EXPORTS[module]).toContain(name);
+          }
+        }
+        for (const module of importedModules(text)) {
+          expect(variant.modules).toContain(module);
+        }
+        for (const [, member = ""] of text.matchAll(/\bTraceRoot\.(\w+)\(/g)) {
+          expect(TRACEROOT_STATICS).toContain(member);
+        }
+        for (const [, member = ""] of text.matchAll(/\btraceroot\.(\w+)\(/g)) {
+          expect(EXPORTS.traceroot).toContain(member);
+        }
+        for (const [, member = ""] of text.matchAll(/\bIntegration\.(\w+)/g)) {
+          expect(INTEGRATION_MEMBERS).toContain(member);
+        }
+        for (const [, keys = ""] of text.matchAll(/instrumentModules: \{([^}]*)\}/g)) {
+          for (const key of keys.split(",")) {
+            expect(INSTRUMENT_MODULES).toContain(key.split(":")[0]?.trim());
+          }
+        }
+      }
+    });
+
+    it(`imports nothing the install step did not install, for ${variant.name}`, () => {
+      const { task: text, manual } = render(variant);
+      const step1 = manual.slice(0, manual.indexOf("\n  2. "));
+      for (const install of variant.installs) {
+        expect(step1).toContain(install);
+      }
+      const step2 = text.slice(text.indexOf("### 2."), text.indexOf("### 3."));
+      expect(step2).toContain(variant.installs[0]);
+      if (variant.name === "Mastra") {
+        expect(step2).toContain("npm install @mastra/observability");
+      }
+    });
+  }
+
+  it("lists Python's Integration members and whole API only for Python", () => {
+    const python = render(variants[0]).task;
+    expect(python).toContain("That is the whole API you need");
+    expect(python).toContain("`Integration` members, verified against `traceroot==1.2.3`");
+    expect(blockAfter(python, "`Integration` members").sort()).toEqual(
+      [...INTEGRATION_MEMBERS].sort(),
+    );
+    for (const variant of variants.slice(1)) {
+      for (const text of Object.values(render(variant))) {
+        expect(text).not.toContain("whole API");
+        expect(text).not.toContain("verified against");
+        expect(text).not.toMatch(/\bIntegration\b/);
+      }
+    }
+  });
+
+  it("names no Python-only file, function or server in a Node task", () => {
+    for (const variant of variants.slice(1)) {
+      const { task: text } = render(variant);
+      for (const name of ["conftest.py", "pytest.ini", "using_attributes", "uvicorn", "gunicorn"]) {
+        expect(text).not.toContain(name);
+      }
+    }
+  });
+
+  it("names the provider in instrumentModules and says what a bare initialize() does", () => {
+    const { task: text, manual } = render(variants[1]);
+    for (const rendered of [text, manual]) {
+      expect(rendered).toContain(
+        "TraceRoot.initialize({ instrumentModules: { openAI: OpenAI } });",
+      );
+      expect(rendered).not.toContain("  initialize();");
+      expect(rendered).toContain("main();");
+    }
+    expect(text).toContain(
+      "auto-instruments only modules loaded with `require()` — CommonJS — so in an ES module it\ninstruments nothing",
+    );
+    expect(manual).toContain("instrumentModules out and initialize() instruments only modules");
+    expect(manual).toContain(
+      "loaded with require() (CommonJS), so an ES module gets no model spans.",
+    );
+    expect(blockAfter(text, "The keys it takes in").sort()).toEqual([...INSTRUMENT_MODULES].sort());
+  });
+
+  it("puts Mastra's exporter on the application's Mastra instance", () => {
+    const { task: text, manual } = render(variants[2]);
+    for (const rendered of [text, manual]) {
+      expect(rendered).toContain('import { TraceRootExporter } from "@traceroot-ai/mastra";');
+      expect(rendered).toContain("exporters: [new TraceRootExporter()]");
+      expect(rendered).not.toContain('"@traceroot-ai/traceroot"');
+      // The exporter reads the key as it is constructed, so the load goes first.
+      expect(rendered.indexOf("config({ path:")).toBeLessThan(
+        rendered.indexOf("new TraceRootExporter()"),
+      );
+    }
+    // The file that constructs the instance is not one detection names.
+    expect(text).toContain("<path from this file to the env file>");
+    expect(text).toContain("there is no `initialize()` to call");
+    expect(text).not.toContain("async function main()");
+  });
+});
