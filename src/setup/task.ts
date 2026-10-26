@@ -463,6 +463,14 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
         "Do not guess.",
       ].join(" ");
 
+  // What a service nothing identified ends in. Only an agent the user opened
+  // can put a question to anyone: the launched one runs captured, where a
+  // question reaches nobody, so it ends with the candidates in its report,
+  // which setup quotes when the run stops without edits.
+  const whenInDoubt = interactive
+    ? "**stop and ask**. List the candidate paths you found and have the user pick exactly one,\nthen state the single strongest piece of evidence before going further."
+    : "**stop and report**. Edit nothing, and list the candidate paths you found in the `notes` of\nyour report (step 8), each with the single strongest piece of evidence for it.";
+
   // Loading the file from the shell is something the launched agent's sandbox
   // refuses. An agent the user opens may be allowed to, and loading in-process
   // is still the better answer.
@@ -571,9 +579,8 @@ ${serviceFacts}
 Determine the target from concrete signals — a dependency manifest, an entry point, an application
 that actually runs. **Do not infer from loose hints**: a stray script, a file extension or a mention
 in a README is not evidence. If exactly one candidate is unambiguous, proceed with it. In every
-other case — several candidates, none, or any doubt about which application the user meant — **stop
-and ask**. List the candidate paths you found and have the user pick exactly one, then state the
-single strongest piece of evidence before going further.
+other case — several candidates, none, or any doubt about which application the user meant —
+${whenInDoubt}
 
 Do not instrument more than one service or language in this run.`
     : `You are instrumenting **exactly one** service. It has already been chosen:

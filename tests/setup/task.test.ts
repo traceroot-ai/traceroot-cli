@@ -251,6 +251,12 @@ describe("the task handed to an agent the user opens", () => {
     expect(text).toContain("do not ask them to paste it to you");
   });
 
+  it("asks the user to pick when no manifest identified the service", () => {
+    const text = handedOver({ service: service({ agentMustIdentify: true }) });
+    expect(text).toContain("**stop and ask**");
+    expect(text).toContain("have the user pick exactly one");
+  });
+
   it("does not describe a sandbox it is not in", () => {
     const text = handedOver({ envFiles: ["./.env"] });
     expect(text).not.toContain("refused by your own sandbox");
@@ -259,6 +265,16 @@ describe("the task handed to an agent the user opens", () => {
 });
 
 describe("the task setup launches its own agent with", () => {
+  it("never tells it to ask the user, even when it has to find the service", () => {
+    // It runs captured, so a question reaches nobody. It reports the
+    // candidates instead, in the notes setup quotes when the run stops.
+    const text = task({ service: service({ agentMustIdentify: true }) });
+    expect(text).toContain("**stop and report**");
+    expect(text).toContain("candidate paths you found in the `notes`");
+    expect(text).not.toContain("stop and ask");
+    expect(text).not.toMatch(/ask the user|have the user pick/);
+  });
+
   it("keeps the claims that are true of the launch", () => {
     const text = task({ envFiles: ["./.env"] });
     expect(text).toContain("You are running non-interactively and cannot ask questions.");
