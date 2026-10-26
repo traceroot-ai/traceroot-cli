@@ -24,6 +24,7 @@ import {
 import {
   type DeviceFlowDeps,
   type DeviceFlowResult,
+  DeviceLoginNotApprovedError,
   openBrowserForPlatform,
   runDeviceFlow,
 } from "../auth/deviceFlow.js";
@@ -1132,14 +1133,23 @@ async function browserSignIn(
         host,
       );
     }
-    // Names the branch a first-time user is most likely on. "Sign-in did not
-    // complete" tells someone halfway through creating an account nothing about
-    // what to do next, and the answer — finish verifying, run it again — is not
-    // guessable from it.
-    wizardWarn(
-      ctx,
-      `Setup didn't complete in the browser. If you were creating an account, verify your email and run \`${setupCommand()}\` again.`,
-    );
+    // Denied, or the code expired first, which is also how a closed tab ends,
+    // a half-created account included. Nothing was approved, so this is a
+    // sign-in that did not happen rather than a fault, and the way on is this
+    // command again. The flow's own message names `login`, which signs the
+    // terminal in but does not carry on with setup, so it is not passed on.
+    if (err instanceof DeviceLoginNotApprovedError) {
+      throw new SetupError({
+        stage: "authenticate",
+        code: "NOT_AUTHENTICATED",
+        message:
+          err.reason === "denied"
+            ? "The sign-in was denied in the browser."
+            : "The sign-in code expired before it was approved in the browser.",
+        remedy: `Run \`${setupCommand()}\` again.`,
+      });
+    }
+    wizardWarn(ctx, `Setup didn't complete in the browser. Run \`${setupCommand()}\` again.`);
     throw err;
   }
 

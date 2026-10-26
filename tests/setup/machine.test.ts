@@ -23,7 +23,7 @@ import {
   type WorkspaceSummary,
 } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
-import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
+import { openBrowserForPlatform, runDeviceFlow } from "../../src/auth/deviceFlow.js";
 import { redeemHandoff } from "../../src/auth/handoff.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
@@ -33,6 +33,7 @@ import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { SETUP_EXIT_CODES } from "../../src/setup/errors.js";
 import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
+import { setupCommand } from "../../src/setup/invocation.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
 import {
   SETUP_PIPELINE,
@@ -1220,6 +1221,71 @@ describe("authentication", () => {
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.BACKEND_UNSUPPORTED);
     expect(result.error?.message).toContain("--no-browser");
   });
+
+  /**
+   * The real device flow, against an auth host that issues a code and answers
+   * every poll with `poll`. Real rather than a thrown stand-in, so what is
+   * asserted is the error `login` and `setup` actually share.
+   */
+  function deviceFlowAnswering(poll: Record<string, string>): SetupDeps["runDeviceFlow"] {
+    let clock = 0;
+    const { fetchImpl } = createFakeFetch((call) =>
+      call.url.endsWith("/api/auth/device/code")
+        ? jsonResponse({
+            device_code: "dev-1",
+            user_code: "ABCDEFGH",
+            verification_uri_complete: "https://api.example.test/device?user_code=ABCDEFGH",
+            expires_in: 12,
+            interval: 5,
+          })
+        : jsonResponse(poll, 400),
+    );
+    return (flowDeps) =>
+      runDeviceFlow({
+        ...flowDeps,
+        fetchImpl,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        now: () => clock,
+        openBrowser: async () => true,
+      });
+  }
+
+  for (const [what, poll, message] of [
+    ["is denied", { error: "access_denied" }, "The sign-in was denied in the browser."],
+    [
+      "expires",
+      { error: "expired_token" },
+      "The sign-in code expired before it was approved in the browser.",
+    ],
+    // Nothing comes back from a tab that was closed: the code just runs out.
+    [
+      "runs out while still pending",
+      { error: "authorization_pending" },
+      "The sign-in code expired before it was approved in the browser.",
+    ],
+  ] as const) {
+    it(`gives one remedy, rerunning setup, when the browser sign-in ${what}`, async () => {
+      pythonRepo();
+      const deps = makeDeps({ auth: authEmpty(), runDeviceFlow: deviceFlowAnswering(poll) });
+      const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(result.error?.code).toBe("NOT_AUTHENTICATED");
+      // A sign-in that did not happen, not an internal error.
+      expect(result.error?.exitCode).toBe(ExitCode.auth);
+      expect(result.error?.message).toBe(`${message}\n\nRun \`${setupCommand()}\` again.`);
+      expect(result.error?.remedy).toBe(`Run \`${setupCommand()}\` again.`);
+      // `login` signs the terminal in and stops there, and TraceRoot sign-up
+      // sends no email to verify.
+      expect(plain(err.data)).not.toContain("traceroot login");
+      expect(plain(err.data)).not.toMatch(/email/i);
+      // The remedy above is the only one.
+      expect(plain(err.data)).not.toContain("didn't complete in the browser");
+    });
+  }
 });
 
 describe("the handoff code from browser-first onboarding", () => {
