@@ -145,6 +145,30 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
   return `config({ path: new URL("${envPathFor(envFile, entryPoint)}", import.meta.url) })`;
 }
 
+/** The package `sdkPackageFor` installs for a Mastra service in place of the core SDK. */
+const MASTRA_SDK = "@traceroot-ai/mastra";
+
+/**
+ * Mastra's own observability package, which the Mastra snippet imports.
+ *
+ * `@traceroot-ai/mastra` builds its exporter on it and lists it as a peer
+ * dependency rather than a dependency, so installing the SDK alone does not
+ * guarantee it is there. A Mastra project often has it already, and
+ * reinstalling it unpinned would move a version the project chose, so it is
+ * installed only where the manifest does not list it.
+ */
+const MASTRA_OBSERVABILITY = "@mastra/observability";
+
+/** The install for {@link MASTRA_OBSERVABILITY}, in the service's own package manager. */
+function mastraObservabilityInstall(service: DetectedService): string {
+  // Unpinned: it has to match the project's `@mastra/core`, which setup does
+  // not read, and the package manager resolves that.
+  return installCommand(
+    { package: MASTRA_OBSERVABILITY, version: "latest", source: "bundled" },
+    service,
+  );
+}
+
 /**
  * The canonical initialization block, spelled out rather than described.
  *
@@ -177,10 +201,54 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
  *
  * The snippet imports from the package step 2 installed, and only names that
  * package exports. The Node one used to be the Python SDK's shape transcribed:
- * a bare `initialize()` that instruments nothing in an ES module.
+ * a bare `initialize()` that instruments nothing in an ES module, and, for a
+ * Mastra service, an import from a package nothing had installed.
  */
-function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
+function initSnippet(
+  service: DetectedService,
+  sdk: ResolvedSdk,
+  envFiles: readonly string[],
+): string {
   const [envFile] = envFiles;
+  if (sdk.package === MASTRA_SDK) {
+    // An exporter on the application's own `Mastra` instance: the package has
+    // no `initialize()`, and does not bring the core SDK with it. The exporter
+    // reads the key in its constructor and stays disabled if it was not there,
+    // so the load goes before the construction rather than into a function
+    // that runs later. Which file constructs the instance is not something
+    // detection establishes, so the path is left for the agent to measure.
+    const load =
+      envFile === undefined
+        ? { imports: [] as string[], call: [] as string[] }
+        : {
+            imports: ['import { config } from "dotenv";'],
+            call: [
+              "// Before the instance below is constructed: the exporter reads the key then.",
+              `${loadDotenvCallTs(envFile, null)};   // the app's own credentials`,
+              "",
+            ],
+          };
+    return [
+      "```typescript",
+      ...load.imports,
+      `import { Observability } from "${MASTRA_OBSERVABILITY}";`,
+      `import { TraceRootExporter } from "${MASTRA_SDK}";`,
+      "",
+      ...load.call,
+      "// The Mastra instance this application already constructs: add the option, keep the rest.",
+      "export const mastra = new Mastra({",
+      "  observability: new Observability({",
+      "    configs: {",
+      "      traceroot: {",
+      '        serviceName: "mastra",',
+      "        exporters: [new TraceRootExporter()],   // reads TRACEROOT_API_KEY",
+      "      },",
+      "    },",
+      "  }),",
+      "});",
+      "```",
+    ].join("\n");
+  }
   if (service.language !== "python") {
     // The env load, named rather than imported for its side effect — and both
     // it and `initialize()` inside the function the file runs, not at module
@@ -290,6 +358,47 @@ AI SDK needs no key at all; the skill's TypeScript reference covers both. For st
 from \`observe\`, user and session from \`usingAttributes\`, and a short-lived script awaits
 \`TraceRoot.flush()\` before it exits, all from \`@traceroot-ai/traceroot\`. If an import fails when
 you run the app, read the error and fix it then.`;
+}
+
+/**
+ * Step 3 for a Mastra service, which installs {@link MASTRA_SDK} and not the
+ * core SDK.
+ *
+ * None of the other branch carries over. The package has no `initialize()` to
+ * place and does not depend on `@traceroot-ai/traceroot`, so every name that
+ * branch teaches — `initialize`, `observe`, `usingAttributes` — is one this
+ * service cannot import, and the snippet that used to render here imported
+ * them from a package nothing had installed.
+ */
+function mastraInitialization(
+  service: DetectedService,
+  sdk: ResolvedSdk,
+  envFiles: readonly string[],
+): string {
+  const [envFile] = envFiles;
+  const placeholder =
+    envFile === undefined
+      ? ""
+      : `
+
+The load's path is a placeholder. Setup does not know which file constructs the instance, so it
+cannot measure the path for you: replace it with the path from that file out to \`${envFile}\`. A
+load that resolves to nothing raises nothing — the application starts and emits no trace.`;
+  return `In the service at \`${service.path}\`, TraceRoot is an exporter on the application's own
+\`Mastra\` instance, and there is no \`initialize()\` to call. Add it to the \`new Mastra({ ... })\`
+this application already constructs, wherever that is. \`TraceRootExporter\` reads
+\`TRACEROOT_API_KEY\` when it is constructed, and one constructed without it stays off, so anything
+that loads the credential has to run before that construction.
+
+${initSnippet(service, sdk, envFiles)}
+
+If that constructor already has an \`observability\` option, add the exporter to the \`exporters\` of
+the config it already has rather than adding a second config.${placeholder}
+
+\`${MASTRA_SDK}\` exports the exporter and its config type, and does not install
+\`@traceroot-ai/traceroot\`: \`initialize\`, \`observe\` and \`usingAttributes\` are not available in
+this service, so do not import them. Mastra traces its own agent runs, tool calls and model calls
+through the exporter. If an import fails when you run the app, read the error and fix it then.`;
 }
 
 /**
@@ -475,6 +584,9 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
     service.language === "python"
       ? 'the entry point\'s `if __name__ == "__main__":` block'
       : "the function the entry point calls to start itself when it is run directly";
+  // A Mastra service installs the Mastra exporter instead of the core SDK, so
+  // step 3 has no `initialize()` in it to place.
+  const mastra = sdk.package === MASTRA_SDK;
 
   const runMode = interactive
     ? "You are running interactively. If something is genuinely ambiguous, ask the user."
@@ -699,12 +811,20 @@ python3 -m venv .venv && ${FALLBACK_INTERPRETER} -m pip install ${sdk.package}==
 \`\`\`
 
 Then run the application with \`${FALLBACK_INTERPRETER}\` throughout.`
-      : ""
+      : mastra
+        ? `
+\`Observability\` in step 3 comes from \`${MASTRA_OBSERVABILITY}\`, which \`${MASTRA_SDK}\` needs
+installed beside it. If \`package.json\` does not list it yet, add it with
+\`${mastraObservabilityInstall(service)}\`; if it does, leave its version alone.`
+        : ""
 }
 
-### 3. Initialize on the path that runs the application
+### 3. ${mastra ? "Add the exporter to the application's Mastra instance" : "Initialize on the path that runs the application"}
 
-In the entry point of the service at \`${service.path}\`, put the credential load and
+${
+  mastra
+    ? mastraInitialization(service, sdk, envFiles)
+    : `In the entry point of the service at \`${service.path}\`, put the credential load and
 \`initialize()\` where they run when the application is **run**, and not at module scope. Here
 that place is ${runPath}.
 
@@ -720,7 +840,7 @@ you named would never be applied. Auto-instrumentation patches the provider libr
 which works whether or not that library has already been imported — so leave its imports where
 they are.
 
-${initSnippet(service, envFiles)}
+${initSnippet(service, sdk, envFiles)}
 
 ${
   service.language === "python"
@@ -766,6 +886,7 @@ Gemini is \`GOOGLE_GENAI\` and Bedrock is \`BEDROCK\`, which are the two people 
 Nothing above needs verifying before you write it. If an import fails when you run the app, read
 the error and fix it then.`
     : typescriptApi()
+}`
 }
 
 ### 4. Cover this application's boundaries with spans
@@ -845,7 +966,15 @@ from dotenv import load_dotenv
 if __name__ == "__main__":
     ${loadDotenvCall(envFile, service.entryPoint)}   # beside initialize(), as in step 3
 \`\`\``
-    : `\`\`\`typescript
+    : mastra
+      ? `\`\`\`typescript
+import { config } from "dotenv";
+
+${loadDotenvCallTs(envFile, null)};   // before the Mastra instance is constructed, as in step 3
+\`\`\`
+
+A CommonJS file has no \`import.meta.url\`; there the same path is \`join(__dirname, "...")\`.`
+      : `\`\`\`typescript
 import { config } from "dotenv";
 
 async function main() {
@@ -1029,8 +1158,9 @@ export function manualInstructions(input: {
   // changed exactly as shown started without its key and sent nothing. Only
   // the code between the fences: the sentence after them is the task's prose,
   // and indented here it would read as a line of the program.
-  const snippet = initSnippet(service, envFiles).split("\n");
+  const snippet = initSnippet(service, sdk, envFiles).split("\n");
   const init = snippet.slice(1, snippet.lastIndexOf("```"));
+  const mastra = sdk.package === MASTRA_SDK;
   // The package that load imports. Neither SDK depends on it.
   const dotenv =
     envFiles.length === 0 ? null : service.language === "python" ? "python-dotenv" : "dotenv";
@@ -1058,18 +1188,29 @@ export function manualInstructions(input: {
         ]
       : [];
   // The same for Node, plus what leaving `instrumentModules` out would do,
-  // since that is the line someone copying this would trim.
+  // since that is the line someone copying this would trim. Mastra has no
+  // provider to name: the exporter goes on the application's own instance, in
+  // a file setup cannot name, which is why its load path is a placeholder.
   const node =
     service.language === "python"
       ? []
-      : [
-          "",
-          "     OpenAI stands in for your provider: import the library your",
-          "     application calls and name it in instrumentModules. Leave",
-          "     instrumentModules out and initialize() instruments only modules",
-          "     loaded with require() (CommonJS), so an ES module gets no model spans.",
-          "     A short-lived script also awaits TraceRoot.flush() before it exits.",
-        ];
+      : mastra
+        ? [
+            "",
+            ...(envFiles[0] === undefined
+              ? []
+              : [`     Replace the placeholder with the path from that file to ${envFiles[0]}.`]),
+            "     If the constructor already has an observability option, add the",
+            "     exporter to the exporters of the config it has, not a second config.",
+          ]
+        : [
+            "",
+            "     OpenAI stands in for your provider: import the library your",
+            "     application calls and name it in instrumentModules. Leave",
+            "     instrumentModules out and initialize() instruments only modules",
+            "     loaded with require() (CommonJS), so an ES module gets no model spans.",
+            "     A short-lived script also awaits TraceRoot.flush() before it exits.",
+          ];
 
   return [
     `Add TraceRoot to ${service.path} by hand:`,
@@ -1078,13 +1219,29 @@ export function manualInstructions(input: {
       ? "  1. Install the SDK, pinned:"
       : `  1. Install the SDK, pinned, and ${dotenv} for the load in step 2:`,
     `       ${dotenv === null ? install : `${install} ${dotenv}`}`,
+    ...(mastra
+      ? [
+          `     Add ${MASTRA_OBSERVABILITY} too if package.json does not list it yet:`,
+          `       ${mastraObservabilityInstall(service)}`,
+        ]
+      : []),
     "",
-    `  2. Initialize it on the path that runs ${service.entryPoint ?? "your entry point"},`,
-    service.language === "python"
-      ? '     under its if __name__ == "__main__": guard rather than at module scope.'
-      : "     inside the function it calls to start itself rather than at module scope.",
-    "     Module scope runs on import, and your test suite imports your entry",
-    "     point, so initializing there starts the SDK in every test:",
+    ...(mastra
+      ? [
+          "  2. Add the exporter to the Mastra instance your application constructs.",
+          dotenv === null
+            ? "     TraceRootExporter reads TRACEROOT_API_KEY when it is constructed:"
+            : "     TraceRootExporter reads TRACEROOT_API_KEY when it is constructed, so",
+          ...(dotenv === null ? [] : ["     load the env file before that line:"]),
+        ]
+      : [
+          `  2. Initialize it on the path that runs ${service.entryPoint ?? "your entry point"},`,
+          service.language === "python"
+            ? '     under its if __name__ == "__main__": guard rather than at module scope.'
+            : "     inside the function it calls to start itself rather than at module scope.",
+          "     Module scope runs on import, and your test suite imports your entry",
+          "     point, so initializing there starts the SDK in every test:",
+        ]),
     "",
     ...init.map((line) => (line === "" ? "" : `       ${line}`)),
     ...commonJs,
