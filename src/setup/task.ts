@@ -485,9 +485,13 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // launched agent's allow-list, is not on PATH under npx, fails without
   // `--agent` when there is no terminal, and installs beside the working
   // directory rather than where setup put the skill.
+  //
+  // And no stop either. The task is self-contained, which is why setup warns
+  // and continues when its own install of the skill fails: a missing skill
+  // degrades the run rather than ending it, and the API it needs is in step 3.
   const missingSkill = interactive
-    ? "If it is missing, stop and tell the\nuser: `traceroot setup` installs it, and printed a warning if that failed."
-    : "If it is missing, stop and say so in\nyour report: `traceroot setup` installed it before you started, so a missing copy means that\ninstall failed.";
+    ? "If it is missing, do not try to\ninstall it: tell the user and carry on with the API written out in step 3."
+    : "If it is missing, do not try to\ninstall it: say so in your report and carry on with the API written out in step 3.";
 
   // Loading the file from the shell is something the launched agent's sandbox
   // refuses. An agent the user opens may be allowed to, and loading in-process

@@ -334,13 +334,18 @@ describe("what either task says", () => {
       expect(text).toContain("should not depend on your environment happening to hold them");
     });
 
-    it(`${which} names no command for a missing skill`, () => {
+    it(`${which} names no command for a missing skill, and carries on without it`, () => {
       // `traceroot skills install` is not on the launched agent's allow-list,
       // is not on PATH under npx, needs `--agent` without a terminal, and
       // installs beside the working directory rather than where setup did.
+      // Nor does the agent stop: setup warns and continues when its own install
+      // fails, because the task carries the API it needs in step 3.
       const text = task({ interactive });
       expect(text).not.toContain("skills install");
-      expect(text).toMatch(/If it is missing, stop and (tell the\s+user|say so in\s+your report)/);
+      expect(text).toMatch(
+        /If it is missing, do not try to\s+install it: (tell the user|say so in your report) and carry on with the API written out in step 3\./,
+      );
+      expect(text).not.toMatch(/If it is missing, stop/);
     });
 
     it(`${which} points into the skill only for the steps it allows`, () => {
