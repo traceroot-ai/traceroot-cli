@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -27,6 +28,7 @@ import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
 import { redeemHandoff } from "../../src/auth/handoff.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
+import { writeConfig as writeCliConfig } from "../../src/config/manager.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
@@ -8244,6 +8246,154 @@ describe("where a run leaves its files", () => {
     // resolving from where the agent stands is the same anchor. Either way it
     // has to land on the file the run actually wrote.
     expect(resolve(launch?.cwd ?? "", named ?? "")).toBe(join(dir, "test1", ".env"));
+  });
+
+  describe("for a service in a subdirectory", () => {
+    /**
+     * `git` in the fixture, as a real repository, because whether anything
+     * under `.traceroot/` is left to commit is git's to answer. Kept away from
+     * the developer's own configuration: a global excludes file that ignores
+     * `.traceroot/` would pass this over a repository that does not.
+     */
+    function git(args: string[]): string {
+      const home = join(dir, ".git", "no-home");
+      const result = spawnSync("git", args, {
+        cwd: dir,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          HOME: home,
+          XDG_CONFIG_HOME: home,
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      });
+      if (result.status !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+      return result.stdout;
+    }
+
+    /** Every file `git status` would offer to commit from a `.traceroot/` directory. */
+    function untrackedUnderTraceroot(): string[] {
+      const status = git(["status", "--porcelain", "--untracked-files=all"]);
+      // The service's own files are untracked too, which is what shows git is
+      // looking at this fixture at all.
+      expect(status).toContain("test1/main.py");
+      return status.split("\n").filter((line) => line.includes(".traceroot/"));
+    }
+
+    /** The paths in the report's table of touched files, as it prints them. */
+    function touched(report: string): string[] {
+      const table = report.split("## Files this run touched")[1]?.split("\n\n")[1] ?? "";
+      return table
+        .split("\n")
+        .slice(2)
+        .map((row) => /^\| `([^`]+)` \|/.exec(row)?.[1] ?? row);
+    }
+
+    describe.each([
+      ["started from the service directory, with a saved sign-in", true, true],
+      ["started from the service directory, with a key already configured", true, false],
+      ["started from the root with --service, with a saved sign-in", false, true],
+      ["started from the root with --service, with a key already configured", false, false],
+    ])("%s", (_name, fromService, session) => {
+      /**
+       * One run, started where the case says. A saved sign-in mints the CLI a
+       * key and writes the config, into the directory setup was run from as
+       * production does; a key already configured writes none.
+       */
+      function start(options: { flags: Partial<SetupFlags>; traces: unknown[]; json?: boolean }) {
+        const sub = subService();
+        const cwd = fromService ? sub : dir;
+        const deps = makeDeps({
+          auth: session ? authEmpty() : authWithKey(),
+          storedCredential: session ? { session_token: "saved-session-token" } : null,
+          setupApi: fakeSetupApi({
+            listProjects: async () => [
+              { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+            ],
+            createProjectApiKey: async (input) => ({
+              id: `ak_${input.scope}`,
+              name: input.name,
+              hint: "tr-…9999",
+              project_id: input.projectId,
+              scope: input.scope,
+              expires_at: null,
+              key: `tr-minted-${input.scope}-key-value`,
+            }),
+          }),
+          traces: options.traces,
+          runProcess: fakeRunProcess({ gitStatus: ["", " M test1/main.py"] }).run,
+        });
+        deps.writeConfig = (config) => {
+          const target = join(cwd, ".traceroot", "config.json");
+          writeCliConfig(config, target);
+          return target;
+        };
+        const flags = fromService ? options.flags : { ...options.flags, service: "test1" };
+        const harness = makeCtx({ cwd, flags, json: options.json });
+        return { ...harness, deps };
+      }
+
+      beforeEach(() => {
+        git(["init", "-q"]);
+      });
+
+      it("lists only files that exist in the report, and leaves git nothing under `.traceroot/`", async () => {
+        const { ctx, deps } = start({ flags: { agent: "claude" }, traces: [traceRow()] });
+
+        const result = await runSetupMachine(ctx, deps);
+
+        expect(result.error).toBeNull();
+        const report = readFileSync(join(dir, ".traceroot", "setup-report.md"), "utf8");
+        const paths = touched(report);
+        expect(paths).toContain("test1/.traceroot/setup.json");
+        if (session) {
+          expect(paths).toContain(
+            fromService ? "test1/.traceroot/config.json" : ".traceroot/config.json",
+          );
+        } else {
+          expect(report).not.toContain("The CLI's own credential");
+        }
+        for (const path of paths) {
+          expect(existsSync(join(dir, path)), path).toBe(true);
+        }
+        expect(untrackedUnderTraceroot()).toEqual([]);
+      });
+
+      it("leaves git nothing under `.traceroot/` after a hand-over", async () => {
+        // No trace, so no report: the task file is the one thing this run
+        // writes in the root's `.traceroot/`.
+        const { ctx, deps } = start({
+          flags: { agent: "claude", instrument: false, traceTimeoutSec: 1 },
+          traces: [],
+        });
+
+        const result = await runSetupMachine(ctx, deps);
+
+        expect(result.ok).toBe(true);
+        expect(result.trace).toBeNull();
+        expect(existsSync(join(dir, ".traceroot", "prompts", "setup-instrument.md"))).toBe(true);
+        expect(untrackedUnderTraceroot()).toEqual([]);
+      });
+
+      it("gives `--json` the checkpoint's real path", async () => {
+        const { ctx, deps, events } = start({
+          flags: { agent: "claude" },
+          traces: [traceRow()],
+          json: true,
+        });
+
+        await runSetupMachine(ctx, deps);
+
+        expect(events.at(-1)).toMatchObject({
+          event: "result",
+          ok: true,
+          data: { checkpoint_path: "test1/.traceroot/setup.json" },
+        });
+        expect(existsSync(join(dir, "test1", ".traceroot", "setup.json"))).toBe(true);
+      });
+    });
   });
 });
 
