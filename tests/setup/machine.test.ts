@@ -2960,7 +2960,7 @@ describe("a repository that already reports to a project", () => {
 
   it("keeps the application's key when the CLI's own key signs in, as after `traceroot logout`", async () => {
     // `logout` leaves the config's admin key behind, and the next run signed in
-    // with it and wrote it over the application's send-only key.
+    // with it and wrote it over the application's ingest key.
     pythonRepo();
     writeFileSync(join(dir, ".env"), ENV_WITH_KEY);
     const world = server(["tr-cli-key", TEST_GLOBEX], ["tr-app-key", TEST_GLOBEX]);
@@ -3022,7 +3022,7 @@ describe("a repository that already reports to a project", () => {
     );
   });
 
-  it("gives the application a send-only key of its own rather than an admin key", async () => {
+  it("gives the application an ingest key of its own rather than an admin key", async () => {
     pythonRepo();
     const world = server(["tr-cli-key", TEST_GLOBEX]);
     world.settings.reportScopes = true;
@@ -3038,7 +3038,7 @@ describe("a repository that already reports to a project", () => {
     expect(each.ctx.session?.userKey.reveal()).toBe("tr-cli-key");
   });
 
-  it("gives the application a send-only key even for an admin key passed with --api-key", async () => {
+  it("gives the application an ingest key even for an admin key passed with --api-key", async () => {
     // The application carries its key into every deployment, and none of them
     // needs to manage keys, whoever chose the key the run signed in with.
     pythonRepo();
@@ -3058,9 +3058,12 @@ describe("a repository that already reports to a project", () => {
     expect(readFileSync(join(dir, ".env"), "utf8")).not.toContain("tr-handed-admin");
     expect(world.reportsTo()).toBe("p_t2");
     expect(each.ctx.session?.userKey.reveal()).toBe("tr-handed-admin");
+    // What the key can do, as the backend scopes it. An ingest key reads the
+    // project's data back, so it was never send-only.
     expect(plain(each.err.data)).toContain(
-      "That key can manage the project's keys, so the application gets a send-only key of its own.",
+      "That key can manage the project's keys, so the application gets a key of its own that can send traces and read this project, but not manage its keys.",
     );
+    expect(plain(each.err.data)).not.toContain("send-only");
   });
 
   it("does the same for an admin key pasted at the prompt", async () => {
@@ -4318,9 +4321,9 @@ describe("the two keys a run mints", () => {
   });
 
   it("reads the first trace back on the CLI's credential, not the application's", async () => {
-    // An ingest key can send telemetry and nothing else. Reading traces with it
-    // worked only because the trace routes do not enforce scope yet, so this
-    // stage would have broken on the day they started to.
+    // An ingest key can send telemetry and read this project, but not manage
+    // its keys. Reading is the CLI's job rather than the application's, so the
+    // stage does not depend on what the backend lets an ingest key do.
     pythonRepo();
     const reads: (string | undefined)[] = [];
     const { deps, minted } = signInRun();
@@ -4345,7 +4348,7 @@ describe("the two keys a run mints", () => {
     expect(reads).toContain("tr-admin-cli-key");
   });
 
-  it("falls back to a send-only CLI key when this account may not mint one", async () => {
+  it("falls back to an ingest CLI key when this account may not mint one", async () => {
     // Minting a key that manages a project's other keys is reserved for a
     // workspace admin, because that is the capability the dashboard reserves
     // for one. A member must still be able to set their repository up.

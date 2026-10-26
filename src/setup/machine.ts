@@ -2062,7 +2062,8 @@ const acquireProjectKey: StageDefinition = {
     const created = await mintRecordedKey(ctx, deps, api, {
       name,
       projectId: project.projectId,
-      // The application's credential, so it sends telemetry and nothing else.
+      // The application's credential, so it can send telemetry and read this
+      // project, but not manage its keys.
       // Stated rather than left to the server's default: the other mint path
       // asks for `admin` for the CLI's own key, and two paths that disagree by
       // omission read as two paths that agree.
@@ -2174,7 +2175,7 @@ async function settleSessionKey(
   }
   wizardProgress(
     ctx,
-    "That key can manage the project's keys, so the application gets a send-only key of its own.",
+    "That key can manage the project's keys, so the application gets a key of its own that can send traces and read this project, but not manage its keys.",
   );
   return false;
 }
@@ -4173,10 +4174,10 @@ const verifyTrace: StageDefinition = {
     // to expose — it is the same public endpoint either way.
     //
     // Read on the user's own credential, never the application's. The
-    // application's key is ingest-scoped: it can send telemetry and nothing
-    // else, which is the whole point of giving the repository its own. Reading
-    // traces with it worked only because the trace routes do not enforce scope
-    // yet, so this stage would have broken on the day they started to.
+    // application's key is ingest-scoped: it can send telemetry and read this
+    // project, but not manage its keys. Reading here is the CLI's job rather
+    // than the application's, so this stage does not depend on what the backend
+    // lets an ingest key do.
     const client = deps.createSetupApi({
       host: session.host,
       apiKey: session.userKey.reveal(),
