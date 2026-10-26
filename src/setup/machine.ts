@@ -62,7 +62,7 @@ import {
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
-import { setupCommand } from "./invocation.js";
+import { cliCommand, setupCommand } from "./invocation.js";
 import {
   buildInvocation,
   launchAgent,
@@ -762,7 +762,7 @@ const authenticate: StageDefinition = {
         remedy: [
           "Provide a key non-interactively:",
           `  ${setupCommand()} --api-key <key>`,
-          "or set TRACEROOT_API_KEY, or run `traceroot login` first.",
+          `or set TRACEROOT_API_KEY, or run \`${cliCommand("login")}\` first.`,
         ].join("\n"),
       });
     }
@@ -4372,7 +4372,7 @@ const verifyTrace: StageDefinition = {
           `  ${setupCommand()} --resume`,
           "To investigate:",
           `  ${setupCommand()} doctor`,
-          "  traceroot traces list --limit 5",
+          `  ${cliCommand("traces list --limit 5")}`,
         ].join("\n"),
       });
     }
@@ -4819,7 +4819,7 @@ function restoreCliConfig(ctx: SetupContext, deps: SetupDeps, revoked: ReadonlyS
   } catch {
     wizardWarn(
       ctx,
-      "could not put the CLI's config back, and it names a key this run revoked; run `traceroot login` to replace it",
+      `could not put the CLI's config back, and it names a key this run revoked; run \`${cliCommand("login")}\` to replace it`,
     );
   }
 }
