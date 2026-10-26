@@ -481,6 +481,14 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
     ? "**stop and ask**. List the candidate paths you found and have the user pick exactly one,\nthen state the single strongest piece of evidence before going further."
     : "**stop and report**. Edit nothing, and list the candidate paths you found in the `notes` of\nyour report (step 8), each with the single strongest piece of evidence for it.";
 
+  // No command for a missing skill. `traceroot skills install` is not on the
+  // launched agent's allow-list, is not on PATH under npx, fails without
+  // `--agent` when there is no terminal, and installs beside the working
+  // directory rather than where setup put the skill.
+  const missingSkill = interactive
+    ? "If it is missing, stop and tell the\nuser: `traceroot setup` installs it, and printed a warning if that failed."
+    : "If it is missing, stop and say so in\nyour report: `traceroot setup` installed it before you started, so a missing copy means that\ninstall failed.";
+
   // Loading the file from the shell is something the launched agent's sandbox
   // refuses. An agent the user opens may be allowed to, and loading in-process
   // is still the better answer.
@@ -668,8 +676,7 @@ ${bullet([
 ### 1. Read the TraceRoot skill
 
 \`${skillPath}/SKILL.md\` is installed and is the source of truth for SDK APIs, initialization
-order and framework integrations. Read it before writing code. If it is missing, install it with
-\`traceroot skills install traceroot-instrument-repo\`.
+order and framework integrations. Read it before writing code. ${missingSkill}
 
 Read it for **step 4 onward** — install, initialize, spans, verify. Its steps 1-3 (check the API
 key, analyse the repository, confirm which service) were done by \`traceroot setup\` before you

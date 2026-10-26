@@ -333,6 +333,15 @@ describe("what either task says", () => {
       expect(text).not.toMatch(/They are\s+not in your environment/);
       expect(text).toContain("should not depend on your environment happening to hold them");
     });
+
+    it(`${which} names no command for a missing skill`, () => {
+      // `traceroot skills install` is not on the launched agent's allow-list,
+      // is not on PATH under npx, needs `--agent` without a terminal, and
+      // installs beside the working directory rather than where setup did.
+      const text = task({ interactive });
+      expect(text).not.toContain("skills install");
+      expect(text).toMatch(/If it is missing, stop and (tell the\s+user|say so in\s+your report)/);
+    });
   }
 });
 
