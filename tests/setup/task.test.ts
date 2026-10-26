@@ -245,6 +245,21 @@ describe("the task handed to an agent the user opens", () => {
     expect(text).not.toContain("commands named here are allowed");
   });
 
+  it("does not put the key in its environment, whether or not a file holds it", () => {
+    // Nothing put the key in the user's agent's environment when no file holds
+    // it, and nothing took it out when one does.
+    for (const credentialEnvFile of [null, "./.env"]) {
+      const text = handedOver({
+        envFiles: ["./.env"],
+        credentialFiles: credentialEnvFile === null ? [] : ["/repo/.env"],
+        credentialEnvFile,
+      });
+      expect(text).not.toContain("already set in your environment");
+      expect(text).not.toContain("**not** in your environment");
+      expect(text).not.toContain("**your** environment");
+    }
+  });
+
   it("says the application reads the key from its environment when no file holds it", () => {
     const text = handedOver({ credentialFiles: [] });
     expect(text).toContain("did not put `TRACEROOT_API_KEY` in a file the application loads");
@@ -287,6 +302,38 @@ describe("the task setup launches its own agent with", () => {
     expect(text).toContain("refused by your own sandbox");
     expect(text).not.toContain("Work from");
   });
+});
+
+describe("what either task says", () => {
+  for (const interactive of [false, true]) {
+    const which = interactive ? "the task file" : "the launched task";
+
+    it(`${which} says one thing about where the key is when a file holds it`, () => {
+      // The hard rule and step 6 both render when the credential's env file
+      // holds the key. Step 6 used to say the key was in the agent's own
+      // environment, which the launched rule denies and the task file's cannot
+      // know.
+      const text = task({
+        interactive,
+        envFiles: ["./.env"],
+        credentialFiles: ["/repo/.env"],
+        credentialEnvFile: "./.env",
+      });
+      expect(text).toContain(
+        "how the key reaches the SDK — in this run, and in every run after it",
+      );
+      expect(text).not.toContain("**your** environment");
+      expect(text).not.toContain("already set in your environment");
+    });
+
+    it(`${which} does not say the application's own credentials are missing from the environment`, () => {
+      // The agent's environment is the user's, minus one variable: an exported
+      // LLM key is in it.
+      const text = task({ interactive, envFiles: ["./.env"] });
+      expect(text).not.toMatch(/They are\s+not in your environment/);
+      expect(text).toContain("should not depend on your environment happening to hold them");
+    });
+  }
 });
 
 describe("the definition of done", () => {

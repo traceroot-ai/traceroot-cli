@@ -820,8 +820,9 @@ If any of these fails, fix it before continuing. Do not report success with a fa
 ${
   envFile !== null
     ? `
-The application may need credentials of its own to run — an LLM API key, a database URL. They are
-not in your environment. These env files exist near this service:
+The application may need credentials of its own to run — an LLM API key, a database URL — and
+should not depend on your environment happening to hold them. These env files exist near this
+service:
 
 ${bullet(envFiles.map((file) => `\`${file}\``))}
 
@@ -863,8 +864,7 @@ ${
   credentialEnvFile === null
     ? ""
     : `\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` into \`${credentialEnvFile}\`, so that load is also
-what keeps tracing working once this run ends: the key is in **your** environment because setup put
-it there for this run, and nothing hands it to the user's next one.
+how the key reaches the SDK — in this run, and in every run after it.
 
 `
 }${shellLoad} it is what makes the application runnable by a human afterwards, which a shell

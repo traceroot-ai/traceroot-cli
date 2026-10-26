@@ -1048,16 +1048,19 @@ describe("getting the credential setup wrote into the application", () => {
     expect(lines[0]).toContain("the app's own credentials");
   });
 
-  it("says that the one load is what keeps tracing working after the run", () => {
-    // The hard rules tell the agent `TRACEROOT_API_KEY` is already in its
-    // environment and not to confirm, print or grep for it. An agent holding
-    // that and no explanation treats the load as redundant — and the key is in
-    // *its* environment only for the length of this run. One sentence now,
-    // where the old filename needed a paragraph per language.
+  it("says that the one load is how the key reaches the SDK, now and after the run", () => {
+    // An agent that thinks it already holds the key treats the load as
+    // redundant. This sentence used to say the key was in the agent's own
+    // environment for this run, which `buildAgentEnv` stopped being true of
+    // whenever a file holds the key, and which the hard rules then contradicted.
+    // One sentence now, where the old filename needed a paragraph per language.
     const rendered = task({ envFiles: ["./.env"], credentialEnvFile: "./.env" });
 
     expect(rendered).toContain("wrote `TRACEROOT_API_KEY` into `./.env`");
-    expect(rendered).toContain("keeps tracing working once this run ends");
+    expect(rendered).toContain(
+      "how the key reaches the SDK — in this run, and in every run after it",
+    );
+    expect(rendered).not.toContain("**your** environment");
   });
 
   it("no longer teaches a loader for a filename of our own", () => {
