@@ -584,6 +584,38 @@ describe("runSetup", () => {
     expect(plain(err.data).indexOf("┌")).toBeLessThan(plain(err.data).indexOf("└"));
   });
 
+  it("prints every documentation link on the host the docs are served from", async () => {
+    // Pinned by host rather than by page. The links used to point at
+    // `docs.traceroot.ai`, which has no DNS record, and the tests that asserted
+    // them checked only that a link was printed, never where it went.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+
+    const docs = (plain(err.data).match(/https?:\/\/\S+/g) ?? []).filter((url) =>
+      url.includes("docs"),
+    );
+    // The closing block's link and the troubleshooting one, so the loop below
+    // cannot pass on a run that printed neither.
+    expect(docs.length).toBeGreaterThanOrEqual(2);
+    for (const url of docs) {
+      expect(url).toMatch(/^https:\/\/traceroot\.ai\/docs\//);
+    }
+  });
+
   it("leaves no line of a whole run outside the frame, until the frame closes", async () => {
     // One line printed bare — "Signed in as a returning user …" was the one
     // that gave this away — and the wizard visibly stops being a frame.
