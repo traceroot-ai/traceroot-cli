@@ -4156,6 +4156,8 @@ const verifyTrace: StageDefinition = {
     }
   },
   async run(ctx, deps) {
+    // An earlier run's stopped wait is not this one's, however this one ends.
+    ctx.checkpoint.traceWaitSkipped = undefined;
     const session = requireSession(ctx);
     // The wizard's own client, not the generated one. The single read this
     // stage makes must not depend on which operations the tool registry chooses
@@ -4324,13 +4326,15 @@ const verifyTrace: StageDefinition = {
     // pressed still counts, and falls through to the normal success below:
     // `outcome.found` is the stronger answer and the skip does not override it.
     if (!outcome.found && skipped) {
-      // Recorded on the context rather than the checkpoint. It is a fact about
-      // how this run ended, not a durable one: `--resume` finds `verify_trace`
+      // Recorded twice, for two kinds of reader. The context's copy is for this
+      // run's closing and is never restored: `--resume` finds `verify_trace`
       // unsatisfied (nothing wrote `ctx.trace`) and waits again, which is
-      // exactly right, and a flag persisted to disk would have to be cleared
-      // there to avoid a later run closing with a sentence about a key nobody
-      // pressed.
+      // exactly right, so a later run cannot close with a sentence about a key
+      // nobody pressed. The checkpoint's copy is for `doctor` and the next
+      // `setup`, which otherwise read a hand-over whose wait was stopped as one
+      // still waiting on the user. It is cleared when this stage next runs.
       ctx.traceWaitSkipped = true;
+      ctx.checkpoint.traceWaitSkipped = true;
       return "skipped";
     }
 

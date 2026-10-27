@@ -16,7 +16,8 @@ export interface DoctorInput {
    * The repository root as `setup` resolves it (`setupRoot(cwd)`), which is
    * where setup installs the instrumentation skill and writes its task. From a
    * service directory it is not `cwd`. Resolved from `cwd` when absent, so a
-   * caller that leaves it out still gets setup's root and never `cwd` itself.
+   * caller that leaves it out still gets setup's root: the git root, or `cwd`
+   * itself outside a git repository.
    */
   root?: string;
   auth: ResolvedAuth;

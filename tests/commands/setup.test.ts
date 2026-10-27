@@ -1401,6 +1401,20 @@ describe("doctor on a run that ended without a trace", () => {
     writeFileSync(join(at, "main.py"), "x = 1\n");
   }
 
+  /** The entry point once it calls `initialize()`, so a trace wait has something to wait for. */
+  function instrumentEntryPoint(): void {
+    writeFileSync(
+      join(dir, "main.py"),
+      'import traceroot\n\nif __name__ == "__main__":\n    traceroot.initialize()\n',
+    );
+  }
+
+  /** What the next `setup` asks, given the checkpoint the last run left. */
+  function nextQuestion(): string | undefined {
+    const found = readCheckpoint(dir);
+    return found === null ? undefined : resumeQuestion(found).message;
+  }
+
   it("calls a run whose wait the user ended complete, with no trace seen yet", async () => {
     pythonService();
     const said = await setupRun(
@@ -1439,6 +1453,64 @@ describe("doctor on a run that ended without a trace", () => {
     expect(completed?.status).toBe("warn");
     expect(completed?.message).toBe(
       "Setup is paused, waiting for the instrumentation it handed over. Apply the manual steps it printed.",
+    );
+  });
+
+  it.each([
+    [
+      "after the task was done",
+      async () => {
+        await setupRun(dir, { agent: "claude", instrument: false });
+        instrumentEntryPoint();
+        return { agent: "claude", instrument: false, resume: true, traceTimeoutSec: 120 } as const;
+      },
+    ],
+    [
+      "in a repository that already called initialize()",
+      async () => {
+        instrumentEntryPoint();
+        return { agent: "claude", instrument: false, traceTimeoutSec: 120 } as const;
+      },
+    ],
+  ] as const)(
+    "calls a hand-over complete once the user stopped its wait, %s",
+    async (_, before) => {
+      // Something could send a trace, so the hand-over route got the full wait,
+      // and stopping it closed the run as complete. The route is still on the
+      // record, and read alone it called the run paused.
+      pythonService();
+      const flags = await before();
+      const said = await setupRun(dir, flags, { canPrompt: true, skipTraceWait: true });
+      expect(said).toContain("└  TraceRoot local setup complete — no trace seen yet.");
+
+      const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+      expect(completed?.status).toBe("pass");
+      expect(completed?.message).toMatch(/^Setup completed on .+ — no trace seen yet$/);
+      expect(nextQuestion()).toBe(
+        "A previous setup for this service already finished. Leave it as it is, or run setup again from the beginning?",
+      );
+    },
+  );
+
+  it("calls the hand-over paused again when a later resume pauses on it", async () => {
+    // The stopped wait belongs to the run that stopped it. A resume that finds
+    // nothing to wait for pauses as a hand-over does, and has to read as one.
+    pythonService();
+    instrumentEntryPoint();
+    await setupRun(
+      dir,
+      { agent: "claude", instrument: false, traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const said = await setupRun(dir, { agent: "claude", instrument: false, resume: true });
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("warn");
+    expect(completed?.message).toContain("Setup is paused");
+    expect(nextQuestion()).toBe(
+      "A previous setup for this service did not finish. It is waiting for the instrumentation it handed over. Continue from there?",
     );
   });
 
