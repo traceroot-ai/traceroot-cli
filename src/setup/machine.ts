@@ -47,7 +47,7 @@ import { ExitCode, type Writers } from "../output.js";
 import { bundledSkillDir } from "../skills/bundled.js";
 import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
-import { createActivityParser } from "./activity.js";
+import { createActivityParser, finalReply } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
@@ -3810,7 +3810,14 @@ const instrument: StageDefinition = {
         feed?.stopAndClear(wizardStepLine(`${adapter.displayName} finished.`));
       }
 
-      const reported = parseCompletion(afterEchoedTask(result.output, task));
+      // Claude Code's reply is inside its stream's closing event, as JSON,
+      // where the fence around the block cannot be matched (see `finalReply`).
+      // Any other agent's capture is its reply as text.
+      const reply =
+        invocation.activityFormat === "claude-stream-json"
+          ? finalReply(result.output)
+          : afterEchoedTask(result.output, task);
+      const reported = reply === null ? null : parseCompletion(reply);
       // An agent did run. Recorded positively rather than by clearing the
       // field, because a rerun without `--resume` still loads the previous
       // checkpoint: writing `"agent"` overwrites a hand-over an earlier run
