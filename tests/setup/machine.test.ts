@@ -5148,6 +5148,37 @@ describe("the report in Claude Code's stream", () => {
     expect(result.error).toBeNull();
   });
 
+  it("counts the agent's edit to the env file setup wrote the key into", async () => {
+    // The file is setup's only while it holds what setup wrote. Left out
+    // whatever it held, a line the agent added after setup's was not counted,
+    // and a run whose only edit was there read as one that changed nothing.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const env = join(dir, ".env");
+    const inner = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null })) } },
+    });
+    const runProcess: SetupDeps["runProcess"] = async (o) => {
+      if (o.program === "claude") {
+        writeFileSync(env, `${readFileSync(env, "utf8")}OTEL_SERVICE_NAME=api\n`);
+      }
+      return inner.run(o);
+    };
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual([".env"]);
+    expect(result.error).toBeNull();
+  });
+
   it("does not fail a run outside git whose report names no files", async () => {
     // `files_changed` as a string is a report of edits in the wrong shape, not
     // a report of none, and with no diff to disagree it failed this run.

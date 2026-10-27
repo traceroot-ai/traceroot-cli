@@ -562,9 +562,10 @@ const agentEvidenceAfterRun = new WeakMap<SetupContext, () => readonly string[]>
  * the root, which holds the report and the transcript, and the one beside the
  * credential, which holds the checkpoint and the CLI config; and the env file
  * `configure_repository` put the key in. That file only when this run wrote to
- * it, because a file that already held the key is the project's, and an edit
- * to it is the agent's. Setup adds no `.gitignore` lines outside `.traceroot/`,
- * so there is nothing else to leave out.
+ * it and it still holds what was written, because a file that already held the
+ * key is the project's, and an edit to it is the agent's, as is one made after
+ * this run's write. Setup adds no `.gitignore` lines outside `.traceroot/`, so
+ * there is nothing else to leave out.
  */
 function setupWrites(ctx: SetupContext, adapter: AgentAdapter): string[] {
   const env = wroteEnvKeys.get(ctx);
@@ -573,7 +574,9 @@ function setupWrites(ctx: SetupContext, adapter: AgentAdapter): string[] {
     adapter.getSkillInstallPath(ctx.root, SKILL_NAME),
     join(ctx.root, own),
     join(ctx.artifactDir, own),
-    ...(env !== undefined && (env.created || env.keys.length > 0) ? [env.path] : []),
+    ...(env !== undefined && env.after !== null && readIfPresent(env.path) === env.after
+      ? [env.path]
+      : []),
   ];
 }
 
