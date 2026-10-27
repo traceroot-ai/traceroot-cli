@@ -4146,6 +4146,38 @@ describe("stack and agent selection", () => {
     expect(launch?.args).toContain("Bash(npx:*)");
   });
 
+  for (const stack of ["python", "typescript"] as const) {
+    it(`permits the program a ${stack} server's one command starts with`, async () => {
+      // Step 6 hands a server one command that starts it, sends it a request
+      // and stops it. A program the launch does not allow is refused in a
+      // headless run, and the server then never sees its request.
+      if (stack === "python") {
+        pythonRepo();
+        mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+        writeFileSync(join(dir, ".venv", "bin", "python"), "");
+      } else {
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ dependencies: { express: "^4" } }),
+        );
+        writeFileSync(join(dir, "tsconfig.json"), "{}\n");
+        mkdirSync(join(dir, "src"), { recursive: true });
+        writeFileSync(join(dir, "src", "server.ts"), "export {};\n");
+      }
+      initGit();
+      const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+      const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: process.run });
+      const { ctx } = makeCtx({ flags: { agent: "claude" } });
+      await runSetupMachine(ctx, deps);
+
+      const launch = process.runs.find((run) => run.program === "claude");
+      expect(launch).toBeDefined();
+      const program = /\n(\S+) -[ce] '\n/.exec(launch?.stdin ?? "")?.[1];
+      expect(program).toBe(stack === "python" ? "./.venv/bin/python" : "node");
+      expect(launch?.args).toContain(`Bash(${program}:*)`);
+    });
+  }
+
   it("permits the check the task told the agent to run once", async () => {
     // The third command the task hands over in full. `pythonRepo` declares
     // pytest, which is what makes `detectStack` name the bare string `pytest`

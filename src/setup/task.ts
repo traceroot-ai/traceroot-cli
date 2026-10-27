@@ -1,5 +1,6 @@
 import { posix, relative, resolve } from "node:path";
 import { setupCommand } from "./invocation.js";
+import { AGENT_FLUSH_INTERVAL_SEC } from "./launch.js";
 import type { ResolvedSdk } from "./sdk.js";
 import { installCommand } from "./sdk.js";
 import type { DetectedService } from "./types.js";
@@ -402,6 +403,123 @@ export function taskPrograms(
   return [...programs];
 }
 
+/**
+ * The frameworks `detectStack` names whose application is a server: it runs
+ * until it is stopped, and the outermost span goes on a request handler, which
+ * runs only when a request arrives.
+ *
+ * Read off the labels detection already assigns rather than detected again.
+ * Running such an application "once", as the task asks of everything else,
+ * starts a process that never returns and sends nothing, so the trace wait ran
+ * its whole budget and then said the code path never ran.
+ */
+const SERVER_FRAMEWORKS: ReadonlySet<string> = new Set([
+  "next",
+  "nestjs",
+  "fastify",
+  "express",
+  "hono",
+  "koa",
+  "fastapi",
+  "django",
+  "flask",
+  "litestar",
+]);
+
+/** Whether a service on this framework only emits a trace when it is sent a request. */
+export function servesRequests(framework: string | null): boolean {
+  return framework !== null && SERVER_FRAMEWORKS.has(framework);
+}
+
+/**
+ * The one command that gets a trace out of a server: start it, send it one
+ * request, wait for the export, stop it.
+ *
+ * One command, because the parts do not work apart. The run line never
+ * returns, so nothing after it in the same command runs; a server started in
+ * the background is a second process the agent has to find and stop again;
+ * and the request needs a program, and `curl` is not one the agent may run. So
+ * the whole thing is a script for a program it may run: the run line's own
+ * interpreter for Python, which `taskPrograms` already permits, and `node`
+ * for the rest. Inline, because the task forbids creating files.
+ *
+ * The server gets its own process group and the whole group is stopped,
+ * because the run line is often a wrapper (`npx tsx`, `npm run dev`, a
+ * reloader) and stopping only the wrapper leaves the server holding its port.
+ * It also gets the short flush interval itself, so the three-second wait holds
+ * for an agent this CLI did not launch, which reads the same task from the
+ * task file. Every wait is bounded, so the command ends inside the two minutes
+ * the task asks the agent to allow it.
+ */
+function exerciseServerCommand(service: DetectedService, runLine: string): string {
+  const port = service.framework === "flask" ? 5000 : service.language === "python" ? 8000 : 3000;
+  const url = `"http://localhost:${port}/"`;
+  const where = "the port it listens on, and a route the outermost span wraps";
+  if (service.language === "python") {
+    return [
+      `${leadingProgram(runLine) ?? "python3"} -c '`,
+      "import os, signal, subprocess, sys, time, urllib.error, urllib.request",
+      `url = ${url}  # ${where}`,
+      "server = subprocess.Popen(",
+      `    [sys.executable, ${JSON.stringify(service.entryPoint ?? "<entry point>")}],`,
+      "    start_new_session=True,  # its own process group, so stopping it stops all of it",
+      `    env={**os.environ, "TRACEROOT_FLUSH_INTERVAL": "${AGENT_FLUSH_INTERVAL_SEC}"},  # export within a second`,
+      ")",
+      "signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))",
+      "direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy",
+      "status, deadline = 0, time.time() + 30",
+      "try:",
+      "    while not status and server.poll() is None and time.time() < deadline:",
+      "        try:",
+      "            status = direct.open(url, timeout=60).status",
+      "        except urllib.error.HTTPError as error:",
+      "            status = error.code",
+      "        except OSError:",
+      "            time.sleep(0.5)",
+      '    print("request status:", status or "no response", flush=True)',
+      "    time.sleep(3)",
+      "finally:",
+      "    for sig in (signal.SIGINT, signal.SIGKILL):",
+      "        try:",
+      "            os.killpg(server.pid, sig)",
+      "            server.wait(5)",
+      "        except (ProcessLookupError, subprocess.TimeoutExpired):",
+      "            pass",
+      "sys.exit(0 if 200 <= status < 400 else 1)",
+      "'",
+    ].join("\n");
+  }
+  return [
+    "node -e '",
+    'const { spawn } = require("node:child_process");',
+    `const url = ${url};  // ${where}`,
+    `const server = spawn(${JSON.stringify(runLine)}, {`,
+    "  shell: true,",
+    '  stdio: "inherit",',
+    "  detached: true,  // its own process group, so stopping it stops all of it",
+    `  env: { ...process.env, TRACEROOT_FLUSH_INTERVAL: "${AGENT_FLUSH_INTERVAL_SEC}" },  // export within a second`,
+    "});",
+    "const stop = (signal) => { try { process.kill(-server.pid, signal); } catch {} };",
+    'process.on("SIGTERM", () => { stop("SIGKILL"); process.exit(1); });',
+    "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+    "(async () => {",
+    "  let status = 0;",
+    "  const deadline = Date.now() + 30000;",
+    "  while (!status && server.exitCode === null && Date.now() < deadline) {",
+    "    try { status = (await fetch(url, { signal: AbortSignal.timeout(60000) })).status; }",
+    "    catch { await sleep(500); }",
+    "  }",
+    '  console.log("request status:", status || "no response");',
+    "  await sleep(3000);",
+    '  stop("SIGINT");',
+    "  await sleep(2000);",
+    '  stop("SIGKILL");',
+    "  process.exit(status >= 200 && status < 400 ? 0 : 1);",
+    "})();",
+    "'",
+  ].join("\n");
+}
+
 export function buildSetupTask(input: BuildSetupTaskInput): string {
   const { service, sdk, skillPath, verifyCommand, interactive } = input;
   const python = input.pythonInterpreter ?? null;
@@ -465,6 +583,9 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   // quoting hazard at all. Absolute is kept only when the interpreter lives
   // outside the tree, where a relative path would be worse.
   const runLine = serviceRunLine(service, input.root, python);
+  // A server is run differently, and only the run and "done" text says so: a
+  // short-lived script's task is exactly what it was.
+  const server = servesRequests(service.framework);
 
   const serviceFacts = bullet([
     `path: \`${service.path}\``,
@@ -483,7 +604,7 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
     // hole in the one fact that exists to save the agent from looking things
     // up, and it fills that hole by reading the directory and running the
     // application once to see if it guessed right.
-    `run it with: \`${runLine}\` — the whole command, worked out before you started. If it fails, read the error and adapt; do not go looking for the entry point, the interpreter or the env file first.`,
+    `run it with: \`${runLine}\` — the whole command, worked out before you started.${server ? " It starts a server, which does not exit on its own: step 6 gives the one command to run instead, which starts it, sends it one request and stops it." : ""} If it fails, read the error and adapt; do not go looking for the entry point, the interpreter or the env file first.`,
   ]);
 
   const existing =
@@ -499,6 +620,43 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
           "Extend what exists. Do not add a second initialization, a second exporter, or duplicate spans.",
         ].join("\n")
       : "";
+
+  // What step 6 asks of a server instead of one run. Its trace starts in a
+  // request handler, so starting it is not enough: something has to send it a
+  // request and then stop it, and `exerciseServerCommand` says why that is one
+  // command.
+  const serverRun = `Instrumenting the code does not emit anything; a **request** does. The framework detected here,
+${service.framework}, runs a server: it keeps running until it is stopped, and the outermost span is on a
+request handler, which runs only when a request arrives. So start it, send it **one** request to a
+route the outermost span wraps, wait a few seconds for the SDK to export, then stop it.
+
+Do all of that in one command, so nothing is left running when it ends. Run this, with \`url\` set to
+the port the server listens on and a route the outermost span wraps, and with the method and body
+that route expects if a plain \`GET\` is not it:
+
+\`\`\`bash
+${exerciseServerCommand(service, runLine)}
+\`\`\`
+
+${
+  service.language === "python"
+    ? `If \`${runLine}\` does not start the server by itself — an entry point that only defines the
+app, say — put the command the project starts it with in the list instead, through the same
+interpreter: \`[sys.executable, "-m", "uvicorn", "main:app"]\` or
+\`[sys.executable, "manage.py", "runserver"]\`.`
+    : `If \`${runLine}\` does not start the server by itself — an entry point that only defines the
+app, say, or a framework with its own command such as \`next dev\` — put the command the project
+starts it with in its place, such as \`"npm run dev"\`.`
+}
+
+If your shell tool takes a time limit, give this command two minutes: the request runs the real
+application, model calls included. It prints the request's status, and exits 0 only when that
+status is a success. Whatever the server prints as it is stopped, such as a \`KeyboardInterrupt\`,
+is the stop and not a failure. If the application exits on its own before it answers, it was not a
+server after all: that run is the one this step asks for, and done means it succeeded.
+
+The project's test suite is not a way to send that request: it runs with TraceRoot switched off, and
+the trace \`traceroot setup\` looks for is the one the application sends when it serves a request.`;
 
   // One run each, and the credentials-absent pass is deliberately absent.
   //
@@ -826,11 +984,15 @@ Never print, echo or cat the contents of these files.
 `
     : ""
 }
-Instrumenting the code does not emit anything; **running** it does. Execute the application, or the
+${
+  server
+    ? serverRun
+    : `Instrumenting the code does not emit anything; **running** it does. Execute the application, or the
 narrowest thing that exercises an instrumented path — an entry point that calls it, one function
 call with the real client — so the SDK sends a trace before you finish. The project's test suite is
 not one of those things: it runs with TraceRoot switched off, and the trace \`traceroot setup\` looks
-for is the one the application sends when it runs.
+for is the one the application sends when it runs.`
+}
 
 Do not skip this because a check in the previous step passed. A check that never touches an
 instrumented path proves the app still works and proves nothing about tracing. If nothing here
@@ -838,7 +1000,7 @@ runs the code, setup has nothing to verify and the run ends without a trace.
 
 ### 7. Definition of done
 
-Done means the code is instrumented and the application has **run once, successfully**. Stop there.
+Done means the code is instrumented and ${server ? "the one request in step 6 **succeeded**" : "the application has **run once, successfully**"}. Stop there.
 
 **There is no confirmation line to wait for.** The SDK does not announce the trace it sent — no
 trace id, no URL, nothing on stdout or stderr — so a run that exported a trace looks exactly like
