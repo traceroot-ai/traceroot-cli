@@ -605,8 +605,8 @@ function keySource(source: ResolvedAuth["credential"]["source"]): string {
  *
  * Named by where it came from, because "a key is configured" is not actionable
  * when the reader cannot see *which* key — and the places differ in how
- * surprising they are: a `.env` belongs to the repository the user is standing
- * in, while the config and credentials files belong to the machine.
+ * surprising they are: a `.env` and the config file belong to the directory the
+ * user is standing in, while the credentials file belongs to the machine.
  *
  * The credentials file is in here because `resolveAuth` reclassifies a
  * `tr_`-shaped value found in its session slot as an API key, source and all —
@@ -2569,7 +2569,8 @@ function holdsKey(candidate: string | undefined, key: string): boolean {
  * Every other source is the CLI's and not the application's. `flag` lasts for
  * one invocation. `env-file` is a file named for the CLI with `--env-file` and
  * may sit anywhere, including outside the repository. `config` and
- * `credentials-file` are the CLI's own stores under the user's home directory,
+ * `credentials-file` are the CLI's own stores, `.traceroot/config.json` in the
+ * working directory and the credentials file under the user's home directory,
  * which no SDK reads — so a `traceroot login` followed by `traceroot setup`
  * lands here. And `none` is a key typed at setup's own prompt, which until this
  * stage runs exists in no file the application could open.
@@ -2604,7 +2605,7 @@ const configureRepository: StageDefinition = {
     // `origin === "existing-config"` is not that claim. The fast path in
     // `acquire_project_key` stamps that origin on the user's own key whatever
     // its provenance, so a key pasted at the prompt, passed as `--api-key`, or
-    // read from the CLI's config in the home directory all arrive here looking
+    // read from the CLI's config in the working directory all arrive here looking
     // like a key already in the environment — and the stage that writes the
     // only file the application can read is skipped for all three. `setup` then
     // closes by telling the user to run an application that cannot
