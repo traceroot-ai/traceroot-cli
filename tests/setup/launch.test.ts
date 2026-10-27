@@ -1007,6 +1007,32 @@ describe("where the credential is allowed to appear", () => {
     expect(env.PATH).toBe("/usr/bin");
     expect(parentEnv.TRACEROOT_ENABLED).toBe("false");
   });
+
+  it("shortens the export delay for what the agent runs, and still strips what it stripped", () => {
+    // A server the agent stops within the SDK's default five seconds of its
+    // request loses its trace: the TypeScript SDK flushes only on `beforeExit`,
+    // which a signal never reaches. Set over an exported value, because the
+    // agent's own runs are the ones that have to export quickly.
+    const parentEnv: NodeJS.ProcessEnv = {
+      PATH: "/usr/bin",
+      TRACEROOT_ENABLED: "false",
+      TRACEROOT_FLUSH_INTERVAL: "30",
+    };
+    const env = buildAgentEnv({
+      parentEnv,
+      credential: makeSecret(KEY),
+      credentialFiles: ["/repo/.env"],
+      host: "https://api.example.test",
+    });
+
+    expect(env.TRACEROOT_FLUSH_INTERVAL).toBe("1");
+    expect("TRACEROOT_ENABLED" in env).toBe(false);
+    expect("TRACEROOT_API_KEY" in env).toBe(false);
+    expect(env.TRACEROOT_HOST_URL).toBe("https://api.example.test");
+    expect(env.PATH).toBe("/usr/bin");
+    // The agent's copy only: the user's own environment keeps its value.
+    expect(parentEnv.TRACEROOT_FLUSH_INTERVAL).toBe("30");
+  });
 });
 
 describe("an exported key that would beat the env file", () => {
