@@ -605,6 +605,22 @@ describe("completion parsing", () => {
     expect(parseCompletion("no block at all")).toBeNull();
   });
 
+  it("reads only an explicit empty list as no files changed", () => {
+    // Anything else names no files, which is not the same as naming none: read
+    // as "nothing changed", it failed a run that worked outside git.
+    const block = (body: string) => `\`\`\`json traceroot-setup-result\n${body}\n\`\`\``;
+    expect(parseCompletion(block('{"files_changed":[]}'))?.filesChanged).toEqual([]);
+    expect(parseCompletion(block('{"notes":"done"}'))?.filesChanged).toBeNull();
+    expect(parseCompletion(block('{"files_changed":"main.py"}'))?.filesChanged).toBeNull();
+    expect(parseCompletion(block('{"files_changed":null}'))?.filesChanged).toBeNull();
+    expect(
+      parseCompletion(block('{"files_changed":[{"path":"main.py"}]}'))?.filesChanged,
+    ).toBeNull();
+    expect(parseCompletion(block('{"files_changed":["main.py",3]}'))?.filesChanged).toEqual([
+      "main.py",
+    ]);
+  });
+
   describe("after the task Codex echoes", () => {
     const task = buildSetupTask({
       credentialFiles: [],

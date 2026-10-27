@@ -134,7 +134,8 @@ export interface InstrumentationResult {
    * report is a claim and `git status` is evidence.
    */
   reported: {
-    filesChanged: string[];
+    /** Null when the block names no files, which is not the same as none. */
+    filesChanged: string[] | null;
     sdkVersion: string | null;
     traceId: string | null;
     notes: string | null;

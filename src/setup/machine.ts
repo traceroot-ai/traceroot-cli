@@ -3947,6 +3947,7 @@ const instrument: StageDefinition = {
       // the right amount of editing may genuinely be none.
       const changedNothing =
         reported !== null &&
+        reported.filesChanged !== null &&
         reported.filesChanged.length === 0 &&
         observedChangedFiles.length === 0 &&
         ctx.stack?.existingInstrumentation.present !== true;
@@ -4013,13 +4014,14 @@ const instrument: StageDefinition = {
         // just above. Neither input is exotic: `reported` is null whenever the
         // parser finds no completion block in the agent's reply, and
         // `changedFiles` is empty in every repository that is not under git.
-        // So when the agent reported nothing, the service's own directory goes
+        // So when the agent named no files, the service's own directory goes
         // in, and a directory candidate is read as the same bounded source scan
         // a directory git reported already gets — not a tree walk.
+        const reportedFiles = reported?.filesChanged ?? null;
         const wiredIn = findTraceRootInitialization(ctx.root, service, [
-          ...(reported?.filesChanged ?? []),
+          ...(reportedFiles ?? []),
           ...observedChangedFiles,
-          ...(reported === null ? [service.path] : []),
+          ...(reportedFiles === null ? [service.path] : []),
         ]);
         if (wiredIn.kind === "absent") {
           throw new PausedSetupError({

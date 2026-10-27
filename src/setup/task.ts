@@ -876,14 +876,26 @@ Then, in prose: what you changed, how to run the app, and anything you could not
 
 /** What the agent claimed, when it emitted a parseable completion block. */
 export interface ParsedCompletion {
-  filesChanged: string[];
+  /** Null when the block names no files: see {@link asFileList}. */
+  filesChanged: string[] | null;
   sdkVersion: string | null;
   traceId: string | null;
   notes: string | null;
 }
 
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+/**
+ * The files the agent says it changed, or null when it did not say.
+ *
+ * Only an explicit empty list says nothing changed. A missing key, a string, or
+ * a list with no paths in it names no files, and reading that as "nothing" is
+ * what fails a run that worked: outside git there is no diff to disagree.
+ */
+function asFileList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const files = value.filter((v): v is string => typeof v === "string");
+  return files.length === 0 && value.length > 0 ? null : files;
 }
 
 function asStringOrNull(value: unknown): string | null {
@@ -927,7 +939,7 @@ export function parseCompletion(output: string): ParsedCompletion | null {
   }
   const obj = parsed as Record<string, unknown>;
   return {
-    filesChanged: asStringArray(obj.files_changed),
+    filesChanged: asFileList(obj.files_changed),
     sdkVersion: asStringOrNull(obj.sdk_version),
     traceId: asStringOrNull(obj.trace_id),
     notes: asStringOrNull(obj.notes),

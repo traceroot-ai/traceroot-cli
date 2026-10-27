@@ -5148,6 +5148,52 @@ describe("the report in Claude Code's stream", () => {
     expect(result.error).toBeNull();
   });
 
+  it("does not fail a run outside git whose report names no files", async () => {
+    // `files_changed` as a string is a report of edits in the wrong shape, not
+    // a report of none, and with no diff to disagree it failed this run.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      results: {
+        claude: { output: stream(reply({ files_changed: "app/server.py", trace_id: null })) },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.reported?.filesChanged).toBeNull();
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("verify_trace");
+  });
+
+  it("reads the service's own folder when the report names no files", async () => {
+    // As for an agent with no report at all: the initialization is one import
+    // away, and only the service's folder has it.
+    pythonRepo();
+    writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
+    writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ trace_id: null, notes: "wired it up" })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
   it("reads the report on a run that worked, and carries on as before", async () => {
     pythonRepo();
     const process = fakeRunProcess({
