@@ -397,6 +397,17 @@ describe("writing the report", () => {
     );
   });
 
+  it("does not call a CLI config git-ignored outside a `.traceroot/` directory", () => {
+    // `TRACEROOT_CONFIG_PATH` can name a file anywhere in the repository, and
+    // the config's writer drops its `.gitignore` only into a `.traceroot/`.
+    const text = renderSetupReport(ctx({ configFile: "/repo/secrets/config.json" }), NOW, NO_FILE);
+
+    expect(text).toContain(
+      "| `secrets/config.json` | The CLI's own credential. Setup did not git-ignore it; keep it out of commits. |",
+    );
+    expect(text).not.toContain("Git-ignored");
+  });
+
   it("git-ignores the root's `.traceroot/` when the report is what creates it", () => {
     // Run from the service directory, the checkpoint and the config go beside
     // the service, and the report is the first thing written in the root's own.

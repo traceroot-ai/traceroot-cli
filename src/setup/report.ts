@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import { writeFileSecure } from "../util/secureFile.js";
 import { ensureGitignore } from "./artifacts.js";
@@ -93,12 +93,19 @@ function skillRow(root: string, agentId: string): string {
  * Not a constant: the config is written in the directory setup was run from,
  * which in a monorepo is the service's, and `TRACEROOT_CONFIG_PATH` can put it
  * outside the repository altogether.
+ *
+ * "Git-ignored" only in a `.traceroot/` directory, the one place `writeConfig`
+ * drops its `.gitignore`. `TRACEROOT_CONFIG_PATH` can name any file, and one
+ * elsewhere in the repository is ignored only if the user's own rules say so.
  */
 function configRow(root: string, target: string): string {
   const path = `\`${cell(slashPath(displaySkillPath(root, target)))}\``;
-  return isInsideDirectory(root, target)
+  if (!isInsideDirectory(root, target)) {
+    return `| ${path} | The CLI's own credential, outside this repository. |`;
+  }
+  return basename(dirname(target)) === ".traceroot"
     ? `| ${path} | The CLI's own credential. Git-ignored. |`
-    : `| ${path} | The CLI's own credential, outside this repository. |`;
+    : `| ${path} | The CLI's own credential. Setup did not git-ignore it; keep it out of commits. |`;
 }
 
 /**
