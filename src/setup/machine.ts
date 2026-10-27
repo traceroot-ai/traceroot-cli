@@ -1011,11 +1011,28 @@ function storeSessionCredential(
  * How a sign-in line names the account: with the email when one is known, and
  * without pretending to one when it is not.
  *
- * One spelling for the three lines that announce a sign-in, because a user
- * reading two of them in the same run is comparing accounts.
+ * One spelling for the lines that announce a sign-in, because a user reading
+ * two of them in the same run is comparing accounts.
  */
 function signedInAs(email: string | undefined): string {
   return email === undefined ? "Signed in" : `Signed in as ${wizardValue(email)}`;
+}
+
+/**
+ * The `email` claim of the access token a provider already holds.
+ *
+ * `whoami` is API-key-only server-side, so the token is the only place a user
+ * credential says who it belongs to. Called after a request has gone out on
+ * the same provider, which caches the token it minted for it, so this sends
+ * nothing. Best-effort: a failure costs a display name, not a run.
+ */
+async function accessTokenEmail(tokenProvider: TokenProvider): Promise<string | undefined> {
+  try {
+    const claimed = decodeJwtClaims(await tokenProvider.getAccessToken())?.email;
+    return typeof claimed === "string" && claimed !== "" ? claimed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1315,9 +1332,27 @@ async function userCredentialSignIn(
     // otherwise be a bare "Which project should receive these traces?" — a
     // question with nothing above it saying which section of the run it belongs
     // to.
-    wizardNote(ctx.writers, [wizardEmphasis("Signed in as a returning user. No browser needed.")], {
-      settled: true,
-    });
+    //
+    // Named, because a saved sign-in outlives the browser's: signing the web
+    // app out of one account and into another leaves this one in place, and a
+    // rerun that only said "a returning user" kept using it unannounced. The
+    // listing above went out on this provider, so its token is already held.
+    const email = (await accessTokenEmail(tokenProvider)) ?? (stored.email || undefined);
+    // A session that is not on disk came from TRACEROOT_TOKEN, which is the
+    // environment's to change.
+    const aside = switchAccountAside(options.persisted === false ? "env" : "credentials-file");
+    wizardNote(
+      ctx.writers,
+      [
+        wizardEmphasis(
+          email === undefined
+            ? "Signed in as a returning user. No browser needed."
+            : `${signedInAs(email)}. No browser needed.`,
+        ),
+        ...(aside.length === 0 ? [] : ["", ...aside]),
+      ],
+      { settled: true },
+    );
   }
 
   // What the repository already reports to, if anything: read before the

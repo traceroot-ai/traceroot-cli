@@ -25,6 +25,7 @@ import {
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
 import { redeemHandoff } from "../../src/auth/handoff.js";
+import { createTokenProvider } from "../../src/auth/token.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
 import type { ResolvedAuth } from "../../src/config/resolve.js";
@@ -1092,6 +1093,78 @@ describe("authentication", () => {
       });
       return { deps, ...makeCtx({ canPrompt: true, flags: { agent: "claude" } }) };
     }
+
+    it("names a saved sign-in's account from the token the run already holds", async () => {
+      // The saved email is stale on purpose: the token is the server's answer
+      // for this session now, so it wins.
+      const run = rerun({
+        stored: { session_token: "saved-session-token", email: "old@example.test" },
+      });
+      const fake = createFakeFetch(() =>
+        jsonResponse({ accessToken: jwtWithClaims({ email: "a@example.test" }), expiresIn: 600 }),
+      );
+      run.deps.createTokenProvider = (opts) =>
+        createTokenProvider({ ...opts, fetchImpl: fake.fetchImpl });
+      // Asks for a token before the listing, as the real setup client does.
+      const createSetupApi = run.deps.createSetupApi;
+      run.deps.createSetupApi = (opts) => {
+        const inner = createSetupApi(opts);
+        return {
+          ...inner,
+          listProjects: async (workspaceId) => {
+            await opts.tokenProvider?.getAccessToken();
+            return inner.listProjects(workspaceId);
+          },
+        };
+      };
+
+      const result = await runSetupMachine(run.ctx, run.deps);
+
+      expect(result.error).toBeNull();
+      expect(said(run.err.data)).toContain(
+        `Signed in as a@example.test. No browser needed. ${NOT_YOU}`,
+      );
+      // One mint, the listing's: the name was read off the token it left.
+      expect(fake.calls.map((call) => call.url)).toEqual([
+        "https://api.example.test/api/cli/token",
+      ]);
+    });
+
+    it("falls back to the email saved with the sign-in when the token names nobody", async () => {
+      // `makeDeps`' token is not a JWT, so it carries no claim to read.
+      const run = rerun({
+        stored: { session_token: "saved-session-token", email: "saved@example.test" },
+      });
+
+      expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
+      expect(said(run.err.data)).toContain(
+        `Signed in as saved@example.test. No browser needed. ${NOT_YOU}`,
+      );
+    });
+
+    it("keeps the returning-user line when nothing names the account", async () => {
+      const run = rerun({ stored: { session_token: "saved-session-token" } });
+
+      expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
+      expect(said(run.err.data)).toContain(
+        `Signed in as a returning user. No browser needed. ${NOT_YOU}`,
+      );
+    });
+
+    it("does not offer login for a session from TRACEROOT_TOKEN", async () => {
+      // Nothing on disk: the environment's token is the session, and the
+      // environment is where it changes.
+      const run = rerun({
+        auth: {
+          ...authEmpty(),
+          credential: { kind: "session", value: "env-session-token", source: "env" },
+        },
+      });
+
+      expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
+      expect(said(run.err.data)).toContain("Signed in as a returning user. No browser needed.");
+      expect(said(run.err.data)).not.toContain("Not you?");
+    });
 
     it("says where a configured key came from, and how to sign in as someone else", async () => {
       const cases: Array<[ResolvedAuth["credential"]["source"], string, string | undefined]> = [
