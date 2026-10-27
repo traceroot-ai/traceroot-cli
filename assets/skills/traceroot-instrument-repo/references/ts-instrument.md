@@ -70,7 +70,7 @@ TraceRoot.initialize({
 Use `observe()` to wrap functions that represent meaningful steps: agent entrypoints, tool calls, orchestration logic.
 
 ```typescript
-import { observe } from '@traceroot-ai/traceroot';
+import { observe, updateCurrentSpan } from '@traceroot-ai/traceroot';
 
 // Agent entrypoint
 const result = await observe({ name: 'agent.run', type: 'agent' }, async () => {
@@ -84,8 +84,11 @@ const docs = await observe({ name: 'search_tool', type: 'tool' }, async () => {
 
 // Generic span with input recorded
 const answer = await observe(
-  { name: 'process_step', type: 'span', input: { query } },
-  async () => await processQuery(query),
+  { name: 'process_step', type: 'span' },
+  async () => {
+    updateCurrentSpan({ input: { query } });
+    return await processQuery(query);
+  },
 );
 ```
 
@@ -95,7 +98,6 @@ const answer = await observe(
 |--------|------|---------|-------------|
 | `name` | `string` | `fn.name` or `'anonymous'` | Span name shown in the UI |
 | `type` | `string` | `'span'` | `'span'`, `'tool'`, `'agent'`, or `'llm'` |
-| `input` | `unknown` | — | Input data to record on the span |
 | `metadata` | `object` | — | Static metadata to attach |
 | `tags` | `string[]` | — | Tags for filtering |
 
