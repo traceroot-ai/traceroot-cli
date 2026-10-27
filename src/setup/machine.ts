@@ -3976,6 +3976,31 @@ const instrument: StageDefinition = {
         reported.filesChanged.length === 0 &&
         observedChangedFiles.length === 0 &&
         ctx.stack?.existingInstrumentation.present !== true;
+      // Unless setup left the service for the agent to find. There, stopping
+      // without an edit is what the task tells it to do when it cannot tell
+      // which service the user meant, and its notes list the candidates.
+      // `--resume` would hand it the same choice again, so the way out is
+      // naming the service.
+      if (changedNothing && service.agentMustIdentify === true) {
+        throw new PausedSetupError({
+          stage: "instrument",
+          code: "AGENT_FAILED",
+          message: [
+            `${adapter.displayName} finished without changing any files, so no service is instrumented.`,
+            reported.notes === null ? null : `It reported: ${oneLine(reported.notes)}`,
+          ]
+            .filter((part) => part !== null)
+            .join(" "),
+          remedy: [
+            "Setup left the agent to find the service, and it stops without editing when it cannot tell which one you meant.",
+            ...agentEvidence(),
+            "Rerun setup on the service you mean:",
+            `  ${setupCommand()} --service <path>`,
+            "Or write the task out and run it yourself:",
+            `  ${setupCommand()} --no-instrument`,
+          ].join("\n"),
+        });
+      }
       if (changedNothing) {
         throw new PausedSetupError({
           stage: "instrument",

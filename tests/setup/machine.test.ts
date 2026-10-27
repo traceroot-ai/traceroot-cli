@@ -5252,6 +5252,43 @@ describe("the report in Claude Code's stream", () => {
     expect(quoted).toBe(`${"a".repeat(150)} ${"b".repeat(48)}…`);
   });
 
+  it("sends an agent that could not pick the service to --service, not --resume", async () => {
+    // Two services and no answer from the user: setup leaves the choice to the
+    // agent, which stops and lists the candidates when it cannot tell. A
+    // `--resume` hands it the same choice again.
+    for (const name of ["svc-a", "svc-b"]) {
+      mkdirSync(join(dir, name), { recursive: true });
+      writeFileSync(join(dir, name, "requirements.txt"), "fastapi\n");
+      writeFileSync(join(dir, name, "main.py"), "print(1)\n");
+    }
+    const notes = "Two candidates: svc-a (FastAPI) and svc-b (FastAPI). I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.selected?.agentMustIdentify).toBe(true);
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    const [message] = plain(result.error?.message ?? "").split("\n\n");
+    expect(message).toBe(
+      `Claude Code finished without changing any files, so no service is instrumented. It reported: ${notes}`,
+    );
+    const remedy = plain(result.error?.remedy ?? "");
+    expect(remedy).toContain(
+      "Rerun setup on the service you mean:\n  traceroot setup --service <path>",
+    );
+    expect(remedy).not.toContain("--resume");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
   it("reads the report on a run that worked, and carries on as before", async () => {
     pythonRepo();
     const process = fakeRunProcess({
