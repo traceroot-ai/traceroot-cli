@@ -1304,6 +1304,29 @@ describe("authentication", () => {
     );
   });
 
+  // `--auth-host` and TRACEROOT_AUTH_URL: the two ways a user names the web app.
+  for (const source of ["flag", "env"] as const) {
+    it(`doesn't offer --auth-host when the auth host was given (${source}) as the API host itself`, async () => {
+      pythonRepo();
+      const asked: string[] = [];
+      const deps = makeDeps({
+        auth: { ...selfHosted(), authHost: { value: "http://localhost:8000", source } },
+        runDeviceFlow: noDeviceEndpoint(asked),
+      });
+      const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(asked).toEqual(["http://localhost:8000/api/auth/device/code"]);
+      expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
+      expect(result.error?.message).toContain(
+        "Browser sign-in is not available at http://localhost:8000 yet.",
+      );
+      // The user already named the web app's origin; that one is the answer.
+      expect(result.error?.message).not.toContain("--auth-host");
+    });
+  }
+
   /**
    * The real device flow, against an auth host that issues a code and answers
    * every poll with `poll`. Real rather than a thrown stand-in, so what is

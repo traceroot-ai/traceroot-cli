@@ -863,11 +863,7 @@ const LOCAL_HOST_CANDIDATES = ["http://localhost:8000", "http://localhost:3000"]
  * with it. TraceRoot Cloud serves both from one origin, so it is not offered
  * for the default host.
  */
-async function signInFallbackHint(
-  host: string,
-  authHost: string,
-  deps: SetupDeps,
-): Promise<string> {
+async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string> {
   const lines: string[] = [];
 
   if (host === DEFAULT_HOST) {
@@ -883,7 +879,10 @@ async function signInFallbackHint(
     }
   }
 
-  if (authHost === host && host !== DEFAULT_HOST) {
+  // Asked of the source, not by comparing hosts: an auth host given as the API
+  // host itself was still given, and suggesting one would be wrong.
+  const authHostSource = deps.resolvedAuth.authHost.source;
+  if ((authHostSource === "default" || authHostSource === "none") && host !== DEFAULT_HOST) {
     lines.push(
       "If the web app is on a different origin from the API, sign in there with --auth-host:",
       `  ${setupCommand()} --host ${host} --auth-host <web app origin>`,
@@ -1148,7 +1147,7 @@ async function browserSignIn(
       throw backendUnsupported(
         "authenticate",
         "Browser sign-in",
-        await signInFallbackHint(host, authHost, deps),
+        await signInFallbackHint(host, deps),
         authHost,
       );
     }
