@@ -1248,7 +1248,7 @@ async function userCredentialSignIn(
       // this case.
       if (options.persisted !== false) {
         deps.deleteCredential(host);
-        wizardWarn(ctx, "the saved TraceRoot sign-in has expired; signing in again");
+        wizardWarn(ctx, "the saved TraceRoot sign-in has expired or was revoked; signing in again");
       } else {
         wizardWarn(ctx, "the configured TraceRoot token was rejected; signing in again");
       }

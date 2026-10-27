@@ -1051,7 +1051,8 @@ describe("authentication", () => {
     // A credential known not to work is forgotten, so later runs do not waste
     // a round trip rediscovering that.
     expect(cleared).toEqual(["https://api.example.test"]);
-    expect(err.data).toContain("expired");
+    // The server answers a revoked session and an expired one alike.
+    expect(plain(err.data)).toContain("the saved TraceRoot sign-in has expired or was revoked");
   });
 
   it("retries with a dated name when this repository already has a key", async () => {
@@ -2770,7 +2771,7 @@ describe("a repository that already reports to a project", () => {
     expect(result.error).toBeNull();
     expect(cleared).toEqual(["https://api.example.test"]);
     expect(plain(each.err.data)).toContain(
-      "the saved TraceRoot sign-in has expired; signing in again",
+      "the saved TraceRoot sign-in has expired or was revoked; signing in again",
     );
     expect(each.ctx.session?.via).toBe("user-credential");
   });
