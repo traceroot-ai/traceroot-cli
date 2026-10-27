@@ -537,6 +537,23 @@ async function confirmDirtyWorktree(
 const baselineChanges = new WeakMap<SetupContext, string[]>();
 
 /**
+ * The instrument stage's `agentEvidence`, for a trace wait that times out
+ * after the agent this run launched.
+ *
+ * The timeout is where a run ends up when the agent stopped short in a way none
+ * of the stage's checks could see: it exited 0, and nothing in its report, the
+ * diff or the entry point showed it. The stage kept nothing, because nothing
+ * there failed, and the trace the agent was told to send is the first thing
+ * found missing. Its output is then the only account of why.
+ *
+ * Kept by context, like the baseline above, and never on the checkpoint: the
+ * output belongs to this process's run of the agent. A `--resume` that
+ * restores the stage launched nothing, so its timeout has no transcript to
+ * keep.
+ */
+const agentEvidenceAfterRun = new WeakMap<SetupContext, () => readonly string[]>();
+
+/**
  * Whether anything can still send this run a trace, which is what decides how
  * long `verify_trace` waits for one.
  *
@@ -3383,6 +3400,8 @@ function oneLine(note: string, max = 200): string {
  * agent can end this stage with the cause in its own output and nowhere else —
  * it exited non-zero, it reported no edits, the service still has no
  * initialization in it, or the SDK it was told to install cannot be imported.
+ * And from one failure after it: the trace wait timing out, when this run's
+ * agent is what came before it (see {@link agentEvidenceAfterRun}).
  *
  * The screen is not the fallback for any of them. The activity feed is a window
  * onto the last few tool calls, it has already been cleared by the time the
@@ -3837,7 +3856,8 @@ const instrument: StageDefinition = {
       // Called from each failure below rather than once from here, which is
       // what keeps the other half of `keepAgentOutput`'s contract true: a run
       // that worked writes no transcript, because nothing on that path calls
-      // it. The arguments are the same at all four, so they are written once.
+      // it. The arguments are the same at all four, so they are written once,
+      // and the trace wait's timeout reuses them.
       const agentEvidence = (): readonly string[] =>
         keepAgentOutput({
           root: ctx.root,
@@ -4028,6 +4048,9 @@ const instrument: StageDefinition = {
         });
       }
 
+      // Handed on uncalled, so a run that worked still writes no transcript:
+      // only the trace wait timing out calls it.
+      agentEvidenceAfterRun.set(ctx, agentEvidence);
       return "ok";
     } finally {
       // The staging directory never lives in the repository, so a failed run
@@ -4375,6 +4398,8 @@ const verifyTrace: StageDefinition = {
         message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}`,
         remedy: [
           "The most common cause is that the instrumented code path never ran.",
+          // Nothing when this process launched no agent before the wait.
+          ...(agentEvidenceAfterRun.get(ctx)?.() ?? []),
           "Run your application once, then:",
           `  ${setupCommand()} --resume`,
           "To investigate:",

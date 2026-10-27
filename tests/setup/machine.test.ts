@@ -5382,6 +5382,85 @@ describe("the agent's own account of a failed run", () => {
     expect(written).not.toContain(key);
     expect(written).toContain("<redacted>");
   });
+
+  it("keeps the output of an agent whose run sent no trace", async () => {
+    // Exit 0, the entry point edited, a report of the edit: every check in the
+    // stage passes, and the first thing found wrong is the trace that never
+    // came. Whatever the agent ran, or stopped short of running, is in its
+    // output and nowhere else.
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: [
+            '{"type":"system","subtype":"init","tools":["Read","Edit","Write","Bash"]}',
+            '{"type":"user","message":"Bash(python main.py) was denied"}',
+            completion({ files_changed: ["main.py"], trace_id: null }),
+          ].join("\n"),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(transcript()).toContain("was denied");
+    const remedy = plain(result.error?.remedy ?? "");
+    expect(remedy).toContain(
+      `What Claude Code printed is in ${AGENT_OUTPUT_PATH} — the only record of what it tried, including anything it was refused.`,
+    );
+    expect(remedy).toContain(
+      "It can quote your repository's files, secrets included, so check it before you share it.",
+    );
+    // Beside the cause it bears on, and ahead of the instructions to rerun.
+    expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeGreaterThan(remedy.indexOf("never ran"));
+    expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeLessThan(remedy.indexOf("--resume"));
+  });
+
+  it("keeps nothing on a timeout when this run launched no agent", async () => {
+    // A resume restores the stage and runs nothing, so there is no output of
+    // this run's to keep, and the remedy must not name a file from another run.
+    pythonRepo();
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.completedStages.push(
+      "precheck",
+      "authenticate",
+      "select_context",
+      "acquire_project_key",
+      "configure_repository",
+      "detect_stack",
+      "select_agent",
+      "install_agent_context",
+      "instrument",
+    );
+    previous.instrumentHandover = "agent";
+    writeCheckpoint(dir, previous);
+    const process = fakeRunProcess({
+      results: { claude: { output: completion({ files_changed: ["main.py"], trace_id: null }) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(transcript()).toBeNull();
+    expect(plain(result.error?.remedy ?? "")).not.toContain(AGENT_OUTPUT_PATH);
+  });
 });
 
 describe("resume and rerun", () => {
