@@ -1012,7 +1012,10 @@ describe("getting the credential setup wrote into the application", () => {
     credentialEnvFile?: string | null;
   }) =>
     buildSetupTask({
-      credentialFiles: [],
+      // As setup builds it: a credential file the task names is one the launch
+      // keeps the key out of the environment for.
+      credentialFiles:
+        input.credentialEnvFile == null ? [] : [join("/repo/svc", input.credentialEnvFile)],
       root: "/repo",
       service: {
         path: "svc",
@@ -1060,6 +1063,8 @@ describe("getting the credential setup wrote into the application", () => {
     expect(rendered).toContain(
       "how the key reaches the SDK — in this run, and in every run after it",
     );
+    expect(rendered).toContain("`TRACEROOT_API_KEY` is **not** in your environment");
+    expect(rendered).not.toContain("already set in your environment");
     expect(rendered).not.toContain("**your** environment");
   });
 

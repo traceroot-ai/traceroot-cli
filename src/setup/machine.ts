@@ -3117,8 +3117,9 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
 /**
  * "Run it in Codex", or — when there is no agent to name — a sentence that says
  * the task works anywhere rather than dead-ending on an agent the user has not
- * got. `subject` is whatever reads best where it is used: "it" straight after
- * the line that named the file, the path itself where nothing has.
+ * got. `task` is the task file's path, and `named` whether the line before has
+ * just named it: "it" reads best straight after that line, the path itself
+ * where nothing has.
  *
  * `generic` is no agent to name: it is the registry's entry for "no particular
  * agent", and its display name — "Agent (generic)" — is a category rather than
@@ -3130,18 +3131,22 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
  * That includes the directory, for a service below the repository root. The
  * task's paths and commands are written from the service, which is where setup
  * starts its own agent; an agent the user opens starts wherever they open it.
- * Named from the root, like the task file's own path beside it.
+ * The directory is named from the root, where the user ran setup. The task is
+ * named from the directory, where the agent they open looks for it — so by its
+ * path even after a line that named it, since that line named it from the root.
  */
-export function runTaskSentence(ctx: SetupContext, subject: string): string {
+export function runTaskSentence(ctx: SetupContext, task: string, named: boolean): string {
   const agent = ctx.agent;
   const generic = agent === undefined || agent.id === "generic";
   const service = ctx.stack?.selected?.path ?? ".";
   if (service !== ".") {
     const dir = `${service}/`;
+    const subject = relative(join(ctx.root, service), task);
     return generic
       ? `No coding agent is set up here, but the task is self-contained — open whichever agent you use in ${dir} and run ${subject} there`
       : `Open ${agent.displayName} in ${dir} and run ${subject} there`;
   }
+  const subject = named ? "it" : displaySkillPath(ctx.root, task);
   return generic
     ? `No coding agent is set up here, but the task is self-contained — run ${subject} in whichever agent you use`
     : `Run ${subject} in ${agent.displayName}`;
@@ -3625,7 +3630,7 @@ const instrument: StageDefinition = {
       recordHandover(ctx, agent.id, "task-file");
       wizardLine(
         ctx,
-        `\nWrote the instrumentation task to ${displaySkillPath(ctx.root, promptPath)}.\n${runTaskSentence(ctx, "it")}, then rerun \`${setupCommand()} --resume\`.`,
+        `\nWrote the instrumentation task to ${displaySkillPath(ctx.root, promptPath)}.\n${runTaskSentence(ctx, promptPath, true)}, then rerun \`${setupCommand()} --resume\`.`,
       );
       return "skipped";
     }

@@ -6541,9 +6541,12 @@ describe("who the instrumentation task is written for", () => {
         expect(said).toContain("Run it in Claude Code, then rerun");
       } else {
         // The task's commands and paths are relative to `api/`, and the user
-        // ran setup from the root.
+        // ran setup from the root. The task file is at the root, so the agent
+        // they open in `api/` is pointed at it from there.
         expect(task).toContain("Work from `api`");
-        expect(said).toContain("Open Claude Code in api/ and run it there, then rerun");
+        expect(said).toContain(
+          `Open Claude Code in api/ and run ${join("..", ".traceroot", "prompts", "setup-instrument.md")} there, then rerun`,
+        );
       }
     });
 
