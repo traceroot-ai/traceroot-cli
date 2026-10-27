@@ -381,6 +381,85 @@ describe("running a server so it sends its trace", () => {
     }
   });
 
+  it("keeps a `'` in the entry point's path inside the quotes", () => {
+    // JSON leaves a `'` as it is, so a path with one ended the single-quoted
+    // script partway through. Written `\u0027`, it still reads back as the path.
+    const literal = /"(?:[^"\\]|\\.)*"/.source;
+    const ts = serverCommand(
+      task({
+        service: service({
+          language: "typescript",
+          framework: "express",
+          entryPoint: "src/it's.ts",
+        }),
+      }),
+    );
+    const py = serverCommand(
+      task({ service: service({ framework: "fastapi", entryPoint: "it's.py" }) }),
+    );
+    for (const command of [ts, py]) {
+      expect(command.slice(command.indexOf("'") + 1, -1)).not.toContain("'");
+    }
+    const spawned = new RegExp(`spawn\\((${literal}), \\{`).exec(ts)?.[1];
+    expect(JSON.parse(spawned as string)).toBe("npx tsx src/it's.ts");
+    const started = new RegExp(`cmd = \\[sys\\.executable, (${literal})\\]`).exec(py)?.[1];
+    expect(JSON.parse(started as string)).toBe("it's.py");
+  });
+
+  it("stops the server when the command itself is interrupted", () => {
+    // The server is detached, so a Ctrl-C reaches only the command. Ended by it
+    // before stopping the group, the command left the server on its port.
+    const ts = serverCommand(
+      task({
+        service: service({
+          language: "typescript",
+          framework: "express",
+          entryPoint: "src/server.ts",
+        }),
+      }),
+    );
+    expect(ts).toContain(
+      'for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stop("SIGKILL"); process.exit(1); });',
+    );
+    // Python turns a Ctrl-C into `KeyboardInterrupt`, which runs the `finally`
+    // that stops the group, and SIGTERM into an exit that runs it too.
+    const py = serverCommand(task({ service: service({ framework: "fastapi" }) }));
+    expect(py).toContain("signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))");
+    expect(py).toMatch(
+      /\\ntry:\\n {4}while .*\\nfinally:\\n {4}for sig in \(signal\.SIGINT, signal\.SIGKILL\)/,
+    );
+  });
+
+  it("exits as the application did when it exits before it answers", () => {
+    // Detection reads the manifest, so a script that depends on a server
+    // framework gets this command. Its one run is the job, and the task says
+    // so; exiting 1 with "no answer" told the agent a clean run had failed.
+    const text = task({
+      service: service({
+        language: "typescript",
+        framework: "express",
+        entryPoint: "src/server.ts",
+      }),
+    });
+    const ts = serverCommand(text);
+    expect(ts).toContain("const exited = status ? null : server.exitCode;");
+    expect(ts).toContain(
+      '"none, the application exited with code " + exited + " before it answered"',
+    );
+    expect(ts).toContain(
+      "process.exit([2, 3].includes(Math.floor(status / 100)) || exited === 0 ? 0 : 1);",
+    );
+    const py = serverCommand(task({ service: service({ framework: "fastapi" }) }));
+    expect(py).toContain("\\n    exited = None if status else server.poll()\\n");
+    expect(py).toContain(
+      '\\"none, the application exited with code \\" + str(exited) + \\" before it answered\\"',
+    );
+    expect(py).toContain("sys.exit(0 if 200 <= status < 400 or exited == 0 else 1)");
+    expect(text).toContain(
+      "The command then prints the application's\nexit code instead of a status and exits 0 only if that code is 0, so done means it exited 0.",
+    );
+  });
+
   it("leaves a short-lived script's task exactly as it was", () => {
     // Detection names more than servers. A script, an agent framework or no
     // framework at all keeps today's text byte for byte, in every place the

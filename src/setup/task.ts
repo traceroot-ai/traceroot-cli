@@ -457,7 +457,12 @@ export function servesRequests(framework: string | null): boolean {
  * for an agent this CLI did not launch, which reads the same task from the
  * task file. Every wait is bounded, so the command ends inside the two minutes
  * the task asks the agent to allow it, and a server that is listening within a
- * few seconds is done in well under ten.
+ * few seconds is done in well under ten. A Ctrl-C or a SIGTERM that ends the
+ * command stops the group first, or the server outlives it on its port.
+ *
+ * An application that exits before it answers was a script after all, whose
+ * one run is the job, so the command then exits 0 only if the application did:
+ * its exit code means done in both cases.
  */
 function exerciseServerCommand(service: DetectedService, runLine: string): string {
   const port = service.framework === "flask" ? 5000 : service.language === "python" ? 8000 : 3000;
@@ -469,7 +474,7 @@ function exerciseServerCommand(service: DetectedService, runLine: string): strin
       "server = subprocess.Popen(cmd, start_new_session=True, env=env)",
       "signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))",
       "direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))",
-      "status, deadline = 0, time.time() + 30",
+      "status, exited, deadline = 0, None, time.time() + 30",
       "try:",
       "    while not status and server.poll() is None and time.time() < deadline:",
       "        try:",
@@ -478,7 +483,8 @@ function exerciseServerCommand(service: DetectedService, runLine: string): strin
       "            status = error.code",
       "        except OSError:",
       "            time.sleep(0.5)",
-      '    print("request status:", status or "no answer from " + url + " in 30 s", flush=True)',
+      "    exited = None if status else server.poll()",
+      '    print("request status:", status or ("no answer from " + url + " in 30 s" if exited is None else "none, the application exited with code " + str(exited) + " before it answered"), flush=True)',
       "    time.sleep(2)",
       "finally:",
       "    for sig in (signal.SIGINT, signal.SIGKILL):",
@@ -487,23 +493,22 @@ function exerciseServerCommand(service: DetectedService, runLine: string): strin
       "            server.wait(5)",
       "        except (ProcessLookupError, subprocess.TimeoutExpired):",
       "            pass",
-      "sys.exit(0 if 200 <= status < 400 else 1)",
+      "sys.exit(0 if 200 <= status < 400 or exited == 0 else 1)",
     ].join("\n");
     return `${leadingProgram(runLine) ?? "python3"} -c '${[
       "import os, sys",
       `url = ${url}`,
-      `cmd = [sys.executable, ${JSON.stringify(service.entryPoint ?? "<entry point>")}]`,
+      `cmd = [sys.executable, ${scriptLiteral(service.entryPoint ?? "<entry point>")}]`,
       `env = {**os.environ, "TRACEROOT_FLUSH_INTERVAL": "${interval}"}`,
-      // A JSON string is a valid Python string literal: `\n` and `\"` escapes.
-      `exec(${JSON.stringify(machinery)})`,
+      `exec(${scriptLiteral(machinery)})`,
     ].join("; ")}'`;
   }
   return `node -e '${[
     'const { spawn } = require("node:child_process");',
     `const url = ${url};`,
-    `const server = spawn(${JSON.stringify(runLine)}, { shell: true, stdio: "inherit", detached: true, env: { ...process.env, TRACEROOT_FLUSH_INTERVAL: "${interval}" } });`,
+    `const server = spawn(${scriptLiteral(runLine)}, { shell: true, stdio: "inherit", detached: true, env: { ...process.env, TRACEROOT_FLUSH_INTERVAL: "${interval}" } });`,
     "const stop = (signal) => { try { process.kill(-server.pid, signal); } catch {} };",
-    'process.on("SIGTERM", () => { stop("SIGKILL"); process.exit(1); });',
+    'for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stop("SIGKILL"); process.exit(1); });',
     "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
     "(async () => {",
     "let status = 0;",
@@ -512,14 +517,27 @@ function exerciseServerCommand(service: DetectedService, runLine: string): strin
     "if (server.exitCode !== null || Date.now() > deadline) break;",
     "try { status = (await fetch(url, { signal: AbortSignal.timeout(60000) })).status; } catch { await sleep(500); }",
     "}",
-    'console.log("request status:", status || "no answer from " + url + " in 30 s");',
+    "const exited = status ? null : server.exitCode;",
+    'console.log("request status:", status || (exited === null ? "no answer from " + url + " in 30 s" : "none, the application exited with code " + exited + " before it answered"));',
     "await sleep(2000);",
     'stop("SIGINT");',
     'await Promise.race([new Promise((resolve) => server.once("exit", resolve)), sleep(2000)]);',
     'stop("SIGKILL");',
-    "process.exit([2, 3].includes(Math.floor(status / 100)) ? 0 : 1);",
+    "process.exit([2, 3].includes(Math.floor(status / 100)) || exited === 0 ? 0 : 1);",
     "})();",
   ].join(" ")}'`;
+}
+
+/**
+ * `value` as a string literal that JavaScript and Python both read back as
+ * `value`, inside the command's single quotes.
+ *
+ * A JSON string is a valid literal in both: `\n` and `\"` escapes. JSON leaves
+ * a `'` as it is, and one in an entry point's path would end the quotes early,
+ * so it is written `\u0027`, which both read as `'`.
+ */
+function scriptLiteral(value: string): string {
+  return JSON.stringify(value).replaceAll("'", "\\u0027");
 }
 
 export function buildSetupTask(input: BuildSetupTaskInput): string {
@@ -655,7 +673,8 @@ If your shell tool takes a time limit, give this command two minutes: the reques
 application, model calls included. It prints the request's status, and exits 0 only when that
 status is a success. Whatever the server prints as it is stopped, such as a \`KeyboardInterrupt\`,
 is the stop and not a failure. If the application exits on its own before it answers, it was not a
-server after all: that run is the one this step asks for, and done means it succeeded.
+server after all: that run is the one this step asks for. The command then prints the application's
+exit code instead of a status and exits 0 only if that code is 0, so done means it exited 0.
 
 The project's test suite is not a way to send that request: it runs with TraceRoot switched off, and
 the trace \`traceroot setup\` looks for is the one the application sends when it serves a request.`;
