@@ -1,10 +1,17 @@
+import { relative } from "node:path";
 import type { Command } from "commander";
 import { normalizeBaseUrl } from "../api/client.js";
 import { deleteCredential } from "../auth/credentials.js";
-import { loadConfigOrThrow, writeConfig as realWriteConfig } from "../config/manager.js";
+import {
+  configPath,
+  loadConfigOrThrow,
+  writeConfig as realWriteConfig,
+} from "../config/manager.js";
+import { type ResolvedCredential, normalizeHostUrl } from "../config/resolve.js";
 import type { Config } from "../config/schema.js";
 import { CliError, ExitCode, type Writers, defaultWriters, logInfo, writeJson } from "../output.js";
 import { createStyler } from "../render/style.js";
+import { cliCommand } from "../setup/invocation.js";
 import { getVersion } from "../version.js";
 import { DEFAULT_HOST } from "./constants.js";
 import { contextFromCommand } from "./shared.js";
@@ -33,6 +40,14 @@ export interface LogoutDeps {
    * how an env session leaves the stored session entry untouched.
    */
   apiKeyFromEnv: boolean;
+  /**
+   * The credential this directory resolves to once the stored session is gone:
+   * the same resolution run again without the credentials file. Asked only
+   * after a session logout, to say when the config file's key takes over.
+   */
+  credentialWithoutSession: () => ResolvedCredential;
+  /** The config file, named as the user would look for it. */
+  configFile: string;
   deleteCredentialEntry: (host: string) => boolean;
   readConfig: () => Config | null;
   writeConfig: (config: Config) => void;
@@ -233,6 +248,30 @@ function reportSessionLogout(
       writers,
     );
   }
+  if (configKeyRemains(deps)) {
+    logInfo(
+      `Note: ${deps.configFile} still holds an API key for ${deps.host}, so commands run here still sign in with it. Run \`${cliCommand("logout")}\` again to remove it.`,
+      writers,
+    );
+  }
+}
+
+/**
+ * Whether the config file holds an API key for the host just logged out of,
+ * and the next command here signs in with it.
+ *
+ * `setup` keeps an admin key there, and a stored session outranks it, so it
+ * stays out of sight until the session is gone and then takes over unannounced.
+ * A key the config file names another host for is not this logout's to report,
+ * and one that something else outranks, such as `TRACEROOT_API_KEY` in the
+ * environment, is not what the next command uses. Reads local files only.
+ */
+function configKeyRemains(deps: LogoutDeps): boolean {
+  if (deps.credentialWithoutSession().source !== "config") {
+    return false;
+  }
+  const configured = deps.readConfig()?.host_url;
+  return configured === undefined || normalizeHostUrl(configured) === deps.host;
 }
 
 export function registerLogout(program: Command): void {
@@ -250,6 +289,9 @@ export function registerLogout(program: Command): void {
         sessionToken: credential.kind === "session" ? credential.value : undefined,
         sessionFromFile: credential.source === "credentials-file",
         apiKeyFromEnv: credential.kind === "api-key" && credential.source !== "config",
+        credentialWithoutSession: () =>
+          contextFromCommand(command, { readCredential: () => null }).auth.credential,
+        configFile: relative(process.cwd(), configPath()) || configPath(),
         deleteCredentialEntry: deleteCredential,
         readConfig: loadConfigOrThrow,
         writeConfig: realWriteConfig,

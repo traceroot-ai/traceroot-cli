@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { type LogoutDeps, runLogout } from "../../src/commands/logout.js";
+import type { ResolvedCredential } from "../../src/config/resolve.js";
 import type { Config } from "../../src/config/schema.js";
 import { CliError, ExitCode, type Writers } from "../../src/output.js";
 import { type FetchCall, createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import { StringSink } from "../helpers/stringSink.js";
+import { plain } from "../setup/colour.js";
 
 const SESSION = "sess_secret_LEAK";
 
@@ -11,6 +13,8 @@ interface HarnessOptions {
   sessionToken?: string;
   sessionFromFile?: boolean;
   apiKeyFromEnv?: boolean;
+  /** What the directory resolves to without the stored session; nothing by default. */
+  withoutSession?: ResolvedCredential;
   config?: Config | null;
   responder?: (call: FetchCall) => Response | Promise<Response>;
   json?: boolean;
@@ -30,6 +34,9 @@ function harness(opts: HarnessOptions = {}) {
     sessionToken: opts.sessionToken,
     sessionFromFile: opts.sessionFromFile ?? true,
     apiKeyFromEnv: opts.apiKeyFromEnv ?? false,
+    credentialWithoutSession: () =>
+      opts.withoutSession ?? { kind: "none", value: undefined, source: "none" },
+    configFile: ".traceroot/config.json",
     deleteCredentialEntry: (host) => {
       deleted.push(host);
       return true;
@@ -218,6 +225,85 @@ describe("runLogout with a stored session", () => {
     expect(parsed.host).toBe("https://api.example.com");
     expect(h.out.data.trimEnd().split("\n")).toHaveLength(1);
     expect(h.out.data).not.toContain(SESSION);
+  });
+});
+
+describe("runLogout with a config key left behind", () => {
+  const CONFIG_KEY: ResolvedCredential = {
+    kind: "api-key",
+    value: "tr_config_key",
+    source: "config",
+  };
+  const NOTE =
+    "Note: .traceroot/config.json still holds an API key for https://api.example.com, so commands run here still sign in with it. Run `traceroot logout` again to remove it.";
+
+  it("says the config key still signs in, and running logout again removes it", async () => {
+    // Setup leaves an admin key in the directory's config that the stored
+    // session outranks, so the session logout is what puts it in charge.
+    const config: Config = { api_key: "tr_config_key", host_url: "https://api.example.com" };
+    const first = harness({ sessionToken: SESSION, withoutSession: CONFIG_KEY, config });
+    await runLogout(first.deps);
+
+    expect(plain(first.err.data)).toContain(NOTE);
+    // Message only: the session goes, the key stays for the second run.
+    expect(first.deleted).toEqual(["https://api.example.com"]);
+    expect(first.writeConfigCalls).toEqual([]);
+
+    // The second run, as the note tells the user to make it.
+    const second = harness({ config });
+    await runLogout(second.deps);
+    expect(second.writeConfigCalls).toEqual([{ host_url: "https://api.example.com" }]);
+  });
+
+  it("says so for a config host written with a trailing slash, or with none", async () => {
+    for (const config of [
+      { api_key: "tr_config_key", host_url: "https://api.example.com/" },
+      { api_key: "tr_config_key" },
+    ]) {
+      const h = harness({ sessionToken: SESSION, withoutSession: CONFIG_KEY, config });
+      await runLogout(h.deps);
+      expect(plain(h.err.data), JSON.stringify(config)).toContain(NOTE);
+    }
+  });
+
+  it("says nothing about a config key for another host", async () => {
+    const h = harness({
+      sessionToken: SESSION,
+      withoutSession: CONFIG_KEY,
+      config: { api_key: "tr_config_key", host_url: "https://other.example.com" },
+    });
+    await runLogout(h.deps);
+    expect(plain(h.err.data)).not.toContain("config.json");
+  });
+
+  it("says nothing when the next command would not sign in with the config key", async () => {
+    // TRACEROOT_API_KEY in the environment ranks below the session and above
+    // the config file, so it is what takes over; and with nothing left at all
+    // there is no key to report.
+    for (const withoutSession of [
+      { kind: "api-key", value: "tr_env_key", source: "env" },
+      { kind: "none", value: undefined, source: "none" },
+    ] satisfies ResolvedCredential[]) {
+      const h = harness({
+        sessionToken: SESSION,
+        withoutSession,
+        config: { api_key: "tr_config_key", host_url: "https://api.example.com" },
+      });
+      await runLogout(h.deps);
+      expect(plain(h.err.data), withoutSession.source).not.toContain("config.json");
+    }
+  });
+
+  it("leaves the --json document as it was", async () => {
+    const h = harness({
+      sessionToken: SESSION,
+      json: true,
+      withoutSession: CONFIG_KEY,
+      config: { api_key: "tr_config_key", host_url: "https://api.example.com" },
+    });
+    await runLogout(h.deps);
+    expect(h.out.data.trimEnd().split("\n")).toHaveLength(1);
+    expect(h.err.data).toBe("");
   });
 });
 
