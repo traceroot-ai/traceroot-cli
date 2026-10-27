@@ -5602,6 +5602,8 @@ describe("the agent's own account of a failed run", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    // A report with no notes adds nothing to the message.
+    expect(result.error?.message.split("\n\n")[0]).toMatch(/^No trace arrived within \d+s\.$/);
     expect(transcript()).toContain("was denied");
     const remedy = plain(result.error?.remedy ?? "");
     expect(remedy).toContain(
@@ -5613,6 +5615,41 @@ describe("the agent's own account of a failed run", () => {
     // Beside the cause it bears on, and ahead of the instructions to rerun.
     expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeGreaterThan(remedy.indexOf("never ran"));
     expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeLessThan(remedy.indexOf("--resume"));
+  });
+
+  it("quotes the agent's notes when no trace arrives after it", async () => {
+    // The agent's report is the one account of the run that is not a guess,
+    // and the timeout is where a run it stopped short of finishing ends up.
+    const ESC = String.fromCharCode(27);
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: completion({
+            files_changed: ["main.py"],
+            trace_id: null,
+            notes: `Instrumented main.py.\nCould not run it: ${ESC}[31mpython3 was refused${ESC}[0m.`,
+          }),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    const [message, remedy] = (result.error?.message ?? "").split("\n\n");
+    expect(message).toMatch(
+      /^No trace arrived within \d+s\. Claude Code reported: Instrumented main\.py\. Could not run it: python3 was refused\.$/,
+    );
+    // The rest of the error is what it was.
+    expect(remedy).toBe(result.error?.remedy);
+    expect(plain(remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
   });
 
   it("keeps nothing on a timeout when this run launched no agent", async () => {

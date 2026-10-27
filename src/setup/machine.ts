@@ -4471,10 +4471,20 @@ const verifyTrace: StageDefinition = {
     }
 
     if (!outcome.found) {
+      // The agent's own account, when it gave one: only an agent this process
+      // ran has a report. Named, where the instrument stage says "It", because
+      // nothing earlier in this message is the agent.
+      const ran = ctx.instrumentation;
+      const notes = ran?.reported?.notes;
+      const quoted = notes === null || notes === undefined ? "" : oneLine(notes);
+      const said =
+        ran === undefined || quoted === ""
+          ? ""
+          : ` ${requireAgent(ran.agentId).displayName} reported: ${quoted}`;
       throw new PausedSetupError({
         stage: "verify_trace",
         code: "TRACE_TIMEOUT",
-        message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}`,
+        message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}${said}`,
         remedy: [
           "The most common cause is that the instrumented code path never ran.",
           // Nothing when this process launched no agent before the wait.
