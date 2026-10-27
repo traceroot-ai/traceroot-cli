@@ -5194,6 +5194,64 @@ describe("the report in Claude Code's stream", () => {
     expect(result.checkpoint.completedStages).toContain("instrument");
   });
 
+  it("quotes the agent's notes as plain text, whatever control bytes they carry", async () => {
+    // The notes are the model's own writing, decoded from JSON where an escape
+    // is six plain characters, so a sequence in them reached the terminal whole.
+    const ESC = String.fromCharCode(27);
+    const BEL = String.fromCharCode(7);
+    const CSI = String.fromCharCode(0x9b);
+    const notes = [
+      `${ESC}[2J${ESC}[31mBlocked:${ESC}[0m npm install`,
+      `was\trefused.\r\nSee ${ESC}]8;;https://example.test${BEL}the log${ESC}]8;;${BEL}`,
+      `${CSI}1Anow${String.fromCharCode(0)} and ${ESC}7done.`,
+    ].join("\n");
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    const [message] = (result.error?.message ?? "").split("\n\n");
+    expect(message).toContain(
+      "It reported: Blocked: npm install was refused. See the log now and done.",
+    );
+    const controls = [...(message ?? "")].filter((c) => {
+      const code = c.charCodeAt(0);
+      return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    });
+    expect(controls).toEqual([]);
+  });
+
+  it("still cuts the notes at 200 characters once they are plain", async () => {
+    const ESC = String.fromCharCode(27);
+    const notes = `${ESC}[31m${"a".repeat(150)}${ESC}[0m ${"b".repeat(150)}`;
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    const [message] = (result.error?.message ?? "").split("\n\n");
+    const quoted = message?.slice(message.indexOf("It reported: ") + "It reported: ".length);
+    expect(quoted).toBe(`${"a".repeat(150)} ${"b".repeat(48)}…`);
+  });
+
   it("reads the report on a run that worked, and carries on as before", async () => {
     pythonRepo();
     const process = fakeRunProcess({

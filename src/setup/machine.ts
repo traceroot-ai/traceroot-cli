@@ -3402,14 +3402,39 @@ async function checkSdkImportable(
 }
 
 /**
+ * Escape sequences, each matched whole: CSI (`ESC [`, or C1 `CSI`) up to its
+ * final byte; OSC, DCS, SOS, PM and APC strings up to their terminator; and
+ * every other `ESC` escape with its intermediate and final bytes.
+ */
+const ESCAPE_SEQUENCE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching escape sequences is the intent.
+  /\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|(?:\u001b[\]PX^_]|[\u0090\u0098\u009d\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[ -/]*[0-~]/g;
+
+/** C0 controls, DEL and C1 controls. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/**
  * An agent's free-text note, short enough and flat enough for an error message.
  *
  * The note is the only place the agent's account of a block exists — the
  * completion block has no field for "I was stopped", so there is nothing to
  * match on and nothing is matched. It is quoted, not parsed.
+ *
+ * And quoted as text only. It is the model's own writing, decoded out of JSON
+ * where an escape is six plain characters, so a sequence in it would reach the
+ * terminal whole: a cleared screen, or a forged line under setup's name.
+ * Sequences go in one piece, so their parameters are not left behind as stray
+ * text. Line breaks and tabs become spaces before the remaining control
+ * characters go, so the words either side of them stay apart.
  */
 function oneLine(note: string, max = 200): string {
-  const flat = note.replace(/\s+/g, " ").trim();
+  const flat = note
+    .replace(ESCAPE_SEQUENCE, "")
+    .replace(/[\t\n\v\f\r]/g, " ")
+    .replace(CONTROL_CHARACTER, "")
+    .replace(/\s+/g, " ")
+    .trim();
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
