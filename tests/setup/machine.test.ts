@@ -5097,6 +5097,57 @@ describe("the report in Claude Code's stream", () => {
     expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
   });
 
+  it("fails fast in a git repository where only setup's own files are new", async () => {
+    // Setup installs the skill and writes the key before the agent starts, and
+    // git sees both. Counted as the agent's edits, they hid an agent that
+    // changed nothing, and the run waited out the trace timeout instead.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const notes = "Two services could be the target. I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    // Both are really there, and both are setup's.
+    expect(existsSync(join(dir, ".claude", "skills", "traceroot-instrument-repo"))).toBe(true);
+    expect(existsSync(join(dir, ".env"))).toBe(true);
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual([]);
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(plain(result.error?.message ?? "")).toContain("without changing any files");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("still counts what the agent changed beside setup's own files", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const process = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL} M app.py${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual(["app.py"]);
+    expect(result.error).toBeNull();
+  });
+
   it("reads the report on a run that worked, and carries on as before", async () => {
     pythonRepo();
     const process = fakeRunProcess({

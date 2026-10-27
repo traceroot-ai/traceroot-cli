@@ -71,7 +71,7 @@ import {
   shadowingApiKey,
 } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
-import { writeSetupReport } from "./report.js";
+import { REPORT_PATH, writeSetupReport } from "./report.js";
 import {
   type ImportCheck,
   type ResolvedSdk,
@@ -552,6 +552,30 @@ const baselineChanges = new WeakMap<SetupContext, string[]>();
  * keep.
  */
 const agentEvidenceAfterRun = new WeakMap<SetupContext, () => readonly string[]>();
+
+/**
+ * Every path this run wrote itself, absolute, so the agent is not credited
+ * with them (see `withoutOwnWrites`).
+ *
+ * Read from where setup already keeps them rather than matched by name: the
+ * skill where the agent's adapter installs it; the `.traceroot/` directory at
+ * the root, which holds the report and the transcript, and the one beside the
+ * credential, which holds the checkpoint and the CLI config; and the env file
+ * `configure_repository` put the key in. That file only when this run wrote to
+ * it, because a file that already held the key is the project's, and an edit
+ * to it is the agent's. Setup adds no `.gitignore` lines outside `.traceroot/`,
+ * so there is nothing else to leave out.
+ */
+function setupWrites(ctx: SetupContext, adapter: AgentAdapter): string[] {
+  const env = wroteEnvKeys.get(ctx);
+  const own = dirname(REPORT_PATH);
+  return [
+    adapter.getSkillInstallPath(ctx.root, SKILL_NAME),
+    join(ctx.root, own),
+    join(ctx.artifactDir, own),
+    ...(env !== undefined && (env.created || env.keys.length > 0) ? [env.path] : []),
+  ];
+}
 
 /**
  * Whether anything can still send this run a trace, which is what decides how
@@ -3801,7 +3825,10 @@ const instrument: StageDefinition = {
           runProcess: deps.runProcess,
           env: deps.env,
         });
-        observedChangedFiles = changedSince(baselineChanges.get(ctx) ?? [], git.changedFiles);
+        observedChangedFiles = changedSince(baselineChanges.get(ctx) ?? [], git.changedFiles, {
+          root: ctx.root,
+          paths: setupWrites(ctx, adapter),
+        });
       } catch (err) {
         // A spinner left animating over an error is the worst of both: the run
         // has stopped and the screen still says it is working.
