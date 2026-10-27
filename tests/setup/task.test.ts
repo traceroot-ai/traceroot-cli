@@ -689,9 +689,10 @@ describe("the API each package's instructions name", () => {
       name: "Python",
       sdk: { ...SDK, package: "traceroot" },
       service: service({ testCommand: "pytest" }),
-      // What step 1 of the manual steps installs, and what else the code may import.
-      installs: ["traceroot==1.2.3", "python-dotenv"],
-      modules: ["traceroot", "dotenv", "pathlib", "anthropic"],
+      // Each module the code imports that setup installs, with what step 1 of
+      // the manual steps installs for it; then the ones the application has.
+      installs: { traceroot: "traceroot==1.2.3", dotenv: "python-dotenv" },
+      appModules: ["pathlib", "anthropic"],
     },
     {
       name: "TypeScript",
@@ -701,8 +702,8 @@ describe("the API each package's instructions name", () => {
         entryPoint: "src/index.ts",
         packageManager: "npm",
       }),
-      installs: ["@traceroot-ai/traceroot@1.2.3", "dotenv"],
-      modules: ["@traceroot-ai/traceroot", "dotenv", "openai"],
+      installs: { "@traceroot-ai/traceroot": "@traceroot-ai/traceroot@1.2.3", dotenv: "dotenv" },
+      appModules: ["openai"],
     },
     {
       name: "Mastra",
@@ -713,8 +714,12 @@ describe("the API each package's instructions name", () => {
         entryPoint: "src/index.ts",
         packageManager: "npm",
       }),
-      installs: ["@traceroot-ai/mastra@1.2.3", "dotenv", "npm install @mastra/observability"],
-      modules: ["@traceroot-ai/mastra", "@mastra/observability", "dotenv"],
+      installs: {
+        "@traceroot-ai/mastra": "@traceroot-ai/mastra@1.2.3",
+        dotenv: "dotenv",
+        "@mastra/observability": "npm install @mastra/observability",
+      },
+      appModules: [],
     },
   ] as const;
 
@@ -763,6 +768,15 @@ describe("the API each package's instructions name", () => {
     return block.split(/\s+/).filter((word) => word !== "");
   }
 
+  /** The text from `start` up to the next `end`; both must be there. */
+  function between(text: string, start: string, end: string): string {
+    const from = text.indexOf(start);
+    expect(from).toBeGreaterThan(-1);
+    const to = text.indexOf(end, from);
+    expect(to).toBeGreaterThan(from);
+    return text.slice(from, to);
+  }
+
   for (const variant of variants) {
     it(`imports only names the installed package exports, for ${variant.name}`, () => {
       for (const text of Object.values(render(variant))) {
@@ -771,9 +785,6 @@ describe("the API each package's instructions name", () => {
             expect(module).toBe(variant.sdk.package);
             expect(EXPORTS[module]).toContain(name);
           }
-        }
-        for (const module of importedModules(text)) {
-          expect(variant.modules).toContain(module);
         }
         for (const [, member = ""] of text.matchAll(/\bTraceRoot\.(\w+)\(/g)) {
           expect(TRACEROOT_STATICS).toContain(member);
@@ -794,14 +805,25 @@ describe("the API each package's instructions name", () => {
 
     it(`imports nothing the install step did not install, for ${variant.name}`, () => {
       const { task: text, manual } = render(variant);
-      const step1 = manual.slice(0, manual.indexOf("\n  2. "));
-      for (const install of variant.installs) {
+      const installs: Readonly<Record<string, string>> = variant.installs;
+      const appModules: readonly string[] = variant.appModules;
+      for (const rendered of [text, manual]) {
+        const imported = importedModules(rendered).filter((module) => !appModules.includes(module));
+        expect(new Set(imported)).toEqual(new Set(Object.keys(installs)));
+      }
+      const step1 = between(manual, "\n  1. ", "\n  2. ");
+      for (const install of Object.values(installs)) {
         expect(step1).toContain(install);
       }
-      const step2 = text.slice(text.indexOf("### 2."), text.indexOf("### 3."));
-      expect(step2).toContain(variant.installs[0]);
-      if (variant.name === "Mastra") {
-        expect(step2).toContain("npm install @mastra/observability");
+      // The task's step 2 installs the SDK and any peer it needs; step 6 has the
+      // agent add dotenv to the manifest once it imports it.
+      const step2 = between(text, "### 2.", "### 3.");
+      for (const [module, install] of Object.entries(installs)) {
+        if (module === "dotenv") {
+          expect(text).toContain("Add the dotenv package to the manifest if you import it.");
+        } else {
+          expect(step2).toContain(install);
+        }
       }
     });
   }
@@ -857,9 +879,9 @@ describe("the API each package's instructions name", () => {
       expect(rendered).toContain("exporters: [new TraceRootExporter()]");
       expect(rendered).not.toContain('"@traceroot-ai/traceroot"');
       // The exporter reads the key as it is constructed, so the load goes first.
-      expect(rendered.indexOf("config({ path:")).toBeLessThan(
-        rendered.indexOf("new TraceRootExporter()"),
-      );
+      const load = rendered.indexOf("config({ path:");
+      expect(load).toBeGreaterThan(-1);
+      expect(load).toBeLessThan(rendered.indexOf("new TraceRootExporter()"));
     }
     // The file that constructs the instance is not one detection names.
     expect(text).toContain("<path from this file to the env file>");
