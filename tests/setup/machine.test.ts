@@ -1055,6 +1055,85 @@ describe("authentication", () => {
     expect(plain(err.data)).toContain("the saved TraceRoot sign-in has expired or was revoked");
   });
 
+  describe("naming the account a reused credential belongs to", () => {
+    const NOT_YOU = "Not you? Run `traceroot login` to sign in as someone else, then rerun setup.";
+
+    /** The run's output with the rail and its wrapping flattened. */
+    function said(data: string): string {
+      return plain(data)
+        .split("\n")
+        .map((line) => line.replace(/^[\u2502\u25c7\u25c6\u25b2\u25cf]/u, "").trim())
+        .join(" ")
+        .replace(/\s+/g, " ");
+    }
+
+    /** A rerun that signs in with `auth`, or with a sign-in saved on this machine. */
+    function rerun(options: { auth?: ResolvedAuth; stored?: CredentialEntry }) {
+      pythonRepo();
+      const deps = makeDeps({
+        auth: options.auth ?? authEmpty(),
+        setupApi: fakeSetupApi({
+          listProjects: async () => [
+            { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+          ],
+          createProjectApiKey: async (input) => ({
+            id: "ak_new",
+            name: input.name,
+            hint: "tr-4444-5555",
+            project_id: input.projectId,
+            scope: "admin",
+            expires_at: null,
+            key: "tr-minted-on-a-rerun",
+          }),
+        }),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        storedCredential: options.stored ?? null,
+      });
+      return { deps, ...makeCtx({ canPrompt: true, flags: { agent: "claude" } }) };
+    }
+
+    it("says where a configured key came from, and how to sign in as someone else", async () => {
+      const cases: Array<[ResolvedAuth["credential"]["source"], string, string | undefined]> = [
+        ["config", "in your TraceRoot config file", NOT_YOU],
+        ["credentials-file", "in your TraceRoot credentials file", NOT_YOU],
+        // `login` saves a key it finds in the `.env` rather than opening the
+        // browser, so the key has to go first.
+        [
+          "auto-env-file",
+          "in this directory's .env",
+          "Not you? Remove TRACEROOT_API_KEY from this directory's .env, then run `traceroot login` to sign in as someone else and rerun setup.",
+        ],
+        // Chosen for this command, so the line naming it is the whole answer.
+        ["flag", "passed with --api-key", undefined],
+        ["env-file", "in the file passed with --env-file", undefined],
+        ["env", "set in the environment", undefined],
+      ];
+      for (const [source, where, aside] of cases) {
+        rmSync(dir, { recursive: true, force: true });
+        mkdirSync(dir, { recursive: true });
+        const run = rerun({
+          auth: {
+            ...authWithKey(),
+            credential: { kind: "api-key", value: "tr-existing-key-value", source },
+          },
+        });
+
+        await runSetupMachine(run.ctx, run.deps);
+
+        const text = said(run.err.data);
+        expect(text, source).toContain(
+          `Signed in with the API key ${where}. Workspace acme — no browser needed.`,
+        );
+        if (aside === undefined) {
+          expect(text, source).not.toContain("Not you?");
+        } else {
+          expect(text, source).toContain(`no browser needed. ${aside}`);
+        }
+      }
+    });
+  });
+
   it("retries with a dated name when this repository already has a key", async () => {
     pythonRepo();
     const attempted: string[] = [];
@@ -1667,7 +1746,7 @@ describe("the handoff code from browser-first onboarding", () => {
     const text = said(run.err.data);
     expect(text).toContain("takes precedence");
     expect(text).toContain("the sign-in code from the browser is no longer valid");
-    expect(text).toContain("Signed in with the TraceRoot credential already configured.");
+    expect(text).toContain("Signed in with the API key in this directory's .env.");
   });
 
   it("redeems the code before any coding agent could read it", async () => {

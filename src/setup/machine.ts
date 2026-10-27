@@ -577,6 +577,30 @@ function apiKeyFrom(auth: SetupDeps["resolvedAuth"]): string | undefined {
 }
 
 /**
+ * Where a resolved API key came from, as the end of a sentence about it.
+ *
+ * One spelling for the two lines that name a key's source: the sign-in line on
+ * the configured-key path, and the line that sets an ambient key aside for a
+ * handoff code.
+ */
+function keySource(source: ResolvedAuth["credential"]["source"]): string {
+  switch (source) {
+    case "flag":
+      return "passed with --api-key";
+    case "env-file":
+      return "in the file passed with --env-file";
+    case "env":
+      return "set in the environment";
+    case "auto-env-file":
+      return "in this directory's .env";
+    case "credentials-file":
+      return "in your TraceRoot credentials file";
+    default:
+      return "in your TraceRoot config file";
+  }
+}
+
+/**
  * The line that says an ambient API key was set aside for a handoff code.
  *
  * Named by where it came from, because "a key is configured" is not actionable
@@ -590,13 +614,34 @@ function apiKeyFrom(auth: SetupDeps["resolvedAuth"]): string | undefined {
  * file for it sends the reader to edit a file that has nothing in it.
  */
 function ambientKeySetAside(source: ResolvedAuth["credential"]["source"]): string {
-  const where =
-    source === "auto-env-file"
-      ? "in this directory's .env"
-      : source === "credentials-file"
-        ? "in your TraceRoot credentials file"
-        : "in your TraceRoot config file";
-  return `A TraceRoot API key is configured ${where}; the sign-in code from the browser takes precedence.`;
+  return `A TraceRoot API key is configured ${keySource(source)}; the sign-in code from the browser takes precedence.`;
+}
+
+/**
+ * The aside under a sign-in line that reused a credential: how to sign in as
+ * someone else instead, or nothing when that is not this CLI's to change.
+ *
+ * An interactive `login` offers to sign in again over a saved sign-in or a key
+ * in the config file. The new sign-in outranks that key, so the next run uses
+ * it, and asks before moving the repository to the new account's project. A key
+ * in this directory's `.env` is different: `login` saves that same key rather
+ * than opening the browser, so the key has to go first. A key or token passed
+ * with a flag, `--env-file` or the environment was chosen for this command, and
+ * the sign-in line already says where it came from.
+ */
+function switchAccountAside(source: ResolvedAuth["credential"]["source"]): string[] {
+  const login = `\`${cliCommand("login")}\``;
+  if (isExplicitSource(source)) {
+    return [];
+  }
+  if (source === "auto-env-file") {
+    return [
+      wizardAside(
+        `Not you? Remove ${KEY_ENV} from this directory's .env, then run ${login} to sign in as someone else and rerun setup.`,
+      ),
+    ];
+  }
+  return [wizardAside(`Not you? Run ${login} to sign in as someone else, then rerun setup.`)];
 }
 
 const authenticate: StageDefinition = {
@@ -688,9 +733,12 @@ const authenticate: StageDefinition = {
         wizardNote(
           ctx.writers,
           [
-            wizardEmphasis("Signed in with the TraceRoot credential already configured."),
+            wizardEmphasis(
+              `Signed in with the API key ${keySource(deps.resolvedAuth.credential.source)}.`,
+            ),
             "",
             wizardAside(`Workspace ${who.workspace_name ?? who.workspace_id} — no browser needed.`),
+            ...switchAccountAside(deps.resolvedAuth.credential.source),
           ],
           { settled: true },
         );
