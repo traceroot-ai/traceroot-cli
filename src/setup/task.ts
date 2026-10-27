@@ -443,30 +443,32 @@ export function servesRequests(framework: string | null): boolean {
  * interpreter for Python, which `taskPrograms` already permits, and `node`
  * for the rest. Inline, because the task forbids creating files.
  *
+ * One line, too, with no `&&`. A permission rule is matched against the
+ * command, and nothing has established that a headless agent's
+ * `Bash(node:*)` passes a command with newlines in it without asking, which
+ * in a headless run is a refusal. Python's `-c` takes only simple statements
+ * after a `;`, so its loop and its `try` run through `exec`, and the two parts
+ * the agent edits, `url` and `cmd`, are set before it in plain code.
+ *
  * The server gets its own process group and the whole group is stopped,
  * because the run line is often a wrapper (`npx tsx`, `npm run dev`, a
  * reloader) and stopping only the wrapper leaves the server holding its port.
- * It also gets the short flush interval itself, so the three-second wait holds
+ * It also gets the short flush interval itself, so the two-second wait holds
  * for an agent this CLI did not launch, which reads the same task from the
  * task file. Every wait is bounded, so the command ends inside the two minutes
- * the task asks the agent to allow it.
+ * the task asks the agent to allow it, and a server that is listening within a
+ * few seconds is done in well under ten.
  */
 function exerciseServerCommand(service: DetectedService, runLine: string): string {
   const port = service.framework === "flask" ? 5000 : service.language === "python" ? 8000 : 3000;
   const url = `"http://localhost:${port}/"`;
-  const where = "the port it listens on, and a route the outermost span wraps";
+  const interval = AGENT_FLUSH_INTERVAL_SEC;
   if (service.language === "python") {
-    return [
-      `${leadingProgram(runLine) ?? "python3"} -c '`,
-      "import os, signal, subprocess, sys, time, urllib.error, urllib.request",
-      `url = ${url}  # ${where}`,
-      "server = subprocess.Popen(",
-      `    [sys.executable, ${JSON.stringify(service.entryPoint ?? "<entry point>")}],`,
-      "    start_new_session=True,  # its own process group, so stopping it stops all of it",
-      `    env={**os.environ, "TRACEROOT_FLUSH_INTERVAL": "${AGENT_FLUSH_INTERVAL_SEC}"},  # export within a second`,
-      ")",
+    const machinery = [
+      "import signal, subprocess, time, urllib.error, urllib.request",
+      "server = subprocess.Popen(cmd, start_new_session=True, env=env)",
       "signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))",
-      "direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy",
+      "direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))",
       "status, deadline = 0, time.time() + 30",
       "try:",
       "    while not status and server.poll() is None and time.time() < deadline:",
@@ -476,8 +478,8 @@ function exerciseServerCommand(service: DetectedService, runLine: string): strin
       "            status = error.code",
       "        except OSError:",
       "            time.sleep(0.5)",
-      '    print("request status:", status or "no response", flush=True)',
-      "    time.sleep(3)",
+      '    print("request status:", status or "no answer from " + url + " in 30 s", flush=True)',
+      "    time.sleep(2)",
       "finally:",
       "    for sig in (signal.SIGINT, signal.SIGKILL):",
       "        try:",
@@ -486,38 +488,38 @@ function exerciseServerCommand(service: DetectedService, runLine: string): strin
       "        except (ProcessLookupError, subprocess.TimeoutExpired):",
       "            pass",
       "sys.exit(0 if 200 <= status < 400 else 1)",
-      "'",
     ].join("\n");
+    return `${leadingProgram(runLine) ?? "python3"} -c '${[
+      "import os, sys",
+      `url = ${url}`,
+      `cmd = [sys.executable, ${JSON.stringify(service.entryPoint ?? "<entry point>")}]`,
+      `env = {**os.environ, "TRACEROOT_FLUSH_INTERVAL": "${interval}"}`,
+      // A JSON string is a valid Python string literal: `\n` and `\"` escapes.
+      `exec(${JSON.stringify(machinery)})`,
+    ].join("; ")}'`;
   }
-  return [
-    "node -e '",
+  return `node -e '${[
     'const { spawn } = require("node:child_process");',
-    `const url = ${url};  // ${where}`,
-    `const server = spawn(${JSON.stringify(runLine)}, {`,
-    "  shell: true,",
-    '  stdio: "inherit",',
-    "  detached: true,  // its own process group, so stopping it stops all of it",
-    `  env: { ...process.env, TRACEROOT_FLUSH_INTERVAL: "${AGENT_FLUSH_INTERVAL_SEC}" },  // export within a second`,
-    "});",
+    `const url = ${url};`,
+    `const server = spawn(${JSON.stringify(runLine)}, { shell: true, stdio: "inherit", detached: true, env: { ...process.env, TRACEROOT_FLUSH_INTERVAL: "${interval}" } });`,
     "const stop = (signal) => { try { process.kill(-server.pid, signal); } catch {} };",
     'process.on("SIGTERM", () => { stop("SIGKILL"); process.exit(1); });',
     "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
     "(async () => {",
-    "  let status = 0;",
-    "  const deadline = Date.now() + 30000;",
-    "  while (!status && server.exitCode === null && Date.now() < deadline) {",
-    "    try { status = (await fetch(url, { signal: AbortSignal.timeout(60000) })).status; }",
-    "    catch { await sleep(500); }",
-    "  }",
-    '  console.log("request status:", status || "no response");',
-    "  await sleep(3000);",
-    '  stop("SIGINT");',
-    "  await sleep(2000);",
-    '  stop("SIGKILL");',
-    "  process.exit(status >= 200 && status < 400 ? 0 : 1);",
+    "let status = 0;",
+    "const deadline = Date.now() + 30000;",
+    "while (!status) {",
+    "if (server.exitCode !== null || Date.now() > deadline) break;",
+    "try { status = (await fetch(url, { signal: AbortSignal.timeout(60000) })).status; } catch { await sleep(500); }",
+    "}",
+    'console.log("request status:", status || "no answer from " + url + " in 30 s");',
+    "await sleep(2000);",
+    'stop("SIGINT");',
+    'await Promise.race([new Promise((resolve) => server.once("exit", resolve)), sleep(2000)]);',
+    'stop("SIGKILL");',
+    "process.exit([2, 3].includes(Math.floor(status / 100)) ? 0 : 1);",
     "})();",
-    "'",
-  ].join("\n");
+  ].join(" ")}'`;
 }
 
 export function buildSetupTask(input: BuildSetupTaskInput): string {
@@ -630,9 +632,9 @@ ${service.framework}, runs a server: it keeps running until it is stopped, and t
 request handler, which runs only when a request arrives. So start it, send it **one** request to a
 route the outermost span wraps, wait a few seconds for the SDK to export, then stop it.
 
-Do all of that in one command, so nothing is left running when it ends. Run this, with \`url\` set to
-the port the server listens on and a route the outermost span wraps, and with the method and body
-that route expects if a plain \`GET\` is not it:
+Do all of that in one command, so nothing is left running when it ends. Run this as one line, with
+\`url\` set to the port the server listens on and a route the outermost span wraps, and with the
+method and body that route expects if a plain \`GET\` is not it:
 
 \`\`\`bash
 ${exerciseServerCommand(service, runLine)}
@@ -641,7 +643,7 @@ ${exerciseServerCommand(service, runLine)}
 ${
   service.language === "python"
     ? `If \`${runLine}\` does not start the server by itself — an entry point that only defines the
-app, say — put the command the project starts it with in the list instead, through the same
+app, say — put the command the project starts it with in \`cmd\` instead, through the same
 interpreter: \`[sys.executable, "-m", "uvicorn", "main:app"]\` or
 \`[sys.executable, "manage.py", "runserver"]\`.`
     : `If \`${runLine}\` does not start the server by itself — an entry point that only defines the

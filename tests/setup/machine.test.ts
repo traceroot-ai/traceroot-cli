@@ -4172,7 +4172,7 @@ describe("stack and agent selection", () => {
 
       const launch = process.runs.find((run) => run.program === "claude");
       expect(launch).toBeDefined();
-      const program = /\n(\S+) -[ce] '\n/.exec(launch?.stdin ?? "")?.[1];
+      const program = /```bash\n(\S+) -[ce] '[^\n]*'\n```/.exec(launch?.stdin ?? "")?.[1];
       expect(program).toBe(stack === "python" ? "./.venv/bin/python" : "node");
       expect(launch?.args).toContain(`Bash(${program}:*)`);
     });

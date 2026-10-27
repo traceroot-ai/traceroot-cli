@@ -282,7 +282,7 @@ describe("running a server so it sends its trace", () => {
 
   /** The one command step 6 gives a server, as the agent would copy it. */
   function serverCommand(text: string): string {
-    const command = /\n((?:node -e|\S+ -c) '\n[\s\S]*?\n')\n```/.exec(text)?.[1];
+    const command = /```bash\n((?:node -e|\S+ -c) '[^\n]*')\n```/.exec(text)?.[1];
     expect(command, "step 6 gives a server one command to run").toBeDefined();
     return command as string;
   }
@@ -305,16 +305,16 @@ describe("running a server so it sends its trace", () => {
     expect(text).toContain("here,\nexpress, runs a server");
     const command = serverCommand(text);
     // `node`, which every launch permits, and not `curl`, which none does.
-    expect(command.startsWith("node -e '\n")).toBe(true);
+    expect(command.startsWith("node -e '")).toBe(true);
     expect(command).not.toContain("curl");
     // The run line itself, in a process group of its own so the wrapper and
     // the server under it are stopped together.
     expect(command).toContain('spawn("npx tsx src/server.ts", {');
     expect(command).toContain("detached: true");
     expect(command).toContain("process.kill(-server.pid, signal)");
-    // Exported a second after the span ends, which the three-second wait outlasts.
+    // Exported a second after the span ends, which the two-second wait outlasts.
     expect(command).toContain('TRACEROOT_FLUSH_INTERVAL: "1"');
-    expect(command).toContain("await sleep(3000);");
+    expect(command).toContain('await sleep(2000); stop("SIGINT");');
     expect(text).toContain(
       "Done means the code is instrumented and the one request in step 6 **succeeded**.",
     );
@@ -332,8 +332,12 @@ describe("running a server so it sends its trace", () => {
     });
     expect(text).toContain("run it with: `../.venv/bin/python main.py`");
     const command = serverCommand(text);
-    expect(command.startsWith("../.venv/bin/python -c '\n")).toBe(true);
-    expect(command).toContain('[sys.executable, "main.py"]');
+    expect(command.startsWith("../.venv/bin/python -c 'import os, sys; ")).toBe(true);
+    // The parts the agent edits are plain statements; the loop and the `try`,
+    // which `-c` cannot take after a `;`, run through `exec`.
+    expect(command).toContain('; cmd = [sys.executable, "main.py"]; ');
+    expect(command).toContain('; exec("import signal, subprocess, time');
+    expect(command).toContain("time.sleep(2)\\nfinally:");
     expect(command).toContain("start_new_session=True");
     expect(command).toContain("os.killpg(server.pid, sig)");
     expect(command).toContain('"TRACEROOT_FLUSH_INTERVAL": "1"');
@@ -355,21 +359,24 @@ describe("running a server so it sends its trace", () => {
     const command = serverCommand(
       task({ service: service({ framework: "flask", entryPoint: "app.py" }) }),
     );
-    expect(command.startsWith("python3 -c '\n")).toBe(true);
+    expect(command.startsWith("python3 -c '")).toBe(true);
     expect(command).toContain('url = "http://localhost:5000/"');
   });
 
-  it("keeps the command one shell word that the shell passes through untouched", () => {
-    // Single-quoted, so a `'` inside would end it early, and a `$` or a
-    // backtick is something a reader of the command has to check is inert.
+  it("keeps the command one line and one shell word", () => {
+    // One line with no `&&`, because a permission rule is matched against the
+    // command and a newline or a second command is something a headless agent
+    // may stop to ask about, which is a refusal. Single-quoted, so a `'` inside
+    // would end it early, and a `$` or a backtick is something a reader of the
+    // command has to check is inert.
     for (const svc of [
       service({ language: "typescript", framework: "nestjs", entryPoint: "src/main.ts" }),
       service({ framework: "django", entryPoint: "manage.py" }),
     ]) {
-      const body = serverCommand(task({ service: svc }))
-        .split("\n")
-        .slice(1, -1)
-        .join("\n");
+      const command = serverCommand(task({ service: svc }));
+      expect(command).not.toContain("\n");
+      expect(command).not.toContain("&&");
+      const body = command.slice(command.indexOf("'") + 1, -1);
       expect(body).not.toMatch(/['`$]/);
     }
   });
