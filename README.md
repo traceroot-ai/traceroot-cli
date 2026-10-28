@@ -293,17 +293,18 @@ resource — without parsing prose.
 | `3` | auth | `auth` | Authentication required or invalid: HTTP 401/403, or no local credentials. |
 | `4` | not_found | `not_found` | The requested resource does not exist (HTTP 404). |
 | `5` | network | `network` | Network failure or timeout — transient, so a retry may succeed. |
+| `6` | conflict | `conflict` | The request conflicts with current state (HTTP 409): a name already taken, a limit reached, something changed since you read it, or a typed confirmation that does not match (`workspaces delete --name`). |
 
 On failure the human-readable message goes to stderr as `error: <message>`. Under
 `--json` the failure is written to stderr instead as exactly one line —
 `{"error":{"code":"<class>","message":"<text>"}}` — while stdout stays empty, so a
 `jq` pipeline over stdout is never corrupted by an error.
 
-The five classes above belong to the whole CLI and mean the same thing whichever
+The six classes above belong to the whole CLI and mean the same thing whichever
 command handed them back, which is why every number below `10` stays reserved for
 them. `setup` has outcomes no other command can produce — the trace never
 arrived, the coding agent crashed, the file was already there — so it numbers
-those from `10` up rather than overloading one of the five:
+those from `10` up rather than overloading one of the shared classes:
 
 | Code | Meaning |
 | ---- | ------- |

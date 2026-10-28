@@ -156,6 +156,7 @@ describe("exitCodeToString", () => {
     expect(exitCodeToString(ExitCode.auth)).toBe("auth");
     expect(exitCodeToString(ExitCode.notFound)).toBe("not_found");
     expect(exitCodeToString(ExitCode.network)).toBe("network");
+    expect(exitCodeToString(ExitCode.conflict)).toBe("conflict");
     expect(exitCodeToString(ExitCode.internal)).toBe("internal");
     expect(exitCodeToString(99)).toBe("internal");
   });
