@@ -327,3 +327,109 @@ describe("generic write path (factory registration)", () => {
     }
   });
 });
+
+describe("boolean flags (detectors update/create)", () => {
+  function harness() {
+    const fake = createFakeFetch(() => jsonResponse({ id: "det-1" }));
+    const program = buildProgram({
+      registry: {
+        fetchImpl: fake.fetchImpl,
+        writers: { out: new StringSink(), err: new StringSink() },
+      },
+    });
+    const run = (...argv: string[]) =>
+      program.parseAsync(["--api-key", "k", "--host", "https://api.test", ...argv], {
+        from: "user",
+      });
+    const body = () => JSON.parse(String(fake.calls[0]?.init.body)) as Record<string, unknown>;
+    return { fake, run, body };
+  }
+  const update = ["detectors", "update", "det-1", "--project-id", "p-1"];
+
+  it.each([
+    [["--enabled", "false"], false],
+    [["--enabled=false"], false],
+    [["--enabled", "FALSE"], false],
+    [["--no-enabled"], false],
+    [["--enabled", "true"], true],
+    [["--enabled"], true],
+  ])("%j sends enabled=%s", async (flags, expected) => {
+    const h = harness();
+    await h.run(...update, ...flags);
+    expect(h.body().enabled).toBe(expected);
+  });
+
+  it("a bare --enabled before another flag still means true", async () => {
+    const h = harness();
+    await h.run("detectors", "update", "det-1", "--enabled", "--project-id", "p-1");
+    expect(h.body()).toMatchObject({ enabled: true, project_id: "p-1" });
+  });
+
+  it("omitting the flag leaves the field out of the body", async () => {
+    const h = harness();
+    await h.run(...update, "--name", "n");
+    expect(h.body()).not.toHaveProperty("enabled");
+    expect(h.body()).not.toHaveProperty("enable_rca");
+  });
+
+  it("--enable-rca false and --no-enable-rca send enable_rca=false", async () => {
+    for (const flags of [["--enable-rca", "false"], ["--no-enable-rca"]]) {
+      const h = harness();
+      await h.run(...update, ...flags);
+      expect(h.body().enable_rca).toBe(false);
+    }
+  });
+
+  it("a non-boolean value is a usage error and never dispatches", async () => {
+    const h = harness();
+    const err = await h.run(...update, "--enabled", "nope").catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect((err as CliError).message).toContain("--enabled must be true or false, got 'nope'");
+    expect(h.fake.calls.length).toBe(0);
+  });
+
+  it("a positional swallowed by a leading --enabled fails loudly instead of misrouting", async () => {
+    const h = harness();
+    const err = await h
+      .run("detectors", "update", "--enabled", "det-1", "--project-id", "p-1")
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect((err as CliError).message).toContain("--enabled must be true or false, got 'det-1'");
+    expect((err as CliError).message).toContain(
+      "put positional arguments first or write --enabled=true",
+    );
+    expect(h.fake.calls.length).toBe(0);
+  });
+
+  it("a flag false overrides --from-file true", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tr-bool-"));
+    const p = join(dir, "on.json");
+    writeFileSync(p, JSON.stringify({ enabled: true }));
+    const h = harness();
+    await h.run(...update, "--from-file", p, "--enabled", "false");
+    expect(h.body().enabled).toBe(false);
+  });
+
+  it("create can start a detector paused with RCA off", async () => {
+    const h = harness();
+    await h.run(
+      "detectors",
+      "create",
+      "--project-id",
+      "p-1",
+      "--name",
+      "t",
+      "--template",
+      "custom",
+      "--prompt",
+      "x",
+      "--enabled",
+      "false",
+      "--enable-rca",
+      "false",
+    );
+    expect(h.body()).toMatchObject({ enabled: false, enable_rca: false });
+  });
+});
