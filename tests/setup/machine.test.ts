@@ -28,8 +28,8 @@ import { openBrowserForPlatform, runDeviceFlow } from "../../src/auth/deviceFlow
 import { redeemHandoff } from "../../src/auth/handoff.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
-import { writeConfig as writeCliConfig } from "../../src/config/manager.js";
-import type { ResolvedAuth } from "../../src/config/resolve.js";
+import { loadConfigOrThrow, writeConfig as writeCliConfig } from "../../src/config/manager.js";
+import { type ResolvedAuth, resolveAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
@@ -494,7 +494,7 @@ describe("authentication", () => {
         key: "tr-browser-minted-key-1234",
       }),
     });
-    const written: Array<{ api_key: string; host_url: string }> = [];
+    const written: Array<{ api_key: string; host_url: string; project_id: string }> = [];
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
@@ -512,7 +512,11 @@ describe("authentication", () => {
     expect(result.ok).toBe(true);
     expect(ctx.session?.via).toBe("user-credential");
     expect(written).toEqual([
-      { api_key: "tr-browser-minted-key-1234", host_url: "https://api.example.test" },
+      {
+        api_key: "tr-browser-minted-key-1234",
+        host_url: "https://api.example.test",
+        project_id: "p_1",
+      },
     ]);
     expect(ctx.credential?.origin).toBe("minted");
     expect(ctx.credential?.keyId).toBe("ak_1");
@@ -726,7 +730,7 @@ describe("authentication", () => {
         key: "tr-key-for-the-new-project",
       }),
     });
-    const written: Array<{ api_key: string; host_url: string }> = [];
+    const written: Array<{ api_key: string; host_url: string; project_id: string }> = [];
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
@@ -755,7 +759,11 @@ describe("authentication", () => {
     expect(ctx.project?.projectId).toBe("p_new");
     expect(ctx.credential?.origin).toBe("minted");
     expect(written).toEqual([
-      { api_key: "tr-key-for-the-new-project", host_url: "https://api.example.test" },
+      {
+        api_key: "tr-key-for-the-new-project",
+        host_url: "https://api.example.test",
+        project_id: "p_new",
+      },
     ]);
     expect(err.data).not.toContain("tr-key-for-the-new-project");
     expect(out.data).not.toContain("tr-key-for-the-new-project");
@@ -963,7 +971,7 @@ describe("authentication", () => {
         key: "tr-minted-without-a-browser",
       }),
     });
-    const written: Array<{ api_key: string; host_url: string }> = [];
+    const written: Array<{ api_key: string; host_url: string; project_id: string }> = [];
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
@@ -1000,7 +1008,11 @@ describe("authentication", () => {
     expect(ctx.credential?.origin).toBe("minted");
     expect(ctx.project?.projectId).toBe("p_1");
     expect(written).toEqual([
-      { api_key: "tr-minted-without-a-browser", host_url: "https://api.example.test" },
+      {
+        api_key: "tr-minted-without-a-browser",
+        host_url: "https://api.example.test",
+        project_id: "p_1",
+      },
     ]);
     // Neither credential is printable.
     expect(err.data).not.toContain("saved-session-token");
@@ -1998,6 +2010,27 @@ describe("the pasted key", () => {
       expect(savedToConfig).toEqual([KEY]);
     });
   }
+
+  it("saves the pasted key's project with it, over the one the config named", async () => {
+    pythonRepo();
+    const written: unknown[] = [];
+    const deps = makeDeps({
+      auth: authEmpty(),
+      hiddenAnswers: [KEY],
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      config: { project_id: "p_other" },
+      onWriteConfig: (config) => written.push(config),
+    });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(written).toEqual([
+      { project_id: "p_1", api_key: KEY, host_url: "https://api.example.test" },
+    ]);
+  });
 
   it("treats a paste that is nothing but the variable name as empty", async () => {
     // Normalising before the empty check is what keeps this a local error
@@ -3511,9 +3544,9 @@ describe("a repository that already reports to a project", () => {
     expect(plain(each.err.data)).toContain("Restored the CLI's previous config.");
   });
 
-  it("keeps a field changed since, and puts back one this run's write dropped", async () => {
-    // The write replaces the whole file, so `project_id` went with it; the host
-    // was then moved by something else, and that move is not this run's to undo.
+  it("keeps a field changed since, and puts back the rest", async () => {
+    // The host was moved by something else after this run's write, and that
+    // move is not this run's to undo; the key goes back to the one before it.
     pythonRepo();
     const world = server(["tr-dead-cli", ALPHA]);
     world.refused.set("tr-dead-cli", "API key has expired");
@@ -3547,19 +3580,19 @@ describe("a repository that already reports to a project", () => {
       configFile: file,
       revoke: "ok",
       failAtInstrument: () => {
-        file.text = JSON.stringify({ ...JSON.parse(file.text ?? "{}"), project_id: "p_a" });
+        file.text = JSON.stringify({ ...JSON.parse(file.text ?? "{}"), project_id: "p_other" });
       },
     });
 
     await runSetupMachine(each.ctx, each.deps);
 
-    expect(JSON.parse(file.text ?? "")).toEqual({ project_id: "p_a" });
+    expect(JSON.parse(file.text ?? "")).toEqual({ project_id: "p_other" });
     expect(plain(each.err.data)).toContain("Removed the revoked key from the CLI's config.");
   });
 
   it("leaves the config alone when the run reused the CLI key in it", async () => {
     pythonRepo();
-    const text = `${JSON.stringify({ api_key: "tr-cli-key", host_url: HOST }, null, 2)}\n`;
+    const text = `${JSON.stringify({ api_key: "tr-cli-key", host_url: HOST, project_id: "p_a" }, null, 2)}\n`;
     const file = configFile(text);
     const each = setupRun(server(["tr-cli-key", ALPHA]), {
       listed: [ALPHA],
@@ -3667,6 +3700,74 @@ describe("a repository that already reports to a project", () => {
       expect(deps.readConfigText()).toBe(DEAD_CONFIG);
       deps.restoreConfigText(null);
       expect(existsSync(path)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // ── the project the CLI's config names ─────────────────────────────────────
+
+  it("keeps the project_id a config already names when the run chooses that project", async () => {
+    pythonRepo();
+    const file = configFile(`{\n  "project_id": "p_t2"\n}\n`);
+    const each = setupRun(server(), {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      answers: ["p_t2"],
+      configFile: file,
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(JSON.parse(file.text ?? "")).toEqual({
+      project_id: "p_t2",
+      api_key: "tr-admin-p_t2-1",
+      host_url: HOST,
+    });
+  });
+
+  it("replaces the config's project_id only with the project the run chose", async () => {
+    pythonRepo();
+    const file = configFile(`{\n  "project_id": "p_a"\n}\n`);
+    const each = setupRun(server(), {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      answers: ["p_t2"],
+      configFile: file,
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(JSON.parse(file.text ?? "").project_id).toBe("p_t2");
+  });
+
+  it("leaves a config later commands find the project in when a saved sign-in outranks its key", async () => {
+    // A user credential belongs to no project, so every project-scoped read
+    // after setup needs the config to name one.
+    const { vi } = await import("vitest");
+    const path = join(dir, "cli-config.json");
+    vi.stubEnv("TRACEROOT_CONFIG_PATH", path);
+    try {
+      pythonRepo();
+      const production = defaultSetupDeps(authEmpty());
+      const each = setupRun(server(), { listed: [ALPHA, TEST_ACME], answers: ["p_t1"] });
+      const deps: SetupDeps = {
+        ...each.deps,
+        writeConfig: production.writeConfig,
+        readConfig: production.readConfig,
+        readConfigText: production.readConfigText,
+        restoreConfigText: production.restoreConfigText,
+      };
+
+      const result = await runSetupMachine(each.ctx, deps);
+
+      expect(result.error).toBeNull();
+      const next = resolveAuth({
+        readConfig: () => loadConfigOrThrow(),
+        readCredential: () => ({ session_token: "saved-session-token" }),
+      });
+      expect(next.credential.kind).toBe("session");
+      expect(next.projectId).toEqual({ value: "p_t1", source: "config" });
     } finally {
       vi.unstubAllEnvs();
     }

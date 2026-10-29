@@ -45,6 +45,7 @@ import {
   writeConfig as realWriteConfig,
 } from "../config/manager.js";
 import { type ResolvedAuth, normalizeApiKey } from "../config/resolve.js";
+import type { Config } from "../config/schema.js";
 import { ExitCode, type Writers } from "../output.js";
 import { bundledSkillDir } from "../skills/bundled.js";
 import { installBundledSkill } from "../skills/install.js";
@@ -197,13 +198,19 @@ export interface SetupDeps {
   prompt: (question: string, stage?: SetupStage) => Promise<string>;
   promptHidden: (question: string, stage: SetupStage) => Promise<string>;
   resolveSdk: (pkg: SdkPackage) => Promise<ResolvedSdk>;
-  /** Returns the absolute path written, which the report names. */
-  writeConfig: (config: { api_key: string; host_url: string }) => string;
+  /**
+   * Writes the whole file, so the caller passes every field it is to hold; see
+   * {@link saveCliConfig}. Returns the absolute path written, which the report
+   * names.
+   */
+  writeConfig: (
+    config: Config & { api_key: string; host_url: string; project_id: string },
+  ) => string;
   /**
    * The CLI's own config as an earlier run left it, or null when there is none:
    * where a rerun finds the CLI key it already has rather than minting another.
    */
-  readConfig: () => { api_key?: string; host_url?: string } | null;
+  readConfig: () => Config | null;
   /**
    * The same file's text as it is on disk, null when there is none; and putting
    * text back, null removing the file. Byte for byte, because a rollback that
@@ -849,7 +856,11 @@ const authenticate: StageDefinition = {
       timeoutMs: 15_000,
     });
     const who = await client.whoami();
-    ctx.configFile = deps.writeConfig({ api_key: pasted, host_url: host });
+    ctx.configFile = saveCliConfig(deps, {
+      api_key: pasted,
+      host_url: host,
+      project_id: who.project_id,
+    });
     adoptKeySession(ctx, host, pasted, who, "pasted-key");
     return "ok";
   },
@@ -1412,7 +1423,7 @@ async function userCredentialSignIn(
   // dead key. Only a mint has an id. A reused key is still good, and the config
   // holding it is left alone.
   const replaced = "id" in cli ? configText(deps) : undefined;
-  ctx.configFile = deps.writeConfig({ api_key: cli.key, host_url: host });
+  ctx.configFile = saveCliConfig(deps, { api_key: cli.key, host_url: host, project_id: projectId });
   const written = replaced === undefined ? undefined : configText(deps);
   if ("id" in cli && replaced !== undefined && typeof written === "string") {
     wroteConfig.set(ctx, { keyId: cli.id, key: cli.key, before: replaced, after: written });
@@ -1451,6 +1462,28 @@ async function userCredentialSignIn(
     wizardProgress(ctx, "Reusing the existing project API key.");
   }
   return true;
+}
+
+/**
+ * Saves the CLI's key in its config, with its host and the project it belongs
+ * to, and returns the path written.
+ *
+ * The project goes in because a saved sign-in outranks the key in this file,
+ * and a user credential belongs to no project: without one named here, every
+ * project-scoped command after setup fails until the user names it. Every
+ * other field already in the file is kept, as `login` keeps them.
+ */
+function saveCliConfig(
+  deps: SetupDeps,
+  fields: { api_key: string; host_url: string; project_id: string },
+): string {
+  let saved: Config | null = null;
+  try {
+    saved = deps.readConfig();
+  } catch {
+    // Unreadable, so there is nothing to keep: written from these fields alone.
+  }
+  return deps.writeConfig({ ...saved, ...fields });
 }
 
 /**
