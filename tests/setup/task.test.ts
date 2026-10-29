@@ -230,6 +230,137 @@ describe("where the task says the agent's own credential is", () => {
   });
 });
 
+describe("the task handed to an agent the user opens", () => {
+  // The task file. Setup's own agent runs captured, under permissions setup set
+  // and in an environment `buildAgentEnv` built. An agent the user opens has
+  // none of that, so it is told none of it.
+  const handedOver = (overrides: Record<string, unknown> = {}): string =>
+    task({ interactive: true, ...overrides });
+
+  it("does not say it cannot ask, or that its permissions are already set", () => {
+    const text = handedOver();
+    expect(text).toContain("ask the user");
+    expect(text).not.toContain("cannot ask questions");
+    expect(text).not.toContain("Your permissions are already set");
+    expect(text).not.toContain("commands named here are allowed");
+  });
+
+  it("does not put the key in its environment, whether or not a file holds it", () => {
+    // Nothing put the key in the user's agent's environment when no file holds
+    // it, and nothing took it out when one does.
+    for (const credentialEnvFile of [null, "./.env"]) {
+      const text = handedOver({
+        envFiles: ["./.env"],
+        credentialFiles: credentialEnvFile === null ? [] : ["/repo/.env"],
+        credentialEnvFile,
+      });
+      expect(text).not.toContain("already set in your environment");
+      expect(text).not.toContain("**not** in your environment");
+      expect(text).not.toContain("**your** environment");
+    }
+  });
+
+  it("says the application reads the key from its environment when no file holds it", () => {
+    const text = handedOver({ credentialFiles: [] });
+    expect(text).toContain("did not put `TRACEROOT_API_KEY` in a file the application loads");
+    expect(text).toContain("do not ask them to paste it to you");
+  });
+
+  it("asks the user to pick when no manifest identified the service", () => {
+    const text = handedOver({ service: service({ agentMustIdentify: true }) });
+    expect(text).toContain("**stop and ask**");
+    expect(text).toContain("have the user pick exactly one");
+  });
+
+  it("names the directory to work from for a service below the repository root", () => {
+    expect(handedOver({ service: service({ path: "api" }) })).toContain("Work from `api`");
+    expect(handedOver()).not.toContain("Work from");
+  });
+
+  it("does not describe a sandbox it is not in", () => {
+    const text = handedOver({ envFiles: ["./.env"] });
+    expect(text).not.toContain("refused by your own sandbox");
+    expect(text).toContain("Do not do this in your shell instead");
+  });
+});
+
+describe("the task setup launches its own agent with", () => {
+  it("never tells it to ask the user, even when it has to find the service", () => {
+    // It runs captured, so a question reaches nobody. It reports the
+    // candidates instead, in the notes setup quotes when the run stops.
+    const text = task({ service: service({ agentMustIdentify: true }) });
+    expect(text).toContain("**stop and report**");
+    expect(text).toContain("candidate paths you found in the `notes`");
+    expect(text).not.toContain("stop and ask");
+    expect(text).not.toMatch(/ask the user|have the user pick/);
+  });
+
+  it("keeps the claims that are true of the launch", () => {
+    const text = task({ envFiles: ["./.env"] });
+    expect(text).toContain("You are running non-interactively and cannot ask questions.");
+    expect(text).toContain("Your permissions are already set for this task");
+    expect(text).toContain("refused by your own sandbox");
+    expect(text).not.toContain("Work from");
+  });
+});
+
+describe("what either task says", () => {
+  for (const interactive of [false, true]) {
+    const which = interactive ? "the task file" : "the launched task";
+
+    it(`${which} says one thing about where the key is when a file holds it`, () => {
+      // The hard rule and step 6 both render when the credential's env file
+      // holds the key. Step 6 used to say the key was in the agent's own
+      // environment, which the launched rule denies and the task file's cannot
+      // know.
+      const text = task({
+        interactive,
+        envFiles: ["./.env"],
+        credentialFiles: ["/repo/.env"],
+        credentialEnvFile: "./.env",
+      });
+      expect(text).toContain(
+        "how the key reaches the SDK — in this run, and in every run after it",
+      );
+      expect(text).not.toContain("**your** environment");
+      expect(text).not.toContain("already set in your environment");
+    });
+
+    it(`${which} does not say the application's own credentials are missing from the environment`, () => {
+      // The agent's environment is the user's, minus one variable: an exported
+      // LLM key is in it.
+      const text = task({ interactive, envFiles: ["./.env"] });
+      expect(text).not.toMatch(/They are\s+not in your environment/);
+      expect(text).toContain("should not depend on your environment happening to hold them");
+    });
+
+    it(`${which} names no command for a missing skill, and carries on without it`, () => {
+      // `traceroot skills install` is not on the launched agent's allow-list,
+      // is not on PATH under npx, needs `--agent` without a terminal, and
+      // installs beside the working directory rather than where setup did.
+      // Nor does the agent stop: setup warns and continues when its own install
+      // fails, because the task carries the API it needs in step 3.
+      const text = task({ interactive });
+      expect(text).not.toContain("skills install");
+      expect(text).toMatch(
+        /If it is missing, do not try to\s+install it: (tell the user|say so in your report) and carry on with the API written out in step 3\./,
+      );
+      expect(text).not.toMatch(/If it is missing, stop/);
+    });
+
+    it(`${which} points into the skill only for the steps it allows`, () => {
+      // The skill's verify step runs a flow, confirms the trace and logs its
+      // id. Step 7 forbids all three, so the pointer stops before it.
+      const text = task({ interactive });
+      expect(text).toContain("Read it for **steps 4 and 5**");
+      expect(text).not.toContain("step 4 onward");
+      expect(text).toContain(
+        "Its step 6, verify, does not apply here either: steps 6 and 7 of this task replace it",
+      );
+    });
+  }
+});
+
 describe("the definition of done", () => {
   it("promises no output the SDK does not produce", () => {
     // The step used to quote a `[traceroot] trace <id> → <url>` line and call

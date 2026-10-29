@@ -20,6 +20,12 @@ export interface BuildSetupTaskInput {
    * Interactive agents may ask the user questions. Background agents must abort
    * instead of guessing — without this distinction a non-interactive agent
    * either hangs or invents an answer.
+   *
+   * False only for the agent setup launches itself, and that is the run every
+   * claim about the launch describes: it runs captured, under the permissions
+   * setup gave it, with the key in its environment when no file holds it. The
+   * task file is the same task handed to an agent the user opens, where none of
+   * that is true, so those claims are made only when this is false.
    */
   interactive: boolean;
   /** Evidence that TraceRoot is already present, so the agent extends rather than duplicates. */
@@ -615,6 +621,19 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
         "it instead, and the load you add in step 3 is what gets it to the SDK. Do not print it, " +
         "grep for it or copy it anywhere else. If the SDK reports at runtime that it is missing, " +
         "that load is the first thing to check.";
+  // Both of those describe the environment `buildAgentEnv` builds, and an agent
+  // the user opens has the user's own instead: nothing put the key there when
+  // no file holds it, and nothing took it out when one does. So the task file
+  // says only where the application gets the key from.
+  const handedOverKey =
+    input.credentialFiles.length === 0
+      ? "`traceroot setup` did not put `TRACEROOT_API_KEY` in a file the application loads, so " +
+        "the application has to read it from the environment it is started in. Do not print it, " +
+        "grep for it or write it into a file. If the SDK reports at runtime that it is missing, " +
+        "tell the user it has to be set there, and do not ask them to paste it to you."
+      : "A file the application loads holds `TRACEROOT_API_KEY`, and the load you add in step 3 " +
+        "is what gets it to the SDK. Do not print it, grep for it or copy it anywhere else. If " +
+        "the SDK reports at runtime that it is missing, that load is the first thing to check.";
 
   // Where "not at module scope" actually is, which differs by runtime: the
   // guard is a Python idiom with no Node counterpart.
@@ -627,12 +646,49 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
   const mastra = sdk.package === MASTRA_SDK;
 
   const runMode = interactive
-    ? "You are running interactively. If something is genuinely ambiguous, ask the user."
+    ? [
+        "You are running interactively. If something is genuinely ambiguous, ask the user.",
+        // Setup starts its own agent in the service directory. An agent the
+        // user opens starts wherever they opened it, and nothing below says
+        // where its relative paths and commands are relative to.
+        ...(service.path === "."
+          ? []
+          : [
+              `Work from \`${service.path}\`, the service's directory under the repository root: every relative path and command in this task assumes you are standing there.`,
+            ]),
+      ].join(" ")
     : [
         "You are running non-interactively and cannot ask questions.",
         "If a step needs a decision you cannot make safely, stop and explain exactly what is needed.",
         "Do not guess.",
       ].join(" ");
+
+  // What a service nothing identified ends in. Only an agent the user opened
+  // can put a question to anyone: the launched one runs captured, where a
+  // question reaches nobody, so it ends with the candidates in its report,
+  // which setup quotes when the run stops without edits.
+  const whenInDoubt = interactive
+    ? "**stop and ask**. List the candidate paths you found and have the user pick exactly one,\nthen state the single strongest piece of evidence before going further."
+    : "**stop and report**. Edit nothing, and list the candidate paths you found in the `notes` of\nyour report (step 8), each with the single strongest piece of evidence for it.";
+
+  // No command for a missing skill. `traceroot skills install` is not on the
+  // launched agent's allow-list, is not on PATH under npx, fails without
+  // `--agent` when there is no terminal, and installs beside the working
+  // directory rather than where setup put the skill.
+  //
+  // And no stop either. The task is self-contained, which is why setup warns
+  // and continues when its own install of the skill fails: a missing skill
+  // degrades the run rather than ending it, and the API it needs is in step 3.
+  const missingSkill = interactive
+    ? "If it is missing, do not try to\ninstall it: tell the user and carry on with the API written out in step 3."
+    : "If it is missing, do not try to\ninstall it: say so in your report and carry on with the API written out in step 3.";
+
+  // Loading the file from the shell is something the launched agent's sandbox
+  // refuses. An agent the user opens may be allowed to, and loading in-process
+  // is still the better answer.
+  const shellLoad = interactive
+    ? "Do not do this in your shell instead, with `set -a`, `. file` or `$(...)`. Loading in-process\nis the better answer:"
+    : "Your shell cannot do this for you — `set -a`, `. file`, `$(...)` and multi-part pipelines are\nall refused by your own sandbox, and trying them costs minutes. Loading in-process is also the\nbetter answer:";
 
   // A bare command, never a shell that loads an env file first.
   //
@@ -735,9 +791,8 @@ ${serviceFacts}
 Determine the target from concrete signals — a dependency manifest, an entry point, an application
 that actually runs. **Do not infer from loose hints**: a stray script, a file extension or a mention
 in a README is not evidence. If exactly one candidate is unambiguous, proceed with it. In every
-other case — several candidates, none, or any doubt about which application the user meant — **stop
-and ask**. List the candidate paths you found and have the user pick exactly one, then state the
-single strongest piece of evidence before going further.
+other case — several candidates, none, or any doubt about which application the user meant —
+${whenInDoubt}
 
 Do not instrument more than one service or language in this run.`
     : `You are instrumenting **exactly one** service. It has already been chosen:
@@ -777,7 +832,7 @@ ${bullet([
     "to that provider and nothing about the structure around them, while an agent framework's " +
     "also covers the tool calls and the loop that makes them. Step 4 says how to tell, and what " +
     "is left for you either way.",
-  whereTheKeyIs,
+  interactive ? handedOverKey : whereTheKeyIs,
   "Never print, log, echo or hardcode an API key.",
   "Do not write the key into any file — not source, not config, not a `.env`. You never write it " +
     "anywhere, so you never need to check what is tracked or gitignored.",
@@ -795,10 +850,16 @@ ${bullet([
     "do not go looking for the SDK's source tree — it is normally outside the directories you can " +
     "read. If an import fails when you run the app, read the error and fix it then; that is the " +
     "moment a wrong assumption actually costs something.",
-  "Your permissions are already set for this task: edits are accepted and the commands named " +
-    "here are allowed. Do not read `.claude/settings.json`, `.claude/settings.local.json` or " +
-    "`.claude/hooks/` to work out what you may run, and do not probe with throwaway commands. " +
-    "If a command is genuinely refused, name it in your report and carry on with what you can do.",
+  // Setup's own launch is what set these. An agent the user opens runs under
+  // the user's own settings, which this task knows nothing about.
+  ...(interactive
+    ? []
+    : [
+        "Your permissions are already set for this task: edits are accepted and the commands named " +
+          "here are allowed. Do not read `.claude/settings.json`, `.claude/settings.local.json` or " +
+          "`.claude/hooks/` to work out what you may run, and do not probe with throwaway commands. " +
+          "If a command is genuinely refused, name it in your report and carry on with what you can do.",
+      ]),
   "Do not create additional files for this setup run. The TraceRoot skill directory and the " +
     "task file were installed by `traceroot setup` on purpose — leave them alone. Do not add " +
     "your own scratch files, notes or task directories.",
@@ -809,13 +870,13 @@ ${bullet([
 ### 1. Read the TraceRoot skill
 
 \`${skillPath}/SKILL.md\` is installed and is the source of truth for SDK APIs, initialization
-order and framework integrations. Read it before writing code. If it is missing, install it with
-\`traceroot skills install traceroot-instrument-repo\`.
+order and framework integrations. Read it before writing code. ${missingSkill}
 
-Read it for **step 4 onward** — install, initialize, spans, verify. Its steps 1-3 (check the API
+Read it for **steps 4 and 5** — install and initialize, then spans. Its steps 1-3 (check the API
 key, analyse the repository, confirm which service) were done by \`traceroot setup\` before you
 started and their answers are the facts above. Do not redo them and do not put them on a
-checklist.
+checklist. Its step 6, verify, does not apply here either: steps 6 and 7 of this task replace it,
+and step 7 says why this run does not confirm the trace itself.
 
 One question inside them was not answered for you: setup does not know whether this application
 has a user or a session concept, so the table in the skill's analyse step is still yours to read
@@ -991,8 +1052,9 @@ If any of these fails, fix it before continuing. Do not report success with a fa
 ${
   envFile !== null
     ? `
-The application may need credentials of its own to run — an LLM API key, a database URL. They are
-not in your environment. These env files exist near this service:
+The application may need credentials of its own to run — an LLM API key, a database URL — and
+should not depend on your environment happening to hold them. These env files exist near this
+service:
 
 ${bullet(envFiles.map((file) => `\`${file}\``))}
 
@@ -1042,13 +1104,10 @@ ${
   credentialEnvFile === null
     ? ""
     : `\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` into \`${credentialEnvFile}\`, so that load is also
-what keeps tracing working once this run ends: the key is in **your** environment because setup put
-it there for this run, and nothing hands it to the user's next one.
+how the key reaches the SDK — in this run, and in every run after it.
 
 `
-}Your shell cannot do this for you — \`set -a\`, \`. file\`, \`$(...)\` and multi-part pipelines are
-all refused by your own sandbox, and trying them costs minutes. Loading in-process is also the
-better answer: it is what makes the application runnable by a human afterwards, which a shell
+}${shellLoad} it is what makes the application runnable by a human afterwards, which a shell
 incantation in your scrollback does not. Add the dotenv package to the manifest if you import it.
 Never print, echo or cat the contents of these files.
 `

@@ -82,7 +82,8 @@ export interface DetectedService {
   /**
    * True when no manifest identified this service and the language came from
    * the user. The CLI has not chosen a target; the agent must find it, and the
-   * task tells it to ask rather than guess.
+   * task tells it to ask (or, launched by setup, to stop and report) rather
+   * than guess.
    */
   agentMustIdentify?: boolean;
 }

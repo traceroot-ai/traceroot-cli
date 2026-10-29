@@ -1120,6 +1120,33 @@ describe("a hand-over nothing has acted on yet", () => {
     expect(said.split("setup --resume").length - 1).toBe(2);
   });
 
+  it("says which directory to open the agent in, for a service below the root", async () => {
+    // The task's paths and commands are relative to `api/`, while the user is
+    // standing at the repository root where they ran setup. The task itself is
+    // at the root, so it is named as the agent opened in `api/` resolves it.
+    mkdirSync(join(dir, "api"), { recursive: true });
+    writeFileSync(join(dir, "api", "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "api", "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+    const result = await runSetup({
+      ctx: ctxWith(false),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude", instrument: false, service: "api" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    });
+    const said = plain(err.data);
+
+    expect(result.ok).toBe(true);
+    const task = join("..", ".traceroot", "prompts", "setup-instrument.md");
+    expect(said).toContain(`Open Claude Code in api/ and run ${task} there, then rerun`);
+    expect(said).toContain(
+      `│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Open Claude Code in api/ and run ${task} there.\n`,
+    );
+    expect(existsSync(join(dir, "api", task))).toBe(true);
+  });
+
   it("points the manual route at the printed steps instead", async () => {
     const { result, err } = await handover({ agent: "claude", method: "manual" });
     const said = plain(err.data);
