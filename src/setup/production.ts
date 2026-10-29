@@ -95,10 +95,6 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
   // read as one long token rather than an instruction with a subject.
   const keys = applicationEnvKeys(input.host);
   const named = nameList(keys.map((name) => wizardEnvVar(name)));
-  // `token` for one and `variables` for several, because with the host in the
-  // list they are not all tokens. The singular sentence is unchanged, which is
-  // the sentence almost every run prints.
-  const noun = keys.length === 1 ? "token" : "variables";
   const location = input.keyLocation;
 
   return [
@@ -113,15 +109,20 @@ export function productionNotice(input: ProductionNoticeInput): string[] {
     // line wrapped in the middle of the instruction on an ordinary window.
     // What is left starts with the thing to do.
     //
-    // The "from your local <file>" clause is there only when a file is. Naming
+    // This is the run's only production instruction. The variables are named
+    // as variables, with no noun after them: "token" was wrong for an API key,
+    // and the CLI has a separate `TRACEROOT_TOKEN` credential it could be read
+    // as.
+    //
+    // The "from <file>" clause is there only when a file is. Naming
     // one anyway is how this block came to tell a user whose key never reached
     // a file to go and open one, which is worse than saying less: the
     // instruction is still followable without the clause, and with a wrong
     // filename in it the user's first move is to look for something that is
     // not there.
     location.kind === "file"
-      ? `Add the ${named} ${noun} from your local ${wizardEmphasis(location.path)} file to your production environment.`
-      : `Add the ${named} ${noun} to your production environment.`,
+      ? `Add ${named} from ${wizardEmphasis(location.path)} to your production environment.`
+      : `Add ${named} to your production environment.`,
     // The footnote, one line, and a different one per case — because what the
     // user needs to know next genuinely differs. With a file it is whether the
     // file reaches the process; without one it is where the value is at all.

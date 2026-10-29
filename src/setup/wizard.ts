@@ -658,22 +658,16 @@ export function wizardWarn(target: FramedOutput, text: string): void {
  * are the CLI talking to its user afterwards, and drawing them inside a box
  * that just closed makes them look like one more step of a flow that is over.
  *
- * `closing` is the one sentence only a successful run may print, so it is a
- * parameter rather than a constant: a run that stopped at the agent has not
- * earned a sentence about using TraceRoot in production.
+ * Nothing about the run goes out here. A production instruction below the
+ * frame repeated the one the closing block inside it had just given.
  */
-export function wizardOutro(
-  writers: Writers,
-  message: string,
-  options: { closing?: string | null } = {},
-): void {
+export function wizardOutro(writers: Writers, message: string): void {
   const color = painterFor(writers.err);
   const rail = color.dim(S_BAR);
   const tail = [
     "",
     `${color.dim(S_BAR_END)}  ${message}`,
     "",
-    ...(options.closing == null ? [] : [options.closing, ""]),
     `If you ran into anything during setup, please open an issue at ${wizardLink(ISSUES_URL, undefined, writers.err)}`,
     "",
     // Grey links, like the line they sit on. These are where to go if

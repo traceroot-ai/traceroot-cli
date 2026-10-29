@@ -79,6 +79,15 @@ describe("what the notice says", () => {
     expect(notice).not.toContain("./.env ");
   });
 
+  it("calls the key by its variable name, not a token", () => {
+    // The CLI has a separate `TRACEROOT_TOKEN` credential, so "the
+    // TRACEROOT_API_KEY token" names one thing with the other's word.
+    for (const language of ["python", "typescript", null] as const) {
+      const notice = productionNotice({ language, keyLocation: IN_ENV_FILE }).map(plain);
+      expect(notice.join("\n")).not.toContain("token");
+    }
+  });
+
   it("opens on the verb, with no heading in front of it", () => {
     // "Production Setup:" led this line until the colon was read for what it
     // was — a heading wearing a sentence's clothes, doing a job the block's own
@@ -86,9 +95,7 @@ describe("what the notice says", () => {
     // wrapped mid-instruction on an ordinary window.
     for (const language of ["python", "typescript", null] as const) {
       const notice = productionNotice({ language, keyLocation: IN_ENV_FILE }).map(plain);
-      expect(notice[0]).toContain("Add the TRACEROOT_API_KEY token");
-      expect(notice[0]).toContain("./.env");
-      expect(notice[0]).toContain("to your production environment.");
+      expect(notice[0]).toBe("Add TRACEROOT_API_KEY from ./.env to your production environment.");
       expect(notice[0]).not.toContain("Production Setup:");
     }
   });
@@ -108,7 +115,7 @@ describe("the runs where no file holds the key", () => {
 
     // The instruction survives whole: production still needs the variable, and
     // that is the point of the block.
-    expect(notice[0]).toBe("Add the TRACEROOT_API_KEY token to your production environment.");
+    expect(notice[0]).toBe("Add TRACEROOT_API_KEY to your production environment.");
     // And it does not send them to a file that was never written.
     expect(notice.join("\n")).not.toContain(".env");
     // What it says instead: where the value they are copying actually is.
@@ -122,13 +129,13 @@ describe("the runs where no file holds the key", () => {
   it("says the key reached no file when a tracked file was refused", () => {
     const notice = lines({ kind: "refused", path: "apps/api/.env" });
 
-    expect(notice[0]).toBe("Add the TRACEROOT_API_KEY token to your production environment.");
+    expect(notice[0]).toBe("Add TRACEROOT_API_KEY to your production environment.");
     // The file is named, because it is the reason — and it is named as the file
     // this run would not write, never as somewhere to go and look.
     expect(notice[1]).toBe(
       "This run wrote TRACEROOT_API_KEY to no file in the project: apps/api/.env is tracked by git, so the key was not written into it. Give your deployment a key of its own.",
     );
-    expect(notice[1]).not.toContain("from your local");
+    expect(notice[0]).not.toContain("apps/api/.env");
     // Claims the file and not the machine. A run reaches this branch with the
     // key in the CLI's own config, or with a stale one exported in the user's
     // shell, and a sentence the reader can see is false is one they stop
@@ -151,7 +158,7 @@ describe("the runs where no file holds the key", () => {
         keyLocation,
       }).map(plain);
       expect(notice[0]).toBe(
-        "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables to your production environment.",
+        "Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL to your production environment.",
       );
       expect(notice.join("\n")).toContain(
         "Exporting only TRACEROOT_API_KEY leaves the SDK on its default host",
@@ -175,7 +182,7 @@ describe("which variables it tells you to carry", () => {
     // and the symptom was that tracing appeared not to work.
     const text = notice(STAGING);
     expect(text).toContain(
-      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local",
+      "Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from ./.env to your production environment.",
     );
     // The caveat about this machine carries the identical gap, and bites first.
     // Space-separated, because this half of the sentence is a command: `export
@@ -195,11 +202,10 @@ describe("which variables it tells you to carry", () => {
   });
 
   it("is unchanged for the hosted product, which is almost every run", () => {
-    // One variable, the singular noun, and no clause about a default host the
-    // run is already on.
+    // One variable, and no clause about a default host the run is already on.
     for (const host of [undefined, DEFAULT_HOST]) {
       const text = notice(host);
-      expect(text).toContain("Add the TRACEROOT_API_KEY token from your local");
+      expect(text).toContain("Add TRACEROOT_API_KEY from ./.env to your production environment.");
       expect(text).not.toContain("TRACEROOT_HOST_URL");
       expect(text).not.toContain("default host");
     }
@@ -220,7 +226,7 @@ describe("which variables it tells you to carry", () => {
       .join("\n");
 
     expect(text).toContain(
-      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local apps/api/.env.local file",
+      "Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from apps/api/.env.local to your production environment.",
     );
     // Still shell-valid, and still naming both, in the half that is a command.
     expect(text).toContain("export TRACEROOT_API_KEY TRACEROOT_HOST_URL in your shell");
@@ -267,7 +273,7 @@ describe("acknowledging it", () => {
       expect(question).toContain("(Press Enter to continue)");
       // A settled block, not a pending one: `◇` is what the transcript shows
       // once the acknowledgement under it has been given.
-      expect(plain(err.data)).toContain("◇  Add the TRACEROOT_API_KEY token");
+      expect(plain(err.data)).toContain("◇  Add TRACEROOT_API_KEY from ./.env");
     });
   });
 
@@ -281,7 +287,7 @@ describe("acknowledging it", () => {
       keyLocation: IN_ENV_FILE,
       prompt: null,
     });
-    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY token");
+    expect(plain(err.data)).toContain("Add TRACEROOT_API_KEY from ./.env");
   });
 
   it("says back every variable the instruction asked for", async () => {
@@ -306,6 +312,6 @@ describe("acknowledging it", () => {
     // And the notice above it asked for both, which is what makes the line
     // above an acknowledgement rather than a smaller claim. Asserted on a
     // fragment because the block is wrapped to the terminal's width.
-    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
+    expect(plain(err.data)).toContain("Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from");
   });
 });

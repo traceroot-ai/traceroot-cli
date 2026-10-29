@@ -21,7 +21,6 @@ import {
   type SetupContextDeps,
   canPrompt,
   closingLine,
-  closingSentence,
   resumeQuestion,
   runSetup,
   runSetupCommand,
@@ -340,30 +339,6 @@ describe("the line that closes the wizard", () => {
     expect(closingLine({ ...base, ok: true, trace: null })).toContain("paused");
   });
 
-  it("makes the production sentence conditional, because it is", () => {
-    // "You can now use TraceRoot in production." is what followed the frame,
-    // and no run that printed it had any reason to believe it: the user had
-    // just been *asked* to add the key there, and an unattended run has nobody
-    // to even read the asking.
-    expect(closingSentence({ ...base, ok: true, trace })).toBe(
-      "You can use TraceRoot in production once TRACEROOT_API_KEY is in its environment.",
-    );
-  });
-
-  it("names the host variable in that sentence off the default host", () => {
-    // Same list as the file the run wrote and the notice it printed, so this
-    // does not become the one line that forgets the second variable.
-    const checkpoint = { ...newCheckpoint(new Date()), host: "https://staging.traceroot.ai" };
-    expect(closingSentence({ ...base, checkpoint, ok: true, trace })).toBe(
-      "You can use TraceRoot in production once TRACEROOT_API_KEY and TRACEROOT_HOST_URL are in its environment.",
-    );
-  });
-
-  it("says nothing below the frame when the run earned nothing", () => {
-    expect(closingSentence({ ...base, ok: true, trace: null })).toBeNull();
-    expect(closingSentence({ ...base, ok: false, trace: null })).toBeNull();
-  });
-
   it("does not call a wait the user ended a pause", () => {
     // Two endings share "ok, and no trace". One has work outstanding and the
     // other does not, and "paused — rerun to finish" is the word for the first
@@ -373,18 +348,6 @@ describe("the line that closes the wizard", () => {
     expect(line).not.toContain("paused");
     // And it still does not claim the trace was seen.
     expect(line).toContain("no trace seen yet");
-  });
-
-  it("ties the production sentence to the trace, not to how the wait ended", () => {
-    // The sentence below the frame is earned by an observed trace. A skipped
-    // wait has not established that the instrumentation works, which is the
-    // whole of what that sentence would be claiming — so unlike `closingLine`
-    // above, `closingSentence` takes no ending at all, and the pair below is
-    // what says the skip cannot reach it.
-    expect(closingSentence({ ...base, ok: true, trace })).toBe(
-      "You can use TraceRoot in production once TRACEROOT_API_KEY is in its environment.",
-    );
-    expect(closingSentence({ ...base, ok: true, trace: null })).toBeNull();
   });
 
   it("does not call a cancellation a failure", () => {
@@ -464,6 +427,38 @@ describe("runSetup", () => {
     expect(said).not.toContain("Run your application");
     expect(said).not.toContain("will appear here");
     expect(said).not.toContain("troubleshoot");
+  });
+
+  it("gives the production instruction once, and nothing after the frame but where to get help", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+
+    const said = plain(err.data);
+    // Once, inside the frame, naming both variables this fixture's host needs.
+    // Asserted on the opening fragment, because the row wraps to the terminal.
+    expect(said.split("production").length - 1).toBe(1);
+    expect(said).toContain("◇  Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env");
+    // Below the frame, only where to get help: no sentence repeating it.
+    const after = said.split("└  TraceRoot local setup complete.\n")[1] ?? "";
+    expect(after.split("\n").filter((line) => line !== "")).toEqual([
+      "If you ran into anything during setup, please open an issue at https://github.com/traceroot-ai/traceroot-cli/issues/new",
+      "- Contact support: https://discord.gg/TM2m3CtKuC",
+      "- Further documentation: https://traceroot.ai/docs/cli/get-started",
+    ]);
   });
 
   it("does not call the trace the user's own when the project already had traces", async () => {
@@ -549,8 +544,9 @@ describe("runSetup", () => {
     // Not the sentence for a run that stopped before the instrumentation was
     // done, which is the other way to end with no trace.
     expect(said).not.toContain("Finish the instrumentation task");
-    // Nor the claim that the instrumentation has been shown to work.
-    expect(said).not.toContain("You can now use TraceRoot in production");
+    // Nor the production instruction, which waits for a trace that shows the
+    // instrumentation works.
+    expect(said).not.toContain("production environment");
     // Still nothing on stdout: the closing blocks live inside the frame.
     expect(out.data).toBe("");
   });
@@ -787,12 +783,14 @@ describe("runSetup", () => {
     // staging or self-hosted user who carried only what they were told to
     // carry pointed the SDK at the hosted product, which is not where their
     // credential works, and nothing anywhere said so.
-    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
+    expect(plain(err.data)).toContain("Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from");
     expect(plain(err.data)).toContain("Exporting only TRACEROOT_API_KEY leaves the SDK");
     // The service was Python, so the local caveat has to be there too.
     expect(plain(err.data)).toContain("os.environ");
     // Between everything the run printed and the line that closes the frame.
-    expect(plain(err.data).indexOf("Production Setup")).toBeLessThan(plain(err.data).indexOf("└"));
+    const at = plain(err.data).indexOf("Add TRACEROOT_API_KEY");
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(plain(err.data).indexOf("└"));
   });
 
   it("says nothing about production for a run that never got a trace", async () => {
@@ -2221,7 +2219,7 @@ describe("the production block that closes a run", () => {
     // sentence has to name the file this run chose and the variables that host
     // implies, both of which were separately capable of going stale.
     expect(flat(err.data)).toContain(
-      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local .env file to your production environment.",
+      "Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env to your production environment.",
     );
   });
 
@@ -2234,8 +2232,8 @@ describe("the production block that closes a run", () => {
 
     const { err } = await run({ canPrompt: true });
 
-    expect(flat(err.data)).toContain("variables from your local .env.local file");
-    expect(flat(err.data)).not.toContain("from your local .env file");
+    expect(flat(err.data)).toContain("from .env.local to your production environment");
+    expect(flat(err.data)).not.toContain("from .env to");
   });
 
   it("never puts the key itself in anything it prints", async () => {
@@ -2250,7 +2248,7 @@ describe("the production block that closes a run", () => {
     // died at `precheck`, or a block that stopped printing altogether, would
     // satisfy the test by printing nothing at all.
     expect(result.ok).toBe(true);
-    expect(flat(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
+    expect(flat(err.data)).toContain("Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from");
 
     expect(err.data).not.toContain(KEY);
     expect(out.data).not.toContain(KEY);
@@ -2291,7 +2289,7 @@ describe("the production block that closes a run", () => {
     expect(asked).toEqual([]);
     expect(result.ok).toBe(true);
     expect(flat(err.data)).toContain(
-      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local .env file",
+      "Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env to your production environment.",
     );
   });
 

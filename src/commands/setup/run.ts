@@ -34,7 +34,6 @@ import {
   writeCheckpoint,
 } from "../../setup/checkpoint.js";
 import { acknowledgeTraces, skippedTraceNotice } from "../../setup/ending.js";
-import { applicationEnvKeys } from "../../setup/envWrite.js";
 import type { SetupError } from "../../setup/errors.js";
 import {
   STAGE_LABELS,
@@ -50,7 +49,7 @@ import {
   runSetupMachine,
   runTaskSentence,
 } from "../../setup/machine.js";
-import { acknowledgeProduction, nameList } from "../../setup/production.js";
+import { acknowledgeProduction } from "../../setup/production.js";
 import type { SelectInput } from "../../setup/select.js";
 import type { SetupCheckpoint, SetupContext, SetupFlags, SetupResult } from "../../setup/types.js";
 import {
@@ -107,7 +106,7 @@ export function closingLine(result: SetupResult, ending: SetupEnding = {}): stri
   // production environment still needs the key — a line that claims the whole
   // job is done directly above the half that is not. The run configured this
   // machine; that is the thing to claim, and naming it as local is also what
-  // makes the sentence below it legible as the rest.
+  // leaves the production block above it legible as the rest.
   if (result.trace !== null) {
     return "TraceRoot local setup complete.";
   }
@@ -126,42 +125,12 @@ export function closingLine(result: SetupResult, ending: SetupEnding = {}): stri
  * Separate from {@link SetupResult} because it is a presentation detail of this
  * invocation rather than part of the machine's result: nothing is checkpointed,
  * nothing is in the `--json` envelope, and `--resume` starts from a clean one.
- * Optional throughout, so the two closing functions keep their old meaning when
+ * Optional throughout, so {@link closingLine} keeps its old meaning when
  * nothing is passed.
  */
 export interface SetupEnding {
   /** The user ended the trace wait early; see `SetupContext.traceWaitSkipped`. */
   traceWaitSkipped?: boolean;
-}
-
-/**
- * The one sentence printed *below* the closed frame, and only when the run
- * earned it.
- *
- * Separate from {@link closingLine} because they answer different questions.
- * The `└` line says how this run ended; this says what the user can now do,
- * and a run that stopped at the agent or never saw a trace can say nothing of
- * the kind. Returning null is how "there is nothing to add" is expressed.
- */
-export function closingSentence(result: SetupResult): string | null {
-  if (!result.ok || result.trace === null) {
-    return null;
-  }
-  // "You can now use TraceRoot in production." is what this said, and it was
-  // not true of any run that printed it: the block immediately above it asks
-  // the user to go and put the key in their production environment, and an
-  // unattended run has nobody to even read that. The condition is the whole
-  // content of the sentence, so the sentence carries it.
-  //
-  // A skipped wait does not change this either: the sentence is earned by a
-  // trace that actually arrived, and a run that has not seen one has not
-  // established that the instrumentation works.
-  //
-  // The variables come from `applicationEnvKeys`, like every other place the
-  // run names them, so a non-default host's second variable is named here too
-  // rather than this becoming the one line that forgets it.
-  const keys = applicationEnvKeys(result.checkpoint.host);
-  return `You can use TraceRoot in production once ${nameList(keys)} ${keys.length === 1 ? "is" : "are"} in its environment.`;
 }
 
 /**
@@ -454,9 +423,7 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   }
 
   if (!json) {
-    wizardOutro(writers, closingLine(result, { traceWaitSkipped: ctx.traceWaitSkipped }), {
-      closing: closingSentence(result),
-    });
+    wizardOutro(writers, closingLine(result, { traceWaitSkipped: ctx.traceWaitSkipped }));
   }
 
   return result;

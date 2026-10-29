@@ -190,13 +190,10 @@ describe("what is said after the frame closes", () => {
     // box that just closed makes them read as one more step of a flow that is
     // over — which is exactly what they are not.
     const t = target();
-    wizardOutro(t.writers, "TraceRoot setup complete.", {
-      closing: "You can now use TraceRoot in production.",
-    });
+    wizardOutro(t.writers, "TraceRoot setup complete.");
 
     const after = plain(t.err.data).split("└  TraceRoot setup complete.\n")[1] ?? "";
     expect(after.split("\n").filter((l) => l !== "")).toEqual([
-      "You can now use TraceRoot in production.",
       "If you ran into anything during setup, please open an issue at https://github.com/traceroot-ai/traceroot-cli/issues/new",
       "- Contact support: https://discord.gg/TM2m3CtKuC",
       "- Further documentation: https://traceroot.ai/docs/cli/get-started",
@@ -214,13 +211,10 @@ describe("what is said after the frame closes", () => {
     expect(plain(t.err.data).endsWith("\n\n\n")).toBe(false);
   });
 
-  it("withholds the closing sentence from a run that did not earn it", () => {
-    // "You can now use TraceRoot in production" over a run that stopped at the
-    // agent is a claim the user finds out is false later.
+  it("says where to get help at the end of a failure too", () => {
     const t = target();
     wizardOutro(t.writers, "Setup stopped at: instrument the application.");
 
-    expect(plain(t.err.data)).not.toContain("You can now use TraceRoot");
     // Where to get help is worth more at the end of a failure than a success.
     expect(plain(t.err.data)).toContain("please open an issue at");
     expect(plain(t.err.data)).toContain("- Contact support:");
