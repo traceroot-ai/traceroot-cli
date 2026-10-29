@@ -4378,6 +4378,38 @@ describe("stack and agent selection", () => {
     expect(launch?.args).toContain("Bash(npx:*)");
   });
 
+  for (const stack of ["python", "typescript"] as const) {
+    it(`permits the program a ${stack} server's one command starts with`, async () => {
+      // Step 6 hands a server one command that starts it, sends it a request
+      // and stops it. A program the launch does not allow is refused in a
+      // headless run, and the server then never sees its request.
+      if (stack === "python") {
+        pythonRepo();
+        mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+        writeFileSync(join(dir, ".venv", "bin", "python"), "");
+      } else {
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ dependencies: { express: "^4" } }),
+        );
+        writeFileSync(join(dir, "tsconfig.json"), "{}\n");
+        mkdirSync(join(dir, "src"), { recursive: true });
+        writeFileSync(join(dir, "src", "server.ts"), "export {};\n");
+      }
+      initGit();
+      const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+      const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: process.run });
+      const { ctx } = makeCtx({ flags: { agent: "claude" } });
+      await runSetupMachine(ctx, deps);
+
+      const launch = process.runs.find((run) => run.program === "claude");
+      expect(launch).toBeDefined();
+      const program = /```bash\n(\S+) -[ce] '[^\n]*'\n```/.exec(launch?.stdin ?? "")?.[1];
+      expect(program).toBe(stack === "python" ? "./.venv/bin/python" : "node");
+      expect(launch?.args).toContain(`Bash(${program}:*)`);
+    });
+  }
+
   it("permits the check the task told the agent to run once", async () => {
     // The third command the task hands over in full. `pythonRepo` declares
     // pytest, which is what makes `detectStack` name the bare string `pytest`
@@ -4440,6 +4472,55 @@ describe("failure handling", () => {
     expect(result.error?.code).toBe("TRACE_TIMEOUT");
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.TRACE_TIMEOUT);
     expect(result.error?.remedy).toContain("--resume");
+  });
+
+  it("tells a server's user to send it a request, not to run it once", async () => {
+    // `pythonRepo` is a FastAPI service. Running a server once sends nothing:
+    // its outermost span is on a request handler, which runs only when a
+    // request arrives.
+    pythonRepo();
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.selected?.framework).toBe("fastapi");
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(result.error?.remedy).toContain(
+      "Start your server, send it one request and leave it running, then:\n  traceroot setup --resume",
+    );
+    expect(result.error?.remedy).not.toContain("Run your application once");
+  });
+
+  it("still tells a script's user to run it once", async () => {
+    writeFileSync(
+      join(dir, "pyproject.toml"),
+      '[project]\ndependencies = ["anthropic","pytest"]\n',
+    );
+    writeFileSync(join(dir, "main.py"), "print('hi')\n");
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.selected?.framework).toBeNull();
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(result.error?.remedy).toBe(
+      [
+        "The most common cause is that the instrumented code path never ran.",
+        "Run your application once, then:",
+        "  traceroot setup --resume",
+        "To investigate:",
+        "  traceroot setup doctor",
+        "  traceroot traces list --limit 5",
+      ].join("\n"),
+    );
   });
 
   it("ignores traces that predate the run", async () => {

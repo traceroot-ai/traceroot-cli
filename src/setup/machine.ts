@@ -96,6 +96,7 @@ import {
   buildSetupTask,
   manualInstructions,
   parseCompletion,
+  servesRequests,
   taskPrograms,
 } from "./task.js";
 import { pollForTrace, spanPhrase } from "./trace.js";
@@ -4542,7 +4543,12 @@ const verifyTrace: StageDefinition = {
           "The most common cause is that the instrumented code path never ran.",
           // Nothing when this process launched no agent before the wait.
           ...(agentEvidenceAfterRun.get(ctx)?.() ?? []),
-          "Run your application once, then:",
+          // A server's path runs only when a request arrives, and running it
+          // once sends nothing. Left running, it also exports on the SDK's
+          // own schedule while the resume waits.
+          servesRequests(ctx.stack?.selected?.framework ?? null)
+            ? "Start your server, send it one request and leave it running, then:"
+            : "Run your application once, then:",
           `  ${setupCommand()} --resume`,
           "To investigate:",
           `  ${setupCommand()} doctor`,

@@ -396,6 +396,251 @@ describe("the definition of done", () => {
   });
 });
 
+describe("running a server so it sends its trace", () => {
+  // Today's text, copied from the task before servers had a case of their own.
+  // A short-lived script's run, step 6 and "done" must stay exactly this.
+  const scriptFact = (runLine: string): string =>
+    `- run it with: \`${runLine}\` — the whole command, worked out before you started. If it fails, read the error and adapt; do not go looking for the entry point, the interpreter or the env file first.\n`;
+  const SCRIPT_RUN = [
+    "Instrumenting the code does not emit anything; **running** it does. Execute the application, or the",
+    "narrowest thing that exercises an instrumented path — an entry point that calls it, one function",
+    "call with the real client — so the SDK sends a trace before you finish. The project's test suite is",
+    "not one of those things: it runs with TraceRoot switched off, and the trace `traceroot setup` looks",
+    "for is the one the application sends when it runs.",
+  ].join("\n");
+  const SCRIPT_DONE =
+    "Done means the code is instrumented and the application has **run once, successfully**. Stop there.";
+
+  /** The one command step 6 gives a server, as the agent would copy it. */
+  function serverCommand(text: string): string {
+    const command = /```bash\n((?:node -e|\S+ -c) '[^\n]*')\n```/.exec(text)?.[1];
+    expect(command, "step 6 gives a server one command to run").toBeDefined();
+    return command as string;
+  }
+
+  it("starts a TypeScript server, sends it one request and stops it, in one node command", () => {
+    // An Express service's run line starts a process that never returns, and
+    // its outermost span is on a request handler nothing ever called: the
+    // trace wait ran its whole budget and blamed a code path that never ran.
+    const text = task({
+      service: service({
+        language: "typescript",
+        framework: "express",
+        entryPoint: "src/server.ts",
+      }),
+    });
+    expect(text).toContain(
+      "run it with: `npx tsx src/server.ts` — the whole command, worked out before you started. It starts a server, which does not exit on its own",
+    );
+    expect(text).toContain("a **request** does");
+    expect(text).toContain("here,\nexpress, runs a server");
+    const command = serverCommand(text);
+    // `node`, which every launch permits, and not `curl`, which none does.
+    expect(command.startsWith("node -e '")).toBe(true);
+    expect(command).not.toContain("curl");
+    // The run line itself, in a process group of its own so the wrapper and
+    // the server under it are stopped together.
+    expect(command).toContain('spawn("npx tsx src/server.ts", {');
+    expect(command).toContain("detached: true");
+    expect(command).toContain("process.kill(-server.pid, signal)");
+    // Exported a second after the span ends, which the two-second wait outlasts.
+    expect(command).toContain('TRACEROOT_FLUSH_INTERVAL: "1"');
+    expect(command).toContain('await sleep(2000); stop("SIGINT");');
+    expect(text).toContain(
+      "Done means the code is instrumented and the one request in step 6 **succeeded**.",
+    );
+    expect(text).not.toContain(SCRIPT_RUN);
+    expect(text).not.toContain(SCRIPT_DONE);
+  });
+
+  it("drives a Python server through the interpreter the run line names", () => {
+    // That interpreter is the one `taskPrograms` already permits, and the
+    // server is started from `sys.executable` so no path has to be quoted
+    // again inside the script.
+    const text = task({
+      service: service({ path: "api", framework: "fastapi" }),
+      pythonInterpreter: "/repo/.venv/bin/python",
+    });
+    expect(text).toContain("run it with: `../.venv/bin/python main.py`");
+    const command = serverCommand(text);
+    expect(command.startsWith("../.venv/bin/python -c 'import os, sys; ")).toBe(true);
+    // The parts the agent edits are plain statements; the loop and the `try`,
+    // which `-c` cannot take after a `;`, run through `exec`.
+    expect(command).toContain('; cmd = [sys.executable, "main.py"]; ');
+    expect(command).toContain('; exec("import signal, subprocess, time');
+    expect(command).toContain("time.sleep(2)\\nfinally:");
+    expect(command).toContain("start_new_session=True");
+    expect(command).toContain("os.killpg(server.pid, sig)");
+    expect(command).toContain('"TRACEROOT_FLUSH_INTERVAL": "1"');
+    expect(command).toContain('url = "http://localhost:8000/"');
+    // An entry point that only defines the app is started the framework's way,
+    // through the same interpreter.
+    expect(text).toContain('[sys.executable, "-m", "uvicorn", "main:app"]');
+    // Detection reads the manifest, so a script that merely depends on a
+    // server framework lands here too. Its one run is still the whole job.
+    expect(text).toContain(
+      "If the application exits on its own before it answers, it was not a\nserver after all",
+    );
+    expect(text).toContain(
+      "Done means the code is instrumented and the one request in step 6 **succeeded**.",
+    );
+  });
+
+  it("points a Flask server at Flask's port", () => {
+    const command = serverCommand(
+      task({ service: service({ framework: "flask", entryPoint: "app.py" }) }),
+    );
+    expect(command.startsWith("python3 -c '")).toBe(true);
+    expect(command).toContain('url = "http://localhost:5000/"');
+  });
+
+  it("keeps the command one line and one shell word", () => {
+    // One line with no `&&`, because a permission rule is matched against the
+    // command and a newline or a second command is something a headless agent
+    // may stop to ask about, which is a refusal. Single-quoted, so a `'` inside
+    // would end it early, and a `$` or a backtick is something a reader of the
+    // command has to check is inert.
+    for (const svc of [
+      service({ language: "typescript", framework: "nestjs", entryPoint: "src/main.ts" }),
+      service({ framework: "django", entryPoint: "manage.py" }),
+    ]) {
+      const command = serverCommand(task({ service: svc }));
+      expect(command).not.toContain("\n");
+      expect(command).not.toContain("&&");
+      const body = command.slice(command.indexOf("'") + 1, -1);
+      expect(body).not.toMatch(/['`$]/);
+    }
+  });
+
+  it("keeps a `'` in the entry point's path inside the quotes", () => {
+    // JSON leaves a `'` as it is, so a path with one ended the single-quoted
+    // script partway through. Written `\u0027`, it still reads back as the path.
+    const literal = /"(?:[^"\\]|\\.)*"/.source;
+    const ts = serverCommand(
+      task({
+        service: service({
+          language: "typescript",
+          framework: "express",
+          entryPoint: "src/it's.ts",
+        }),
+      }),
+    );
+    const py = serverCommand(
+      task({ service: service({ framework: "fastapi", entryPoint: "it's.py" }) }),
+    );
+    for (const command of [ts, py]) {
+      expect(command.slice(command.indexOf("'") + 1, -1)).not.toContain("'");
+    }
+    const spawned = new RegExp(`spawn\\((${literal}), \\{`).exec(ts)?.[1];
+    expect(JSON.parse(spawned as string)).toBe("npx tsx src/it's.ts");
+    const started = new RegExp(`cmd = \\[sys\\.executable, (${literal})\\]`).exec(py)?.[1];
+    expect(JSON.parse(started as string)).toBe("it's.py");
+  });
+
+  it("stops the server when the command itself is interrupted", () => {
+    // The server is detached, so a Ctrl-C reaches only the command. Ended by it
+    // before stopping the group, the command left the server on its port.
+    const ts = serverCommand(
+      task({
+        service: service({
+          language: "typescript",
+          framework: "express",
+          entryPoint: "src/server.ts",
+        }),
+      }),
+    );
+    expect(ts).toContain(
+      'for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stop("SIGKILL"); process.exit(1); });',
+    );
+    // Python turns a Ctrl-C into `KeyboardInterrupt`, which runs the `finally`
+    // that stops the group, and SIGTERM into an exit that runs it too.
+    const py = serverCommand(task({ service: service({ framework: "fastapi" }) }));
+    expect(py).toContain("signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))");
+    expect(py).toMatch(
+      /\\ntry:\\n {4}while .*\\nfinally:\\n {4}for sig in \(signal\.SIGINT, signal\.SIGKILL\)/,
+    );
+  });
+
+  it("exits as the application did when it exits before it answers", () => {
+    // Detection reads the manifest, so a script that depends on a server
+    // framework gets this command. Its one run is the job, and the task says
+    // so; exiting 1 with "no answer" told the agent a clean run had failed.
+    const text = task({
+      service: service({
+        language: "typescript",
+        framework: "express",
+        entryPoint: "src/server.ts",
+      }),
+    });
+    const ts = serverCommand(text);
+    expect(ts).toContain("const exited = status ? null : server.exitCode;");
+    expect(ts).toContain(
+      '"none, the application exited with code " + exited + " before it answered"',
+    );
+    expect(ts).toContain(
+      "process.exit([2, 3].includes(Math.floor(status / 100)) || exited === 0 ? 0 : 1);",
+    );
+    const py = serverCommand(task({ service: service({ framework: "fastapi" }) }));
+    expect(py).toContain("\\n    exited = None if status else server.poll()\\n");
+    expect(py).toContain(
+      '\\"none, the application exited with code \\" + str(exited) + \\" before it answered\\"',
+    );
+    expect(py).toContain("sys.exit(0 if 200 <= status < 400 or exited == 0 else 1)");
+    expect(text).toContain(
+      "The command then prints the application's\nexit code instead of a status and exits 0 only if that code is 0, so done means it exited 0.",
+    );
+  });
+
+  it("leaves a short-lived script's task exactly as it was", () => {
+    // Detection names more than servers. A script, an agent framework or no
+    // framework at all keeps today's text byte for byte, in every place the
+    // server case changes.
+    for (const [svc, runLine] of [
+      [service(), "python3 main.py"],
+      [service({ framework: "langgraph" }), "python3 main.py"],
+      [service({ language: "typescript", entryPoint: "src/index.ts" }), "npx tsx src/index.ts"],
+      [
+        service({ language: "typescript", framework: "langchain", entryPoint: "src/index.ts" }),
+        "npx tsx src/index.ts",
+      ],
+      [
+        service({ language: "javascript", framework: "mastra", entryPoint: "index.js" }),
+        "node index.js",
+      ],
+    ] as const) {
+      const text = task({ service: svc });
+      expect(text).toContain(scriptFact(runLine));
+      expect(text).toContain(`\n${SCRIPT_RUN}\n`);
+      expect(text).toContain(`\n${SCRIPT_DONE}\n`);
+      expect(text).not.toContain("a **request** does");
+      expect(text).not.toContain("It starts a server");
+    }
+  });
+
+  it("changes nothing else about the task for a server", () => {
+    // The same service on a server framework and on a script one: put the
+    // script text back into the three places the server case changes, and the
+    // two tasks are the same document.
+    const server = task({ service: service({ framework: "fastapi" }), envFiles: ["./.env"] });
+    const script = task({ service: service({ framework: "langgraph" }), envFiles: ["./.env"] });
+    const restored = server
+      .replace(
+        " It starts a server, which does not exit on its own: step 6 gives the one command to run instead, which starts it, sends it one request and stops it.",
+        "",
+      )
+      .replace(
+        /Instrumenting the code does not emit anything; a \*\*request\*\* does\.[\s\S]*?when it serves a request\./,
+        SCRIPT_RUN,
+      )
+      .replace(
+        "the one request in step 6 **succeeded**",
+        "the application has **run once, successfully**",
+      )
+      .replaceAll("fastapi", "langgraph");
+    expect(restored).toBe(script);
+  });
+});
+
 describe("the span coverage the task asks for", () => {
   it("states a bar for each boundary a run has, not a licence to stop at one span", () => {
     // A run against an agent application that ran its own tool loop produced a
