@@ -24,6 +24,7 @@ import {
 import {
   type DeviceFlowDeps,
   type DeviceFlowResult,
+  DeviceLoginNotApprovedError,
   openBrowserForPlatform,
   runDeviceFlow,
 } from "../auth/deviceFlow.js";
@@ -855,6 +856,12 @@ const LOCAL_HOST_CANDIDATES = ["http://localhost:8000", "http://localhost:3000"]
  * still never switches hosts on its own: silently retargeting where a
  * credential gets minted is precisely the kind of helpfulness nobody wants from
  * a security-adjacent tool.
+ *
+ * When nothing named the web app, the sign-in went to the API host. A
+ * self-hosted deployment that serves the two on different origins answers
+ * exactly like this, and `--auth-host` is the whole fix, so the remedy leads
+ * with it. TraceRoot Cloud serves both from one origin, so it is not offered
+ * for the default host.
  */
 async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string> {
   const lines: string[] = [];
@@ -870,6 +877,17 @@ async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string
         break;
       }
     }
+  }
+
+  // Asked of the source, not by comparing hosts: an auth host given as the API
+  // host itself was still given, and suggesting one would be wrong.
+  const authHostSource = deps.resolvedAuth.authHost.source;
+  if ((authHostSource === "default" || authHostSource === "none") && host !== DEFAULT_HOST) {
+    lines.push(
+      "If the web app is on a different origin from the API, sign in there with --auth-host:",
+      `  ${setupCommand()} --host ${host} --auth-host <web app origin>`,
+      "",
+    );
   }
 
   lines.push(
@@ -1122,24 +1140,34 @@ async function browserSignIn(
     // different problem from a sign-in that failed, and it has a different
     // answer: you are probably pointed at the wrong host. The shared flow
     // reports the status in its message rather than as a field, so that is what
-    // there is to match on.
+    // there is to match on. Names the auth host, because that is where the
+    // request went.
     const message = err instanceof Error ? err.message : String(err);
     if (/\(status (?:404|501)\)/.test(message)) {
       throw backendUnsupported(
         "authenticate",
         "Browser sign-in",
         await signInFallbackHint(host, deps),
-        host,
+        authHost,
       );
     }
-    // Names the branch a first-time user is most likely on. "Sign-in did not
-    // complete" tells someone halfway through creating an account nothing about
-    // what to do next, and the answer — finish verifying, run it again — is not
-    // guessable from it.
-    wizardWarn(
-      ctx,
-      `Setup didn't complete in the browser. If you were creating an account, verify your email and run \`${setupCommand()}\` again.`,
-    );
+    // Denied, or the code expired first, which is also how a closed tab ends,
+    // a half-created account included. Nothing was approved, so this is a
+    // sign-in that did not happen rather than a fault, and the way on is this
+    // command again. The flow's own message names `login`, which signs the
+    // terminal in but does not carry on with setup, so it is not passed on.
+    if (err instanceof DeviceLoginNotApprovedError) {
+      throw new SetupError({
+        stage: "authenticate",
+        code: "NOT_AUTHENTICATED",
+        message:
+          err.reason === "denied"
+            ? "The sign-in was denied in the browser."
+            : "The sign-in code expired before it was approved in the browser.",
+        remedy: `Run \`${setupCommand()}\` again.`,
+      });
+    }
+    wizardWarn(ctx, `Setup didn't complete in the browser. Run \`${setupCommand()}\` again.`);
     throw err;
   }
 
