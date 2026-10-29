@@ -577,11 +577,43 @@ describe("runSetup", () => {
     expect(plain(err.data)).toContain(`┌  ${WIZARD_TITLE}`);
     expect(plain(err.data)).toContain("└  TraceRoot local setup complete.");
     // Where to go next, on the way out — the moment it is most likely to be read.
-    expect(plain(err.data)).toContain("https://docs.traceroot.ai");
+    expect(plain(err.data)).toContain("https://traceroot.ai/docs/cli/get-started");
     expect(err.data).toContain("https://github.com/traceroot-ai/traceroot-cli/issues");
     // Opened before anything the run prints, so the sign-in half is inside it.
     expect(plain(err.data).indexOf("┌")).toBe(0);
     expect(plain(err.data).indexOf("┌")).toBeLessThan(plain(err.data).indexOf("└"));
+  });
+
+  it("prints every documentation link on the host the docs are served from", async () => {
+    // Pinned by host rather than by page. The links used to point at
+    // `docs.traceroot.ai`, which has no DNS record, and the tests that asserted
+    // them checked only that a link was printed, never where it went.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+
+    const docs = (plain(err.data).match(/https?:\/\/\S+/g) ?? []).filter((url) =>
+      url.includes("docs"),
+    );
+    // The closing block's link and the troubleshooting one, so the loop below
+    // cannot pass on a run that printed neither.
+    expect(docs.length).toBeGreaterThanOrEqual(2);
+    for (const url of docs) {
+      expect(url).toMatch(/^https:\/\/traceroot\.ai\/docs\//);
+    }
   });
 
   it("leaves no line of a whole run outside the frame, until the frame closes", async () => {
@@ -1086,6 +1118,33 @@ describe("a hand-over nothing has acted on yet", () => {
     expect(said).not.toContain("▲  Wait for the first trace");
     // Twice: the hand-over's own instruction, and the closing line.
     expect(said.split("setup --resume").length - 1).toBe(2);
+  });
+
+  it("says which directory to open the agent in, for a service below the root", async () => {
+    // The task's paths and commands are relative to `api/`, while the user is
+    // standing at the repository root where they ran setup. The task itself is
+    // at the root, so it is named as the agent opened in `api/` resolves it.
+    mkdirSync(join(dir, "api"), { recursive: true });
+    writeFileSync(join(dir, "api", "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "api", "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+    const result = await runSetup({
+      ctx: ctxWith(false),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude", instrument: false, service: "api" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    });
+    const said = plain(err.data);
+
+    expect(result.ok).toBe(true);
+    const task = join("..", ".traceroot", "prompts", "setup-instrument.md");
+    expect(said).toContain(`Open Claude Code in api/ and run ${task} there, then rerun`);
+    expect(said).toContain(
+      `│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Open Claude Code in api/ and run ${task} there.\n`,
+    );
+    expect(existsSync(join(dir, "api", task))).toBe(true);
   });
 
   it("points the manual route at the printed steps instead", async () => {

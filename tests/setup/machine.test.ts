@@ -23,7 +23,7 @@ import {
   type WorkspaceSummary,
 } from "../../src/api/setup.js";
 import type { CredentialEntry } from "../../src/auth/credentials.js";
-import { openBrowserForPlatform } from "../../src/auth/deviceFlow.js";
+import { openBrowserForPlatform, runDeviceFlow } from "../../src/auth/deviceFlow.js";
 import { redeemHandoff } from "../../src/auth/handoff.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
@@ -33,6 +33,7 @@ import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { SETUP_EXIT_CODES } from "../../src/setup/errors.js";
 import { type SetupEvent, jsonEmitter } from "../../src/setup/events.js";
+import { setupCommand } from "../../src/setup/invocation.js";
 import type { SetupDeps } from "../../src/setup/machine.js";
 import {
   SETUP_PIPELINE,
@@ -47,6 +48,7 @@ import type { TraceLister } from "../../src/setup/trace.js";
 import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import { sleep } from "../../src/util/sleep.js";
+import { getVersion } from "../../src/version.js";
 import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
@@ -55,6 +57,7 @@ import {
   type RecordedRun,
   authEmpty,
   authWithKey,
+  claudeResult,
   codexCapture,
   defaultFlags,
   fakeApiClient,
@@ -1203,6 +1206,8 @@ describe("authentication", () => {
     const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
     const result = await runSetupMachine(ctx, deps);
     expect(result.error?.message).not.toContain("localhost");
+    // TraceRoot Cloud serves sign-in and the API from one origin.
+    expect(result.error?.message).not.toContain("--auth-host");
   });
 
   it("names the manual fallback when browser sign-in is not deployed", async () => {
@@ -1220,6 +1225,174 @@ describe("authentication", () => {
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.BACKEND_UNSUPPORTED);
     expect(result.error?.message).toContain("--no-browser");
   });
+
+  /** The real device flow, against a host with no device endpoint. Records where it asked. */
+  function noDeviceEndpoint(asked: string[]): SetupDeps["runDeviceFlow"] {
+    const { fetchImpl } = createFakeFetch((call) => {
+      asked.push(call.url);
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    return (flowDeps) => runDeviceFlow({ ...flowDeps, fetchImpl });
+  }
+
+  /** A self-hosted API on its own origin, with or without `--auth-host`. */
+  function selfHosted(authHost?: string): ResolvedAuth {
+    return {
+      ...authEmpty(),
+      hostUrl: { value: "http://localhost:8000", source: "flag" },
+      authHost:
+        authHost === undefined
+          ? { value: "http://localhost:8000", source: "default" }
+          : { value: authHost, source: "flag" },
+    };
+  }
+
+  it("offers --auth-host when browser sign-in went to the API host and found nothing", async () => {
+    // A self-hosted deployment with the web app on another origin answers
+    // exactly this way when only `--host` is given.
+    pythonRepo();
+    const asked: string[] = [];
+    const deps = makeDeps({ auth: selfHosted(), runDeviceFlow: noDeviceEndpoint(asked) });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(asked).toEqual(["http://localhost:8000/api/auth/device/code"]);
+    expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
+    expect(result.error?.message).toBe(
+      [
+        "Browser sign-in is not available at http://localhost:8000 yet.",
+        "",
+        "If the web app is on a different origin from the API, sign in there with --auth-host:",
+        `  ${setupCommand()} --host http://localhost:8000 --auth-host <web app origin>`,
+        "",
+        "If you meant a different deployment, point the CLI at it:",
+        `  ${setupCommand()} --host <url>        (or set TRACEROOT_HOST_URL)`,
+        "",
+        "Otherwise sign in with a key instead:",
+        `  ${setupCommand()} --no-browser`,
+        "or set TRACEROOT_API_KEY before running setup.",
+      ].join("\n"),
+    );
+  });
+
+  it("names the auth host, not the API host, when that is where sign-in found nothing", async () => {
+    pythonRepo();
+    const asked: string[] = [];
+    const deps = makeDeps({
+      auth: selfHosted("http://localhost:3000"),
+      runDeviceFlow: noDeviceEndpoint(asked),
+    });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(asked).toEqual(["http://localhost:3000/api/auth/device/code"]);
+    expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
+    expect(result.error?.message).toContain(
+      "Browser sign-in is not available at http://localhost:3000 yet.",
+    );
+    // An auth host was given; telling the user to add one would be wrong.
+    expect(result.error?.message).not.toContain("--auth-host");
+    expect(result.error?.remedy).toBe(
+      [
+        "If you meant a different deployment, point the CLI at it:",
+        `  ${setupCommand()} --host <url>        (or set TRACEROOT_HOST_URL)`,
+        "",
+        "Otherwise sign in with a key instead:",
+        `  ${setupCommand()} --no-browser`,
+        "or set TRACEROOT_API_KEY before running setup.",
+      ].join("\n"),
+    );
+  });
+
+  // `--auth-host` and TRACEROOT_AUTH_URL: the two ways a user names the web app.
+  for (const source of ["flag", "env"] as const) {
+    it(`doesn't offer --auth-host when the auth host was given (${source}) as the API host itself`, async () => {
+      pythonRepo();
+      const asked: string[] = [];
+      const deps = makeDeps({
+        auth: { ...selfHosted(), authHost: { value: "http://localhost:8000", source } },
+        runDeviceFlow: noDeviceEndpoint(asked),
+      });
+      const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(asked).toEqual(["http://localhost:8000/api/auth/device/code"]);
+      expect(result.error?.code).toBe("BACKEND_UNSUPPORTED");
+      expect(result.error?.message).toContain(
+        "Browser sign-in is not available at http://localhost:8000 yet.",
+      );
+      // The user already named the web app's origin; that one is the answer.
+      expect(result.error?.message).not.toContain("--auth-host");
+    });
+  }
+
+  /**
+   * The real device flow, against an auth host that issues a code and answers
+   * every poll with `poll`. Real rather than a thrown stand-in, so what is
+   * asserted is the error `login` and `setup` actually share.
+   */
+  function deviceFlowAnswering(poll: Record<string, string>): SetupDeps["runDeviceFlow"] {
+    let clock = 0;
+    const { fetchImpl } = createFakeFetch((call) =>
+      call.url.endsWith("/api/auth/device/code")
+        ? jsonResponse({
+            device_code: "dev-1",
+            user_code: "ABCDEFGH",
+            verification_uri_complete: "https://api.example.test/device?user_code=ABCDEFGH",
+            expires_in: 12,
+            interval: 5,
+          })
+        : jsonResponse(poll, 400),
+    );
+    return (flowDeps) =>
+      runDeviceFlow({
+        ...flowDeps,
+        fetchImpl,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        now: () => clock,
+        openBrowser: async () => true,
+      });
+  }
+
+  for (const [what, poll, message] of [
+    ["is denied", { error: "access_denied" }, "The sign-in was denied in the browser."],
+    [
+      "expires",
+      { error: "expired_token" },
+      "The sign-in code expired before it was approved in the browser.",
+    ],
+    // Nothing comes back from a tab that was closed: the code just runs out.
+    [
+      "runs out while still pending",
+      { error: "authorization_pending" },
+      "The sign-in code expired before it was approved in the browser.",
+    ],
+  ] as const) {
+    it(`gives one remedy, rerunning setup, when the browser sign-in ${what}`, async () => {
+      pythonRepo();
+      const deps = makeDeps({ auth: authEmpty(), runDeviceFlow: deviceFlowAnswering(poll) });
+      const { ctx, err } = makeCtx({ canPrompt: true, flags: { browser: true } });
+
+      const result = await runSetupMachine(ctx, deps);
+
+      expect(result.error?.code).toBe("NOT_AUTHENTICATED");
+      // A sign-in that did not happen, not an internal error.
+      expect(result.error?.exitCode).toBe(ExitCode.auth);
+      expect(result.error?.message).toBe(`${message}\n\nRun \`${setupCommand()}\` again.`);
+      expect(result.error?.remedy).toBe(`Run \`${setupCommand()}\` again.`);
+      // `login` signs the terminal in and stops there, and TraceRoot sign-up
+      // sends no email to verify.
+      expect(plain(err.data)).not.toContain("traceroot login");
+      expect(plain(err.data)).not.toMatch(/email/i);
+      // The remedy above is the only one.
+      expect(plain(err.data)).not.toContain("didn't complete in the browser");
+    });
+  }
 });
 
 describe("the handoff code from browser-first onboarding", () => {
@@ -2164,9 +2337,27 @@ describe("the TraceRoot demo workspace", () => {
 
     expect(result.error?.code).toBe("AMBIGUOUS");
     expect(result.error?.message).toContain("has 2 projects");
-    expect(result.error?.remedy).toContain("--project web");
+    expect(result.error?.remedy).toContain("--project p_own");
     expect(result.error?.remedy).not.toContain("agent-demo");
+    expect(result.error?.remedy).not.toContain("p_demo");
     expect(run.calls).toEqual([]);
+  });
+
+  it("names the project by its id in a remedy that reruns setup", async () => {
+    // A name is free text: `--project My App` reached setup as two operands, a
+    // usage error, and a name can belong to projects in two workspaces.
+    pythonRepo();
+    const run = demoRun({
+      projects: [{ ...OWN, project_name: "My App" }, WORKER],
+      canPrompt: false,
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.remedy).toBe(
+      "Choose one by its id with --project, for example 'My App' in Acme (w_own):\n  traceroot setup --project p_own",
+    );
   });
 });
 
@@ -2960,7 +3151,7 @@ describe("a repository that already reports to a project", () => {
 
   it("keeps the application's key when the CLI's own key signs in, as after `traceroot logout`", async () => {
     // `logout` leaves the config's admin key behind, and the next run signed in
-    // with it and wrote it over the application's send-only key.
+    // with it and wrote it over the application's ingest key.
     pythonRepo();
     writeFileSync(join(dir, ".env"), ENV_WITH_KEY);
     const world = server(["tr-cli-key", TEST_GLOBEX], ["tr-app-key", TEST_GLOBEX]);
@@ -3022,7 +3213,7 @@ describe("a repository that already reports to a project", () => {
     );
   });
 
-  it("gives the application a send-only key of its own rather than an admin key", async () => {
+  it("gives the application an ingest key of its own rather than an admin key", async () => {
     pythonRepo();
     const world = server(["tr-cli-key", TEST_GLOBEX]);
     world.settings.reportScopes = true;
@@ -3038,7 +3229,7 @@ describe("a repository that already reports to a project", () => {
     expect(each.ctx.session?.userKey.reveal()).toBe("tr-cli-key");
   });
 
-  it("gives the application a send-only key even for an admin key passed with --api-key", async () => {
+  it("gives the application an ingest key even for an admin key passed with --api-key", async () => {
     // The application carries its key into every deployment, and none of them
     // needs to manage keys, whoever chose the key the run signed in with.
     pythonRepo();
@@ -3058,9 +3249,12 @@ describe("a repository that already reports to a project", () => {
     expect(readFileSync(join(dir, ".env"), "utf8")).not.toContain("tr-handed-admin");
     expect(world.reportsTo()).toBe("p_t2");
     expect(each.ctx.session?.userKey.reveal()).toBe("tr-handed-admin");
+    // What the key can do, as the backend scopes it. An ingest key reads the
+    // project's data back, so it was never send-only.
     expect(plain(each.err.data)).toContain(
-      "That key can manage the project's keys, so the application gets a send-only key of its own.",
+      "That key can manage the project's keys, so the application gets a key of its own that can send traces and read this project, but not manage its keys.",
     );
+    expect(plain(each.err.data)).not.toContain("send-only");
   });
 
   it("does the same for an admin key pasted at the prompt", async () => {
@@ -3362,6 +3556,42 @@ describe("a repository that already reports to a project", () => {
     expect(said).toContain("Kept the CLI's config, since the key in it still works.");
   });
 
+  it("names the sign-in command as setup was started when it cannot put the config back", async () => {
+    pythonRepo();
+    const file = configFile();
+    const each = setupRun(server(), {
+      listed: [ALPHA],
+      answers: ["abort"],
+      configFile: file,
+      revoke: "ok",
+    });
+    const deps: SetupDeps = {
+      ...each.deps,
+      restoreConfigText: () => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    // As npx starts it, where no `traceroot` is on PATH.
+    const saved = { script: process.argv[1], npmCommand: process.env.npm_command };
+    process.argv[1] = "/Users/u/.npm/_npx/6c3e1b2a9f0d4e17/node_modules/.bin/traceroot";
+    process.env.npm_command = "exec";
+    try {
+      await runSetupMachine(each.ctx, deps);
+    } finally {
+      process.argv[1] = saved.script as string;
+      if (saved.npmCommand === undefined) {
+        // biome-ignore lint/performance/noDelete: an unset env var, not the string "undefined"
+        delete process.env.npm_command;
+      } else {
+        process.env.npm_command = saved.npmCommand;
+      }
+    }
+
+    expect(plain(each.err.data)).toContain(
+      `could not put the CLI's config back, and it names a key this run revoked; run \`npx -y traceroot-cli@${getVersion()} login\` to replace it`,
+    );
+  });
+
   it("leaves a config that names another key by the time of the rollback", async () => {
     pythonRepo();
     const file = configFile();
@@ -3535,6 +3765,8 @@ describe("project credential", () => {
 
     expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
     expect(result.error?.message).toContain("other");
+    // By its id, which no name with a space, or a namesake, can get wrong.
+    expect(result.error?.remedy).toContain("\n  traceroot setup --project p_other\n");
     // The file must be untouched.
     expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-other-project-key-77");
   });
@@ -4318,9 +4550,9 @@ describe("the two keys a run mints", () => {
   });
 
   it("reads the first trace back on the CLI's credential, not the application's", async () => {
-    // An ingest key can send telemetry and nothing else. Reading traces with it
-    // worked only because the trace routes do not enforce scope yet, so this
-    // stage would have broken on the day they started to.
+    // An ingest key can send telemetry and read this project, but not manage
+    // its keys. Reading is the CLI's job rather than the application's, so the
+    // stage does not depend on what the backend lets an ingest key do.
     pythonRepo();
     const reads: (string | undefined)[] = [];
     const { deps, minted } = signInRun();
@@ -4345,7 +4577,7 @@ describe("the two keys a run mints", () => {
     expect(reads).toContain("tr-admin-cli-key");
   });
 
-  it("falls back to a send-only CLI key when this account may not mint one", async () => {
+  it("falls back to an ingest CLI key when this account may not mint one", async () => {
     // Minting a key that manages a project's other keys is reserved for a
     // workspace admin, because that is the capability the dashboard reserves
     // for one. A member must still be able to set their repository up.
@@ -4644,9 +4876,11 @@ describe("proving the agent installed the SDK", () => {
 });
 
 describe("proving the agent did something", () => {
-  /** An agent's completion block, as it arrives on stdout. */
+  /** An agent's completion block, as Claude Code's stream carries it: in its closing event. */
   function completion(body: Record<string, unknown>, prose = "done"): string {
-    return [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n");
+    return claudeResult(
+      [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n"),
+    );
   }
 
   it("fails the stage when the agent reports it changed nothing", async () => {
@@ -5032,10 +5266,371 @@ describe("proving the agent did something", () => {
   });
 });
 
+describe("the report in Claude Code's stream", () => {
+  /** A reply ending in a completion block, the way the task asks for one. */
+  function reply(body: Record<string, unknown>): string {
+    return [
+      "Here is what I did.",
+      "",
+      "```json traceroot-setup-result",
+      JSON.stringify(body, null, 2),
+      "```",
+      "",
+      "Then, in prose: nothing else to add.",
+    ].join("\n");
+  }
+
+  /** What `claude -p --output-format stream-json --verbose` prints, one event per line. */
+  function stream(text: string): string {
+    return [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        cwd: dir,
+        tools: ["Bash", "Edit", "Read"],
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "main.py" } }] },
+      }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }),
+      claudeResult(text),
+    ].join("\n");
+  }
+
+  it("fails fast on an agent that stopped without editing, with no git and no entry point", async () => {
+    // A launched agent cannot ask which service to use, so it stops and says so
+    // in its report. With no git there is no diff, and with no entry point
+    // there is nothing to read, so the report is the only thing that shows the
+    // run did nothing. Unread, the run said "Claude Code finished." and waited
+    // out the whole trace timeout.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const notes =
+      "Two services could be the target: apps/api (FastAPI) and apps/worker (Celery). I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.selected?.entryPoint).toBeNull();
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    const message = plain(result.error?.message ?? "");
+    expect(message).toContain("without changing any files");
+    expect(message).toContain(`It reported: ${notes}`);
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("fails fast in a git repository where only setup's own files are new", async () => {
+    // Setup installs the skill and writes the key before the agent starts, and
+    // git sees both. Counted as the agent's edits, they hid an agent that
+    // changed nothing, and the run waited out the trace timeout instead.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const notes = "Two services could be the target. I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    // Both are really there, and both are setup's.
+    expect(existsSync(join(dir, ".claude", "skills", "traceroot-instrument-repo"))).toBe(true);
+    expect(existsSync(join(dir, ".env"))).toBe(true);
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual([]);
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(plain(result.error?.message ?? "")).toContain("without changing any files");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("still counts what the agent changed beside setup's own files", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const process = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL} M app.py${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual(["app.py"]);
+    expect(result.error).toBeNull();
+  });
+
+  it("counts the agent's edit to the env file setup wrote the key into", async () => {
+    // The file is setup's only while it holds what setup wrote. Left out
+    // whatever it held, a line the agent added after setup's was not counted,
+    // and a run whose only edit was there read as one that changed nothing.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const env = join(dir, ".env");
+    const inner = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null })) } },
+    });
+    const runProcess: SetupDeps["runProcess"] = async (o) => {
+      if (o.program === "claude") {
+        writeFileSync(env, `${readFileSync(env, "utf8")}OTEL_SERVICE_NAME=api\n`);
+      }
+      return inner.run(o);
+    };
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual([".env"]);
+    expect(result.error).toBeNull();
+  });
+
+  it("does not fail a run outside git whose report names no files", async () => {
+    // `files_changed` as a string is a report of edits in the wrong shape, not
+    // a report of none, and with no diff to disagree it failed this run.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      results: {
+        claude: { output: stream(reply({ files_changed: "app/server.py", trace_id: null })) },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.reported?.filesChanged).toBeNull();
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("verify_trace");
+  });
+
+  it("reads the service's own folder when the report names no files", async () => {
+    // As for an agent with no report at all: the initialization is one import
+    // away, and only the service's folder has it.
+    pythonRepo();
+    writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
+    writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ trace_id: null, notes: "wired it up" })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("quotes the agent's notes as plain text, whatever control bytes they carry", async () => {
+    // The notes are the model's own writing, decoded from JSON where an escape
+    // is six plain characters, so a sequence in them reached the terminal whole.
+    const ESC = String.fromCharCode(27);
+    const BEL = String.fromCharCode(7);
+    const CSI = String.fromCharCode(0x9b);
+    const notes = [
+      `${ESC}[2J${ESC}[31mBlocked:${ESC}[0m npm install`,
+      `was\trefused.\r\nSee ${ESC}]8;;https://example.test${BEL}the log${ESC}]8;;${BEL}`,
+      `${CSI}1Anow${String.fromCharCode(0)} and ${ESC}7done.`,
+    ].join("\n");
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    const [message] = (result.error?.message ?? "").split("\n\n");
+    expect(message).toContain(
+      "It reported: Blocked: npm install was refused. See the log now and done.",
+    );
+    const controls = [...(message ?? "")].filter((c) => {
+      const code = c.charCodeAt(0);
+      return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    });
+    expect(controls).toEqual([]);
+  });
+
+  it("still cuts the notes at 200 characters once they are plain", async () => {
+    const ESC = String.fromCharCode(27);
+    const notes = `${ESC}[31m${"a".repeat(150)}${ESC}[0m ${"b".repeat(150)}`;
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    const [message] = (result.error?.message ?? "").split("\n\n");
+    const quoted = message?.slice(message.indexOf("It reported: ") + "It reported: ".length);
+    expect(quoted).toBe(`${"a".repeat(150)} ${"b".repeat(48)}…`);
+  });
+
+  it("sends an agent that could not pick the service to --service, not --resume", async () => {
+    // Two services and no answer from the user: setup leaves the choice to the
+    // agent, which stops and lists the candidates when it cannot tell. A
+    // `--resume` hands it the same choice again.
+    for (const name of ["svc-a", "svc-b"]) {
+      mkdirSync(join(dir, name), { recursive: true });
+      writeFileSync(join(dir, name, "requirements.txt"), "fastapi\n");
+      writeFileSync(join(dir, name, "main.py"), "print(1)\n");
+    }
+    const notes = "Two candidates: svc-a (FastAPI) and svc-b (FastAPI). I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.selected?.agentMustIdentify).toBe(true);
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    const [message] = plain(result.error?.message ?? "").split("\n\n");
+    expect(message).toBe(
+      `Claude Code finished without changing any files, so no service is instrumented. It reported: ${notes}`,
+    );
+    const remedy = plain(result.error?.remedy ?? "");
+    expect(remedy).toContain(
+      "Rerun setup on the service you mean:\n  traceroot setup --service <path>",
+    );
+    expect(remedy).not.toContain("--resume");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("reads the report on a run that worked, and carries on as before", async () => {
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: stream(reply({ files_changed: ["main.py"], trace_id: null, notes: "ran once" })),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(ctx.instrumentation?.reported).toEqual({
+      filesChanged: ["main.py"],
+      sdkVersion: null,
+      traceId: null,
+      notes: "ran once",
+    });
+    expect(result.checkpoint.completedStages).toContain("verify_trace");
+  });
+
+  it("reads no report from a stream that was cut off", async () => {
+    // The closing event never arrived whole, which is the same as no block:
+    // the report is null and the run is judged on what is on disk, as it was
+    // for every Claude Code run before the report was read.
+    pythonRepo();
+    const whole = stream(reply({ files_changed: [], trace_id: null }));
+    const process = fakeRunProcess({
+      results: { claude: { output: whole.slice(0, whole.length - 40) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.reported).toBeNull();
+    expect(result.error).toBeNull();
+  });
+
+  it("still reads Codex's reply as the text it prints", async () => {
+    // `codex exec` prints its reply as plain text, so its block was always
+    // read, and reading Claude Code's stream must not change that.
+    pythonRepo();
+    const base = fakeRunProcess({ instrument: false });
+    const run: SetupDeps["runProcess"] = async (o) => {
+      const result = await base.run(o);
+      return o.program === "codex"
+        ? {
+            ...result,
+            output: codexCapture(o.stdin ?? "", reply({ files_changed: [], notes: "refused" })),
+          }
+        : result;
+    };
+    const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: run });
+    const { ctx } = makeCtx({ flags: { agent: "codex" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.reported?.notes).toBe("refused");
+    expect(plain(result.error?.message ?? "")).toContain("without changing any files");
+  });
+});
+
 describe("the agent's own account of a failed run", () => {
-  /** An agent's completion block, as it arrives on stdout. */
+  /** An agent's completion block, as Claude Code's stream carries it: in its closing event. */
   function completion(body: Record<string, unknown>, prose = "done"): string {
-    return [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n");
+    return claudeResult(
+      [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n"),
+    );
   }
 
   /** The written transcript, or null when the run left none. */
@@ -5240,6 +5835,122 @@ describe("the agent's own account of a failed run", () => {
     expect(written).not.toBeNull();
     expect(written).not.toContain(key);
     expect(written).toContain("<redacted>");
+  });
+
+  it("keeps the output of an agent whose run sent no trace", async () => {
+    // Exit 0, the entry point edited, a report of the edit: every check in the
+    // stage passes, and the first thing found wrong is the trace that never
+    // came. Whatever the agent ran, or stopped short of running, is in its
+    // output and nowhere else.
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: [
+            '{"type":"system","subtype":"init","tools":["Read","Edit","Write","Bash"]}',
+            '{"type":"user","message":"Bash(python main.py) was denied"}',
+            completion({ files_changed: ["main.py"], trace_id: null }),
+          ].join("\n"),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    // A report with no notes adds nothing to the message.
+    expect(result.error?.message.split("\n\n")[0]).toMatch(/^No trace arrived within \d+s\.$/);
+    expect(transcript()).toContain("was denied");
+    const remedy = plain(result.error?.remedy ?? "");
+    expect(remedy).toContain(
+      `What Claude Code printed is in ${AGENT_OUTPUT_PATH} — the only record of what it tried, including anything it was refused.`,
+    );
+    expect(remedy).toContain(
+      "It can quote your repository's files, secrets included, so check it before you share it.",
+    );
+    // Beside the cause it bears on, and ahead of the instructions to rerun.
+    expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeGreaterThan(remedy.indexOf("never ran"));
+    expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeLessThan(remedy.indexOf("--resume"));
+  });
+
+  it("quotes the agent's notes when no trace arrives after it", async () => {
+    // The agent's report is the one account of the run that is not a guess,
+    // and the timeout is where a run it stopped short of finishing ends up.
+    const ESC = String.fromCharCode(27);
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: completion({
+            files_changed: ["main.py"],
+            trace_id: null,
+            notes: `Instrumented main.py.\nCould not run it: ${ESC}[31mpython3 was refused${ESC}[0m.`,
+          }),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    const [message, remedy] = (result.error?.message ?? "").split("\n\n");
+    expect(message).toMatch(
+      /^No trace arrived within \d+s\. Claude Code reported: Instrumented main\.py\. Could not run it: python3 was refused\.$/,
+    );
+    // The rest of the error is what it was.
+    expect(remedy).toBe(result.error?.remedy);
+    expect(plain(remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+  });
+
+  it("keeps nothing on a timeout when this run launched no agent", async () => {
+    // A resume restores the stage and runs nothing, so there is no output of
+    // this run's to keep, and the remedy must not name a file from another run.
+    pythonRepo();
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.completedStages.push(
+      "precheck",
+      "authenticate",
+      "select_context",
+      "acquire_project_key",
+      "configure_repository",
+      "detect_stack",
+      "select_agent",
+      "install_agent_context",
+      "instrument",
+    );
+    previous.instrumentHandover = "agent";
+    writeCheckpoint(dir, previous);
+    const process = fakeRunProcess({
+      results: { claude: { output: completion({ files_changed: ["main.py"], trace_id: null }) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(transcript()).toBeNull();
+    expect(plain(result.error?.remedy ?? "")).not.toContain(AGENT_OUTPUT_PATH);
   });
 });
 
@@ -6534,6 +7245,213 @@ describe("watching the agent work", () => {
   });
 });
 
+describe("who the instrumentation task is written for", () => {
+  // One task, two readers. Setup's own agent runs captured, under permissions
+  // the launch sets, in an environment `buildAgentEnv` builds and in the
+  // service directory. The task file is for an agent the user opens, where none
+  // of that holds. Both read out of real runs, so the route each task took is
+  // the one under test.
+
+  /** A Python service in `api/`, below the repository root. */
+  function apiService(): void {
+    mkdirSync(join(dir, "api"), { recursive: true });
+    writeFileSync(join(dir, "api", "pyproject.toml"), '[project]\ndependencies = ["fastapi"]\n');
+    writeFileSync(join(dir, "api", "main.py"), "print('hi')\n");
+  }
+
+  const services = [
+    { name: "a root service", make: pythonRepo, service: undefined, changed: " M main.py" },
+    { name: "a service in api/", make: apiService, service: "api", changed: " M api/main.py" },
+  ] as const;
+
+  /** What setup wrote for the user's own agent, and what it said about it. */
+  async function taskFile(service: string | undefined): Promise<{ task: string; said: string }> {
+    // `.claude/` makes the hand-over name Claude Code, as in the reproduction.
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    const { ctx, err } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1, service } });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    );
+    expect(result.error).toBeNull();
+    return {
+      task: readFileSync(join(dir, ".traceroot", "prompts", "setup-instrument.md"), "utf8"),
+      said: plain(err.data),
+    };
+  }
+
+  /** The task setup launched Claude Code with, and the launch itself. */
+  async function launched(
+    service: string | undefined,
+    changed: string,
+  ): Promise<{ task: string; launch: RecordedRun }> {
+    initGit();
+    const process = fakeRunProcess({ gitStatus: ["", changed] });
+    const { ctx } = makeCtx({ flags: { agent: "claude", service } });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: process.run }),
+    );
+    expect(result.error).toBeNull();
+    const launch = process.runs.find((run) => run.program === "claude");
+    expect(launch).toBeDefined();
+    return { task: launch?.stdin ?? "", launch: launch as RecordedRun };
+  }
+
+  for (const { name, make, service, changed } of services) {
+    it(`writes the task file for an agent the user runs, for ${name}`, async () => {
+      make();
+      const { task, said } = await taskFile(service);
+
+      expect(task).toContain("ask the user");
+      expect(task).not.toContain("cannot ask questions");
+      expect(task).not.toContain("Your permissions are already set");
+      // The env file this run wrote holds the key, and nothing took it out of
+      // the user's own environment, so the task says only that the file does.
+      expect(task).toContain("A file the application loads holds `TRACEROOT_API_KEY`");
+      expect(task).not.toContain("already set in your environment");
+      expect(task).not.toContain("**not** in your environment");
+      expect(task).not.toContain("**your** environment");
+      expect(task).not.toContain("skills install");
+
+      if (service === undefined) {
+        expect(task).not.toContain("Work from");
+        expect(said).toContain("Run it in Claude Code, then rerun");
+      } else {
+        // The task's commands and paths are relative to `api/`, and the user
+        // ran setup from the root. The task file is at the root, so the agent
+        // they open in `api/` is pointed at it from there.
+        expect(task).toContain("Work from `api`");
+        expect(said).toContain(
+          `Open Claude Code in api/ and run ${join("..", ".traceroot", "prompts", "setup-instrument.md")} there, then rerun`,
+        );
+      }
+    });
+
+    it(`launches setup's own agent with the task written for it, for ${name}`, async () => {
+      make();
+      const { task, launch } = await launched(service, changed);
+
+      expect(launch.cwd).toBe(service === undefined ? dir : join(dir, service));
+      expect(task).toContain("You are running non-interactively and cannot ask questions.");
+      expect(task).toContain("Your permissions are already set for this task");
+      // `buildAgentEnv` withholds the key whenever a file holds it, and the
+      // task says that once.
+      expect(task).toContain("`TRACEROOT_API_KEY` is **not** in your environment");
+      expect(launch.env.TRACEROOT_API_KEY).toBeUndefined();
+      expect(task).not.toContain("**your** environment");
+      expect(task).not.toMatch(/ask the user|stop and ask/);
+      expect(task).not.toContain("Work from");
+      expect(task).not.toContain("skills install");
+    });
+  }
+
+  it("does not tell the user's agent the key is in its environment when git kept it out of every file", async () => {
+    // The tracked-env-file refusal. Setup's own agent gets the key from
+    // `buildAgentEnv` then; an agent the user opens gets nothing, because
+    // nothing set it in their shell.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), "# committed by mistake\n");
+    const { ctx } = makeCtx({ flags: { instrument: false, traceTimeoutSec: 1 } });
+    const result = await runSetupMachine(
+      ctx,
+      makeDeps({
+        auth: authWithKey(),
+        traces: [],
+        runProcess: fakeRunProcess({
+          git: (args) => (args.includes("ls-files") ? { output: ".env\n" } : {}),
+        }).run,
+      }),
+    );
+
+    expect(result.error).toBeNull();
+    expect(ctx.refusedCredentialEnvFile).toBe(join(dir, ".env"));
+    const task = readFileSync(join(dir, ".traceroot", "prompts", "setup-instrument.md"), "utf8");
+    expect(task).not.toContain("already set in your environment");
+    expect(task).toContain("did not put `TRACEROOT_API_KEY` in a file the application loads");
+  });
+
+  /**
+   * Every command the task hands over to be run as written: the run line, each
+   * fenced shell block, and the check step 5 names. Commands the task names in
+   * order to forbid them are not instructions and are left out.
+   */
+  function commandsTheTaskRuns(task: string): string[] {
+    const commands: string[] = [];
+    const runLine = /run it with: `([^`]+)`/.exec(task)?.[1];
+    if (runLine !== undefined) {
+      commands.push(runLine);
+    }
+    for (const [, block] of task.matchAll(/```bash\n([\s\S]*?)```/g)) {
+      for (const line of (block ?? "").split("\n")) {
+        commands.push(...line.split(" && ").filter((part) => part.trim() !== ""));
+      }
+    }
+    const check = /1\. Run `([^`]+)` once/.exec(task)?.[1];
+    if (check !== undefined) {
+      commands.push(check);
+    }
+    return commands.map((command) => command.trim());
+  }
+
+  /** The command prefixes the launch approves, read out of its `Bash(<prefix>:*)` rules. */
+  function approvedPrefixes(args: readonly string[]): string[] {
+    return args.flatMap((arg) => /^Bash\((.+):\*\)$/.exec(arg)?.[1] ?? []);
+  }
+
+  it.each([
+    [
+      "a Python service with a virtualenv and a test suite",
+      () => {
+        pythonRepo();
+        mkdirSync(join(dir, ".venv", "bin"), { recursive: true });
+        writeFileSync(join(dir, ".venv", "bin", "python"), "");
+      },
+      undefined,
+      " M main.py",
+    ],
+    ["a Python service in api/ with no virtualenv", apiService, "api", " M api/main.py"],
+    [
+      "a TypeScript service",
+      () => {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { next: "^14" } }));
+        writeFileSync(join(dir, "index.ts"), "export {};\n");
+      },
+      undefined,
+      " M index.ts",
+    ],
+  ] as const)(
+    "allows every program the launched task tells the agent to run, for %s",
+    async (_, make, service, changed) => {
+      // Both halves from one run: the task the agent was handed and the rules
+      // it was launched with. A rule matches the start of a command literally,
+      // which is how Claude Code applies it.
+      make();
+      const { task, launch } = await launched(service, changed);
+      const prefixes = approvedPrefixes(launch.args);
+      const commands = commandsTheTaskRuns(task);
+
+      expect(commands.length).toBeGreaterThan(1);
+      for (const command of commands) {
+        const allowed = prefixes.some(
+          (prefix) => command === prefix || command.startsWith(`${prefix} `),
+        );
+        expect({ command, allowed }).toEqual({ command, allowed: true });
+      }
+      // And the CLI's own commands are named only as things not to run.
+      expect(task).not.toContain("skills install");
+      const cliCommands = [...task.matchAll(/`(traceroot [^`]+)`/g)]
+        .map((match) => match[1])
+        .filter((command) => command !== "traceroot setup");
+      expect(cliCommands.sort()).toEqual(["traceroot traces get", "traceroot traces list"]);
+      expect(task).toContain(
+        "Do not query the API yourself — not with\n`traceroot traces list`, not with `traceroot traces get`",
+      );
+    },
+  );
+});
+
 describe("--no-instrument", () => {
   it("writes the task and stops short of claiming a trace", async () => {
     pythonRepo();
@@ -6809,10 +7727,32 @@ describe("the agent a hand-over targets", () => {
     // Both are named, so the one it did not pick is not invisible.
     expect(said).toContain("Agents set up here: Claude Code, Codex");
     expect(said).toContain("Targeting Claude Code");
-    expect(said).toContain("--agent");
+    // With the flag that keeps it a hand-over: `--agent` alone launches the
+    // agent, with nobody there to confirm it. And by the ids the flag takes,
+    // which the list above does not show.
+    expect(said).toContain(
+      "to target another, rerun with `--no-instrument --agent <id>`, where <id> is one of claude, codex, generic.",
+    );
     // And not a word of the question itself.
     expect(said).not.toContain("Which coding agent");
     expect(ctx.agent?.id).toBe("claude");
+  });
+
+  it("keeps --manual in the flags that change the target of a manual hand-over", async () => {
+    pythonRepo();
+    withClaudeConfigured();
+    withCodexConfigured();
+    const { deps } = askRecorder(handoverDeps());
+    const { ctx, err } = makeCtx({
+      canPrompt: false,
+      flags: { method: "manual", traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    const said = plain(err.data);
+    expect(said).toContain("rerun with `--manual --agent <id>`");
+    expect(said).not.toContain("--no-instrument --agent");
   });
 
   it("keeps the choice out of a --json run's event stream", async () => {
@@ -8275,6 +9215,31 @@ describe("where a run leaves its files", () => {
     const launch = process.runs.find((run) => run.program === "claude");
     expect(launch).toBeDefined();
     expect(launch?.stdin ?? "").not.toContain("wrote `TRACEROOT_API_KEY` into");
+  });
+
+  it("does not ask the user to copy a key it never showed them into another file", async () => {
+    // The refusal used to end "add it to an untracked env file to persist it",
+    // but the run never prints the key, so there was nothing to add. It now
+    // says what the closing block says, plus the one way to get a file written.
+    pythonRepo();
+    initGit();
+    writeFileSync(join(dir, ".env"), "# committed by mistake\n");
+    const process = fakeRunProcess({
+      gitStatus: ["", " M main.py"],
+      results: { git: { output: ".env\n" } },
+    });
+    const { ctx, err } = makeCtx({ flags: { agent: "claude", project: "demo" } });
+
+    await runSetupMachine(ctx, mintingDeps(process.run));
+
+    expect(plain(err.data)).toContain(
+      ".env is tracked by git, so the API key was not written to it. The key is available to this setup run only. Give your deployment a key of its own, or untrack .env and rerun setup to have one written to it.",
+    );
+    expect(plain(err.data)).not.toContain("untracked env file");
+    // And the premise: the key really is nowhere in what the run printed.
+    const key = ctx.credential?.key.reveal();
+    expect(key).toBeDefined();
+    expect(err.data).not.toContain(key as string);
   });
 
   it("survives a credential file it cannot read, rather than failing the stage", async () => {

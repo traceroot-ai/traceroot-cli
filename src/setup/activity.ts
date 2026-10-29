@@ -82,6 +82,24 @@ function describe(name: string, input: Record<string, unknown>): ActivityLine | 
   }
 }
 
+/** One line of the stream as an event, or null for a line that is not one. */
+function decodeEvent(line: string): Record<string, unknown> | null {
+  const trimmed = line.trim();
+  if (trimmed === "" || !trimmed.startsWith("{")) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+  return parsed as Record<string, unknown>;
+}
+
 /**
  * Parses Claude Code's `--output-format stream-json` feed.
  *
@@ -101,21 +119,10 @@ export function createActivityParser(): (chunk: string) => ActivityLine[] {
 
     const found: ActivityLine[] = [];
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed === "" || !trimmed.startsWith("{")) {
+      const record = decodeEvent(line);
+      if (record === null) {
         continue;
       }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        continue;
-      }
-      if (typeof parsed !== "object" || parsed === null) {
-        continue;
-      }
-
-      const record = parsed as Record<string, unknown>;
       const message = record.message;
       if (typeof message !== "object" || message === null) {
         continue;
@@ -145,4 +152,30 @@ export function createActivityParser(): (chunk: string) => ActivityLine[] {
     }
     return found;
   };
+}
+
+/**
+ * The agent's final reply, read out of the `result` event that closes a
+ * captured stream, or null when the stream has none.
+ *
+ * The reply is where the completion block is (see `parseCompletion`), and the
+ * raw stream cannot be searched for it. Every event is one line of JSON, so the
+ * newlines that fence the block arrive escaped and a pattern written for the
+ * reply never matches. Decoded, the event gives the reply back as the agent
+ * wrote it.
+ *
+ * As forgiving as the feed. A stream that was cut off, or one whose closing
+ * event changed shape in a release, has no reply to give, and the run carries
+ * on exactly as it does for an agent that wrote no block. Read from the end,
+ * because the closing event is the last line of a stream that finished.
+ */
+export function finalReply(output: string): string | null {
+  const lines = output.split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const record = decodeEvent(lines[i] ?? "");
+    if (record?.type === "result") {
+      return typeof record.result === "string" ? record.result : null;
+    }
+  }
+  return null;
 }

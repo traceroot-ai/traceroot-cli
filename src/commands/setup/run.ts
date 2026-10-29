@@ -18,7 +18,6 @@
  */
 import { join, resolve } from "node:path";
 import type { Command } from "commander";
-import { displaySkillPath } from "../../agents/index.js";
 import { loadOptionalEnvFileFromDisk } from "../../config/envFile.js";
 import { configPath, loadConfigOrThrow } from "../../config/manager.js";
 import type { ResolvedAuth } from "../../config/resolve.js";
@@ -395,7 +394,7 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       // the entry point imports where detection cannot see it, so that claim
       // would be false — and the steps are no longer "above".
       const task = ctx.instrumentation?.promptPath ?? null;
-      const runTask = task === null ? null : runTaskSentence(ctx, displaySkillPath(ctx.root, task));
+      const runTask = task === null ? null : runTaskSentence(ctx, task, false);
       const said =
         ctx.handedOverThisRun === true
           ? `No trace yet: setup changed no code, so the service has no TraceRoot in it. ${runTask === null ? "Apply the steps above." : `${runTask}.`}`

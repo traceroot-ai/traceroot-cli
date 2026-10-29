@@ -230,6 +230,137 @@ describe("where the task says the agent's own credential is", () => {
   });
 });
 
+describe("the task handed to an agent the user opens", () => {
+  // The task file. Setup's own agent runs captured, under permissions setup set
+  // and in an environment `buildAgentEnv` built. An agent the user opens has
+  // none of that, so it is told none of it.
+  const handedOver = (overrides: Record<string, unknown> = {}): string =>
+    task({ interactive: true, ...overrides });
+
+  it("does not say it cannot ask, or that its permissions are already set", () => {
+    const text = handedOver();
+    expect(text).toContain("ask the user");
+    expect(text).not.toContain("cannot ask questions");
+    expect(text).not.toContain("Your permissions are already set");
+    expect(text).not.toContain("commands named here are allowed");
+  });
+
+  it("does not put the key in its environment, whether or not a file holds it", () => {
+    // Nothing put the key in the user's agent's environment when no file holds
+    // it, and nothing took it out when one does.
+    for (const credentialEnvFile of [null, "./.env"]) {
+      const text = handedOver({
+        envFiles: ["./.env"],
+        credentialFiles: credentialEnvFile === null ? [] : ["/repo/.env"],
+        credentialEnvFile,
+      });
+      expect(text).not.toContain("already set in your environment");
+      expect(text).not.toContain("**not** in your environment");
+      expect(text).not.toContain("**your** environment");
+    }
+  });
+
+  it("says the application reads the key from its environment when no file holds it", () => {
+    const text = handedOver({ credentialFiles: [] });
+    expect(text).toContain("did not put `TRACEROOT_API_KEY` in a file the application loads");
+    expect(text).toContain("do not ask them to paste it to you");
+  });
+
+  it("asks the user to pick when no manifest identified the service", () => {
+    const text = handedOver({ service: service({ agentMustIdentify: true }) });
+    expect(text).toContain("**stop and ask**");
+    expect(text).toContain("have the user pick exactly one");
+  });
+
+  it("names the directory to work from for a service below the repository root", () => {
+    expect(handedOver({ service: service({ path: "api" }) })).toContain("Work from `api`");
+    expect(handedOver()).not.toContain("Work from");
+  });
+
+  it("does not describe a sandbox it is not in", () => {
+    const text = handedOver({ envFiles: ["./.env"] });
+    expect(text).not.toContain("refused by your own sandbox");
+    expect(text).toContain("Do not do this in your shell instead");
+  });
+});
+
+describe("the task setup launches its own agent with", () => {
+  it("never tells it to ask the user, even when it has to find the service", () => {
+    // It runs captured, so a question reaches nobody. It reports the
+    // candidates instead, in the notes setup quotes when the run stops.
+    const text = task({ service: service({ agentMustIdentify: true }) });
+    expect(text).toContain("**stop and report**");
+    expect(text).toContain("candidate paths you found in the `notes`");
+    expect(text).not.toContain("stop and ask");
+    expect(text).not.toMatch(/ask the user|have the user pick/);
+  });
+
+  it("keeps the claims that are true of the launch", () => {
+    const text = task({ envFiles: ["./.env"] });
+    expect(text).toContain("You are running non-interactively and cannot ask questions.");
+    expect(text).toContain("Your permissions are already set for this task");
+    expect(text).toContain("refused by your own sandbox");
+    expect(text).not.toContain("Work from");
+  });
+});
+
+describe("what either task says", () => {
+  for (const interactive of [false, true]) {
+    const which = interactive ? "the task file" : "the launched task";
+
+    it(`${which} says one thing about where the key is when a file holds it`, () => {
+      // The hard rule and step 6 both render when the credential's env file
+      // holds the key. Step 6 used to say the key was in the agent's own
+      // environment, which the launched rule denies and the task file's cannot
+      // know.
+      const text = task({
+        interactive,
+        envFiles: ["./.env"],
+        credentialFiles: ["/repo/.env"],
+        credentialEnvFile: "./.env",
+      });
+      expect(text).toContain(
+        "how the key reaches the SDK — in this run, and in every run after it",
+      );
+      expect(text).not.toContain("**your** environment");
+      expect(text).not.toContain("already set in your environment");
+    });
+
+    it(`${which} does not say the application's own credentials are missing from the environment`, () => {
+      // The agent's environment is the user's, minus one variable: an exported
+      // LLM key is in it.
+      const text = task({ interactive, envFiles: ["./.env"] });
+      expect(text).not.toMatch(/They are\s+not in your environment/);
+      expect(text).toContain("should not depend on your environment happening to hold them");
+    });
+
+    it(`${which} names no command for a missing skill, and carries on without it`, () => {
+      // `traceroot skills install` is not on the launched agent's allow-list,
+      // is not on PATH under npx, needs `--agent` without a terminal, and
+      // installs beside the working directory rather than where setup did.
+      // Nor does the agent stop: setup warns and continues when its own install
+      // fails, because the task carries the API it needs in step 3.
+      const text = task({ interactive });
+      expect(text).not.toContain("skills install");
+      expect(text).toMatch(
+        /If it is missing, do not try to\s+install it: (tell the user|say so in your report) and carry on with the API written out in step 3\./,
+      );
+      expect(text).not.toMatch(/If it is missing, stop/);
+    });
+
+    it(`${which} points into the skill only for the steps it allows`, () => {
+      // The skill's verify step runs a flow, confirms the trace and logs its
+      // id. Step 7 forbids all three, so the pointer stops before it.
+      const text = task({ interactive });
+      expect(text).toContain("Read it for **steps 4 and 5**");
+      expect(text).not.toContain("step 4 onward");
+      expect(text).toContain(
+        "Its step 6, verify, does not apply here either: steps 6 and 7 of this task replace it",
+      );
+    });
+  }
+});
+
 describe("the definition of done", () => {
   it("promises no output the SDK does not produce", () => {
     // The step used to quote a `[traceroot] trace <id> → <url>` line and call
@@ -567,7 +698,10 @@ describe("the manual steps", () => {
         packageManager: "npm",
       }),
     });
-    expect(ts).not.toContain("stands in for your provider");
+    // Its own stand-in, named in `instrumentModules` rather than as an
+    // `Integration` member the Node package does not have.
+    expect(ts).toContain("OpenAI stands in for your provider");
+    expect(ts).not.toContain("Anthropic stands in for your provider");
     expect(ts).toMatch(/\n {7}\}\n/);
   });
 
@@ -593,5 +727,316 @@ describe("the manual steps", () => {
     const text = manual({ sdk: { ...SDK, package: "traceroot" }, envFiles: [] });
     expect(text).not.toContain("dotenv");
     expect(text).toContain("python3 -m pip install traceroot==1.2.3\n");
+  });
+});
+
+describe("the API each package's instructions name", () => {
+  // Read from each package's source at the version setup pins when the
+  // registry cannot be reached: `traceroot` 0.3.0, `@traceroot-ai/traceroot`
+  // 0.5.0 and `@traceroot-ai/mastra` 0.1.1. The first two have the same
+  // tracing names in 0.4.0 and 0.6.0, their current releases. Evaluation
+  // exports are left out, because no instruction names one.
+  //
+  // The Node instructions used to be the Python SDK's — `Integration`,
+  // `using_attributes`, a bare `initialize()` — under a line saying they were
+  // verified against the Node package, and the Mastra ones imported from
+  // `@traceroot-ai/traceroot`, which nothing had installed.
+  const EXPORTS: Readonly<Record<string, readonly string[]>> = {
+    traceroot: [
+      "__version__",
+      "initialize",
+      "get_client",
+      "flush",
+      "shutdown",
+      "observe",
+      "TracerootClient",
+      "Integration",
+      "get_current_trace_id",
+      "get_current_span_id",
+      "update_current_span",
+      "update_current_trace",
+      "using_attributes",
+    ],
+    "@traceroot-ai/traceroot": [
+      "TraceRoot",
+      "initialize",
+      "observe",
+      "updateCurrentSpan",
+      "updateCurrentTrace",
+      "getCurrentTraceId",
+      "getCurrentSpanId",
+      "getCurrentSpan",
+      "usingAttributes",
+      "SpanAttributes",
+      "OpenAIAgentsProcessor",
+      "startSpan",
+      "usingSpan",
+      "instrumentPiAgentCore",
+    ],
+    "@traceroot-ai/mastra": ["TraceRootExporter"],
+  };
+  // The Node SDK's `flush` is a static on `TraceRoot`, not an export.
+  const TRACEROOT_STATICS = [
+    "initialize",
+    "flush",
+    "shutdown",
+    "isInitialized",
+    "isTracingActive",
+    "resolveCredentials",
+  ];
+  const INSTRUMENT_MODULES = [
+    "openAI",
+    "anthropic",
+    "langchain",
+    "claudeAgentSDK",
+    "bedrock",
+    "typeSafe",
+    "openaiAgents",
+    "piCodingAgent",
+    "piAgentCore",
+  ];
+  const INTEGRATION_MEMBERS = [
+    "OPENAI",
+    "ANTHROPIC",
+    "LANGCHAIN",
+    "GOOGLE_GENAI",
+    "CREWAI",
+    "OPENAI_AGENTS",
+    "CLAUDE_AGENT_SDK",
+    "LLAMA_INDEX",
+    "AUTOGEN",
+    "AGNO",
+    "GROQ",
+    "DSPY",
+    "GOOGLE_ADK",
+    "MISTRAL",
+    "PYDANTIC_AI",
+    "BEDROCK",
+    "AGENT_FRAMEWORK",
+  ];
+
+  const variants = [
+    {
+      name: "Python",
+      sdk: { ...SDK, package: "traceroot" },
+      service: service({ testCommand: "pytest" }),
+      // Each module the code imports that setup installs, with what step 1 of
+      // the manual steps installs for it; then the ones the application has.
+      installs: { traceroot: "traceroot==1.2.3", dotenv: "python-dotenv" },
+      appModules: ["pathlib", "anthropic"],
+    },
+    {
+      name: "TypeScript",
+      sdk: SDK,
+      service: service({
+        language: "typescript",
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+      }),
+      installs: { "@traceroot-ai/traceroot": "@traceroot-ai/traceroot@1.2.3", dotenv: "dotenv" },
+      appModules: ["openai"],
+    },
+    {
+      name: "Mastra",
+      sdk: { ...SDK, package: "@traceroot-ai/mastra" },
+      service: service({
+        language: "typescript",
+        framework: "mastra",
+        entryPoint: "src/index.ts",
+        packageManager: "npm",
+      }),
+      installs: {
+        "@traceroot-ai/mastra": "@traceroot-ai/mastra@1.2.3",
+        dotenv: "dotenv",
+        "@mastra/observability": "npm install @mastra/observability",
+      },
+      appModules: [],
+    },
+  ] as const;
+
+  function render(variant: (typeof variants)[number]): { task: string; manual: string } {
+    return {
+      task: task({ service: variant.service, sdk: variant.sdk, envFiles: ["./.env"] }),
+      manual: manualInstructions({
+        service: variant.service,
+        sdk: variant.sdk,
+        skillPath: ".claude/skills/traceroot-instrument-repo",
+        envFiles: ["./.env"],
+        pythonInterpreter: null,
+      }),
+    };
+  }
+
+  /** Every `[module, name]` an `import { … } from` or a `from … import` brings in. */
+  function importedNames(text: string): Array<[string, string]> {
+    const found: Array<[string, string]> = [];
+    for (const [, names = "", module = ""] of text.matchAll(
+      /import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g,
+    )) {
+      for (const name of names.split(",")) found.push([module, name.trim()]);
+    }
+    for (const [, module = "", names = ""] of text.matchAll(/^\s*from (\S+) import ([^#\n]+)/gm)) {
+      for (const name of names.split(",")) found.push([module, name.trim()]);
+    }
+    return found.filter(([, name]) => name !== "");
+  }
+
+  /** Every module the text imports, in either language. */
+  function importedModules(text: string): string[] {
+    return [
+      ...[...text.matchAll(/\bfrom\s+"([^"]+)"/g)].map((m) => m[1]),
+      ...[...text.matchAll(/^\s*from (\S+) import /gm)].map((m) => m[1]),
+      // Python's bare `import x`; a Node default import carries a `from`.
+      ...[...text.matchAll(/^\s*import ([\w.]+)[ \t]*(?:#.*)?$/gm)].map((m) => m[1]),
+    ].filter((m): m is string => m !== undefined);
+  }
+
+  /** The words of the fenced block that follows `marker`. */
+  function blockAfter(text: string, marker: string): string[] {
+    const at = text.indexOf(marker);
+    expect(at).toBeGreaterThan(-1);
+    const block = /```\n([\s\S]*?)```/.exec(text.slice(at))?.[1] ?? "";
+    return block.split(/\s+/).filter((word) => word !== "");
+  }
+
+  /** The text from `start` up to the next `end`; both must be there. */
+  function between(text: string, start: string, end: string): string {
+    const from = text.indexOf(start);
+    expect(from).toBeGreaterThan(-1);
+    const to = text.indexOf(end, from);
+    expect(to).toBeGreaterThan(from);
+    return text.slice(from, to);
+  }
+
+  for (const variant of variants) {
+    it(`imports only names the installed package exports, for ${variant.name}`, () => {
+      for (const text of Object.values(render(variant))) {
+        for (const [module, name] of importedNames(text)) {
+          if (module in EXPORTS) {
+            expect(module).toBe(variant.sdk.package);
+            expect(EXPORTS[module]).toContain(name);
+          }
+        }
+        for (const [, member = ""] of text.matchAll(/\bTraceRoot\.(\w+)\(/g)) {
+          expect(TRACEROOT_STATICS).toContain(member);
+        }
+        for (const [, member = ""] of text.matchAll(/\btraceroot\.(\w+)\(/g)) {
+          expect(EXPORTS.traceroot).toContain(member);
+        }
+        for (const [, member = ""] of text.matchAll(/\bIntegration\.(\w+)/g)) {
+          expect(INTEGRATION_MEMBERS).toContain(member);
+        }
+        for (const [, keys = ""] of text.matchAll(/instrumentModules: \{([^}]*)\}/g)) {
+          for (const key of keys.split(",")) {
+            expect(INSTRUMENT_MODULES).toContain(key.split(":")[0]?.trim());
+          }
+        }
+      }
+    });
+
+    it(`imports nothing the install step did not install, for ${variant.name}`, () => {
+      const { task: text, manual } = render(variant);
+      const installs: Readonly<Record<string, string>> = variant.installs;
+      const appModules: readonly string[] = variant.appModules;
+      for (const rendered of [text, manual]) {
+        const imported = importedModules(rendered).filter((module) => !appModules.includes(module));
+        expect(new Set(imported)).toEqual(new Set(Object.keys(installs)));
+      }
+      const step1 = between(manual, "\n  1. ", "\n  2. ");
+      for (const install of Object.values(installs)) {
+        expect(step1).toContain(install);
+      }
+      // The task's step 2 installs the SDK and any peer it needs; step 6 has the
+      // agent add dotenv to the manifest once it imports it.
+      const step2 = between(text, "### 2.", "### 3.");
+      for (const [module, install] of Object.entries(installs)) {
+        if (module === "dotenv") {
+          expect(text).toContain("Add the dotenv package to the manifest if you import it.");
+        } else {
+          expect(step2).toContain(install);
+        }
+      }
+    });
+  }
+
+  it("lists Python's Integration members and whole API only for Python", () => {
+    const python = render(variants[0]).task;
+    expect(python).toContain("That is the whole API you need");
+    expect(python).toContain("`Integration` members, verified against `traceroot==1.2.3`");
+    expect(blockAfter(python, "`Integration` members").sort()).toEqual(
+      [...INTEGRATION_MEMBERS].sort(),
+    );
+    for (const variant of variants.slice(1)) {
+      for (const text of Object.values(render(variant))) {
+        expect(text).not.toContain("whole API");
+        expect(text).not.toContain("verified against");
+        expect(text).not.toMatch(/\bIntegration\b/);
+      }
+    }
+  });
+
+  it("names no Python-only file, function or server in a Node task", () => {
+    for (const variant of variants.slice(1)) {
+      const { task: text } = render(variant);
+      for (const name of ["conftest.py", "pytest.ini", "using_attributes", "uvicorn", "gunicorn"]) {
+        expect(text).not.toContain(name);
+      }
+    }
+  });
+
+  it("names the provider in instrumentModules and says what a bare initialize() does", () => {
+    const { task: text, manual } = render(variants[1]);
+    for (const rendered of [text, manual]) {
+      expect(rendered).toContain(
+        "TraceRoot.initialize({ instrumentModules: { openAI: OpenAI } });",
+      );
+      expect(rendered).not.toContain("  initialize();");
+      expect(rendered).toContain("main();");
+    }
+    expect(text).toContain(
+      "auto-instruments only modules loaded with `require()` — CommonJS — so in an ES module it\ninstruments nothing",
+    );
+    expect(manual).toContain("instrumentModules out and initialize() instruments only modules");
+    expect(manual).toContain(
+      "loaded with require() (CommonJS), so an ES module gets no model spans.",
+    );
+    expect(blockAfter(text, "The keys it takes in").sort()).toEqual([...INSTRUMENT_MODULES].sort());
+  });
+
+  it("puts Mastra's exporter on the application's Mastra instance", () => {
+    const { task: text, manual } = render(variants[2]);
+    for (const rendered of [text, manual]) {
+      expect(rendered).toContain('import { TraceRootExporter } from "@traceroot-ai/mastra";');
+      expect(rendered).toContain("exporters: [new TraceRootExporter()]");
+      expect(rendered).not.toContain('"@traceroot-ai/traceroot"');
+      // The exporter reads the key as it is constructed, so the load goes first.
+      const load = rendered.indexOf("config({ path:");
+      expect(load).toBeGreaterThan(-1);
+      expect(load).toBeLessThan(rendered.indexOf("new TraceRootExporter()"));
+    }
+    // The file that constructs the instance is not one detection names.
+    expect(text).toContain("<path from this file to the env file>");
+    expect(text).toContain("there is no `initialize()` to call");
+    expect(text).not.toContain("async function main()");
+  });
+
+  it("asks a Mastra service for no span the core SDK would have to write", () => {
+    // Step 4's bar is met with `observe` and `usingAttributes`, which come from
+    // a package a Mastra service does not install. Mastra traces the run
+    // itself, so the step asks only for the user and the session, through
+    // Mastra's own tracing metadata.
+    const { task: text, manual } = render(variants[2]);
+    for (const rendered of [text, manual]) {
+      expect(rendered).not.toContain("observe(");
+      expect(rendered).not.toContain("usingAttributes");
+    }
+    const step4 = text.slice(text.indexOf("### 4."), text.indexOf("### 5."));
+    expect(step4).toContain("Write no spans by hand in this service");
+    expect(step4).toContain("tracingOptions: { metadata: { userId, sessionId } }");
+    expect(step4).not.toContain("One span per tool this application's own code calls");
+    // Every other service keeps the span-by-span bar.
+    for (const variant of variants.slice(0, 2)) {
+      expect(render(variant).task).toContain("One span per tool this application's own code calls");
+    }
   });
 });
