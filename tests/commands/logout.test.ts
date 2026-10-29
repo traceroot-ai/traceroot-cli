@@ -255,9 +255,11 @@ describe("runLogout with a config key left behind", () => {
     expect(second.writeConfigCalls).toEqual([{ host_url: "https://api.example.com" }]);
   });
 
-  it("says so for a config host written with a trailing slash, or with none", async () => {
+  it("says so for a config host with a trailing slash, left blank, or missing", async () => {
     for (const config of [
       { api_key: "tr_config_key", host_url: "https://api.example.com/" },
+      { api_key: "tr_config_key", host_url: "" },
+      { api_key: "tr_config_key", host_url: " / " },
       { api_key: "tr_config_key" },
     ]) {
       const h = harness({ sessionToken: SESSION, withoutSession: CONFIG_KEY, config });

@@ -271,7 +271,9 @@ function configKeyRemains(deps: LogoutDeps): boolean {
     return false;
   }
   const configured = deps.readConfig()?.host_url;
-  return configured === undefined || normalizeHostUrl(configured) === deps.host;
+  // Resolution skips a host that normalizes to nothing, as it does a missing one.
+  const host = configured === undefined ? "" : normalizeHostUrl(configured);
+  return host === "" || host === deps.host;
 }
 
 export function registerLogout(program: Command): void {
