@@ -1170,7 +1170,7 @@ async function browserSignIn(
   wizardNote(
     ctx.writers,
     [
-      wizardEmphasis("Continue in your browser to finish setup."),
+      wizardEmphasis("Continue in your browser."),
       "",
       wizardAside("Sign in — or create a free account — and approve this terminal."),
     ],
