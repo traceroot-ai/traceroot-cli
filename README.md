@@ -189,18 +189,7 @@ where it goes. An API key is already scoped to one project and does not carry
 `--project` — pass `--project-id` instead (or set `project_id` in
 `--from-file`).
 
-### Generated commands
-
-`traces`, `detectors`, `findings`, `alerts`, `dashboards`, `widgets`,
-`workspaces`, `projects`, `sql`, `datasets`, and `evals` are generated from the
-tool registry shipped in
-[`@traceroot-ai/tools`](https://www.npmjs.com/package/@traceroot-ai/tools): each
-entry's input schema drives its flags, and its response type drives the default
-rendering. Adding a new backend endpoint to the CLI is a registry bump
-plus one placement line in `src/registry/naming.ts` — no hand-written command
-handler needed. `setup`, `login`, `logout`, `status`, `skills`, `instrument`,
-and `doctor` stay hand-written: they are auth flows or local tooling with no
-registry entry.
+### More examples
 
 ```sh
 traceroot traces get 99224be337d725fd5e8f2e7b45dc22ef
