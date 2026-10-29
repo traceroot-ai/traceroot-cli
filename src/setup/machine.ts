@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { AGENT_IDS, displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import type { AgentAdapter } from "../agents/types.js";
 import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
@@ -38,6 +38,7 @@ import {
 import { DEFAULT_HOST } from "../commands/constants.js";
 import { loadOptionalEnvFileFromDisk, parseEnvFile } from "../config/envFile.js";
 import {
+  configPath as realConfigPath,
   readConfig as realReadConfig,
   readConfigText as realReadConfigText,
   restoreConfigText as realRestoreConfigText,
@@ -50,8 +51,8 @@ import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
 import { createActivityParser, finalReply } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
-import { instrumentTaskPath, relativeToRoot } from "./artifacts.js";
-import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
+import { ensureGitignore, instrumentTaskPath, relativeToRoot } from "./artifacts.js";
+import { checkpointPath, hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
 import {
   HOST_ENV,
   KEY_ENV,
@@ -196,7 +197,8 @@ export interface SetupDeps {
   prompt: (question: string, stage?: SetupStage) => Promise<string>;
   promptHidden: (question: string, stage: SetupStage) => Promise<string>;
   resolveSdk: (pkg: SdkPackage) => Promise<ResolvedSdk>;
-  writeConfig: (config: { api_key: string; host_url: string }) => void;
+  /** Returns the absolute path written, which the report names. */
+  writeConfig: (config: { api_key: string; host_url: string }) => string;
   /**
    * The CLI's own config as an earlier run left it, or null when there is none:
    * where a rerun finds the CLI key it already has rather than minting another.
@@ -276,7 +278,10 @@ export function defaultSetupDeps(resolvedAuth: ResolvedAuth): SetupDeps {
         masked: true,
       }),
     resolveSdk: (pkg) => resolveSdkVersion(pkg),
-    writeConfig: realWriteConfig,
+    writeConfig: (config) => {
+      realWriteConfig(config);
+      return resolve(realConfigPath());
+    },
     readConfig: () => {
       const read = realReadConfig();
       return read.ok ? read.config : null;
@@ -844,7 +849,7 @@ const authenticate: StageDefinition = {
       timeoutMs: 15_000,
     });
     const who = await client.whoami();
-    deps.writeConfig({ api_key: pasted, host_url: host });
+    ctx.configFile = deps.writeConfig({ api_key: pasted, host_url: host });
     adoptKeySession(ctx, host, pasted, who, "pasted-key");
     return "ok";
   },
@@ -1407,7 +1412,7 @@ async function userCredentialSignIn(
   // dead key. Only a mint has an id. A reused key is still good, and the config
   // holding it is left alone.
   const replaced = "id" in cli ? configText(deps) : undefined;
-  deps.writeConfig({ api_key: cli.key, host_url: host });
+  ctx.configFile = deps.writeConfig({ api_key: cli.key, host_url: host });
   const written = replaced === undefined ? undefined : configText(deps);
   if ("id" in cli && replaced !== undefined && typeof written === "string") {
     wroteConfig.set(ctx, { keyId: cli.id, key: cli.key, before: replaced, after: written });
@@ -3723,6 +3728,9 @@ const instrument: StageDefinition = {
       const promptPath = instrumentTaskPath(ctx.root);
       const { mkdirSync, writeFileSync } = await import("node:fs");
       mkdirSync(dirname(promptPath), { recursive: true });
+      // The root's `.traceroot/`, which nothing else creates when setup is run
+      // from the service directory.
+      ensureGitignore(join(ctx.root, ".traceroot"));
       writeFileSync(promptPath, task, "utf8");
       recordHandover(ctx, agent.id, "task-file");
       wizardLine(
@@ -5143,7 +5151,7 @@ function resultData(ctx: SetupContext): Record<string, unknown> {
     sdk_version: ctx.checkpoint.sdkVersion ?? null,
     trace_id: ctx.trace?.traceId ?? null,
     trace_url: ctx.trace?.traceUrl ?? null,
-    checkpoint_path: join(".traceroot", "setup.json"),
+    checkpoint_path: relativeToRoot(ctx.root, checkpointPath(ctx.artifactDir)),
   };
 }
 

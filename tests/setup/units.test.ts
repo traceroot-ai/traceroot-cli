@@ -779,6 +779,7 @@ describe("setup report", () => {
   const baseCtx = () =>
     ({
       root: dir,
+      artifactDir: join(dir, "apps", "api"),
       checkpoint: {
         version: 1 as const,
         startedAt: "2026-07-30T00:00:00.000Z",
@@ -1308,7 +1309,7 @@ describe("reading a checkpoint that cannot be trusted", () => {
     expect(checkpoint?.trace?.traceId).toBe("t_1");
     expect(checkpoint?.trace?.attributed).toBeUndefined();
     const md = renderSetupReport(
-      { root, checkpoint, trace: checkpoint?.trace } as unknown as Parameters<
+      { root, artifactDir: root, checkpoint, trace: checkpoint?.trace } as unknown as Parameters<
         typeof renderSetupReport
       >[0],
       new Date("2026-07-26T12:01:00.000Z"),
