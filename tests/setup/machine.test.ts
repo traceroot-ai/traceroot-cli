@@ -47,6 +47,7 @@ import type { TraceLister } from "../../src/setup/trace.js";
 import { SETUP_STAGES, type SetupContext, type SetupFlags } from "../../src/setup/types.js";
 import { wizardEmphasis } from "../../src/setup/wizard.js";
 import { sleep } from "../../src/util/sleep.js";
+import { getVersion } from "../../src/version.js";
 import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
@@ -2164,9 +2165,27 @@ describe("the TraceRoot demo workspace", () => {
 
     expect(result.error?.code).toBe("AMBIGUOUS");
     expect(result.error?.message).toContain("has 2 projects");
-    expect(result.error?.remedy).toContain("--project web");
+    expect(result.error?.remedy).toContain("--project p_own");
     expect(result.error?.remedy).not.toContain("agent-demo");
+    expect(result.error?.remedy).not.toContain("p_demo");
     expect(run.calls).toEqual([]);
+  });
+
+  it("names the project by its id in a remedy that reruns setup", async () => {
+    // A name is free text: `--project My App` reached setup as two operands, a
+    // usage error, and a name can belong to projects in two workspaces.
+    pythonRepo();
+    const run = demoRun({
+      projects: [{ ...OWN, project_name: "My App" }, WORKER],
+      canPrompt: false,
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.remedy).toBe(
+      "Choose one by its id with --project, for example 'My App' in Acme (w_own):\n  traceroot setup --project p_own",
+    );
   });
 });
 
@@ -3362,6 +3381,42 @@ describe("a repository that already reports to a project", () => {
     expect(said).toContain("Kept the CLI's config, since the key in it still works.");
   });
 
+  it("names the sign-in command as setup was started when it cannot put the config back", async () => {
+    pythonRepo();
+    const file = configFile();
+    const each = setupRun(server(), {
+      listed: [ALPHA],
+      answers: ["abort"],
+      configFile: file,
+      revoke: "ok",
+    });
+    const deps: SetupDeps = {
+      ...each.deps,
+      restoreConfigText: () => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    // As npx starts it, where no `traceroot` is on PATH.
+    const saved = { script: process.argv[1], npmCommand: process.env.npm_command };
+    process.argv[1] = "/Users/u/.npm/_npx/6c3e1b2a9f0d4e17/node_modules/.bin/traceroot";
+    process.env.npm_command = "exec";
+    try {
+      await runSetupMachine(each.ctx, deps);
+    } finally {
+      process.argv[1] = saved.script as string;
+      if (saved.npmCommand === undefined) {
+        // biome-ignore lint/performance/noDelete: an unset env var, not the string "undefined"
+        delete process.env.npm_command;
+      } else {
+        process.env.npm_command = saved.npmCommand;
+      }
+    }
+
+    expect(plain(each.err.data)).toContain(
+      `could not put the CLI's config back, and it names a key this run revoked; run \`npx -y traceroot-cli@${getVersion()} login\` to replace it`,
+    );
+  });
+
   it("leaves a config that names another key by the time of the rollback", async () => {
     pythonRepo();
     const file = configFile();
@@ -3535,6 +3590,8 @@ describe("project credential", () => {
 
     expect(result.error?.code).toBe("UNSAFE_OVERWRITE");
     expect(result.error?.message).toContain("other");
+    // By its id, which no name with a space, or a namesake, can get wrong.
+    expect(result.error?.remedy).toContain("\n  traceroot setup --project p_other\n");
     // The file must be untouched.
     expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-other-project-key-77");
   });
@@ -6742,10 +6799,32 @@ describe("the agent a hand-over targets", () => {
     // Both are named, so the one it did not pick is not invisible.
     expect(said).toContain("Agents set up here: Claude Code, Codex");
     expect(said).toContain("Targeting Claude Code");
-    expect(said).toContain("--agent");
+    // With the flag that keeps it a hand-over: `--agent` alone launches the
+    // agent, with nobody there to confirm it. And by the ids the flag takes,
+    // which the list above does not show.
+    expect(said).toContain(
+      "to target another, rerun with `--no-instrument --agent <id>`, where <id> is one of claude, codex, generic.",
+    );
     // And not a word of the question itself.
     expect(said).not.toContain("Which coding agent");
     expect(ctx.agent?.id).toBe("claude");
+  });
+
+  it("keeps --manual in the flags that change the target of a manual hand-over", async () => {
+    pythonRepo();
+    withClaudeConfigured();
+    withCodexConfigured();
+    const { deps } = askRecorder(handoverDeps());
+    const { ctx, err } = makeCtx({
+      canPrompt: false,
+      flags: { method: "manual", traceTimeoutSec: 1 },
+    });
+
+    await runSetupMachine(ctx, deps);
+
+    const said = plain(err.data);
+    expect(said).toContain("rerun with `--manual --agent <id>`");
+    expect(said).not.toContain("--no-instrument --agent");
   });
 
   it("keeps the choice out of a --json run's event stream", async () => {

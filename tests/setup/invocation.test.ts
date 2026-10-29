@@ -1,12 +1,23 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closingLine, runSetup } from "../../src/commands/setup/run.js";
+import { buildDoctorReport } from "../../src/doctor/checks.js";
 import { newCheckpoint } from "../../src/setup/checkpoint.js";
-import { setupCommand } from "../../src/setup/invocation.js";
+import { skippedTraceNotice } from "../../src/setup/ending.js";
+import { cliCommand, setupCommand } from "../../src/setup/invocation.js";
 import { getVersion } from "../../src/version.js";
-import { authEmpty, defaultFlags, makeContext, makeDeps, makeWriters } from "./helpers.js";
+import { plain } from "./colour.js";
+import {
+  authEmpty,
+  authWithKey,
+  defaultFlags,
+  fakeRunProcess,
+  makeContext,
+  makeDeps,
+  makeWriters,
+} from "./helpers.js";
 
 /** Where npx starts the CLI from: its own cache, through the `.bin` link. */
 const NPX_SCRIPT = "/Users/u/.npm/_npx/6c3e1b2a9f0d4e17/node_modules/.bin/traceroot";
@@ -46,6 +57,18 @@ describe("the command a hint tells the user to run", () => {
     for (const [env, script] of cases) {
       expect(setupCommand(env, ["node", script], version), script).toBe("traceroot setup");
     }
+  });
+
+  it("spells the other commands a hint names the same way", () => {
+    // `login`, `traces list` and `skills install` were written out by hand as
+    // `traceroot …`, which under npx is the same missing command.
+    expect(
+      cliCommand("traces list --limit 5", { npm_command: "exec" }, ["node", NPX_SCRIPT], version),
+    ).toBe("npx -y traceroot-cli@0.6.1 traces list --limit 5");
+    expect(cliCommand("login", {}, ["node", GLOBAL_SCRIPT], version)).toBe("traceroot login");
+    expect(cliCommand("login", { npm_command: "exec" }, ["node", GLOBAL_SCRIPT], version)).toBe(
+      "traceroot login",
+    );
   });
 
   it("pins the version that is running", () => {
@@ -117,6 +140,73 @@ describe("the hints a run prints, for the way it was started", () => {
 
     expect(closingLine(paused)).toBe(`Setup paused — rerun \`${npx} --resume\` to finish.`);
     expect(await unauthenticatedRemedy()).toContain(`\n  ${npx} --api-key <key>\n`);
+  });
+
+  it("send a run npx started to the other commands with npx as well", async () => {
+    startedAs(NPX_SCRIPT, "exec");
+    const npx = `npx -y traceroot-cli@${getVersion()}`;
+
+    expect(await unauthenticatedRemedy()).toContain(`or run \`${npx} login\` first.`);
+    // After a wait the user ended themselves.
+    expect(skippedTraceNotice({ uiBaseUrl: null }).map(plain)).toContain(
+      `  ${npx} traces list --limit 5`,
+    );
+  });
+
+  it("offer the terminal check with npx when no trace arrived in time", async () => {
+    startedAs(NPX_SCRIPT, "exec");
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "print('hi')\n");
+    const timedOut = await runSetup({
+      ctx: makeContext(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude", traceTimeoutSec: 1 }),
+      writers: makeWriters().writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+    expect(timedOut.error?.code).toBe("TRACE_TIMEOUT");
+    expect(timedOut.error?.remedy?.split("\n")).toContain(
+      `  npx -y traceroot-cli@${getVersion()} traces list --limit 5`,
+    );
+  });
+
+  it("give setup doctor's remedies with npx when npx started it", () => {
+    startedAs(NPX_SCRIPT, "exec");
+    const npx = `npx -y traceroot-cli@${getVersion()}`;
+    // Hermetic: the skill check reads Codex's global skills directory.
+    vi.stubEnv("CODEX_HOME", join(dir, "codex-home"));
+    try {
+      const report = buildDoctorReport({
+        cwd: dir,
+        auth: { ...authEmpty(), hostUrl: { value: undefined, source: "none" } },
+        credentialsValid: null,
+        configPath: join(dir, ".traceroot", "config.json"),
+        detection: {
+          root: dir,
+          hasPackageJson: false,
+          hasPyprojectToml: true,
+          hasRequirementsTxt: false,
+          hasTsconfigJson: false,
+          likelyLanguages: ["python"],
+        },
+        env: {},
+        includeSetup: true,
+      });
+      const message = (name: string) => report.checks.find((c) => c.name === name)?.message;
+
+      expect(message("credentials_resolved")).toBe(`No credentials found. Run \`${npx} login\`.`);
+      expect(message("host_resolved")).toBe(`Host not found. Run \`${npx} login\`.`);
+      expect(message("skill_instrument")).toBe(
+        `Instrumentation skill not installed. Run \`${npx} skills install traceroot-instrument-repo\``,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("are byte for byte what they were for a global install", async () => {

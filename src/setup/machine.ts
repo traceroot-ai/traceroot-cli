@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
-import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
+import { AGENT_IDS, displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import type { AgentAdapter } from "../agents/types.js";
 import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
 import {
@@ -62,7 +62,7 @@ import {
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
-import { setupCommand } from "./invocation.js";
+import { cliCommand, setupCommand } from "./invocation.js";
 import {
   buildInvocation,
   launchAgent,
@@ -762,7 +762,7 @@ const authenticate: StageDefinition = {
         remedy: [
           "Provide a key non-interactively:",
           `  ${setupCommand()} --api-key <key>`,
-          "or set TRACEROOT_API_KEY, or run `traceroot login` first.",
+          `or set TRACEROOT_API_KEY, or run \`${cliCommand("login")}\` first.`,
         ].join("\n"),
       });
     }
@@ -1843,7 +1843,7 @@ async function chooseProject(
       stage,
       code: "AMBIGUOUS",
       message: `This workspace has ${projects.length} projects, so setup cannot pick one for you.`,
-      remedy: `Choose one with --project, for example:\n  ${setupCommand()} --project ${first.project_name}`,
+      remedy: `Choose one by its id with --project, for example ${describeProject(first)}:\n  ${setupCommand()} --project ${first.project_id}`,
     });
   }
 
@@ -2408,7 +2408,7 @@ async function reuseExistingKey(
       message: `${envEntry} already contains a working TraceRoot key for project '${who.project_name ?? who.project_id}', but setup selected '${ctx.project?.projectName}'.`,
       remedy: [
         "Run setup for that project instead:",
-        `  ${setupCommand()} --project ${who.project_name ?? who.project_id}`,
+        `  ${setupCommand()} --project ${who.project_id}`,
         `or remove ${KEY_ENV} from ${envEntry} if it is stale.`,
       ].join("\n"),
     });
@@ -3082,10 +3082,13 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
     // No question, and not a word of one: `--json` owns stdout for its event
     // stream and a CI job has nobody to read a prompt. The registry's order
     // decides, and the run then *reports* the decision and the flag that
-    // changes it — output after the fact, not a prompt.
+    // changes it — output after the fact, not a prompt. `--agent` on its own
+    // asks for a launch (see `chooseInstrumentation`), so the flag that made
+    // this a hand-over goes with it.
+    const handover = ctx.flags.method === "manual" ? "--manual" : "--no-instrument";
     wizardProgress(
       ctx,
-      `Agents set up here: ${present.map((a) => a.displayName).join(", ")}. Targeting ${first.displayName}; rerun with \`--agent <id>\` to target another.`,
+      `Agents set up here: ${present.map((a) => a.displayName).join(", ")}. Targeting ${first.displayName}; to target another, rerun with \`${handover} --agent <id>\`, where <id> is one of ${AGENT_IDS.join(", ")}.`,
     );
     return unlaunchedAgent(first, true);
   }
@@ -4372,7 +4375,7 @@ const verifyTrace: StageDefinition = {
           `  ${setupCommand()} --resume`,
           "To investigate:",
           `  ${setupCommand()} doctor`,
-          "  traceroot traces list --limit 5",
+          `  ${cliCommand("traces list --limit 5")}`,
         ].join("\n"),
       });
     }
@@ -4819,7 +4822,7 @@ function restoreCliConfig(ctx: SetupContext, deps: SetupDeps, revoked: ReadonlyS
   } catch {
     wizardWarn(
       ctx,
-      "could not put the CLI's config back, and it names a key this run revoked; run `traceroot login` to replace it",
+      `could not put the CLI's config back, and it names a key this run revoked; run \`${cliCommand("login")}\` to replace it`,
     );
   }
 }
