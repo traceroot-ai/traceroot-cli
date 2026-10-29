@@ -55,6 +55,7 @@ import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
 import {
+  type FakeTraces,
   type MakeDepsOptions,
   type RecordedRun,
   authEmpty,
@@ -6305,6 +6306,107 @@ describe("resume and rerun", () => {
       stage: "verify_trace",
       code: "TRACE_TIMEOUT",
     });
+  });
+
+  /** The checkpoint of a run that finished, with the trace it saw in `projectId` on `host`. */
+  function writeFinishedCheckpoint(projectId: string, projectName: string, host: string): void {
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.completedStages.push(...SETUP_STAGES);
+    previous.host = host;
+    previous.projectId = projectId;
+    previous.projectName = projectName;
+    previous.agentId = "claude";
+    previous.instrumentHandover = "agent";
+    previous.trace = {
+      traceId: "t_old",
+      traceUrl: "https://app.example.test/trace/t_old",
+      observedAt: "2026-07-26T12:00:30.000Z",
+      waitedMs: 1000,
+    };
+    writeCheckpoint(dir, previous);
+  }
+
+  /** A resumed run whose key belongs to `p_1` on the test host, with `traces` to find there. */
+  function resumeOnProject1(traces: FakeTraces) {
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({ auth: authWithKey(), traces, runProcess: process.run });
+    const harness = makeCtx({
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    return { ...harness, deps, runs: process.runs };
+  }
+
+  const NEW_TRACE = traceRow({
+    trace_id: "t_new",
+    trace_url: "https://app.example.test/trace/t_new",
+  });
+
+  it("keeps the trace a resumed run saw in the same project", async () => {
+    pythonRepo();
+    writeFinishedCheckpoint("p_1", "demo", "https://api.example.test");
+    let polls = 0;
+    const run = resumeOnProject1(() => {
+      polls += 1;
+      return [NEW_TRACE];
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error).toBeNull();
+    expect(result.trace?.traceId).toBe("t_old");
+    expect(polls).toBe(0);
+  });
+
+  it.each([
+    [
+      "another project",
+      "p_old",
+      "https://api.example.test",
+      "The earlier run's trace is in project 'old', not 'demo', so setup checks again.",
+    ],
+    [
+      "another deployment",
+      "p_1",
+      "https://old.example.test",
+      "The earlier run's trace is in project 'old' on https://old.example.test, not 'demo' on https://api.example.test, so setup checks again.",
+    ],
+  ])(
+    "checks the trace again when a resumed run signs in to %s",
+    async (_, projectId, host, said) => {
+      // The trace on record proves another project receives this service's
+      // traces, not the one the key and env file now name.
+      pythonRepo();
+      writeFinishedCheckpoint(projectId, "old", host);
+      const run = resumeOnProject1([NEW_TRACE]);
+
+      const result = await runSetupMachine(run.ctx, run.deps);
+
+      expect(result.error).toBeNull();
+      expect(result.trace?.traceId).toBe("t_new");
+      expect(result.stagesRun.find((s) => s.stage === "verify_trace")?.status).toBe("ok");
+      // The code is the same code, so the agent is not run over it again.
+      expect(run.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+      expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-existing-key-value");
+      expect(plain(run.err.data)).toContain(said);
+    },
+  );
+
+  it("leaves no trace from another project on record when the check finds none", async () => {
+    // Otherwise the next resume, now recorded against this project, would
+    // restore it as this project's.
+    pythonRepo();
+    writeFinishedCheckpoint("p_old", "old", "https://api.example.test");
+    const run = resumeOnProject1([]);
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    const recorded = readCheckpoint(dir);
+    expect(recorded?.projectId).toBe("p_1");
+    expect(recorded?.trace).toBeUndefined();
+    expect(recorded?.completedStages).not.toContain("verify_trace");
+    expect(recorded?.completedStages).not.toContain("complete");
   });
 
   it("does not revoke a minted key when the failure leaves a run to resume", async () => {

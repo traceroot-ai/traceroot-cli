@@ -899,7 +899,6 @@ function adoptKeySession(
     workspaceId: who.workspace_id,
     origin: "from-whoami",
   };
-  ctx.checkpoint.host = host;
   ctx.checkpoint.uiBaseUrl = who.ui_base_url;
   ctx.checkpoint.workspaceId = who.workspace_id;
   recordProject(ctx);
@@ -1446,7 +1445,6 @@ async function userCredentialSignIn(
   // The application's key, not the CLI's. Everything downstream that writes a
   // credential into the repository or hands one to a child process reads this.
   ctx.credential = application;
-  ctx.checkpoint.host = host;
   ctx.checkpoint.uiBaseUrl = who.ui_base_url;
   ctx.checkpoint.workspaceId = chosen.project.workspaceId;
   // The key the report and the closing notice are about is the one the
@@ -2108,10 +2106,46 @@ interface SwitchRoute {
   keep: string;
 }
 
+/**
+ * Records the project this run sends traces to, and the deployment it is on.
+ *
+ * A trace an earlier run recorded shows that its own project received one. A
+ * resumed run that lands on another project or deployment would otherwise
+ * restore that trace and report it as this project's, without ever looking in
+ * the project its key and env file now name. So the trace, and the two stages
+ * that found and reported it, come off the record and the run checks again.
+ * Everything else a resume restores is the code it changed, which does not
+ * depend on the project.
+ */
 function recordProject(ctx: SetupContext): void {
-  if (ctx.project !== undefined) {
-    ctx.checkpoint.projectId = ctx.project.projectId;
-    ctx.checkpoint.projectName = ctx.project.projectName;
+  const project = ctx.project;
+  if (project === undefined) {
+    return;
+  }
+  const record = ctx.checkpoint;
+  const host = ctx.session?.host;
+  const otherHost = record.host !== undefined && host !== undefined && record.host !== host;
+  const otherProject = record.projectId !== undefined && record.projectId !== project.projectId;
+  if (otherHost || otherProject) {
+    const before = record.projectName ?? record.projectId;
+    if (record.trace !== undefined && before !== undefined) {
+      const where = (name: string, on: string | undefined): string =>
+        `'${name}'${otherHost ? ` on ${on}` : ""}`;
+      wizardProgress(
+        ctx,
+        `The earlier run's trace is in project ${where(before, record.host)}, not ${where(project.projectName, host)}, so setup checks again.`,
+      );
+    }
+    record.trace = undefined;
+    record.traceWaitSkipped = undefined;
+    record.completedStages = record.completedStages.filter(
+      (stage) => stage !== "verify_trace" && stage !== "complete",
+    );
+  }
+  record.projectId = project.projectId;
+  record.projectName = project.projectName;
+  if (host !== undefined) {
+    record.host = host;
   }
 }
 
