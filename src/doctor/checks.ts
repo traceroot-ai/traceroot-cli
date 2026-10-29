@@ -1,15 +1,25 @@
 import { existsSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { ALL_AGENTS } from "../agents/index.js";
+import { basename, dirname, join, relative } from "node:path";
+import { ALL_AGENTS, displaySkillPath } from "../agents/index.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
-import { setupCommand } from "../setup/invocation.js";
+import { instrumentTaskPath } from "../setup/artifacts.js";
+import { pendingHandover, setupRoot } from "../setup/checkpoint.js";
+import { cliCommand, setupCommand } from "../setup/invocation.js";
 import type { SetupCheckpoint } from "../setup/types.js";
 import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
 
 /** Inputs for {@link buildDoctorReport}. All IO results are passed in pre-resolved. */
 export interface DoctorInput {
   cwd: string;
+  /**
+   * The repository root as `setup` resolves it (`setupRoot(cwd)`), which is
+   * where setup installs the instrumentation skill and writes its task. From a
+   * service directory it is not `cwd`. Resolved from `cwd` when absent, so a
+   * caller that leaves it out still gets setup's root: the git root, or `cwd`
+   * itself outside a git repository.
+   */
+  root?: string;
   auth: ResolvedAuth;
   /** Network validation result; `null` when it was skipped (no credentials). */
   credentialsValid: boolean | null;
@@ -78,7 +88,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     status: hasCredential ? "pass" : "fail",
     message: hasCredential
       ? `${kindLabel} resolved from ${describeSource(credential.source, configPath)}`
-      : "No credentials found. Run `traceroot login`.",
+      : `No credentials found. Run \`${cliCommand("login")}\`.`,
   });
 
   const host = auth.hostUrl.value;
@@ -89,7 +99,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     message:
       host !== undefined
         ? `Host resolved: ${safeHostOrigin(host)}`
-        : "Host not found. Run `traceroot login`.",
+        : `Host not found. Run \`${cliCommand("login")}\`.`,
   });
 
   // Only assert validity when we actually attempted a check.
@@ -171,10 +181,23 @@ function installedFor(cwd: string, skillName: string): string[] {
  * `traceroot skills list`). The instrumentation skill is the one that matters for
  * getting started, so its absence is an actionable warning; the quickstart skill
  * is explicitly optional. A skill counts as present if installed for any agent.
+ *
+ * The instrumentation skill is looked for at the repository root, because that
+ * is where setup installs it and the copy its task names. From a service
+ * directory the two differ: looking in the current directory reported setup's
+ * copy as missing, with a remedy that installed a second one beside the service.
  */
 function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
-  const instrumentAgents = installedFor(input.cwd, "traceroot-instrument-repo");
+  const root = repositoryRoot(input);
+  const instrumentAgents = installedFor(root, "traceroot-instrument-repo");
   const quickstartAgents = installedFor(input.cwd, "traceroot-quickstart");
+  // `skills install` writes into the directory it is run from, so from a
+  // service directory the remedy says to run it at the root, where it installs
+  // the copy setup would have.
+  const fromRoot =
+    relative(input.cwd, root) === ""
+      ? ""
+      : ` from the repository root, ${displaySkillPath(input.cwd, root)}`;
 
   return [
     {
@@ -184,7 +207,7 @@ function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
       message:
         instrumentAgents.length > 0
           ? `Instrumentation skill installed for ${instrumentAgents.join(", ")}`
-          : "Instrumentation skill not installed. Run `traceroot skills install traceroot-instrument-repo`",
+          : `Instrumentation skill not installed. Run \`${cliCommand("skills install traceroot-instrument-repo")}\`${fromRoot}`,
     },
     {
       name: "skill_quickstart",
@@ -327,14 +350,24 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
   const stoppedByUser =
     checkpoint.lastError?.code === "CANCELLED" || checkpoint.lastError?.code === "INTERRUPTED";
   const failed = checkpoint.lastError !== undefined && !stoppedByUser;
+  // A run that reached its last stage with no trace and no error ended one of
+  // two ways, told apart as `setup` tells them apart (see `pendingHandover`): a
+  // hand-over still to be done, which setup calls paused, or a run whose wait
+  // the user ended, which it calls complete. Both were reported as stopped at
+  // 'complete', the stage every run ends on. An error outranks either: a run
+  // that ends normally clears it, so one on the record is a later run's.
+  const ended = !finished && completed.has("complete") && checkpoint.lastError === undefined;
+  const handover = ended ? pendingHandover(checkpoint) : null;
 
   checks.push({
     name: "setup_completed",
     category: "setup",
-    status: finished ? "pass" : failed ? "fail" : "warn",
+    status: finished || (ended && handover === null) ? "pass" : failed ? "fail" : "warn",
     message: finished
       ? `Setup completed on ${checkpoint.updatedAt}`
-      : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`${setupCommand()} --resume\`.`,
+      : ended
+        ? endedWithoutTrace(input, checkpoint, handover)
+        : `Setup is incomplete; it stopped at '${checkpoint.lastError?.stage ?? lastStage(checkpoint)}'. Run \`${setupCommand()} --resume\`.`,
   });
 
   if (checkpoint.lastError !== undefined && !finished) {
@@ -394,6 +427,30 @@ function setupChecks(input: DoctorInput): DoctorCheck[] {
   });
 
   return checks;
+}
+
+/** {@link DoctorInput.root}, or the same root resolved from `cwd` when none was passed. */
+function repositoryRoot(input: DoctorInput): string {
+  return input.root ?? setupRoot(input.cwd);
+}
+
+/**
+ * How a run that reached its last stage without a trace ended, in setup's own
+ * words: paused on a hand-over, naming what is left to do, or complete.
+ */
+function endedWithoutTrace(
+  input: DoctorInput,
+  checkpoint: SetupCheckpoint,
+  handover: "task-file" | "manual" | null,
+): string {
+  if (handover === "task-file") {
+    const task = displaySkillPath(input.cwd, instrumentTaskPath(repositoryRoot(input)));
+    return `Setup is paused, waiting for the instrumentation it handed over. Run the task in ${task} in your coding agent.`;
+  }
+  if (handover === "manual") {
+    return "Setup is paused, waiting for the instrumentation it handed over. Apply the manual steps it printed.";
+  }
+  return `Setup completed on ${checkpoint.updatedAt} — no trace seen yet`;
 }
 
 /** The furthest stage a checkpoint recorded, for the "stopped at" message. */

@@ -82,7 +82,8 @@ export interface DetectedService {
   /**
    * True when no manifest identified this service and the language came from
    * the user. The CLI has not chosen a target; the agent must find it, and the
-   * task tells it to ask rather than guess.
+   * task tells it to ask (or, launched by setup, to stop and report) rather
+   * than guess.
    */
   agentMustIdentify?: boolean;
 }
@@ -134,7 +135,8 @@ export interface InstrumentationResult {
    * report is a claim and `git status` is evidence.
    */
   reported: {
-    filesChanged: string[];
+    /** Null when the block names no files, which is not the same as none. */
+    filesChanged: string[] | null;
     sdkVersion: string | null;
     traceId: string | null;
     notes: string | null;
@@ -233,6 +235,21 @@ export interface SetupCheckpoint {
    */
   mintedKeys?: { id: string; name: string | null; hint: string }[];
   trace?: TraceVerification;
+  /**
+   * The user ended the latest trace wait before a trace arrived.
+   *
+   * What tells a run that finished from a hand-over still waiting on the user.
+   * Both record every stage with no trace and no error, and on the task-file
+   * and manual routes both carry the hand-over too. But only a wait something
+   * could answer is offered for stopping, so a run whose wait was stopped is
+   * not waiting on the instrumentation. `pendingHandover` reads it, so `setup`
+   * and `doctor` call that run complete, as the run itself did.
+   *
+   * Cleared each time `verify_trace` runs, so it always describes the latest
+   * wait, and never restored into a later run, which waits again (see
+   * {@link SetupContext.traceWaitSkipped}). `true` or absent, never `false`.
+   */
+  traceWaitSkipped?: true;
   lastError?: { stage: SetupStage; code: SetupErrorCode; message: string };
 }
 
@@ -376,8 +393,10 @@ export interface SetupContext {
    * had just watched an agent instrument their service off to "finish the
    * instrumentation task".
    *
-   * Deliberately not on the checkpoint: it describes how this invocation ended,
-   * and `--resume` re-runs the wait rather than inheriting the decision.
+   * Never restored from the checkpoint: it describes how this invocation ended,
+   * and `--resume` re-runs the wait rather than inheriting the decision. The
+   * checkpoint keeps its own record, {@link SetupCheckpoint.traceWaitSkipped},
+   * for the readers that come after the run.
    */
   traceWaitSkipped?: boolean;
   /**
@@ -393,7 +412,7 @@ export interface SetupContext {
    * is not there to see, and saying "no TraceRoot" over it is false.
    *
    * Not on the checkpoint, for the reason {@link SetupContext.traceWaitSkipped}
-   * is not.
+   * is not restored from it.
    */
   handedOverThisRun?: boolean;
 }

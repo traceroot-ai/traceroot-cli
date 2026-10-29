@@ -18,7 +18,6 @@
  */
 import { join, resolve } from "node:path";
 import type { Command } from "commander";
-import { displaySkillPath } from "../../agents/index.js";
 import { loadOptionalEnvFileFromDisk } from "../../config/envFile.js";
 import { configPath, loadConfigOrThrow } from "../../config/manager.js";
 import type { ResolvedAuth } from "../../config/resolve.js";
@@ -29,6 +28,7 @@ import {
   clearCheckpoint,
   hasCompleted,
   newCheckpoint,
+  pendingHandover,
   readCheckpoint,
   setupRoot,
   writeCheckpoint,
@@ -210,16 +210,11 @@ export function setupFailureExit(result: SetupResult, json: boolean): SetupFailu
  * second API key and points a coding agent at code it has already edited, so it
  * is offered rather than taken on an unread keypress.
  *
- * Holding every stage is not quite enough, though. A hand-over nothing has acted
- * on ends normally, so it records the last stage too, with no trace and the
- * instrumentation still outstanding — the opposite of finished.
+ * Holding every stage is not quite enough, though: see {@link pendingHandover}.
  */
 export function resumeQuestion(found: SetupCheckpoint): SelectInput {
   const ranToTheEnd = hasCompleted(found, "complete");
-  const awaitingHandover =
-    ranToTheEnd &&
-    found.trace === undefined &&
-    (found.instrumentHandover === "task-file" || found.instrumentHandover === "manual");
+  const awaitingHandover = pendingHandover(found) !== null;
   if (ranToTheEnd && !awaitingHandover) {
     return {
       stage: "precheck",
@@ -399,7 +394,7 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       // the entry point imports where detection cannot see it, so that claim
       // would be false — and the steps are no longer "above".
       const task = ctx.instrumentation?.promptPath ?? null;
-      const runTask = task === null ? null : runTaskSentence(ctx, displaySkillPath(ctx.root, task));
+      const runTask = task === null ? null : runTaskSentence(ctx, task, false);
       const said =
         ctx.handedOverThisRun === true
           ? `No trace yet: setup changed no code, so the service has no TraceRoot in it. ${runTask === null ? "Apply the steps above." : `${runTask}.`}`

@@ -148,6 +148,11 @@ export function readCheckpoint(root: string): SetupCheckpoint | null {
   if (isTrace(obj.trace)) {
     checkpoint.trace = obj.trace;
   }
+  // Only `true`. Anything else reads as absent, so a corrupt or hand-edited
+  // file can at worst leave a run looking paused, never a hand-over finished.
+  if (obj.traceWaitSkipped === true) {
+    checkpoint.traceWaitSkipped = true;
+  }
   if (isLastError(obj.lastError)) {
     checkpoint.lastError = obj.lastError;
   }
@@ -247,4 +252,28 @@ export function markComplete(checkpoint: SetupCheckpoint, stage: SetupStage): vo
 /** True when `stage` completed in a previous run. */
 export function hasCompleted(checkpoint: SetupCheckpoint, stage: SetupStage): boolean {
   return checkpoint.completedStages.includes(stage);
+}
+
+/**
+ * The hand-over a run that reached its last stage is still waiting on, or null.
+ *
+ * Holding every stage is not quite "finished". A hand-over nothing has acted on
+ * ends normally, so it records the last stage too, with no trace and the
+ * instrumentation still outstanding — the opposite of finished. Asked by
+ * `setup` before it offers to resume and by `doctor` before it reports the
+ * run, so the two cannot describe one checkpoint in different ways.
+ *
+ * Not a run whose trace wait the user ended, though, which records the same
+ * stages and route. That wait was offered only because something could send a
+ * trace, such as the task done since the hand-over, and the run closed as
+ * complete. See {@link SetupCheckpoint.traceWaitSkipped}.
+ */
+export function pendingHandover(checkpoint: SetupCheckpoint): "task-file" | "manual" | null {
+  const route = checkpoint.instrumentHandover;
+  return hasCompleted(checkpoint, "complete") &&
+    checkpoint.trace === undefined &&
+    checkpoint.traceWaitSkipped !== true &&
+    (route === "task-file" || route === "manual")
+    ? route
+    : null;
 }

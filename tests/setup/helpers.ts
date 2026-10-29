@@ -175,6 +175,23 @@ export function codexCapture(task: string, reply: string): string {
   ].join("\n");
 }
 
+/**
+ * The event that closes what `claude -p --output-format stream-json` prints:
+ * the agent's final reply, as one line of JSON with its newlines escaped like
+ * every other string in the stream.
+ */
+export function claudeResult(reply: string): string {
+  return JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    duration_ms: 48210,
+    num_turns: 14,
+    result: reply,
+    session_id: "0b7f3c1e-5a2d-4e8f-9c61-2d4b8a7e9f10",
+  });
+}
+
 /** Minimal `whoami` payload; overridable per field. */
 export function whoami(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

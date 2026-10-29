@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
+import { AGENT_IDS, displaySkillPath, isInsideDirectory, requireAgent } from "../agents/index.js";
 import type { AgentAdapter } from "../agents/types.js";
 import { type ApiClient, type ApiClientOptions, createApiClient } from "../api/client.js";
 import {
@@ -24,6 +24,7 @@ import {
 import {
   type DeviceFlowDeps,
   type DeviceFlowResult,
+  DeviceLoginNotApprovedError,
   openBrowserForPlatform,
   runDeviceFlow,
 } from "../auth/deviceFlow.js";
@@ -48,9 +49,9 @@ import { ExitCode, type Writers } from "../output.js";
 import { bundledSkillDir } from "../skills/bundled.js";
 import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
-import { createActivityParser } from "./activity.js";
+import { createActivityParser, finalReply } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
-import { ensureGitignore, relativeToRoot } from "./artifacts.js";
+import { ensureGitignore, instrumentTaskPath, relativeToRoot } from "./artifacts.js";
 import { checkpointPath, hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
 import {
   HOST_ENV,
@@ -63,7 +64,7 @@ import {
 import { SetupError, backendUnsupported } from "./errors.js";
 import type { RunProcess } from "./exec.js";
 import { changedSince, isPathIgnored, readGitState } from "./git.js";
-import { setupCommand } from "./invocation.js";
+import { cliCommand, setupCommand } from "./invocation.js";
 import {
   buildInvocation,
   launchAgent,
@@ -72,7 +73,7 @@ import {
   shadowingApiKey,
 } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
-import { writeSetupReport } from "./report.js";
+import { REPORT_PATH, writeSetupReport } from "./report.js";
 import {
   type ImportCheck,
   type ResolvedSdk,
@@ -96,6 +97,7 @@ import {
   buildSetupTask,
   manualInstructions,
   parseCompletion,
+  servesRequests,
   taskPrograms,
 } from "./task.js";
 import { pollForTrace, spanPhrase } from "./trace.js";
@@ -542,6 +544,50 @@ async function confirmDirtyWorktree(
 const baselineChanges = new WeakMap<SetupContext, string[]>();
 
 /**
+ * The instrument stage's `agentEvidence`, for a trace wait that times out
+ * after the agent this run launched.
+ *
+ * The timeout is where a run ends up when the agent stopped short in a way none
+ * of the stage's checks could see: it exited 0, and nothing in its report, the
+ * diff or the entry point showed it. The stage kept nothing, because nothing
+ * there failed, and the trace the agent was told to send is the first thing
+ * found missing. Its output is then the only account of why.
+ *
+ * Kept by context, like the baseline above, and never on the checkpoint: the
+ * output belongs to this process's run of the agent. A `--resume` that
+ * restores the stage launched nothing, so its timeout has no transcript to
+ * keep.
+ */
+const agentEvidenceAfterRun = new WeakMap<SetupContext, () => readonly string[]>();
+
+/**
+ * Every path this run wrote itself, absolute, so the agent is not credited
+ * with them (see `withoutOwnWrites`).
+ *
+ * Read from where setup already keeps them rather than matched by name: the
+ * skill where the agent's adapter installs it; the `.traceroot/` directory at
+ * the root, which holds the report and the transcript, and the one beside the
+ * credential, which holds the checkpoint and the CLI config; and the env file
+ * `configure_repository` put the key in. That file only when this run wrote to
+ * it and it still holds what was written, because a file that already held the
+ * key is the project's, and an edit to it is the agent's, as is one made after
+ * this run's write. Setup adds no `.gitignore` lines outside `.traceroot/`, so
+ * there is nothing else to leave out.
+ */
+function setupWrites(ctx: SetupContext, adapter: AgentAdapter): string[] {
+  const env = wroteEnvKeys.get(ctx);
+  const own = dirname(REPORT_PATH);
+  return [
+    adapter.getSkillInstallPath(ctx.root, SKILL_NAME),
+    join(ctx.root, own),
+    join(ctx.artifactDir, own),
+    ...(env !== undefined && env.after !== null && readIfPresent(env.path) === env.after
+      ? [env.path]
+      : []),
+  ];
+}
+
+/**
  * Whether anything can still send this run a trace, which is what decides how
  * long `verify_trace` waits for one.
  *
@@ -767,7 +813,7 @@ const authenticate: StageDefinition = {
         remedy: [
           "Provide a key non-interactively:",
           `  ${setupCommand()} --api-key <key>`,
-          "or set TRACEROOT_API_KEY, or run `traceroot login` first.",
+          `or set TRACEROOT_API_KEY, or run \`${cliCommand("login")}\` first.`,
         ].join("\n"),
       });
     }
@@ -860,6 +906,12 @@ const LOCAL_HOST_CANDIDATES = ["http://localhost:8000", "http://localhost:3000"]
  * still never switches hosts on its own: silently retargeting where a
  * credential gets minted is precisely the kind of helpfulness nobody wants from
  * a security-adjacent tool.
+ *
+ * When nothing named the web app, the sign-in went to the API host. A
+ * self-hosted deployment that serves the two on different origins answers
+ * exactly like this, and `--auth-host` is the whole fix, so the remedy leads
+ * with it. TraceRoot Cloud serves both from one origin, so it is not offered
+ * for the default host.
  */
 async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string> {
   const lines: string[] = [];
@@ -875,6 +927,17 @@ async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string
         break;
       }
     }
+  }
+
+  // Asked of the source, not by comparing hosts: an auth host given as the API
+  // host itself was still given, and suggesting one would be wrong.
+  const authHostSource = deps.resolvedAuth.authHost.source;
+  if ((authHostSource === "default" || authHostSource === "none") && host !== DEFAULT_HOST) {
+    lines.push(
+      "If the web app is on a different origin from the API, sign in there with --auth-host:",
+      `  ${setupCommand()} --host ${host} --auth-host <web app origin>`,
+      "",
+    );
   }
 
   lines.push(
@@ -1127,24 +1190,34 @@ async function browserSignIn(
     // different problem from a sign-in that failed, and it has a different
     // answer: you are probably pointed at the wrong host. The shared flow
     // reports the status in its message rather than as a field, so that is what
-    // there is to match on.
+    // there is to match on. Names the auth host, because that is where the
+    // request went.
     const message = err instanceof Error ? err.message : String(err);
     if (/\(status (?:404|501)\)/.test(message)) {
       throw backendUnsupported(
         "authenticate",
         "Browser sign-in",
         await signInFallbackHint(host, deps),
-        host,
+        authHost,
       );
     }
-    // Names the branch a first-time user is most likely on. "Sign-in did not
-    // complete" tells someone halfway through creating an account nothing about
-    // what to do next, and the answer — finish verifying, run it again — is not
-    // guessable from it.
-    wizardWarn(
-      ctx,
-      `Setup didn't complete in the browser. If you were creating an account, verify your email and run \`${setupCommand()}\` again.`,
-    );
+    // Denied, or the code expired first, which is also how a closed tab ends,
+    // a half-created account included. Nothing was approved, so this is a
+    // sign-in that did not happen rather than a fault, and the way on is this
+    // command again. The flow's own message names `login`, which signs the
+    // terminal in but does not carry on with setup, so it is not passed on.
+    if (err instanceof DeviceLoginNotApprovedError) {
+      throw new SetupError({
+        stage: "authenticate",
+        code: "NOT_AUTHENTICATED",
+        message:
+          err.reason === "denied"
+            ? "The sign-in was denied in the browser."
+            : "The sign-in code expired before it was approved in the browser.",
+        remedy: `Run \`${setupCommand()}\` again.`,
+      });
+    }
+    wizardWarn(ctx, `Setup didn't complete in the browser. Run \`${setupCommand()}\` again.`);
     throw err;
   }
 
@@ -1848,7 +1921,7 @@ async function chooseProject(
       stage,
       code: "AMBIGUOUS",
       message: `This workspace has ${projects.length} projects, so setup cannot pick one for you.`,
-      remedy: `Choose one with --project, for example:\n  ${setupCommand()} --project ${first.project_name}`,
+      remedy: `Choose one by its id with --project, for example ${describeProject(first)}:\n  ${setupCommand()} --project ${first.project_id}`,
     });
   }
 
@@ -2067,7 +2140,8 @@ const acquireProjectKey: StageDefinition = {
     const created = await mintRecordedKey(ctx, deps, api, {
       name,
       projectId: project.projectId,
-      // The application's credential, so it sends telemetry and nothing else.
+      // The application's credential, so it can send telemetry and read this
+      // project, but not manage its keys.
       // Stated rather than left to the server's default: the other mint path
       // asks for `admin` for the CLI's own key, and two paths that disagree by
       // omission read as two paths that agree.
@@ -2179,7 +2253,7 @@ async function settleSessionKey(
   }
   wizardProgress(
     ctx,
-    "That key can manage the project's keys, so the application gets a send-only key of its own.",
+    "That key can manage the project's keys, so the application gets a key of its own that can send traces and read this project, but not manage its keys.",
   );
   return false;
 }
@@ -2413,7 +2487,7 @@ async function reuseExistingKey(
       message: `${envEntry} already contains a working TraceRoot key for project '${who.project_name ?? who.project_id}', but setup selected '${ctx.project?.projectName}'.`,
       remedy: [
         "Run setup for that project instead:",
-        `  ${setupCommand()} --project ${who.project_name ?? who.project_id}`,
+        `  ${setupCommand()} --project ${who.project_id}`,
         `or remove ${KEY_ENV} from ${envEntry} if it is stale.`,
       ].join("\n"),
     });
@@ -2570,10 +2644,14 @@ const configureRepository: StageDefinition = {
         // that the reason there is no credential file is this one and not "the
         // user's own environment already had the key" — the instruction it gives
         // differs between the two. See {@link ApplicationKeyLocation}.
+        //
+        // And the same instruction as that block. The key is never printed, so
+        // telling the user to copy it into another file asks for a value they
+        // were never shown.
         ctx.refusedCredentialEnvFile = envPath;
         wizardWarn(
           ctx,
-          `${envEntry} is tracked by git, so the API key was not written to it. The key is available to this setup run only; add it to an untracked env file to persist it.`,
+          `${envEntry} is tracked by git, so the API key was not written to it. The key is available to this setup run only. Give your deployment a key of its own, or untrack ${envEntry} and rerun setup to have one written to it.`,
         );
         return "skipped";
       }
@@ -3087,10 +3165,13 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
     // No question, and not a word of one: `--json` owns stdout for its event
     // stream and a CI job has nobody to read a prompt. The registry's order
     // decides, and the run then *reports* the decision and the flag that
-    // changes it — output after the fact, not a prompt.
+    // changes it — output after the fact, not a prompt. `--agent` on its own
+    // asks for a launch (see `chooseInstrumentation`), so the flag that made
+    // this a hand-over goes with it.
+    const handover = ctx.flags.method === "manual" ? "--manual" : "--no-instrument";
     wizardProgress(
       ctx,
-      `Agents set up here: ${present.map((a) => a.displayName).join(", ")}. Targeting ${first.displayName}; rerun with \`--agent <id>\` to target another.`,
+      `Agents set up here: ${present.map((a) => a.displayName).join(", ")}. Targeting ${first.displayName}; to target another, rerun with \`${handover} --agent <id>\`, where <id> is one of ${AGENT_IDS.join(", ")}.`,
     );
     return unlaunchedAgent(first, true);
   }
@@ -3122,8 +3203,9 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
 /**
  * "Run it in Codex", or — when there is no agent to name — a sentence that says
  * the task works anywhere rather than dead-ending on an agent the user has not
- * got. `subject` is whatever reads best where it is used: "it" straight after
- * the line that named the file, the path itself where nothing has.
+ * got. `task` is the task file's path, and `named` whether the line before has
+ * just named it: "it" reads best straight after that line, the path itself
+ * where nothing has.
  *
  * `generic` is no agent to name: it is the registry's entry for "no particular
  * agent", and its display name — "Agent (generic)" — is a category rather than
@@ -3131,10 +3213,27 @@ async function handoverAgent(ctx: SetupContext, deps: SetupDeps): Promise<Detect
  *
  * Shared by the hand-over itself and by the closing block that has to repeat it,
  * so the two cannot come to disagree about where the task is supposed to run.
+ *
+ * That includes the directory, for a service below the repository root. The
+ * task's paths and commands are written from the service, which is where setup
+ * starts its own agent; an agent the user opens starts wherever they open it.
+ * The directory is named from the root, where the user ran setup. The task is
+ * named from the directory, where the agent they open looks for it — so by its
+ * path even after a line that named it, since that line named it from the root.
  */
-export function runTaskSentence(ctx: SetupContext, subject: string): string {
+export function runTaskSentence(ctx: SetupContext, task: string, named: boolean): string {
   const agent = ctx.agent;
-  return agent === undefined || agent.id === "generic"
+  const generic = agent === undefined || agent.id === "generic";
+  const service = ctx.stack?.selected?.path ?? ".";
+  if (service !== ".") {
+    const dir = `${service}/`;
+    const subject = relative(join(ctx.root, service), task);
+    return generic
+      ? `No coding agent is set up here, but the task is self-contained — open whichever agent you use in ${dir} and run ${subject} there`
+      : `Open ${agent.displayName} in ${dir} and run ${subject} there`;
+  }
+  const subject = named ? "it" : displaySkillPath(ctx.root, task);
+  return generic
     ? `No coding agent is set up here, but the task is self-contained — run ${subject} in whichever agent you use`
     : `Run ${subject} in ${agent.displayName}`;
 }
@@ -3366,14 +3465,39 @@ async function checkSdkImportable(
 }
 
 /**
+ * Escape sequences, each matched whole: CSI (`ESC [`, or C1 `CSI`) up to its
+ * final byte; OSC, DCS, SOS, PM and APC strings up to their terminator; and
+ * every other `ESC` escape with its intermediate and final bytes.
+ */
+const ESCAPE_SEQUENCE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching escape sequences is the intent.
+  /\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|(?:\u001b[\]PX^_]|[\u0090\u0098\u009d\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[ -/]*[0-~]/g;
+
+/** C0 controls, DEL and C1 controls. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/**
  * An agent's free-text note, short enough and flat enough for an error message.
  *
  * The note is the only place the agent's account of a block exists — the
  * completion block has no field for "I was stopped", so there is nothing to
  * match on and nothing is matched. It is quoted, not parsed.
+ *
+ * And quoted as text only. It is the model's own writing, decoded out of JSON
+ * where an escape is six plain characters, so a sequence in it would reach the
+ * terminal whole: a cleared screen, or a forged line under setup's name.
+ * Sequences go in one piece, so their parameters are not left behind as stray
+ * text. Line breaks and tabs become spaces before the remaining control
+ * characters go, so the words either side of them stay apart.
  */
 function oneLine(note: string, max = 200): string {
-  const flat = note.replace(/\s+/g, " ").trim();
+  const flat = note
+    .replace(ESCAPE_SEQUENCE, "")
+    .replace(/[\t\n\v\f\r]/g, " ")
+    .replace(CONTROL_CHARACTER, "")
+    .replace(/\s+/g, " ")
+    .trim();
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
@@ -3388,6 +3512,8 @@ function oneLine(note: string, max = 200): string {
  * agent can end this stage with the cause in its own output and nowhere else —
  * it exited non-zero, it reported no edits, the service still has no
  * initialization in it, or the SDK it was told to install cannot be imported.
+ * And from one failure after it: the trace wait timing out, when this run's
+ * agent is what came before it (see {@link agentEvidenceAfterRun}).
  *
  * The screen is not the fallback for any of them. The activity feed is a window
  * onto the last few tool calls, it has already been cleared by the time the
@@ -3427,17 +3553,6 @@ function keepAgentOutput(input: {
         // and a pattern scrub for those would miss some and read as a promise.
         "It can quote your repository's files, secrets included, so check it before you share it.",
       ];
-}
-
-/**
- * Where the task-file route writes the instrumentation task.
- *
- * Named once because two invocations have to agree on it: the run that writes
- * the file, and the `--resume` that restores the hand-over and has to name that
- * file again without having written it.
- */
-function instrumentTaskPath(root: string): string {
-  return join(root, ".traceroot", "prompts", "setup-instrument.md");
 }
 
 /**
@@ -3578,7 +3693,10 @@ const instrument: StageDefinition = {
       // for the SDK's API and spends the run guessing.
       skillPath: displaySkillPath(agentCwd, adapter.getSkillInstallPath(ctx.root, SKILL_NAME)),
       verifyCommand: service.testCommand,
-      interactive: false,
+      // Only the agent launched below runs captured, under permissions this
+      // run sets and in an environment `buildAgentEnv` builds. The task file
+      // hands the same task to an agent the user opens, which can ask them.
+      interactive: method !== "agent",
       existingInstrumentation: ctx.stack?.existingInstrumentation.evidence ?? [],
       // Found here rather than by the agent. Working out which Python a
       // service runs on is slow for an agent to establish, and all of it
@@ -3617,7 +3735,7 @@ const instrument: StageDefinition = {
       recordHandover(ctx, agent.id, "task-file");
       wizardLine(
         ctx,
-        `\nWrote the instrumentation task to ${displaySkillPath(ctx.root, promptPath)}.\n${runTaskSentence(ctx, "it")}, then rerun \`${setupCommand()} --resume\`.`,
+        `\nWrote the instrumentation task to ${displaySkillPath(ctx.root, promptPath)}.\n${runTaskSentence(ctx, promptPath, true)}, then rerun \`${setupCommand()} --resume\`.`,
       );
       return "skipped";
     }
@@ -3790,7 +3908,10 @@ const instrument: StageDefinition = {
           runProcess: deps.runProcess,
           env: deps.env,
         });
-        observedChangedFiles = changedSince(baselineChanges.get(ctx) ?? [], git.changedFiles);
+        observedChangedFiles = changedSince(baselineChanges.get(ctx) ?? [], git.changedFiles, {
+          root: ctx.root,
+          paths: setupWrites(ctx, adapter),
+        });
       } catch (err) {
         // A spinner left animating over an error is the worst of both: the run
         // has stopped and the screen still says it is working.
@@ -3818,7 +3939,14 @@ const instrument: StageDefinition = {
         feed?.stopAndClear(wizardStepLine(`${adapter.displayName} finished.`));
       }
 
-      const reported = parseCompletion(afterEchoedTask(result.output, task));
+      // Claude Code's reply is inside its stream's closing event, as JSON,
+      // where the fence around the block cannot be matched (see `finalReply`).
+      // Any other agent's capture is its reply as text.
+      const reply =
+        invocation.activityFormat === "claude-stream-json"
+          ? finalReply(result.output)
+          : afterEchoedTask(result.output, task);
+      const reported = reply === null ? null : parseCompletion(reply);
       // An agent did run. Recorded positively rather than by clearing the
       // field, because a rerun without `--resume` still loads the previous
       // checkpoint: writing `"agent"` overwrites a hand-over an earlier run
@@ -3838,7 +3966,8 @@ const instrument: StageDefinition = {
       // Called from each failure below rather than once from here, which is
       // what keeps the other half of `keepAgentOutput`'s contract true: a run
       // that worked writes no transcript, because nothing on that path calls
-      // it. The arguments are the same at all four, so they are written once.
+      // it. The arguments are the same at all four, so they are written once,
+      // and the trace wait's timeout reuses them.
       const agentEvidence = (): readonly string[] =>
         keepAgentOutput({
           root: ctx.root,
@@ -3901,9 +4030,35 @@ const instrument: StageDefinition = {
       // the right amount of editing may genuinely be none.
       const changedNothing =
         reported !== null &&
+        reported.filesChanged !== null &&
         reported.filesChanged.length === 0 &&
         observedChangedFiles.length === 0 &&
         ctx.stack?.existingInstrumentation.present !== true;
+      // Unless setup left the service for the agent to find. There, stopping
+      // without an edit is what the task tells it to do when it cannot tell
+      // which service the user meant, and its notes list the candidates.
+      // `--resume` would hand it the same choice again, so the way out is
+      // naming the service.
+      if (changedNothing && service.agentMustIdentify === true) {
+        throw new PausedSetupError({
+          stage: "instrument",
+          code: "AGENT_FAILED",
+          message: [
+            `${adapter.displayName} finished without changing any files, so no service is instrumented.`,
+            reported.notes === null ? null : `It reported: ${oneLine(reported.notes)}`,
+          ]
+            .filter((part) => part !== null)
+            .join(" "),
+          remedy: [
+            "Setup left the agent to find the service, and it stops without editing when it cannot tell which one you meant.",
+            ...agentEvidence(),
+            "Rerun setup on the service you mean:",
+            `  ${setupCommand()} --service <path>`,
+            "Or write the task out and run it yourself:",
+            `  ${setupCommand()} --no-instrument`,
+          ].join("\n"),
+        });
+      }
       if (changedNothing) {
         throw new PausedSetupError({
           stage: "instrument",
@@ -3967,13 +4122,14 @@ const instrument: StageDefinition = {
         // just above. Neither input is exotic: `reported` is null whenever the
         // parser finds no completion block in the agent's reply, and
         // `changedFiles` is empty in every repository that is not under git.
-        // So when the agent reported nothing, the service's own directory goes
+        // So when the agent named no files, the service's own directory goes
         // in, and a directory candidate is read as the same bounded source scan
         // a directory git reported already gets — not a tree walk.
+        const reportedFiles = reported?.filesChanged ?? null;
         const wiredIn = findTraceRootInitialization(ctx.root, service, [
-          ...(reported?.filesChanged ?? []),
+          ...(reportedFiles ?? []),
           ...observedChangedFiles,
-          ...(reported === null ? [service.path] : []),
+          ...(reportedFiles === null ? [service.path] : []),
         ]);
         if (wiredIn.kind === "absent") {
           throw new PausedSetupError({
@@ -4029,6 +4185,9 @@ const instrument: StageDefinition = {
         });
       }
 
+      // Handed on uncalled, so a run that worked still writes no transcript:
+      // only the trace wait timing out calls it.
+      agentEvidenceAfterRun.set(ctx, agentEvidence);
       return "ok";
     } finally {
       // The staging directory never lives in the repository, so a failed run
@@ -4175,16 +4334,18 @@ const verifyTrace: StageDefinition = {
     }
   },
   async run(ctx, deps) {
+    // An earlier run's stopped wait is not this one's, however this one ends.
+    ctx.checkpoint.traceWaitSkipped = undefined;
     const session = requireSession(ctx);
     // The wizard's own client, not the generated one. The single read this
     // stage makes must not depend on which operations the tool registry chooses
     // to expose — it is the same public endpoint either way.
     //
     // Read on the user's own credential, never the application's. The
-    // application's key is ingest-scoped: it can send telemetry and nothing
-    // else, which is the whole point of giving the repository its own. Reading
-    // traces with it worked only because the trace routes do not enforce scope
-    // yet, so this stage would have broken on the day they started to.
+    // application's key is ingest-scoped: it can send telemetry and read this
+    // project, but not manage its keys. Reading here is the CLI's job rather
+    // than the application's, so this stage does not depend on what the backend
+    // lets an ingest key do.
     const client = deps.createSetupApi({
       host: session.host,
       apiKey: session.userKey.reveal(),
@@ -4343,13 +4504,15 @@ const verifyTrace: StageDefinition = {
     // pressed still counts, and falls through to the normal success below:
     // `outcome.found` is the stronger answer and the skip does not override it.
     if (!outcome.found && skipped) {
-      // Recorded on the context rather than the checkpoint. It is a fact about
-      // how this run ended, not a durable one: `--resume` finds `verify_trace`
+      // Recorded twice, for two kinds of reader. The context's copy is for this
+      // run's closing and is never restored: `--resume` finds `verify_trace`
       // unsatisfied (nothing wrote `ctx.trace`) and waits again, which is
-      // exactly right, and a flag persisted to disk would have to be cleared
-      // there to avoid a later run closing with a sentence about a key nobody
-      // pressed.
+      // exactly right, so a later run cannot close with a sentence about a key
+      // nobody pressed. The checkpoint's copy is for `doctor` and the next
+      // `setup`, which otherwise read a hand-over whose wait was stopped as one
+      // still waiting on the user. It is cleared when this stage next runs.
       ctx.traceWaitSkipped = true;
+      ctx.checkpoint.traceWaitSkipped = true;
       return "skipped";
     }
 
@@ -4370,17 +4533,34 @@ const verifyTrace: StageDefinition = {
     }
 
     if (!outcome.found) {
+      // The agent's own account, when it gave one: only an agent this process
+      // ran has a report. Named, where the instrument stage says "It", because
+      // nothing earlier in this message is the agent.
+      const ran = ctx.instrumentation;
+      const notes = ran?.reported?.notes;
+      const quoted = notes === null || notes === undefined ? "" : oneLine(notes);
+      const said =
+        ran === undefined || quoted === ""
+          ? ""
+          : ` ${requireAgent(ran.agentId).displayName} reported: ${quoted}`;
       throw new PausedSetupError({
         stage: "verify_trace",
         code: "TRACE_TIMEOUT",
-        message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}`,
+        message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}${said}`,
         remedy: [
           "The most common cause is that the instrumented code path never ran.",
-          "Run your application once, then:",
+          // Nothing when this process launched no agent before the wait.
+          ...(agentEvidenceAfterRun.get(ctx)?.() ?? []),
+          // A server's path runs only when a request arrives, and running it
+          // once sends nothing. Left running, it also exports on the SDK's
+          // own schedule while the resume waits.
+          servesRequests(ctx.stack?.selected?.framework ?? null)
+            ? "Start your server, send it one request and leave it running, then:"
+            : "Run your application once, then:",
           `  ${setupCommand()} --resume`,
           "To investigate:",
           `  ${setupCommand()} doctor`,
-          "  traceroot traces list --limit 5",
+          `  ${cliCommand("traces list --limit 5")}`,
         ].join("\n"),
       });
     }
@@ -4536,6 +4716,14 @@ export async function runSetupMachine(ctx: SetupContext, deps: SetupDeps): Promi
   // setup run created and no run put into service.
   if ((ctx.checkpoint.mintedKeys ?? []).length > 0) {
     ctx.checkpoint.mintedKeys = [];
+    writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
+  }
+
+  // Nor is the error an earlier run stopped on. A resume that gets past it
+  // used to leave it on the record, so `doctor` reported a run that had just
+  // finished as stopped at the step it had since completed.
+  if (ctx.checkpoint.lastError !== undefined) {
+    ctx.checkpoint.lastError = undefined;
     writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
   }
 
@@ -4827,7 +5015,7 @@ function restoreCliConfig(ctx: SetupContext, deps: SetupDeps, revoked: ReadonlyS
   } catch {
     wizardWarn(
       ctx,
-      "could not put the CLI's config back, and it names a key this run revoked; run `traceroot login` to replace it",
+      `could not put the CLI's config back, and it names a key this run revoked; run \`${cliCommand("login")}\` to replace it`,
     );
   }
 }
