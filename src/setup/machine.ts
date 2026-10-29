@@ -48,7 +48,7 @@ import { ExitCode, type Writers } from "../output.js";
 import { bundledSkillDir } from "../skills/bundled.js";
 import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
-import { createActivityParser } from "./activity.js";
+import { createActivityParser, finalReply } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
 import { relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
@@ -72,7 +72,7 @@ import {
   shadowingApiKey,
 } from "./launch.js";
 import { detectEnvFiles, detectPythonEnvironment } from "./python.js";
-import { writeSetupReport } from "./report.js";
+import { REPORT_PATH, writeSetupReport } from "./report.js";
 import {
   type ImportCheck,
   type ResolvedSdk,
@@ -536,6 +536,50 @@ async function confirmDirtyWorktree(
 
 /** Per-run baseline of changed files, keyed by context (no global state). */
 const baselineChanges = new WeakMap<SetupContext, string[]>();
+
+/**
+ * The instrument stage's `agentEvidence`, for a trace wait that times out
+ * after the agent this run launched.
+ *
+ * The timeout is where a run ends up when the agent stopped short in a way none
+ * of the stage's checks could see: it exited 0, and nothing in its report, the
+ * diff or the entry point showed it. The stage kept nothing, because nothing
+ * there failed, and the trace the agent was told to send is the first thing
+ * found missing. Its output is then the only account of why.
+ *
+ * Kept by context, like the baseline above, and never on the checkpoint: the
+ * output belongs to this process's run of the agent. A `--resume` that
+ * restores the stage launched nothing, so its timeout has no transcript to
+ * keep.
+ */
+const agentEvidenceAfterRun = new WeakMap<SetupContext, () => readonly string[]>();
+
+/**
+ * Every path this run wrote itself, absolute, so the agent is not credited
+ * with them (see `withoutOwnWrites`).
+ *
+ * Read from where setup already keeps them rather than matched by name: the
+ * skill where the agent's adapter installs it; the `.traceroot/` directory at
+ * the root, which holds the report and the transcript, and the one beside the
+ * credential, which holds the checkpoint and the CLI config; and the env file
+ * `configure_repository` put the key in. That file only when this run wrote to
+ * it and it still holds what was written, because a file that already held the
+ * key is the project's, and an edit to it is the agent's, as is one made after
+ * this run's write. Setup adds no `.gitignore` lines outside `.traceroot/`, so
+ * there is nothing else to leave out.
+ */
+function setupWrites(ctx: SetupContext, adapter: AgentAdapter): string[] {
+  const env = wroteEnvKeys.get(ctx);
+  const own = dirname(REPORT_PATH);
+  return [
+    adapter.getSkillInstallPath(ctx.root, SKILL_NAME),
+    join(ctx.root, own),
+    join(ctx.artifactDir, own),
+    ...(env !== undefined && env.after !== null && readIfPresent(env.path) === env.after
+      ? [env.path]
+      : []),
+  ];
+}
 
 /**
  * Whether anything can still send this run a trace, which is what decides how
@@ -3415,14 +3459,39 @@ async function checkSdkImportable(
 }
 
 /**
+ * Escape sequences, each matched whole: CSI (`ESC [`, or C1 `CSI`) up to its
+ * final byte; OSC, DCS, SOS, PM and APC strings up to their terminator; and
+ * every other `ESC` escape with its intermediate and final bytes.
+ */
+const ESCAPE_SEQUENCE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching escape sequences is the intent.
+  /\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|(?:\u001b[\]PX^_]|[\u0090\u0098\u009d\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[ -/]*[0-~]/g;
+
+/** C0 controls, DEL and C1 controls. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/**
  * An agent's free-text note, short enough and flat enough for an error message.
  *
  * The note is the only place the agent's account of a block exists — the
  * completion block has no field for "I was stopped", so there is nothing to
  * match on and nothing is matched. It is quoted, not parsed.
+ *
+ * And quoted as text only. It is the model's own writing, decoded out of JSON
+ * where an escape is six plain characters, so a sequence in it would reach the
+ * terminal whole: a cleared screen, or a forged line under setup's name.
+ * Sequences go in one piece, so their parameters are not left behind as stray
+ * text. Line breaks and tabs become spaces before the remaining control
+ * characters go, so the words either side of them stay apart.
  */
 function oneLine(note: string, max = 200): string {
-  const flat = note.replace(/\s+/g, " ").trim();
+  const flat = note
+    .replace(ESCAPE_SEQUENCE, "")
+    .replace(/[\t\n\v\f\r]/g, " ")
+    .replace(CONTROL_CHARACTER, "")
+    .replace(/\s+/g, " ")
+    .trim();
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
@@ -3437,6 +3506,8 @@ function oneLine(note: string, max = 200): string {
  * agent can end this stage with the cause in its own output and nowhere else —
  * it exited non-zero, it reported no edits, the service still has no
  * initialization in it, or the SDK it was told to install cannot be imported.
+ * And from one failure after it: the trace wait timing out, when this run's
+ * agent is what came before it (see {@link agentEvidenceAfterRun}).
  *
  * The screen is not the fallback for any of them. The activity feed is a window
  * onto the last few tool calls, it has already been cleared by the time the
@@ -3839,7 +3910,10 @@ const instrument: StageDefinition = {
           runProcess: deps.runProcess,
           env: deps.env,
         });
-        observedChangedFiles = changedSince(baselineChanges.get(ctx) ?? [], git.changedFiles);
+        observedChangedFiles = changedSince(baselineChanges.get(ctx) ?? [], git.changedFiles, {
+          root: ctx.root,
+          paths: setupWrites(ctx, adapter),
+        });
       } catch (err) {
         // A spinner left animating over an error is the worst of both: the run
         // has stopped and the screen still says it is working.
@@ -3867,7 +3941,14 @@ const instrument: StageDefinition = {
         feed?.stopAndClear(wizardStepLine(`${adapter.displayName} finished.`));
       }
 
-      const reported = parseCompletion(afterEchoedTask(result.output, task));
+      // Claude Code's reply is inside its stream's closing event, as JSON,
+      // where the fence around the block cannot be matched (see `finalReply`).
+      // Any other agent's capture is its reply as text.
+      const reply =
+        invocation.activityFormat === "claude-stream-json"
+          ? finalReply(result.output)
+          : afterEchoedTask(result.output, task);
+      const reported = reply === null ? null : parseCompletion(reply);
       // An agent did run. Recorded positively rather than by clearing the
       // field, because a rerun without `--resume` still loads the previous
       // checkpoint: writing `"agent"` overwrites a hand-over an earlier run
@@ -3887,7 +3968,8 @@ const instrument: StageDefinition = {
       // Called from each failure below rather than once from here, which is
       // what keeps the other half of `keepAgentOutput`'s contract true: a run
       // that worked writes no transcript, because nothing on that path calls
-      // it. The arguments are the same at all four, so they are written once.
+      // it. The arguments are the same at all four, so they are written once,
+      // and the trace wait's timeout reuses them.
       const agentEvidence = (): readonly string[] =>
         keepAgentOutput({
           root: ctx.root,
@@ -3950,9 +4032,35 @@ const instrument: StageDefinition = {
       // the right amount of editing may genuinely be none.
       const changedNothing =
         reported !== null &&
+        reported.filesChanged !== null &&
         reported.filesChanged.length === 0 &&
         observedChangedFiles.length === 0 &&
         ctx.stack?.existingInstrumentation.present !== true;
+      // Unless setup left the service for the agent to find. There, stopping
+      // without an edit is what the task tells it to do when it cannot tell
+      // which service the user meant, and its notes list the candidates.
+      // `--resume` would hand it the same choice again, so the way out is
+      // naming the service.
+      if (changedNothing && service.agentMustIdentify === true) {
+        throw new PausedSetupError({
+          stage: "instrument",
+          code: "AGENT_FAILED",
+          message: [
+            `${adapter.displayName} finished without changing any files, so no service is instrumented.`,
+            reported.notes === null ? null : `It reported: ${oneLine(reported.notes)}`,
+          ]
+            .filter((part) => part !== null)
+            .join(" "),
+          remedy: [
+            "Setup left the agent to find the service, and it stops without editing when it cannot tell which one you meant.",
+            ...agentEvidence(),
+            "Rerun setup on the service you mean:",
+            `  ${setupCommand()} --service <path>`,
+            "Or write the task out and run it yourself:",
+            `  ${setupCommand()} --no-instrument`,
+          ].join("\n"),
+        });
+      }
       if (changedNothing) {
         throw new PausedSetupError({
           stage: "instrument",
@@ -4016,13 +4124,14 @@ const instrument: StageDefinition = {
         // just above. Neither input is exotic: `reported` is null whenever the
         // parser finds no completion block in the agent's reply, and
         // `changedFiles` is empty in every repository that is not under git.
-        // So when the agent reported nothing, the service's own directory goes
+        // So when the agent named no files, the service's own directory goes
         // in, and a directory candidate is read as the same bounded source scan
         // a directory git reported already gets — not a tree walk.
+        const reportedFiles = reported?.filesChanged ?? null;
         const wiredIn = findTraceRootInitialization(ctx.root, service, [
-          ...(reported?.filesChanged ?? []),
+          ...(reportedFiles ?? []),
           ...observedChangedFiles,
-          ...(reported === null ? [service.path] : []),
+          ...(reportedFiles === null ? [service.path] : []),
         ]);
         if (wiredIn.kind === "absent") {
           throw new PausedSetupError({
@@ -4078,6 +4187,9 @@ const instrument: StageDefinition = {
         });
       }
 
+      // Handed on uncalled, so a run that worked still writes no transcript:
+      // only the trace wait timing out calls it.
+      agentEvidenceAfterRun.set(ctx, agentEvidence);
       return "ok";
     } finally {
       // The staging directory never lives in the repository, so a failed run
@@ -4419,12 +4531,24 @@ const verifyTrace: StageDefinition = {
     }
 
     if (!outcome.found) {
+      // The agent's own account, when it gave one: only an agent this process
+      // ran has a report. Named, where the instrument stage says "It", because
+      // nothing earlier in this message is the agent.
+      const ran = ctx.instrumentation;
+      const notes = ran?.reported?.notes;
+      const quoted = notes === null || notes === undefined ? "" : oneLine(notes);
+      const said =
+        ran === undefined || quoted === ""
+          ? ""
+          : ` ${requireAgent(ran.agentId).displayName} reported: ${quoted}`;
       throw new PausedSetupError({
         stage: "verify_trace",
         code: "TRACE_TIMEOUT",
-        message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}`,
+        message: `No trace arrived within ${Math.round(outcome.waitedMs / 1000)}s.${outcome.lastError === null ? "" : ` Last error: ${outcome.lastError}`}${said}`,
         remedy: [
           "The most common cause is that the instrumented code path never ran.",
+          // Nothing when this process launched no agent before the wait.
+          ...(agentEvidenceAfterRun.get(ctx)?.() ?? []),
           "Run your application once, then:",
           `  ${setupCommand()} --resume`,
           "To investigate:",

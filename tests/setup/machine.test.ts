@@ -57,6 +57,7 @@ import {
   type RecordedRun,
   authEmpty,
   authWithKey,
+  claudeResult,
   codexCapture,
   defaultFlags,
   fakeApiClient,
@@ -4875,9 +4876,11 @@ describe("proving the agent installed the SDK", () => {
 });
 
 describe("proving the agent did something", () => {
-  /** An agent's completion block, as it arrives on stdout. */
+  /** An agent's completion block, as Claude Code's stream carries it: in its closing event. */
   function completion(body: Record<string, unknown>, prose = "done"): string {
-    return [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n");
+    return claudeResult(
+      [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n"),
+    );
   }
 
   it("fails the stage when the agent reports it changed nothing", async () => {
@@ -5263,10 +5266,371 @@ describe("proving the agent did something", () => {
   });
 });
 
+describe("the report in Claude Code's stream", () => {
+  /** A reply ending in a completion block, the way the task asks for one. */
+  function reply(body: Record<string, unknown>): string {
+    return [
+      "Here is what I did.",
+      "",
+      "```json traceroot-setup-result",
+      JSON.stringify(body, null, 2),
+      "```",
+      "",
+      "Then, in prose: nothing else to add.",
+    ].join("\n");
+  }
+
+  /** What `claude -p --output-format stream-json --verbose` prints, one event per line. */
+  function stream(text: string): string {
+    return [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        cwd: dir,
+        tools: ["Bash", "Edit", "Read"],
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "main.py" } }] },
+      }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }),
+      claudeResult(text),
+    ].join("\n");
+  }
+
+  it("fails fast on an agent that stopped without editing, with no git and no entry point", async () => {
+    // A launched agent cannot ask which service to use, so it stops and says so
+    // in its report. With no git there is no diff, and with no entry point
+    // there is nothing to read, so the report is the only thing that shows the
+    // run did nothing. Unread, the run said "Claude Code finished." and waited
+    // out the whole trace timeout.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const notes =
+      "Two services could be the target: apps/api (FastAPI) and apps/worker (Celery). I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.selected?.entryPoint).toBeNull();
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    const message = plain(result.error?.message ?? "");
+    expect(message).toContain("without changing any files");
+    expect(message).toContain(`It reported: ${notes}`);
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("fails fast in a git repository where only setup's own files are new", async () => {
+    // Setup installs the skill and writes the key before the agent starts, and
+    // git sees both. Counted as the agent's edits, they hid an agent that
+    // changed nothing, and the run waited out the trace timeout instead.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const notes = "Two services could be the target. I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    // Both are really there, and both are setup's.
+    expect(existsSync(join(dir, ".claude", "skills", "traceroot-instrument-repo"))).toBe(true);
+    expect(existsSync(join(dir, ".env"))).toBe(true);
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual([]);
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    expect(plain(result.error?.message ?? "")).toContain("without changing any files");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("still counts what the agent changed beside setup's own files", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const process = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL} M app.py${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual(["app.py"]);
+    expect(result.error).toBeNull();
+  });
+
+  it("counts the agent's edit to the env file setup wrote the key into", async () => {
+    // The file is setup's only while it holds what setup wrote. Left out
+    // whatever it held, a line the agent added after setup's was not counted,
+    // and a run whose only edit was there read as one that changed nothing.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    initGit();
+    const env = join(dir, ".env");
+    const inner = fakeRunProcess({
+      instrument: false,
+      gitStatus: ["", `?? .claude/${NUL}?? .env${NUL}`],
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null })) } },
+    });
+    const runProcess: SetupDeps["runProcess"] = async (o) => {
+      if (o.program === "claude") {
+        writeFileSync(env, `${readFileSync(env, "utf8")}OTEL_SERVICE_NAME=api\n`);
+      }
+      return inner.run(o);
+    };
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.observedChangedFiles).toEqual([".env"]);
+    expect(result.error).toBeNull();
+  });
+
+  it("does not fail a run outside git whose report names no files", async () => {
+    // `files_changed` as a string is a report of edits in the wrong shape, not
+    // a report of none, and with no diff to disagree it failed this run.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      results: {
+        claude: { output: stream(reply({ files_changed: "app/server.py", trace_id: null })) },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.reported?.filesChanged).toBeNull();
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("verify_trace");
+  });
+
+  it("reads the service's own folder when the report names no files", async () => {
+    // As for an agent with no report at all: the initialization is one import
+    // away, and only the service's folder has it.
+    pythonRepo();
+    writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
+    writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ trace_id: null, notes: "wired it up" })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(result.checkpoint.completedStages).toContain("instrument");
+  });
+
+  it("quotes the agent's notes as plain text, whatever control bytes they carry", async () => {
+    // The notes are the model's own writing, decoded from JSON where an escape
+    // is six plain characters, so a sequence in them reached the terminal whole.
+    const ESC = String.fromCharCode(27);
+    const BEL = String.fromCharCode(7);
+    const CSI = String.fromCharCode(0x9b);
+    const notes = [
+      `${ESC}[2J${ESC}[31mBlocked:${ESC}[0m npm install`,
+      `was\trefused.\r\nSee ${ESC}]8;;https://example.test${BEL}the log${ESC}]8;;${BEL}`,
+      `${CSI}1Anow${String.fromCharCode(0)} and ${ESC}7done.`,
+    ].join("\n");
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    const [message] = (result.error?.message ?? "").split("\n\n");
+    expect(message).toContain(
+      "It reported: Blocked: npm install was refused. See the log now and done.",
+    );
+    const controls = [...(message ?? "")].filter((c) => {
+      const code = c.charCodeAt(0);
+      return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    });
+    expect(controls).toEqual([]);
+  });
+
+  it("still cuts the notes at 200 characters once they are plain", async () => {
+    const ESC = String.fromCharCode(27);
+    const notes = `${ESC}[31m${"a".repeat(150)}${ESC}[0m ${"b".repeat(150)}`;
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["fastapi","pytest"]\n');
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    const [message] = (result.error?.message ?? "").split("\n\n");
+    const quoted = message?.slice(message.indexOf("It reported: ") + "It reported: ".length);
+    expect(quoted).toBe(`${"a".repeat(150)} ${"b".repeat(48)}…`);
+  });
+
+  it("sends an agent that could not pick the service to --service, not --resume", async () => {
+    // Two services and no answer from the user: setup leaves the choice to the
+    // agent, which stops and lists the candidates when it cannot tell. A
+    // `--resume` hands it the same choice again.
+    for (const name of ["svc-a", "svc-b"]) {
+      mkdirSync(join(dir, name), { recursive: true });
+      writeFileSync(join(dir, name, "requirements.txt"), "fastapi\n");
+      writeFileSync(join(dir, name, "main.py"), "print(1)\n");
+    }
+    const notes = "Two candidates: svc-a (FastAPI) and svc-b (FastAPI). I edited nothing.";
+    const process = fakeRunProcess({
+      instrument: false,
+      results: { claude: { output: stream(reply({ files_changed: [], trace_id: null, notes })) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.stack?.selected?.agentMustIdentify).toBe(true);
+    expect(result.error?.code).toBe("AGENT_FAILED");
+    const [message] = plain(result.error?.message ?? "").split("\n\n");
+    expect(message).toBe(
+      `Claude Code finished without changing any files, so no service is instrumented. It reported: ${notes}`,
+    );
+    const remedy = plain(result.error?.remedy ?? "");
+    expect(remedy).toContain(
+      "Rerun setup on the service you mean:\n  traceroot setup --service <path>",
+    );
+    expect(remedy).not.toContain("--resume");
+    expect(result.stagesRun.map((s) => s.stage)).not.toContain("verify_trace");
+  });
+
+  it("reads the report on a run that worked, and carries on as before", async () => {
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: stream(reply({ files_changed: ["main.py"], trace_id: null, notes: "ran once" })),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(ctx.instrumentation?.reported).toEqual({
+      filesChanged: ["main.py"],
+      sdkVersion: null,
+      traceId: null,
+      notes: "ran once",
+    });
+    expect(result.checkpoint.completedStages).toContain("verify_trace");
+  });
+
+  it("reads no report from a stream that was cut off", async () => {
+    // The closing event never arrived whole, which is the same as no block:
+    // the report is null and the run is judged on what is on disk, as it was
+    // for every Claude Code run before the report was read.
+    pythonRepo();
+    const whole = stream(reply({ files_changed: [], trace_id: null }));
+    const process = fakeRunProcess({
+      results: { claude: { output: whole.slice(0, whole.length - 40) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.reported).toBeNull();
+    expect(result.error).toBeNull();
+  });
+
+  it("still reads Codex's reply as the text it prints", async () => {
+    // `codex exec` prints its reply as plain text, so its block was always
+    // read, and reading Claude Code's stream must not change that.
+    pythonRepo();
+    const base = fakeRunProcess({ instrument: false });
+    const run: SetupDeps["runProcess"] = async (o) => {
+      const result = await base.run(o);
+      return o.program === "codex"
+        ? {
+            ...result,
+            output: codexCapture(o.stdin ?? "", reply({ files_changed: [], notes: "refused" })),
+          }
+        : result;
+    };
+    const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: run });
+    const { ctx } = makeCtx({ flags: { agent: "codex" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(ctx.instrumentation?.reported?.notes).toBe("refused");
+    expect(plain(result.error?.message ?? "")).toContain("without changing any files");
+  });
+});
+
 describe("the agent's own account of a failed run", () => {
-  /** An agent's completion block, as it arrives on stdout. */
+  /** An agent's completion block, as Claude Code's stream carries it: in its closing event. */
   function completion(body: Record<string, unknown>, prose = "done"): string {
-    return [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n");
+    return claudeResult(
+      [prose, "```json traceroot-setup-result", JSON.stringify(body), "```"].join("\n"),
+    );
   }
 
   /** The written transcript, or null when the run left none. */
@@ -5471,6 +5835,122 @@ describe("the agent's own account of a failed run", () => {
     expect(written).not.toBeNull();
     expect(written).not.toContain(key);
     expect(written).toContain("<redacted>");
+  });
+
+  it("keeps the output of an agent whose run sent no trace", async () => {
+    // Exit 0, the entry point edited, a report of the edit: every check in the
+    // stage passes, and the first thing found wrong is the trace that never
+    // came. Whatever the agent ran, or stopped short of running, is in its
+    // output and nowhere else.
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: [
+            '{"type":"system","subtype":"init","tools":["Read","Edit","Write","Bash"]}',
+            '{"type":"user","message":"Bash(python main.py) was denied"}',
+            completion({ files_changed: ["main.py"], trace_id: null }),
+          ].join("\n"),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    // A report with no notes adds nothing to the message.
+    expect(result.error?.message.split("\n\n")[0]).toMatch(/^No trace arrived within \d+s\.$/);
+    expect(transcript()).toContain("was denied");
+    const remedy = plain(result.error?.remedy ?? "");
+    expect(remedy).toContain(
+      `What Claude Code printed is in ${AGENT_OUTPUT_PATH} — the only record of what it tried, including anything it was refused.`,
+    );
+    expect(remedy).toContain(
+      "It can quote your repository's files, secrets included, so check it before you share it.",
+    );
+    // Beside the cause it bears on, and ahead of the instructions to rerun.
+    expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeGreaterThan(remedy.indexOf("never ran"));
+    expect(remedy.indexOf(AGENT_OUTPUT_PATH)).toBeLessThan(remedy.indexOf("--resume"));
+  });
+
+  it("quotes the agent's notes when no trace arrives after it", async () => {
+    // The agent's report is the one account of the run that is not a guess,
+    // and the timeout is where a run it stopped short of finishing ends up.
+    const ESC = String.fromCharCode(27);
+    pythonRepo();
+    const process = fakeRunProcess({
+      results: {
+        claude: {
+          output: completion({
+            files_changed: ["main.py"],
+            trace_id: null,
+            notes: `Instrumented main.py.\nCould not run it: ${ESC}[31mpython3 was refused${ESC}[0m.`,
+          }),
+        },
+      },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({ flags: { agent: "claude", traceTimeoutSec: 1 } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    const [message, remedy] = (result.error?.message ?? "").split("\n\n");
+    expect(message).toMatch(
+      /^No trace arrived within \d+s\. Claude Code reported: Instrumented main\.py\. Could not run it: python3 was refused\.$/,
+    );
+    // The rest of the error is what it was.
+    expect(remedy).toBe(result.error?.remedy);
+    expect(plain(remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
+  });
+
+  it("keeps nothing on a timeout when this run launched no agent", async () => {
+    // A resume restores the stage and runs nothing, so there is no output of
+    // this run's to keep, and the remedy must not name a file from another run.
+    pythonRepo();
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.completedStages.push(
+      "precheck",
+      "authenticate",
+      "select_context",
+      "acquire_project_key",
+      "configure_repository",
+      "detect_stack",
+      "select_agent",
+      "install_agent_context",
+      "instrument",
+    );
+    previous.instrumentHandover = "agent";
+    writeCheckpoint(dir, previous);
+    const process = fakeRunProcess({
+      results: { claude: { output: completion({ files_changed: ["main.py"], trace_id: null }) } },
+    });
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: process.run,
+    });
+    const { ctx } = makeCtx({
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(transcript()).toBeNull();
+    expect(plain(result.error?.remedy ?? "")).not.toContain(AGENT_OUTPUT_PATH);
   });
 });
 
