@@ -21,6 +21,12 @@ export interface BuildSetupTaskInput {
    * Interactive agents may ask the user questions. Background agents must abort
    * instead of guessing — without this distinction a non-interactive agent
    * either hangs or invents an answer.
+   *
+   * False only for the agent setup launches itself, and that is the run every
+   * claim about the launch describes: it runs captured, under the permissions
+   * setup gave it, with the key in its environment when no file holds it. The
+   * task file is the same task handed to an agent the user opens, where none of
+   * that is true, so those claims are made only when this is false.
    */
   interactive: boolean;
   /** Evidence that TraceRoot is already present, so the agent extends rather than duplicates. */
@@ -146,6 +152,30 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
   return `config({ path: new URL("${envPathFor(envFile, entryPoint)}", import.meta.url) })`;
 }
 
+/** The package `sdkPackageFor` installs for a Mastra service in place of the core SDK. */
+const MASTRA_SDK = "@traceroot-ai/mastra";
+
+/**
+ * Mastra's own observability package, which the Mastra snippet imports.
+ *
+ * `@traceroot-ai/mastra` builds its exporter on it and lists it as a peer
+ * dependency rather than a dependency, so installing the SDK alone does not
+ * guarantee it is there. A Mastra project often has it already, and
+ * reinstalling it unpinned would move a version the project chose, so it is
+ * installed only where the manifest does not list it.
+ */
+const MASTRA_OBSERVABILITY = "@mastra/observability";
+
+/** The install for {@link MASTRA_OBSERVABILITY}, in the service's own package manager. */
+function mastraObservabilityInstall(service: DetectedService): string {
+  // Unpinned: it has to match the project's `@mastra/core`, which setup does
+  // not read, and the package manager resolves that.
+  return installCommand(
+    { package: MASTRA_OBSERVABILITY, version: "latest", source: "bundled" },
+    service,
+  );
+}
+
 /**
  * The canonical initialization block, spelled out rather than described.
  *
@@ -175,9 +205,57 @@ function loadDotenvCallTs(envFile: string, entryPoint: string | null): string {
  * with `initialize()` correctly under the guard. So the task also has the agent
  * run the suite with `TRACEROOT_ENABLED=false`, which is what actually keeps it
  * out of the user's project.
+ *
+ * The snippet imports from the package step 2 installed, and only names that
+ * package exports. The Node one used to be the Python SDK's shape transcribed:
+ * a bare `initialize()` that instruments nothing in an ES module, and, for a
+ * Mastra service, an import from a package nothing had installed.
  */
-function initSnippet(service: DetectedService, envFiles: readonly string[]): string {
+function initSnippet(
+  service: DetectedService,
+  sdk: ResolvedSdk,
+  envFiles: readonly string[],
+): string {
   const [envFile] = envFiles;
+  if (sdk.package === MASTRA_SDK) {
+    // An exporter on the application's own `Mastra` instance: the package has
+    // no `initialize()`, and does not bring the core SDK with it. The exporter
+    // reads the key in its constructor and stays disabled if it was not there,
+    // so the load goes before the construction rather than into a function
+    // that runs later. Which file constructs the instance is not something
+    // detection establishes, so the path is left for the agent to measure.
+    const load =
+      envFile === undefined
+        ? { imports: [] as string[], call: [] as string[] }
+        : {
+            imports: ['import { config } from "dotenv";'],
+            call: [
+              "// Before the instance below is constructed: the exporter reads the key then.",
+              `${loadDotenvCallTs(envFile, null)};   // the app's own credentials`,
+              "",
+            ],
+          };
+    return [
+      "```typescript",
+      ...load.imports,
+      `import { Observability } from "${MASTRA_OBSERVABILITY}";`,
+      `import { TraceRootExporter } from "${MASTRA_SDK}";`,
+      "",
+      ...load.call,
+      "// The Mastra instance this application already constructs: add the option, keep the rest.",
+      "export const mastra = new Mastra({",
+      "  observability: new Observability({",
+      "    configs: {",
+      "      traceroot: {",
+      '        serviceName: "mastra",',
+      "        exporters: [new TraceRootExporter()],   // reads TRACEROOT_API_KEY",
+      "      },",
+      "    },",
+      "  }),",
+      "});",
+      "```",
+    ].join("\n");
+  }
   if (service.language !== "python") {
     // The env load, named rather than imported for its side effect — and both
     // it and `initialize()` inside the function the file runs, not at module
@@ -204,6 +282,11 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     // this SDK: the instrumentors patch the provider's class methods through
     // `wrapt`, which does not care whether it was imported first. What it has to
     // precede is the first model call and the first `observe`.
+    //
+    // `instrumentModules`, naming the provider, because without it
+    // `initialize()` falls back to hooking `require()`, and an ES module — which
+    // this snippet is, anchored on `import.meta.url` — never goes through it. A
+    // bare `initialize()`, which is what this used to show, instrumented nothing.
     const load =
       envFile === undefined
         ? { imports: [] as string[], call: [] as string[] }
@@ -216,14 +299,17 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     return [
       "```typescript",
       ...load.imports,
-      'import { initialize, observe } from "@traceroot-ai/traceroot";',
+      'import { TraceRoot } from "@traceroot-ai/traceroot";',
+      'import OpenAI from "openai";   // the provider library, imported wherever it already was',
       "",
       "// The function this file calls when it is run directly — not module scope.",
       "async function main() {",
       ...load.call,
-      "  initialize();",
+      "  TraceRoot.initialize({ instrumentModules: { openAI: OpenAI } });   // name the library this app uses",
       "  await run();   // whatever this file already does",
       "}",
+      "",
+      "main();   // however this file already starts itself",
       "```",
     ].join("\n");
   }
@@ -251,6 +337,113 @@ function initSnippet(service: DetectedService, envFiles: readonly string[]): str
     "",
     "and, for a short-lived script only, `traceroot.flush()` before exit.",
   ].join("\n");
+}
+
+/**
+ * Step 3's account of the TypeScript SDK, where the Python one lists its
+ * `Integration` members.
+ *
+ * The Python list used to render here for every language, under a "verified
+ * against" line naming the Node package — which exports neither `Integration`
+ * nor `using_attributes`, and has `flush` only as `TraceRoot.flush()`. These
+ * names are read from `@traceroot-ai/traceroot` 0.5.0 and 0.6.0, whose
+ * `InitializeOptions` take the same `instrumentModules` keys.
+ */
+function typescriptApi(): string {
+  return `\`instrumentModules\` is what instruments the provider. Name each library this application
+calls, set to the module it imports, and leave out the ones it does not. Without it, \`initialize()\`
+auto-instruments only modules loaded with \`require()\` — CommonJS — so in an ES module it
+instruments nothing. The keys it takes in \`@traceroot-ai/traceroot\`:
+
+\`\`\`
+openAI  anthropic  langchain  bedrock  typeSafe  claudeAgentSDK  openaiAgents  piCodingAgent
+piAgentCore
+\`\`\`
+
+LangChain's key takes \`@langchain/core/callbacks/manager\`, not the LangChain class, and the Vercel
+AI SDK needs no key at all; the skill's TypeScript reference covers both. For step 4, spans come
+from \`observe\`, user and session from \`usingAttributes\`, and a short-lived script awaits
+\`TraceRoot.flush()\` before it exits, all from \`@traceroot-ai/traceroot\`. If an import fails when
+you run the app, read the error and fix it then.`;
+}
+
+/**
+ * Step 3 for a Mastra service, which installs {@link MASTRA_SDK} and not the
+ * core SDK.
+ *
+ * None of the other branch carries over. The package has no `initialize()` to
+ * place and does not depend on `@traceroot-ai/traceroot`, so every name that
+ * branch teaches — `initialize`, `observe`, `usingAttributes` — is one this
+ * service cannot import, and the snippet that used to render here imported
+ * them from a package nothing had installed.
+ */
+function mastraInitialization(
+  service: DetectedService,
+  sdk: ResolvedSdk,
+  envFiles: readonly string[],
+): string {
+  const [envFile] = envFiles;
+  const placeholder =
+    envFile === undefined
+      ? ""
+      : `
+
+The load's path is a placeholder. Setup does not know which file constructs the instance, so it
+cannot measure the path for you: replace it with the path from that file out to \`${envFile}\`. A
+load that resolves to nothing raises nothing — the application starts and emits no trace.`;
+  return `In the service at \`${service.path}\`, TraceRoot is an exporter on the application's own
+\`Mastra\` instance, and there is no \`initialize()\` to call. Add it to the \`new Mastra({ ... })\`
+this application already constructs, wherever that is. \`TraceRootExporter\` reads
+\`TRACEROOT_API_KEY\` when it is constructed, and one constructed without it stays off, so anything
+that loads the credential has to run before that construction.
+
+${initSnippet(service, sdk, envFiles)}
+
+If that constructor already has an \`observability\` option, add the exporter to the \`exporters\` of
+the config it already has rather than adding a second config.${placeholder}
+
+\`${MASTRA_SDK}\` exports the exporter and its config type, and does not install
+\`@traceroot-ai/traceroot\`, so nothing from that package is available in this service: do not
+import from it. Mastra traces its own agent runs, tool calls and model calls through the exporter.
+If an import fails when you run the app, read the error and fix it then.`;
+}
+
+/**
+ * Step 4 for a Mastra service, in place of the span-by-span bar the other
+ * branch sets.
+ *
+ * That bar is met with `observe` and `usingAttributes`, which come from a
+ * package a Mastra service does not install, so asking for it there sends the
+ * agent to import one. Mastra emits the tree itself — agent run, workflow run
+ * and step, model generation, tool and MCP tool call — and the exporter
+ * converts every span it is handed, errors included. What it does not get is
+ * the user and the session: it reads them from `userId` and `sessionId` span
+ * metadata only, while Mastra puts `resourceId` and `threadId` there, and
+ * `tracingOptions.metadata` is how a run's caller adds to the root span's.
+ * Read from `@traceroot-ai/mastra` 0.1.1 and `@mastra/core` 1.22.0.
+ */
+function mastraSpans(): string {
+  return `Write no spans by hand in this service. Mastra traces its own work, and the exporter from step 3
+sends all of it: each agent run as the root of its trace, each workflow run and step, each model call
+with its provider, model and token usage, and each tool call, MCP tools included, with its input,
+output and any error. That is the tree this step builds by hand in other applications, and there is
+nothing to add to it: an external call made inside a tool or a workflow step is timed by that tool's
+or step's own span.
+
+The user and the session are the one thing to add. Mastra records each agent run's \`resourceId\` and
+\`threadId\`, but as plain metadata: the exporter reads the user and the session from \`userId\` and
+\`sessionId\` metadata only. Pass those where the application starts a run, and the exporter puts
+them on the run's root span:
+
+\`\`\`typescript
+await agent.generate(messages, {   // the call this application already makes
+  tracingOptions: { metadata: { userId, sessionId } },
+});
+\`\`\`
+
+\`agent.stream()\` and a workflow run's \`start()\` take the same option. The table in the skill's
+analyse step is for deciding what the two values are, not whether to attach them. That option is the
+only code this step adds.`;
 }
 
 /**
@@ -566,6 +759,19 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
         "it instead, and the load you add in step 3 is what gets it to the SDK. Do not print it, " +
         "grep for it or copy it anywhere else. If the SDK reports at runtime that it is missing, " +
         "that load is the first thing to check.";
+  // Both of those describe the environment `buildAgentEnv` builds, and an agent
+  // the user opens has the user's own instead: nothing put the key there when
+  // no file holds it, and nothing took it out when one does. So the task file
+  // says only where the application gets the key from.
+  const handedOverKey =
+    input.credentialFiles.length === 0
+      ? "`traceroot setup` did not put `TRACEROOT_API_KEY` in a file the application loads, so " +
+        "the application has to read it from the environment it is started in. Do not print it, " +
+        "grep for it or write it into a file. If the SDK reports at runtime that it is missing, " +
+        "tell the user it has to be set there, and do not ask them to paste it to you."
+      : "A file the application loads holds `TRACEROOT_API_KEY`, and the load you add in step 3 " +
+        "is what gets it to the SDK. Do not print it, grep for it or copy it anywhere else. If " +
+        "the SDK reports at runtime that it is missing, that load is the first thing to check.";
 
   // Where "not at module scope" actually is, which differs by runtime: the
   // guard is a Python idiom with no Node counterpart.
@@ -573,14 +779,54 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
     service.language === "python"
       ? 'the entry point\'s `if __name__ == "__main__":` block'
       : "the function the entry point calls to start itself when it is run directly";
+  // A Mastra service installs the Mastra exporter instead of the core SDK, so
+  // step 3 has no `initialize()` in it to place.
+  const mastra = sdk.package === MASTRA_SDK;
 
   const runMode = interactive
-    ? "You are running interactively. If something is genuinely ambiguous, ask the user."
+    ? [
+        "You are running interactively. If something is genuinely ambiguous, ask the user.",
+        // Setup starts its own agent in the service directory. An agent the
+        // user opens starts wherever they opened it, and nothing below says
+        // where its relative paths and commands are relative to.
+        ...(service.path === "."
+          ? []
+          : [
+              `Work from \`${service.path}\`, the service's directory under the repository root: every relative path and command in this task assumes you are standing there.`,
+            ]),
+      ].join(" ")
     : [
         "You are running non-interactively and cannot ask questions.",
         "If a step needs a decision you cannot make safely, stop and explain exactly what is needed.",
         "Do not guess.",
       ].join(" ");
+
+  // What a service nothing identified ends in. Only an agent the user opened
+  // can put a question to anyone: the launched one runs captured, where a
+  // question reaches nobody, so it ends with the candidates in its report,
+  // which setup quotes when the run stops without edits.
+  const whenInDoubt = interactive
+    ? "**stop and ask**. List the candidate paths you found and have the user pick exactly one,\nthen state the single strongest piece of evidence before going further."
+    : "**stop and report**. Edit nothing, and list the candidate paths you found in the `notes` of\nyour report (step 8), each with the single strongest piece of evidence for it.";
+
+  // No command for a missing skill. `traceroot skills install` is not on the
+  // launched agent's allow-list, is not on PATH under npx, fails without
+  // `--agent` when there is no terminal, and installs beside the working
+  // directory rather than where setup put the skill.
+  //
+  // And no stop either. The task is self-contained, which is why setup warns
+  // and continues when its own install of the skill fails: a missing skill
+  // degrades the run rather than ending it, and the API it needs is in step 3.
+  const missingSkill = interactive
+    ? "If it is missing, do not try to\ninstall it: tell the user and carry on with the API written out in step 3."
+    : "If it is missing, do not try to\ninstall it: say so in your report and carry on with the API written out in step 3.";
+
+  // Loading the file from the shell is something the launched agent's sandbox
+  // refuses. An agent the user opens may be allowed to, and loading in-process
+  // is still the better answer.
+  const shellLoad = interactive
+    ? "Do not do this in your shell instead, with `set -a`, `. file` or `$(...)`. Loading in-process\nis the better answer:"
+    : "Your shell cannot do this for you — `set -a`, `. file`, `$(...)` and multi-part pipelines are\nall refused by your own sandbox, and trying them costs minutes. Loading in-process is also the\nbetter answer:";
 
   // A bare command, never a shell that loads an env file first.
   //
@@ -724,9 +970,8 @@ ${serviceFacts}
 Determine the target from concrete signals — a dependency manifest, an entry point, an application
 that actually runs. **Do not infer from loose hints**: a stray script, a file extension or a mention
 in a README is not evidence. If exactly one candidate is unambiguous, proceed with it. In every
-other case — several candidates, none, or any doubt about which application the user meant — **stop
-and ask**. List the candidate paths you found and have the user pick exactly one, then state the
-single strongest piece of evidence before going further.
+other case — several candidates, none, or any doubt about which application the user meant —
+${whenInDoubt}
 
 Do not instrument more than one service or language in this run.`
     : `You are instrumenting **exactly one** service. It has already been chosen:
@@ -766,7 +1011,7 @@ ${bullet([
     "to that provider and nothing about the structure around them, while an agent framework's " +
     "also covers the tool calls and the loop that makes them. Step 4 says how to tell, and what " +
     "is left for you either way.",
-  whereTheKeyIs,
+  interactive ? handedOverKey : whereTheKeyIs,
   "Never print, log, echo or hardcode an API key.",
   "Do not write the key into any file — not source, not config, not a `.env`. You never write it " +
     "anywhere, so you never need to check what is tracked or gitignored.",
@@ -784,10 +1029,16 @@ ${bullet([
     "do not go looking for the SDK's source tree — it is normally outside the directories you can " +
     "read. If an import fails when you run the app, read the error and fix it then; that is the " +
     "moment a wrong assumption actually costs something.",
-  "Your permissions are already set for this task: edits are accepted and the commands named " +
-    "here are allowed. Do not read `.claude/settings.json`, `.claude/settings.local.json` or " +
-    "`.claude/hooks/` to work out what you may run, and do not probe with throwaway commands. " +
-    "If a command is genuinely refused, name it in your report and carry on with what you can do.",
+  // Setup's own launch is what set these. An agent the user opens runs under
+  // the user's own settings, which this task knows nothing about.
+  ...(interactive
+    ? []
+    : [
+        "Your permissions are already set for this task: edits are accepted and the commands named " +
+          "here are allowed. Do not read `.claude/settings.json`, `.claude/settings.local.json` or " +
+          "`.claude/hooks/` to work out what you may run, and do not probe with throwaway commands. " +
+          "If a command is genuinely refused, name it in your report and carry on with what you can do.",
+      ]),
   "Do not create additional files for this setup run. The TraceRoot skill directory and the " +
     "task file were installed by `traceroot setup` on purpose — leave them alone. Do not add " +
     "your own scratch files, notes or task directories.",
@@ -798,13 +1049,13 @@ ${bullet([
 ### 1. Read the TraceRoot skill
 
 \`${skillPath}/SKILL.md\` is installed and is the source of truth for SDK APIs, initialization
-order and framework integrations. Read it before writing code. If it is missing, install it with
-\`traceroot skills install traceroot-instrument-repo\`.
+order and framework integrations. Read it before writing code. ${missingSkill}
 
-Read it for **step 4 onward** — install, initialize, spans, verify. Its steps 1-3 (check the API
+Read it for **steps 4 and 5** — install and initialize, then spans. Its steps 1-3 (check the API
 key, analyse the repository, confirm which service) were done by \`traceroot setup\` before you
 started and their answers are the facts above. Do not redo them and do not put them on a
-checklist.
+checklist. Its step 6, verify, does not apply here either: steps 6 and 7 of this task replace it,
+and step 7 says why this run does not confirm the trace itself.
 
 One question inside them was not answered for you: setup does not know whether this application
 has a user or a session concept, so the table in the skill's analyse step is still yours to read
@@ -838,12 +1089,20 @@ python3 -m venv .venv && ${FALLBACK_INTERPRETER} -m pip install ${sdk.package}==
 \`\`\`
 
 Then run the application with \`${FALLBACK_INTERPRETER}\` throughout.`
-      : ""
+      : mastra
+        ? `
+\`Observability\` in step 3 comes from \`${MASTRA_OBSERVABILITY}\`, which \`${MASTRA_SDK}\` needs
+installed beside it. If \`package.json\` does not list it yet, add it with
+\`${mastraObservabilityInstall(service)}\`; if it does, leave its version alone.`
+        : ""
 }
 
-### 3. Initialize on the path that runs the application
+### 3. ${mastra ? "Add the exporter to the application's Mastra instance" : "Initialize on the path that runs the application"}
 
-In the entry point of the service at \`${service.path}\`, put the credential load and
+${
+  mastra
+    ? mastraInitialization(service, sdk, envFiles)
+    : `In the entry point of the service at \`${service.path}\`, put the credential load and
 \`initialize()\` where they run when the application is **run**, and not at module scope. Here
 that place is ${runPath}.
 
@@ -859,12 +1118,19 @@ you named would never be applied. Auto-instrumentation patches the provider libr
 which works whether or not that library has already been imported — so leave its imports where
 they are.
 
-${initSnippet(service, envFiles)}
+${initSnippet(service, sdk, envFiles)}
 
-Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
+${
+  service.language === "python"
+    ? `Two shapes cannot do this. A module another process imports in order to run it — uvicorn,
 gunicorn, a queue worker — has no such place to put it, so initialize where the framework starts
 up instead. And an application that needs its own credentials while it is still being imported — a
-client constructed at module scope — has to keep the load there.
+client constructed at module scope — has to keep the load there.`
+    : `Two shapes cannot do this. A module another process imports in order to run it — a server
+started by a process manager, a queue worker — has no such place to put it, so initialize where the
+framework starts up instead. And an application that needs its own credentials while it is still
+being imported — a client constructed at module scope — has to keep the load there.`
+}
 
 Whatever the shape, the run path does not on its own keep the project's tests from exporting.
 \`observe\` starts the SDK by itself whenever \`TRACEROOT_API_KEY\` is in the environment, and the key
@@ -872,11 +1138,19 @@ can get there without the entry point's help — your own environment, a shell e
 loaded at import by code that was there before you. What keeps a test run out of the user's project
 is \`TRACEROOT_ENABLED=false\` on the command that runs it, which is how step 5 runs the suite.
 
-None of this belongs in the project's test configuration — not a \`conftest.py\`, not a fixture, not
+${
+  service.language === "python"
+    ? `None of this belongs in the project's test configuration — not a \`conftest.py\`, not a fixture, not
 a \`pytest.ini\`. Those are the user's files, and the variable on the command line does the job
-without touching them.
+without touching them.`
+    : `None of this belongs in the project's test configuration — not a test setup file, not a fixture,
+not the test runner's config. Those are the user's files, and the variable on the command line does
+the job without touching them.`
+}
 
-That is the whole API you need: \`initialize\`, \`observe\`, \`using_attributes\`, \`flush\`.
+${
+  service.language === "python"
+    ? `That is the whole API you need: \`initialize\`, \`observe\`, \`using_attributes\`, \`flush\`.
 
 \`Integration\` members, verified against \`${sdk.package}==${sdk.version}\`:
 
@@ -888,11 +1162,17 @@ AGENT_FRAMEWORK
 
 Gemini is \`GOOGLE_GENAI\` and Bedrock is \`BEDROCK\`, which are the two people guess wrong.
 Nothing above needs verifying before you write it. If an import fails when you run the app, read
-the error and fix it then.
+the error and fix it then.`
+    : typescriptApi()
+}`
+}
 
-### 4. Cover this application's boundaries with spans
+### 4. ${mastra ? "Leave the spans to Mastra, and add the user and session" : "Cover this application's boundaries with spans"}
 
-A trace is read as a tree, so there has to be a tree. This step fails in both directions: a whole
+${
+  mastra
+    ? mastraSpans()
+    : `A trace is read as a tree, so there has to be a tree. This step fails in both directions: a whole
 run that arrives as one span names no tool, times nothing separately and gives a failure inside it
 no location — while a span wrapped around work something else already traces reports one call as
 two, and afterwards cannot be told from real nesting.
@@ -934,7 +1214,8 @@ reader would recognise and the \`type\` the skill documents for it — a run or 
 
 Then read back what you added. One span and the attributes is the whole job for an application
 whose framework runs the loop; it is not, for one that runs its own, where every tool your code
-calls belongs in the trace.
+calls belongs in the trace.`
+}
 
 ### 5. Verify the application still works
 
@@ -950,8 +1231,9 @@ If any of these fails, fix it before continuing. Do not report success with a fa
 ${
   envFile !== null
     ? `
-The application may need credentials of its own to run — an LLM API key, a database URL. They are
-not in your environment. These env files exist near this service:
+The application may need credentials of its own to run — an LLM API key, a database URL — and
+should not depend on your environment happening to hold them. These env files exist near this
+service:
 
 ${bullet(envFiles.map((file) => `\`${file}\``))}
 
@@ -967,7 +1249,15 @@ from dotenv import load_dotenv
 if __name__ == "__main__":
     ${loadDotenvCall(envFile, service.entryPoint)}   # beside initialize(), as in step 3
 \`\`\``
-    : `\`\`\`typescript
+    : mastra
+      ? `\`\`\`typescript
+import { config } from "dotenv";
+
+${loadDotenvCallTs(envFile, null)};   // before the Mastra instance is constructed, as in step 3
+\`\`\`
+
+A CommonJS file has no \`import.meta.url\`; there the same path is \`join(__dirname, "...")\`.`
+      : `\`\`\`typescript
 import { config } from "dotenv";
 
 async function main() {
@@ -993,13 +1283,10 @@ ${
   credentialEnvFile === null
     ? ""
     : `\`traceroot setup\` wrote \`TRACEROOT_API_KEY\` into \`${credentialEnvFile}\`, so that load is also
-what keeps tracing working once this run ends: the key is in **your** environment because setup put
-it there for this run, and nothing hands it to the user's next one.
+how the key reaches the SDK — in this run, and in every run after it.
 
 `
-}Your shell cannot do this for you — \`set -a\`, \`. file\`, \`$(...)\` and multi-part pipelines are
-all refused by your own sandbox, and trying them costs minutes. Loading in-process is also the
-better answer: it is what makes the application runnable by a human afterwards, which a shell
+}${shellLoad} it is what makes the application runnable by a human afterwards, which a shell
 incantation in your scrollback does not. Add the dotenv package to the manifest if you import it.
 Never print, echo or cat the contents of these files.
 `
@@ -1059,14 +1346,26 @@ Then, in prose: what you changed, how to run the app, and anything you could not
 
 /** What the agent claimed, when it emitted a parseable completion block. */
 export interface ParsedCompletion {
-  filesChanged: string[];
+  /** Null when the block names no files: see {@link asFileList}. */
+  filesChanged: string[] | null;
   sdkVersion: string | null;
   traceId: string | null;
   notes: string | null;
 }
 
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+/**
+ * The files the agent says it changed, or null when it did not say.
+ *
+ * Only an explicit empty list says nothing changed. A missing key, a string, or
+ * a list with no paths in it names no files, and reading that as "nothing" is
+ * what fails a run that worked: outside git there is no diff to disagree.
+ */
+function asFileList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const files = value.filter((v): v is string => typeof v === "string");
+  return files.length === 0 && value.length > 0 ? null : files;
 }
 
 function asStringOrNull(value: unknown): string | null {
@@ -1110,7 +1409,7 @@ export function parseCompletion(output: string): ParsedCompletion | null {
   }
   const obj = parsed as Record<string, unknown>;
   return {
-    filesChanged: asStringArray(obj.files_changed),
+    filesChanged: asFileList(obj.files_changed),
     sdkVersion: asStringOrNull(obj.sdk_version),
     traceId: asStringOrNull(obj.trace_id),
     notes: asStringOrNull(obj.notes),
@@ -1155,8 +1454,9 @@ export function manualInstructions(input: {
   // changed exactly as shown started without its key and sent nothing. Only
   // the code between the fences: the sentence after them is the task's prose,
   // and indented here it would read as a line of the program.
-  const snippet = initSnippet(service, envFiles).split("\n");
+  const snippet = initSnippet(service, sdk, envFiles).split("\n");
   const init = snippet.slice(1, snippet.lastIndexOf("```"));
+  const mastra = sdk.package === MASTRA_SDK;
   // The package that load imports. Neither SDK depends on it.
   const dotenv =
     envFiles.length === 0 ? null : service.language === "python" ? "python-dotenv" : "dotenv";
@@ -1168,7 +1468,7 @@ export function manualInstructions(input: {
     dotenv === "dotenv"
       ? [
           "",
-          "     A CommonJS entry point has no import.meta.url. There, require() both",
+          "     A CommonJS module has no import.meta.url. There, require() the",
           '     packages and give the same path as join(__dirname, "...").',
         ]
       : [];
@@ -1183,6 +1483,30 @@ export function manualInstructions(input: {
           "     traceroot.flush() before it exits.",
         ]
       : [];
+  // The same for Node, plus what leaving `instrumentModules` out would do,
+  // since that is the line someone copying this would trim. Mastra has no
+  // provider to name: the exporter goes on the application's own instance, in
+  // a file setup cannot name, which is why its load path is a placeholder.
+  const node =
+    service.language === "python"
+      ? []
+      : mastra
+        ? [
+            "",
+            ...(envFiles[0] === undefined
+              ? []
+              : [`     Replace the placeholder with the path from that file to ${envFiles[0]}.`]),
+            "     If the constructor already has an observability option, add the",
+            "     exporter to the exporters of the config it has, not a second config.",
+          ]
+        : [
+            "",
+            "     OpenAI stands in for your provider: import the library your",
+            "     application calls and name it in instrumentModules. Leave",
+            "     instrumentModules out and initialize() instruments only modules",
+            "     loaded with require() (CommonJS), so an ES module gets no model spans.",
+            "     A short-lived script also awaits TraceRoot.flush() before it exits.",
+          ];
 
   return [
     `Add TraceRoot to ${service.path} by hand:`,
@@ -1191,17 +1515,34 @@ export function manualInstructions(input: {
       ? "  1. Install the SDK, pinned:"
       : `  1. Install the SDK, pinned, and ${dotenv} for the load in step 2:`,
     `       ${dotenv === null ? install : `${install} ${dotenv}`}`,
+    ...(mastra
+      ? [
+          `     Add ${MASTRA_OBSERVABILITY} too if package.json does not list it yet:`,
+          `       ${mastraObservabilityInstall(service)}`,
+        ]
+      : []),
     "",
-    `  2. Initialize it on the path that runs ${service.entryPoint ?? "your entry point"},`,
-    service.language === "python"
-      ? '     under its if __name__ == "__main__": guard rather than at module scope.'
-      : "     inside the function it calls to start itself rather than at module scope.",
-    "     Module scope runs on import, and your test suite imports your entry",
-    "     point, so initializing there starts the SDK in every test:",
+    ...(mastra
+      ? [
+          "  2. Add the exporter to the Mastra instance your application constructs.",
+          dotenv === null
+            ? "     TraceRootExporter reads TRACEROOT_API_KEY when it is constructed:"
+            : "     TraceRootExporter reads TRACEROOT_API_KEY when it is constructed, so",
+          ...(dotenv === null ? [] : ["     load the env file before that line:"]),
+        ]
+      : [
+          `  2. Initialize it on the path that runs ${service.entryPoint ?? "your entry point"},`,
+          service.language === "python"
+            ? '     under its if __name__ == "__main__": guard rather than at module scope.'
+            : "     inside the function it calls to start itself rather than at module scope.",
+          "     Module scope runs on import, and your test suite imports your entry",
+          "     point, so initializing there starts the SDK in every test:",
+        ]),
     "",
     ...init.map((line) => (line === "" ? "" : `       ${line}`)),
     ...commonJs,
     ...python,
+    ...node,
     "",
     "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
     "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",

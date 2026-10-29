@@ -82,7 +82,8 @@ export interface DetectedService {
   /**
    * True when no manifest identified this service and the language came from
    * the user. The CLI has not chosen a target; the agent must find it, and the
-   * task tells it to ask rather than guess.
+   * task tells it to ask (or, launched by setup, to stop and report) rather
+   * than guess.
    */
   agentMustIdentify?: boolean;
 }
@@ -134,7 +135,8 @@ export interface InstrumentationResult {
    * report is a claim and `git status` is evidence.
    */
   reported: {
-    filesChanged: string[];
+    /** Null when the block names no files, which is not the same as none. */
+    filesChanged: string[] | null;
     sdkVersion: string | null;
     traceId: string | null;
     notes: string | null;

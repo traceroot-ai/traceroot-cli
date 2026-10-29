@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { ALL_AGENTS } from "../agents/index.js";
 import type { AuthSource, ResolvedAuth } from "../config/resolve.js";
 import type { RepoDetection } from "../repo/detect.js";
-import { setupCommand } from "../setup/invocation.js";
+import { cliCommand, setupCommand } from "../setup/invocation.js";
 import type { SetupCheckpoint } from "../setup/types.js";
 import type { DoctorCheck, DoctorReport, DoctorSummary } from "./types.js";
 
@@ -78,7 +78,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     status: hasCredential ? "pass" : "fail",
     message: hasCredential
       ? `${kindLabel} resolved from ${describeSource(credential.source, configPath)}`
-      : "No credentials found. Run `traceroot login`.",
+      : `No credentials found. Run \`${cliCommand("login")}\`.`,
   });
 
   const host = auth.hostUrl.value;
@@ -89,7 +89,7 @@ function credentialChecks(input: DoctorInput): DoctorCheck[] {
     message:
       host !== undefined
         ? `Host resolved: ${safeHostOrigin(host)}`
-        : "Host not found. Run `traceroot login`.",
+        : `Host not found. Run \`${cliCommand("login")}\`.`,
   });
 
   // Only assert validity when we actually attempted a check.
@@ -184,7 +184,7 @@ function agentSkillChecks(input: DoctorInput): DoctorCheck[] {
       message:
         instrumentAgents.length > 0
           ? `Instrumentation skill installed for ${instrumentAgents.join(", ")}`
-          : "Instrumentation skill not installed. Run `traceroot skills install traceroot-instrument-repo`",
+          : `Instrumentation skill not installed. Run \`${cliCommand("skills install traceroot-instrument-repo")}\``,
     },
     {
       name: "skill_quickstart",

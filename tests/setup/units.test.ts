@@ -605,6 +605,22 @@ describe("completion parsing", () => {
     expect(parseCompletion("no block at all")).toBeNull();
   });
 
+  it("reads only an explicit empty list as no files changed", () => {
+    // Anything else names no files, which is not the same as naming none: read
+    // as "nothing changed", it failed a run that worked outside git.
+    const block = (body: string) => `\`\`\`json traceroot-setup-result\n${body}\n\`\`\``;
+    expect(parseCompletion(block('{"files_changed":[]}'))?.filesChanged).toEqual([]);
+    expect(parseCompletion(block('{"notes":"done"}'))?.filesChanged).toBeNull();
+    expect(parseCompletion(block('{"files_changed":"main.py"}'))?.filesChanged).toBeNull();
+    expect(parseCompletion(block('{"files_changed":null}'))?.filesChanged).toBeNull();
+    expect(
+      parseCompletion(block('{"files_changed":[{"path":"main.py"}]}'))?.filesChanged,
+    ).toBeNull();
+    expect(parseCompletion(block('{"files_changed":["main.py",3]}'))?.filesChanged).toEqual([
+      "main.py",
+    ]);
+  });
+
   describe("after the task Codex echoes", () => {
     const task = buildSetupTask({
       credentialFiles: [],
@@ -919,7 +935,7 @@ describe("everything the task settles so the agent does not have to", () => {
   });
 
   it("tells the agent the skill's first three steps are already done", () => {
-    expect(task()).toContain("Read it for **step 4 onward**");
+    expect(task()).toContain("Read it for **steps 4 and 5**");
   });
 
   it("keeps every stated fact recoverable if it turns out wrong", () => {
@@ -1012,7 +1028,10 @@ describe("getting the credential setup wrote into the application", () => {
     credentialEnvFile?: string | null;
   }) =>
     buildSetupTask({
-      credentialFiles: [],
+      // As setup builds it: a credential file the task names is one the launch
+      // keeps the key out of the environment for.
+      credentialFiles:
+        input.credentialEnvFile == null ? [] : [join("/repo/svc", input.credentialEnvFile)],
       root: "/repo",
       service: {
         path: "svc",
@@ -1048,16 +1067,21 @@ describe("getting the credential setup wrote into the application", () => {
     expect(lines[0]).toContain("the app's own credentials");
   });
 
-  it("says that the one load is what keeps tracing working after the run", () => {
-    // The hard rules tell the agent `TRACEROOT_API_KEY` is already in its
-    // environment and not to confirm, print or grep for it. An agent holding
-    // that and no explanation treats the load as redundant — and the key is in
-    // *its* environment only for the length of this run. One sentence now,
-    // where the old filename needed a paragraph per language.
+  it("says that the one load is how the key reaches the SDK, now and after the run", () => {
+    // An agent that thinks it already holds the key treats the load as
+    // redundant. This sentence used to say the key was in the agent's own
+    // environment for this run, which `buildAgentEnv` stopped being true of
+    // whenever a file holds the key, and which the hard rules then contradicted.
+    // One sentence now, where the old filename needed a paragraph per language.
     const rendered = task({ envFiles: ["./.env"], credentialEnvFile: "./.env" });
 
     expect(rendered).toContain("wrote `TRACEROOT_API_KEY` into `./.env`");
-    expect(rendered).toContain("keeps tracing working once this run ends");
+    expect(rendered).toContain(
+      "how the key reaches the SDK — in this run, and in every run after it",
+    );
+    expect(rendered).toContain("`TRACEROOT_API_KEY` is **not** in your environment");
+    expect(rendered).not.toContain("already set in your environment");
+    expect(rendered).not.toContain("**your** environment");
   });
 
   it("no longer teaches a loader for a filename of our own", () => {
@@ -1085,7 +1109,9 @@ describe("getting the credential setup wrote into the application", () => {
 
     expect(snippet).not.toContain('import "dotenv/config"');
     expect(snippet).toContain('config({ path: new URL(".env", import.meta.url) })');
-    expect(snippet.indexOf("config({ path:")).toBeLessThan(snippet.indexOf("initialize();"));
+    expect(snippet.indexOf("config({ path:")).toBeLessThan(
+      snippet.indexOf("TraceRoot.initialize("),
+    );
     expect(rendered).not.toContain("load_dotenv");
   });
 
@@ -1101,10 +1127,10 @@ describe("getting the credential setup wrote into the application", () => {
     const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
 
     expect(snippet).toContain("async function main() {");
-    expect(snippet).toContain("\n  initialize();");
+    expect(snippet).toContain("\n  TraceRoot.initialize({ instrumentModules:");
     expect(snippet).toContain('\n  config({ path: new URL(".env", import.meta.url) })');
     // Neither at the left margin, which is where both used to sit.
-    expect(snippet).not.toMatch(/\ninitialize\(\);/);
+    expect(snippet).not.toMatch(/\nTraceRoot\.initialize\(/);
     expect(snippet).not.toMatch(/\nconfig\(\{ path:/);
   });
 

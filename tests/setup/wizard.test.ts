@@ -117,7 +117,7 @@ describe("colour", () => {
     // wrapped a URL in brackets or reflowed a sentence would break copy-paste for
     // every user who has colour turned off, and silently invalidate every wording
     // assertion in this suite.
-    expect(plain(wizardLink("https://docs.traceroot.ai"))).toBe("https://docs.traceroot.ai");
+    expect(plain(wizardLink("https://traceroot.ai/docs"))).toBe("https://traceroot.ai/docs");
     expect(plain(wizardEnvVar("TRACEROOT_API_KEY"))).toBe("TRACEROOT_API_KEY");
     expect(plain(wizardAside("supporting detail"))).toBe("supporting detail");
     expect(plain(wizardEmphasis("TRACEROOT_API_KEY"))).toBe("TRACEROOT_API_KEY");
@@ -199,7 +199,7 @@ describe("what is said after the frame closes", () => {
       "You can now use TraceRoot in production.",
       "If you ran into anything during setup, please open an issue at https://github.com/traceroot-ai/traceroot-cli/issues/new",
       "- Contact support: https://discord.gg/TM2m3CtKuC",
-      "- Further documentation: https://docs.traceroot.ai",
+      "- Further documentation: https://traceroot.ai/docs/cli/get-started",
     ]);
   });
 
