@@ -35,7 +35,7 @@ import type { DoctorCheck } from "../../src/doctor/types.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { ExitCode, isCliError, reportError } from "../../src/output.js";
-import { ALL_AGENTS } from "../../src/agents/index.js";
+import { ALL_AGENTS, displaySkillPath } from "../../src/agents/index.js";
 import { LAUNCHABLE_AGENTS } from "../../src/setup/agents.js";
 import { SetupError } from "../../src/setup/errors.js";
 import { readAnswer } from "../../src/setup/machine.js";
@@ -1413,6 +1413,246 @@ describe("doctor reports setup state", () => {
     const setupChecks = report.checks.filter((c) => c.category === "setup");
     expect(setupChecks.find((c) => c.name === "setup_completed")?.status).toBe("warn");
     expect(setupChecks.find((c) => c.name === "setup_first_trace")?.status).toBe("warn");
+  });
+});
+
+describe("doctor on a run that ended without a trace", () => {
+  // Every checkpoint here is the one a real run wrote, not one built by hand:
+  // the bug was a state no hand-built fixture had, a last stage recorded with
+  // neither a trace nor an error.
+  async function setupRun(
+    cwd: string,
+    flags: Parameters<typeof defaultFlags>[0],
+    options: { canPrompt?: boolean; skipTraceWait?: boolean } = {},
+  ): Promise<string> {
+    const { writers, err } = makeWriters();
+    await runSetup({
+      ctx: ctxWith(),
+      cwd,
+      flags: defaultFlags(flags),
+      writers,
+      canPrompt: options.canPrompt ?? false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        skipTraceWait: options.skipTraceWait,
+      }),
+    });
+    return plain(err.data);
+  }
+
+  async function setupChecks(cwd: string = dir): Promise<DoctorCheck[]> {
+    const report = await runDoctor({
+      ctx: ctxWith(),
+      cwd,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out: new StringSink(), err: new StringSink() },
+      includeSetup: true,
+    });
+    return report.checks.filter((c) => c.category === "setup");
+  }
+
+  function pythonService(at: string = dir): void {
+    mkdirSync(at, { recursive: true });
+    writeFileSync(join(at, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(at, "main.py"), "x = 1\n");
+  }
+
+  /** The entry point once it calls `initialize()`, so a trace wait has something to wait for. */
+  function instrumentEntryPoint(): void {
+    writeFileSync(
+      join(dir, "main.py"),
+      'import traceroot\n\nif __name__ == "__main__":\n    traceroot.initialize()\n',
+    );
+  }
+
+  /** What the next `setup` asks, given the checkpoint the last run left. */
+  function nextQuestion(): string | undefined {
+    const found = readCheckpoint(dir);
+    return found === null ? undefined : resumeQuestion(found).message;
+  }
+
+  it("calls a run whose wait the user ended complete, with no trace seen yet", async () => {
+    pythonService();
+    const said = await setupRun(
+      dir,
+      { agent: "claude", traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+    expect(said).toContain("└  TraceRoot local setup complete — no trace seen yet.");
+
+    const checks = await setupChecks();
+    const completed = checks.find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("pass");
+    expect(completed?.message).toMatch(/^Setup completed on .+ — no trace seen yet$/);
+    expect(completed?.message).not.toContain("stopped at");
+    // The trace is still what is missing, and the next step is still to look again.
+    expect(checks.find((c) => c.name === "setup_first_trace")?.status).toBe("warn");
+  });
+
+  it("names the task a task-file hand-over left to do", async () => {
+    pythonService();
+    const said = await setupRun(dir, { agent: "claude", instrument: false });
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("warn");
+    expect(completed?.message).toBe(
+      "Setup is paused, waiting for the instrumentation it handed over. Run the task in .traceroot/prompts/setup-instrument.md in your coding agent.",
+    );
+  });
+
+  it("names the manual steps a manual hand-over left to do", async () => {
+    pythonService();
+    await setupRun(dir, { agent: "claude", method: "manual" });
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("warn");
+    expect(completed?.message).toBe(
+      "Setup is paused, waiting for the instrumentation it handed over. Apply the manual steps it printed.",
+    );
+  });
+
+  it.each([
+    [
+      "after the task was done",
+      async () => {
+        await setupRun(dir, { agent: "claude", instrument: false });
+        instrumentEntryPoint();
+        return { agent: "claude", instrument: false, resume: true, traceTimeoutSec: 120 } as const;
+      },
+    ],
+    [
+      "in a repository that already called initialize()",
+      async () => {
+        instrumentEntryPoint();
+        return { agent: "claude", instrument: false, traceTimeoutSec: 120 } as const;
+      },
+    ],
+  ] as const)(
+    "calls a hand-over complete once the user stopped its wait, %s",
+    async (_, before) => {
+      // Something could send a trace, so the hand-over route got the full wait,
+      // and stopping it closed the run as complete. The route is still on the
+      // record, and read alone it called the run paused.
+      pythonService();
+      const flags = await before();
+      const said = await setupRun(dir, flags, { canPrompt: true, skipTraceWait: true });
+      expect(said).toContain("└  TraceRoot local setup complete — no trace seen yet.");
+
+      const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+      expect(completed?.status).toBe("pass");
+      expect(completed?.message).toMatch(/^Setup completed on .+ — no trace seen yet$/);
+      expect(nextQuestion()).toBe(
+        "A previous setup for this service already finished. Leave it as it is, or run setup again from the beginning?",
+      );
+    },
+  );
+
+  it("calls the hand-over paused again when a later resume pauses on it", async () => {
+    // The stopped wait belongs to the run that stopped it. A resume that finds
+    // nothing to wait for pauses as a hand-over does, and has to read as one.
+    pythonService();
+    instrumentEntryPoint();
+    await setupRun(
+      dir,
+      { agent: "claude", instrument: false, traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const said = await setupRun(dir, { agent: "claude", instrument: false, resume: true });
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("warn");
+    expect(completed?.message).toContain("Setup is paused");
+    expect(nextQuestion()).toBe(
+      "A previous setup for this service did not finish. It is waiting for the instrumentation it handed over. Continue from there?",
+    );
+  });
+
+  it("names the task at the repository root when run from a service directory", async () => {
+    // Setup writes the task at the root wherever it was run from, so from the
+    // service directory the path has to say so.
+    mkdirSync(join(dir, ".git"));
+    const api = join(dir, "api");
+    pythonService(api);
+    await setupRun(api, { agent: "claude", instrument: false });
+
+    const completed = (await setupChecks(api)).find((c) => c.name === "setup_completed");
+    expect(completed?.message).toBe(
+      `Setup is paused, waiting for the instrumentation it handed over. Run the task in ${displaySkillPath(api, join(dir, ".traceroot", "prompts", "setup-instrument.md"))} in your coding agent.`,
+    );
+  });
+
+  it("calls a resume that got past a timeout complete, not stopped at the timeout", async () => {
+    pythonService();
+    await setupRun(dir, { agent: "claude", traceTimeoutSec: 1 });
+    expect(readCheckpoint(dir)?.lastError?.code).toBe("TRACE_TIMEOUT");
+
+    await setupRun(
+      dir,
+      { agent: "claude", resume: true, traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("pass");
+    expect(completed?.message).toContain("no trace seen yet");
+    expect((await setupChecks()).find((c) => c.name === "setup_last_error")).toBeUndefined();
+  });
+
+  it("still reports a later run that stopped, over an earlier one that finished", async () => {
+    pythonService();
+    await setupRun(
+      dir,
+      { agent: "claude", traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+    await setupRun(dir, { agent: "claude", resume: true, traceTimeoutSec: 1 });
+
+    const checks = await setupChecks();
+    expect(checks.find((c) => c.name === "setup_completed")).toMatchObject({
+      status: "fail",
+      message: "Setup is incomplete; it stopped at 'verify_trace'. Run `traceroot setup --resume`.",
+    });
+    expect(checks.find((c) => c.name === "setup_last_error")?.message).toContain("TRACE_TIMEOUT");
+  });
+});
+
+describe("doctor's skill check after setup ran from a service directory", () => {
+  it("finds the skill setup installed at the repository root", async () => {
+    mkdirSync(join(dir, ".git"));
+    const api = join(dir, "api");
+    mkdirSync(api);
+    writeFileSync(join(api, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(api, "main.py"), "x = 1\n");
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: api,
+      flags: defaultFlags({ agent: "claude", instrument: false }),
+      writers: makeWriters().writers,
+      canPrompt: false,
+      setupDeps: makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    });
+    expect(
+      existsSync(join(dir, ".claude", "skills", "traceroot-instrument-repo", "SKILL.md")),
+    ).toBe(true);
+
+    const report = await runDoctor({
+      ctx: ctxWith(),
+      cwd: api,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out: new StringSink(), err: new StringSink() },
+      includeSetup: true,
+    });
+    expect(report.checks.find((c) => c.name === "skill_instrument")).toMatchObject({
+      status: "pass",
+      message: "Instrumentation skill installed for Claude Code",
+    });
   });
 });
 

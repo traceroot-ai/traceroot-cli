@@ -50,7 +50,7 @@ import { installBundledSkill } from "../skills/install.js";
 import { sleep } from "../util/sleep.js";
 import { createActivityParser, finalReply } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
-import { relativeToRoot } from "./artifacts.js";
+import { instrumentTaskPath, relativeToRoot } from "./artifacts.js";
 import { hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
 import {
   HOST_ENV,
@@ -3550,17 +3550,6 @@ function keepAgentOutput(input: {
 }
 
 /**
- * Where the task-file route writes the instrumentation task.
- *
- * Named once because two invocations have to agree on it: the run that writes
- * the file, and the `--resume` that restores the hand-over and has to name that
- * file again without having written it.
- */
-function instrumentTaskPath(root: string): string {
-  return join(root, ".traceroot", "prompts", "setup-instrument.md");
-}
-
-/**
  * Records a hand-over: the stage result for a route that ran nothing, and the
  * route itself on the checkpoint.
  *
@@ -4336,6 +4325,8 @@ const verifyTrace: StageDefinition = {
     }
   },
   async run(ctx, deps) {
+    // An earlier run's stopped wait is not this one's, however this one ends.
+    ctx.checkpoint.traceWaitSkipped = undefined;
     const session = requireSession(ctx);
     // The wizard's own client, not the generated one. The single read this
     // stage makes must not depend on which operations the tool registry chooses
@@ -4504,13 +4495,15 @@ const verifyTrace: StageDefinition = {
     // pressed still counts, and falls through to the normal success below:
     // `outcome.found` is the stronger answer and the skip does not override it.
     if (!outcome.found && skipped) {
-      // Recorded on the context rather than the checkpoint. It is a fact about
-      // how this run ended, not a durable one: `--resume` finds `verify_trace`
+      // Recorded twice, for two kinds of reader. The context's copy is for this
+      // run's closing and is never restored: `--resume` finds `verify_trace`
       // unsatisfied (nothing wrote `ctx.trace`) and waits again, which is
-      // exactly right, and a flag persisted to disk would have to be cleared
-      // there to avoid a later run closing with a sentence about a key nobody
-      // pressed.
+      // exactly right, so a later run cannot close with a sentence about a key
+      // nobody pressed. The checkpoint's copy is for `doctor` and the next
+      // `setup`, which otherwise read a hand-over whose wait was stopped as one
+      // still waiting on the user. It is cleared when this stage next runs.
       ctx.traceWaitSkipped = true;
+      ctx.checkpoint.traceWaitSkipped = true;
       return "skipped";
     }
 
@@ -4709,6 +4702,14 @@ export async function runSetupMachine(ctx: SetupContext, deps: SetupDeps): Promi
   // setup run created and no run put into service.
   if ((ctx.checkpoint.mintedKeys ?? []).length > 0) {
     ctx.checkpoint.mintedKeys = [];
+    writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
+  }
+
+  // Nor is the error an earlier run stopped on. A resume that gets past it
+  // used to leave it on the record, so `doctor` reported a run that had just
+  // finished as stopped at the step it had since completed.
+  if (ctx.checkpoint.lastError !== undefined) {
+    ctx.checkpoint.lastError = undefined;
     writeCheckpoint(ctx.artifactDir, ctx.checkpoint);
   }
 

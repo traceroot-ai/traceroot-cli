@@ -15,6 +15,7 @@ import {
   hasCompleted,
   markComplete,
   newCheckpoint,
+  pendingHandover,
   readCheckpoint,
   writeCheckpoint,
 } from "../../src/setup/checkpoint.js";
@@ -111,6 +112,38 @@ describe("checkpoint", () => {
     markComplete(checkpoint, "precheck");
     markComplete(checkpoint, "precheck");
     expect(checkpoint.completedStages).toEqual(["precheck", "verify_trace"]);
+  });
+
+  it("keeps a stopped trace wait, and reads nothing but true as one", () => {
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    checkpoint.traceWaitSkipped = true;
+    writeCheckpoint(dir, checkpoint);
+    expect(readCheckpoint(dir)?.traceWaitSkipped).toBe(true);
+
+    for (const value of [false, "true", 1]) {
+      writeFileSync(
+        join(dir, ".traceroot", "setup.json"),
+        JSON.stringify({
+          version: 1,
+          startedAt: "2026-07-26T12:00:00.000Z",
+          traceWaitSkipped: value,
+        }),
+        "utf8",
+      );
+      expect(readCheckpoint(dir)).not.toHaveProperty("traceWaitSkipped");
+    }
+  });
+
+  it("does not count a hand-over whose trace wait was stopped as pending", () => {
+    // Both hold every stage and the route with no trace. Only the stopped wait
+    // was one something could answer, and that run closed as complete.
+    const checkpoint = newCheckpoint();
+    markComplete(checkpoint, "complete");
+    checkpoint.instrumentHandover = "task-file";
+    expect(pendingHandover(checkpoint)).toBe("task-file");
+
+    checkpoint.traceWaitSkipped = true;
+    expect(pendingHandover(checkpoint)).toBeNull();
   });
 
   it("clears cleanly", () => {

@@ -83,6 +83,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<DoctorReport> {
 
   const report = buildDoctorReport({
     cwd,
+    root: setupDir,
     auth: ctx.auth,
     credentialsValid,
     configPath: deps.configPath,

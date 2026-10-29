@@ -5997,6 +5997,73 @@ describe("resume and rerun", () => {
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
   });
 
+  /** The checkpoint a run leaves when an agent instrumented and the trace wait then timed out. */
+  function writeTraceTimeoutCheckpoint(): void {
+    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    previous.completedStages.push(
+      "precheck",
+      "authenticate",
+      "select_context",
+      "acquire_project_key",
+      "configure_repository",
+      "detect_stack",
+      "select_agent",
+      "install_agent_context",
+      "instrument",
+    );
+    previous.lastError = { stage: "verify_trace", code: "TRACE_TIMEOUT", message: "no trace" };
+    previous.instrumentHandover = "agent";
+    writeCheckpoint(dir, previous);
+  }
+
+  it("clears the error an earlier run stopped on once a resume ends normally", async () => {
+    // The timeout's own remedy is "run your application once, then --resume",
+    // and a user who then stops the wait has a finished run. The error stayed
+    // on the record, so `doctor` failed that run at the step it had completed.
+    pythonRepo();
+    writeTraceTimeoutCheckpoint();
+
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      skipTraceWait: true,
+    });
+    const { ctx } = makeCtx({
+      canPrompt: true,
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 120 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    expect(ctx.traceWaitSkipped).toBe(true);
+    expect(result.checkpoint.lastError).toBeUndefined();
+    expect(readCheckpoint(dir)?.lastError).toBeUndefined();
+  });
+
+  it("keeps the error when the resume stops on one of its own", async () => {
+    pythonRepo();
+    writeTraceTimeoutCheckpoint();
+
+    const deps = makeDeps({
+      auth: authWithKey(),
+      traces: [],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    const { ctx } = makeCtx({
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(false);
+    expect(readCheckpoint(dir)?.lastError).toMatchObject({
+      stage: "verify_trace",
+      code: "TRACE_TIMEOUT",
+    });
+  });
+
   it("does not revoke a minted key when the failure leaves a run to resume", async () => {
     pythonRepo();
     let revoked = 0;
@@ -8061,20 +8128,32 @@ describe("letting the user stop waiting for the first trace", () => {
     expect(said).not.toContain("No trace arrived within");
   });
 
-  it("leaves nothing on the checkpoint, so --resume waits again", async () => {
-    // A skip describes how this invocation ended. Persisting it would have to
-    // be cleared on the next run, and a run that inherited it would close with
-    // a sentence about a key nobody pressed.
+  it("records the stop on the checkpoint, but --resume still waits again", async () => {
+    // The checkpoint's record is for `doctor` and the next `setup`. A run that
+    // inherited it would close with a sentence about a key nobody pressed, so
+    // the resume waits afresh, and clears the record when that wait ends some
+    // other way.
     waitable();
-    const { ctx } = makeCtx({
+    const first = makeCtx({
       canPrompt: true,
       flags: { instrument: false, traceTimeoutSec: 120 },
     });
+    const stopped = await runSetupMachine(first.ctx, traceless({ skip: true }));
 
-    const result = await runSetupMachine(ctx, traceless({ skip: true }));
+    expect(stopped.checkpoint.trace).toBeUndefined();
+    expect(readCheckpoint(dir)?.traceWaitSkipped).toBe(true);
 
-    expect(result.checkpoint.trace).toBeUndefined();
-    expect(JSON.stringify(result.checkpoint)).not.toContain("traceWaitSkipped");
+    const second = makeCtx({
+      canPrompt: true,
+      flags: { instrument: false, resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    const resumed = await runSetupMachine(second.ctx, traceless());
+
+    expect(plain(second.err.data)).toContain("Waiting for your first trace");
+    expect(second.ctx.traceWaitSkipped).toBeUndefined();
+    expect(resumed.error?.code).toBe("TRACE_TIMEOUT");
+    expect(readCheckpoint(dir)?.traceWaitSkipped).toBeUndefined();
   });
 
   it("offers the skip on the waiting line, where there is somebody to press it", async () => {
