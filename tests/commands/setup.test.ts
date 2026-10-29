@@ -4,7 +4,6 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { type Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,7 +36,6 @@ import { ExitCode, isCliError, reportError } from "../../src/output.js";
 import { ALL_AGENTS, displaySkillPath } from "../../src/agents/index.js";
 import { LAUNCHABLE_AGENTS } from "../../src/setup/agents.js";
 import { SetupError } from "../../src/setup/errors.js";
-import { readAnswer } from "../../src/setup/machine.js";
 import { SETUP_STAGES } from "../../src/setup/types.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -47,7 +45,6 @@ import {
   authWithKey,
   defaultFlags,
   fakeApiClient,
-  fakeInput,
   fakeRunProcess,
   fakeSetupApi,
   listTracesFrom,
@@ -812,97 +809,45 @@ describe("runSetup", () => {
     expect(err.data).not.toContain("In production");
   });
 
-  it("waits for both acknowledgements where there is somebody to ask", async () => {
+  it("asks nothing once the first trace has arrived", async () => {
+    // The trace is the confirmation, so there is nothing left to acknowledge,
+    // and a closing "I have added the key to production" would record a claim
+    // whatever the user typed.
     writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
     writeFileSync(join(dir, "main.py"), "x = 1\n");
-    const asked: string[] = [];
+    const asked: { question: string; stage: string | undefined }[] = [];
     const setupDeps = makeDeps({
       auth: authWithKey(),
       traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const inner = setupDeps.prompt;
-    setupDeps.prompt = async (question) => {
-      asked.push(question);
-      return inner(question);
+    setupDeps.prompt = async (question, stage) => {
+      asked.push({ question: plain(question), stage });
+      return inner(question, stage);
     };
+    const { writers, err } = makeWriters();
 
-    await runSetup({
+    const result = await runSetup({
       ctx: ctxWith(),
       cwd: dir,
       flags: defaultFlags({ agent: "claude" }),
-      writers: makeWriters().writers,
+      writers,
       canPrompt: true,
       setupDeps,
     });
 
-    // One per closing block, in the order a user acts on them: this machine
-    // first, then everywhere else.
-    const acknowledged = asked.map(plain).filter((q) => q.includes("(Press Enter to continue)"));
-    expect(acknowledged).toHaveLength(2);
-    expect(acknowledged[0]).toContain("I've confirmed my application is sending traces.");
-    // Every variable, not just the key. A line that claims less than the
-    // instruction asked for is how someone confirms a thing they half did.
-    expect(acknowledged[1]).toContain(
-      "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
-    );
-    // Each one says how to answer it, once, on the right.
-    for (const line of acknowledged) {
-      expect(line).toContain("(Press Enter to continue)");
-    }
+    expect(result.ok).toBe(true);
+    expect(asked.filter((q) => q.stage === "complete")).toEqual([]);
+    expect(asked.filter((q) => q.question.includes("Press Enter"))).toEqual([]);
+    const said = plain(err.data);
+    expect(said).not.toContain("I've confirmed");
+    expect(said).not.toContain("I have added");
+    // Both closing blocks are still there, and the frame still closes.
+    expect(said).toContain("◇  Your first trace:");
+    expect(said).toContain("◇  Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env");
+    expect(said).toContain("└  TraceRoot local setup complete.");
   });
-
-  for (const [at, which] of [
-    [0, "the traces one"],
-    [1, "the production one"],
-  ] as const) {
-    it(`ends with 130, not 0, on Ctrl+C at ${which} of the closing acknowledgements`, async () => {
-      // Readline closed on the keypress and the question never settled, so the
-      // event loop drained and `traceroot setup && <next step>` carried on.
-      writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
-      writeFileSync(join(dir, "main.py"), "x = 1\n");
-      const input = fakeInput();
-      const output = new PassThrough();
-      let screen = "";
-      output.on("data", (chunk) => {
-        screen += String(chunk);
-      });
-      const shown = async (count: number): Promise<void> => {
-        while (screen.split("(Press Enter to continue)").length - 1 < count) {
-          await new Promise((resolve) => setImmediate(resolve));
-        }
-      };
-      const setupDeps = makeDeps({
-        auth: authWithKey(),
-        traces: [traceRow()],
-        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
-      });
-      // The production prompt, against a terminal this test types into.
-      setupDeps.prompt = (question, stage) => readAnswer({ input, output }, question, { stage });
-
-      const run = runSetup({
-        ctx: ctxWith(),
-        cwd: dir,
-        flags: defaultFlags({ agent: "claude" }),
-        writers: makeWriters().writers,
-        canPrompt: true,
-        setupDeps,
-      });
-      for (let i = 0; i < at; i += 1) {
-        await shown(i + 1);
-        input.write("\r");
-      }
-      await shown(at + 1);
-      input.write("\x03");
-
-      await expect(run).rejects.toSatisfy((err: unknown) => {
-        expect(err).toBeInstanceOf(SetupError);
-        expect((err as SetupError).code).toBe("INTERRUPTED");
-        expect((err as SetupError).exitCode).toBe(130);
-        return true;
-      });
-    });
-  }
 
   it("notes when there is no checkpoint to resume", async () => {
     writeFileSync(join(dir, "go.mod"), "module x\n");
@@ -2181,7 +2126,7 @@ describe("the production block that closes a run", () => {
   /** A key distinctive enough that finding it in the output means something. */
   const KEY = "tr-production-step-secret-value";
 
-  async function run(options: { canPrompt?: boolean; json?: boolean; answer?: string } = {}) {
+  async function run(options: { canPrompt?: boolean; json?: boolean } = {}) {
     writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
     writeFileSync(join(dir, "main.py"), "x = 1\n");
     const { writers, out, err } = makeWriters();
@@ -2202,7 +2147,7 @@ describe("the production block that closes a run", () => {
         ...base,
         prompt: async (question: string) => {
           asked.push(question);
-          return options.answer ?? "";
+          return "";
         },
       },
     });
@@ -2254,28 +2199,15 @@ describe("the production block that closes a run", () => {
     expect(out.data).not.toContain(KEY);
   });
 
-  it("asks for an acknowledgement, and takes any answer at all", async () => {
-    const { asked } = await run({ canPrompt: true, answer: "n" });
-
-    expect(
-      asked
-        .map(plain)
-        .some((question) =>
-          question.includes(
-            "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
-          ),
-        ),
-    ).toBe(true);
-  });
-
-  it("completes successfully when the acknowledgement is declined", async () => {
-    // An acknowledgement, not a gate. A user who says no has still had a
-    // successful run, and a tool that exits non-zero over a confirmation it
-    // did not need is a tool whose exit code means nothing.
-    const { result, err } = await run({ canPrompt: true, answer: "no" });
+  it("does not ask the user to say the key is in production", async () => {
+    // Nothing branched on the answer, so the run recorded "I have added …"
+    // whatever was typed. The instruction is enough, and the run ends without
+    // a question.
+    const { result, err, asked } = await run({ canPrompt: true });
 
     expect(result.ok).toBe(true);
-    expect(result.error).toBeNull();
+    expect(asked.map(plain).filter((q) => q.includes("production"))).toEqual([]);
+    expect(err.data).not.toContain("I have added");
     expect(setupFailureExit(result, false)).toEqual({ kind: "none" });
     expect(plain(err.data)).toContain("└  TraceRoot local setup complete.");
   });

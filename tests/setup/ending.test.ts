@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { acknowledgeTraces, skippedTraceNotice, tracesNotice } from "../../src/setup/ending.js";
+import { skippedTraceNotice, tracesNotice } from "../../src/setup/ending.js";
 import { plain } from "./colour.js";
-import { makeWriters } from "./helpers.js";
 
 const TRACE_URL = "https://app.example.test/trace/t_1";
 
@@ -42,45 +41,6 @@ describe("what the block says", () => {
   it("puts the link on a line of its own, so it survives being copied", () => {
     const lines = tracesNotice({ traceUrl: TRACE_URL }).map(plain);
     expect(lines.filter((line) => line.includes(TRACE_URL))).toEqual([TRACE_URL]);
-  });
-});
-
-describe("acknowledging it", () => {
-  it("waits for a human, and ignores whatever they type", async () => {
-    // An acknowledgement, not a question: nothing branches on the answer. It
-    // exists so the production block cannot scroll this one away unread.
-    const { writers, err } = makeWriters();
-    const asked: string[] = [];
-
-    await acknowledgeTraces({
-      writers,
-      traceUrl: TRACE_URL,
-      prompt: async (question) => {
-        asked.push(question);
-        return "anything at all";
-      },
-    });
-
-    // A green dot rather than the rail, the sentence at full contrast, and the
-    // instruction grey on the right — the only row of the block waiting on
-    // anybody, and it should look like it.
-    expect(asked).toHaveLength(1);
-    const question = plain(asked[0] ?? "");
-    expect(question).toContain("│  I've confirmed my application is sending traces.");
-    expect(question).not.toContain("●");
-    expect(question).toContain("(Press Enter to continue)");
-    // A settled block: `◇` is what the transcript shows once the
-    // acknowledgement under it has been given.
-    expect(plain(err.data)).toContain("◇  Your first trace:");
-    expect(plain(err.data)).toContain(`│  ${TRACE_URL}`);
-  });
-
-  it("still prints the block when there is nobody to ask", async () => {
-    // Worth reading in a log too — but an unattended run must never be left
-    // waiting on a keypress.
-    const { writers, err } = makeWriters();
-    await acknowledgeTraces({ writers, traceUrl: TRACE_URL, prompt: null });
-    expect(plain(err.data)).toContain(TRACE_URL);
   });
 });
 

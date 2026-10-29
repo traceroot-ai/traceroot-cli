@@ -367,80 +367,6 @@ export function wizardValue(text: string, sink: Sink = process.stderr): string {
 }
 
 /**
- * The line under a closing block that a human presses Enter on.
- *
- * Three parts, three weights, and the order matters. A green dot in place of
- * the rail, because this row is the only one in the block that is waiting on
- * somebody; the sentence at full contrast, because it is what they are
- * agreeing to; and the instruction in grey on the right, because a user who
- * has pressed Enter once already knows, and one who has not needs telling
- * exactly once.
- *
- * The line is not dim. Dimming it would read the row as a formality — nothing
- * branches on the answer — but the thing being acknowledged is the one action
- * the wizard cannot take for the user, and dimming it makes the only live row
- * on screen the quietest thing on it.
- *
- * Anything inside `text` that must stand out is the caller's to mark with
- * {@link wizardEmphasis}, which survives being composed in here.
- */
-export function wizardAcknowledgement(text: string, sink: Sink = process.stderr): string {
-  // The rail in the gutter, not a marker and not a blank.
-  //
-  // The green dot went because a marker is how every other line in the wizard
-  // announces "a new thing starts here", and these two do the opposite — they
-  // close the block above them. Three spaces was the wrong replacement: the
-  // frame's vertical line simply stopped for two rows and started again, which
-  // reads as the block having ended early. `│` is the frame, not a marker, so
-  // it continues through a row that is waiting without claiming to open one.
-  return `${painterFor(sink).dim(S_BAR)}  ${text}  ${wizardAside("(Press Enter to continue)", sink)}`;
-}
-
-/**
- * The same line once it has been answered, ready to be drawn over the live one.
- *
- * Two things change and both are the point. The instruction goes, because
- * "press Enter to continue" above a run that has already continued is stale
- * text the user has to re-read to discover is stale. And the whole row drops to
- * grey, because a settled acknowledgement is transcript rather than something
- * being asked — the live row should be the only bright one on screen.
- *
- * Takes the plain sentence, not the composed line: dimming a string that
- * already contains a bold span ends the dim early, and the row comes back half
- * grey and half not.
- */
-export function wizardAcknowledgementSettled(text: string, sink: Sink = process.stderr): string {
-  const color = painterFor(sink);
-  return `${color.dim(S_BAR)}  ${color.dim(text)}`;
-}
-
-/**
- * Draws the settled acknowledgement over the live one the user just answered.
- *
- * Enter leaves the cursor on the row below the prompt, so this steps back one
- * line, wipes it, and writes the grey version in its place.
- *
- * Only where the terminal can be redrawn at all. Piped, dumb or non-TTY, the
- * cursor movement would be literal garbage in the output and the live line was
- * never animated to begin with — so the answered line simply stays as it was,
- * which reads correctly in a transcript.
- */
-export function settleAcknowledgement(writers: Writers, text: string): void {
-  if (!canRedraw(writers.err, process.env)) {
-    return;
-  }
-  // `ESC[1A` reaches one row. A live line that wrapped occupies two or more, so
-  // redrawing would grey the tail and leave the head bright; leaving the
-  // answered line as it stands reads correctly instead.
-  const columns = (process.stderr as unknown as { columns?: number }).columns ?? 80;
-  // The prompt appends one space to the composed line.
-  if (visibleLength(wizardAcknowledgement(text, writers.err)) + 1 > columns) {
-    return;
-  }
-  writers.err.write(`${ESC}[1A${ESC}[2K${wizardAcknowledgementSettled(text, writers.err)}\n`);
-}
-
-/**
  * Splits a line so it fits beside the rail instead of wrapping under it.
  *
  * A terminal wrapping a line on its own puts the overflow in column zero, where
@@ -532,9 +458,8 @@ export function wizardNote(
   // sentence explaining what it means.
   const dimFrom = options.dimFrom ?? Number.POSITIVE_INFINITY;
   // `◆` is clack's marker for the step you are on; `◇` for one that has been
-  // answered. The closing blocks take `◇` because that is what they look like
-  // in the transcript a user is left with — the acknowledgement under each one
-  // has been given by the time anybody reads it back.
+  // answered. The closing blocks take `◇` because nothing in them is waiting
+  // on the user: they are the transcript of a run that has finished.
   const glyph = options.settled === true ? S_STEP_SUBMIT : S_STEP_ACTIVE;
   const width = railWidth();
   const rendered: string[] = [];

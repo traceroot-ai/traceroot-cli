@@ -1,14 +1,6 @@
-import type { Sink, Writers } from "../output.js";
-import type { Prompt } from "../prompt.js";
+import type { Sink } from "../output.js";
 import { cliCommand, setupCommand } from "./invocation.js";
-import {
-  settleAcknowledgement,
-  wizardAcknowledgement,
-  wizardAside,
-  wizardEmphasis,
-  wizardLink,
-  wizardNote,
-} from "./wizard.js";
+import { wizardAside, wizardEmphasis, wizardLink } from "./wizard.js";
 
 /**
  * The first of the two blocks that close a run that received a trace.
@@ -20,8 +12,12 @@ import {
  * belong to the box the CLI has just drawn.
  *
  * Instead: two settled blocks, and then the frame closes. This block is the
- * local half — the trace this run received — and {@link acknowledgeProduction}
- * is the half about everywhere else.
+ * local half — the trace this run received — and `productionNotice` is the
+ * half about everywhere else.
+ *
+ * Neither waits for a keypress. The trace is the confirmation an
+ * acknowledgement would ask for, and a closing "I have added the key to
+ * production" recorded the same claim whatever the user typed.
  *
  * Only a run that saw a trace prints it, so it says nothing about producing
  * one. Telling the user to run their application, that traces "will appear",
@@ -65,35 +61,6 @@ export function tracesNotice(input: TracesNoticeInput, sink: Sink = process.stde
   const label =
     input.attributed === false ? "First trace since setup started:" : "Your first trace:";
   return [wizardEmphasis(label, sink), wizardLink(input.traceUrl, undefined, sink)];
-}
-
-/** Named once, because it is written twice: live, then greyed over itself. */
-const TRACES_ACK = "I've confirmed my application is sending traces.";
-
-export interface AcknowledgeTracesInput extends TracesNoticeInput {
-  writers: Writers;
-  /**
-   * Asks for the acknowledgement. Null when there is nobody to ask — the block
-   * is still printed, because it reads as well in a log as on a terminal, but
-   * an unattended run must never be left waiting on a keypress.
-   */
-  prompt: Prompt | null;
-}
-
-/** Prints the block and, where there is a human, waits for them to take it in. */
-export async function acknowledgeTraces(input: AcknowledgeTracesInput): Promise<void> {
-  const lines = tracesNotice(input, input.writers.err);
-  // A blank rail before the acknowledgement, and no glyph on it. The rail
-  // supplies the separation on its own; without a marker in the gutter the line
-  // still reads as part of this block rather than as a section of its own.
-  wizardNote(input.writers, input.prompt === null ? lines : [...lines, ""], { settled: true });
-  if (input.prompt === null) {
-    return;
-  }
-  // The answer is deliberately ignored: an acknowledgement, not a question.
-  // Its only job is to stop the next block from scrolling this one away unread.
-  await input.prompt(`${wizardAcknowledgement(TRACES_ACK, input.writers.err)} `);
-  settleAcknowledgement(input.writers, TRACES_ACK);
 }
 
 export interface SkippedTraceNoticeInput {

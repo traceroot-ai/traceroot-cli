@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { applicationEnvKeys } from "../../src/setup/envWrite.js";
-import { acknowledgeProduction, productionNotice } from "../../src/setup/production.js";
+import { productionNotice } from "../../src/setup/production.js";
 import type { ApplicationKeyLocation } from "../../src/setup/types.js";
 import { plain } from "./colour.js";
-import { makeWriters } from "./helpers.js";
 
 /** The ordinary run: one of the project's own env files holds the key. */
 const IN_ENV_FILE: ApplicationKeyLocation = { kind: "file", path: "./.env" };
@@ -246,72 +245,5 @@ describe("which variables it tells you to carry", () => {
       const mentioned = new Set(notice(host).match(/TRACEROOT_[A-Z_]+/g) ?? []);
       expect([...mentioned].sort()).toEqual([...applicationEnvKeys(host)].sort());
     }
-  });
-});
-
-describe("acknowledging it", () => {
-  it("waits for a human, and ignores whatever they type", () => {
-    // An acknowledgement, not a question: there is no wrong answer and nothing
-    // branches on it. It exists so the closing line cannot scroll the notice
-    // away unread.
-    const { writers, err } = makeWriters();
-    const asked: string[] = [];
-
-    return acknowledgeProduction({
-      writers,
-      language: "python",
-      keyLocation: IN_ENV_FILE,
-      prompt: async (question) => {
-        asked.push(question);
-        return "anything at all";
-      },
-    }).then(() => {
-      expect(asked).toHaveLength(1);
-      const question = plain(asked[0] ?? "");
-      expect(question).toContain("│  I have added TRACEROOT_API_KEY to my production env.");
-      expect(question).not.toContain("●");
-      expect(question).toContain("(Press Enter to continue)");
-      // A settled block, not a pending one: `◇` is what the transcript shows
-      // once the acknowledgement under it has been given.
-      expect(plain(err.data)).toContain("◇  Add TRACEROOT_API_KEY from ./.env");
-    });
-  });
-
-  it("still prints the notice when there is nobody to ask", async () => {
-    // Worth reading in a log too — but an unattended run must never be left
-    // waiting on a keypress.
-    const { writers, err } = makeWriters();
-    await acknowledgeProduction({
-      writers,
-      language: "typescript",
-      keyLocation: IN_ENV_FILE,
-      prompt: null,
-    });
-    expect(plain(err.data)).toContain("Add TRACEROOT_API_KEY from ./.env");
-  });
-
-  it("says back every variable the instruction asked for", async () => {
-    // The acknowledgement is the user reporting what they did. Off the default
-    // host the instruction names two variables, so a line that claims only the
-    // key is someone confirming a thing they have half done.
-    const { writers, err } = makeWriters();
-    const asked: string[] = [];
-    await acknowledgeProduction({
-      writers,
-      language: "python",
-      host: "https://staging.traceroot.ai",
-      keyLocation: IN_ENV_FILE,
-      prompt: async (question) => {
-        asked.push(question);
-        return "";
-      },
-    });
-    expect(plain(asked[0] ?? "")).toContain(
-      "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
-    );
-    // And the notice above it asked for both, which is what makes the line
-    // above an acknowledgement rather than a smaller claim. Asserted on a
-    // fragment because the block is wrapped to the terminal's width.
-    expect(plain(err.data)).toContain("Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from");
   });
 });

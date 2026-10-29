@@ -33,7 +33,7 @@ import {
   setupRoot,
   writeCheckpoint,
 } from "../../setup/checkpoint.js";
-import { acknowledgeTraces, skippedTraceNotice } from "../../setup/ending.js";
+import { skippedTraceNotice, tracesNotice } from "../../setup/ending.js";
 import type { SetupError } from "../../setup/errors.js";
 import {
   STAGE_LABELS,
@@ -49,7 +49,7 @@ import {
   runSetupMachine,
   runTaskSentence,
 } from "../../setup/machine.js";
-import { acknowledgeProduction } from "../../setup/production.js";
+import { productionNotice } from "../../setup/production.js";
 import type { SelectInput } from "../../setup/select.js";
 import type { SetupCheckpoint, SetupContext, SetupFlags, SetupResult } from "../../setup/types.js";
 import {
@@ -389,21 +389,19 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
   // them: this machine first, then everywhere else. Only for a run that
   // actually got a trace — telling someone how to deploy an instrumentation
   // that has not been shown to work yet is premature.
+  //
+  // Printed, not acknowledged. The trace is the confirmation a keypress would
+  // ask for, and nothing branched on the answer to either question.
   if (!json && result.ok && result.trace !== null) {
-    // Named a stage so that Ctrl+C here ends the run with 130, as it does at
-    // every question before it. With none, readline closed on the keypress, the
-    // question never settled, and the process exited 0.
-    const prompt = deps.canPrompt
-      ? (question: string) => deps.setupDeps.prompt(question, "complete")
-      : null;
-    await acknowledgeTraces({
+    wizardNote(
       writers,
-      traceUrl: result.trace.traceUrl,
-      attributed: result.trace.attributed,
-      prompt,
-    });
-    await acknowledgeProduction({
-      writers,
+      tracesNotice(
+        { traceUrl: result.trace.traceUrl, attributed: result.trace.attributed },
+        writers.err,
+      ),
+      { settled: true },
+    );
+    const production = productionNotice({
       language: result.checkpoint.service?.language ?? null,
       // Where the key actually is, asked of the machine rather than assembled
       // here. This was the credential file or nothing, and nothing fell back to
@@ -418,8 +416,8 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       // it exactly pointed their SDK at the hosted product while holding a
       // credential for somewhere else.
       host: result.checkpoint.host,
-      prompt,
     });
+    wizardNote(writers, production, { settled: true });
   }
 
   if (!json) {

@@ -1,15 +1,6 @@
-import type { Writers } from "../output.js";
-import type { Prompt } from "../prompt.js";
 import { HOST_ENV, KEY_ENV, applicationEnvKeys } from "./envWrite.js";
 import type { ApplicationKeyLocation, StackLanguage } from "./types.js";
-import {
-  settleAcknowledgement,
-  wizardAcknowledgement,
-  wizardAside,
-  wizardEmphasis,
-  wizardEnvVar,
-  wizardNote,
-} from "./wizard.js";
+import { wizardAside, wizardEmphasis, wizardEnvVar } from "./wizard.js";
 
 /**
  * The last thing a run says, and the only part of it about somewhere other than
@@ -227,44 +218,4 @@ function localCaveat(
   // reader arrives with — and for this file it is usually right. The line's job
   // is now to mark the case where it is not, which is a plain entry point.
   return `Locally too: the SDK reads process.env, so ${file} only reaches it if your app loads it — a framework such as Next.js does, a plain node entry point needs dotenv or export ${exports} in your shell.`;
-}
-
-export interface AcknowledgeProductionInput extends ProductionNoticeInput {
-  writers: Writers;
-  /**
-   * Asks for the acknowledgement. Null when there is nobody to ask — the notice
-   * is still printed, because it is as worth reading in a log as on a terminal,
-   * but an unattended run must never be left waiting on a keypress.
-   */
-  prompt: Prompt | null;
-}
-
-/** Prints the notice and, where there is a human, waits for them to take it in. */
-export async function acknowledgeProduction(input: AcknowledgeProductionInput): Promise<void> {
-  const lines = productionNotice(input);
-  // A blank rail before the acknowledgement, and no glyph on it. The rail
-  // supplies the separation on its own; without a marker in the gutter the line
-  // still reads as part of this block rather than as a section of its own.
-  wizardNote(input.writers, input.prompt === null ? lines : [...lines, ""], { settled: true });
-  if (input.prompt === null) {
-    return;
-  }
-  // The answer is deliberately ignored. This is an acknowledgement, not a
-  // question: there is no wrong reply and nothing branches on it. Its only job
-  // is to stop the closing line from scrolling the notice away unread.
-  //
-  // Bold rather than blue on the variable here. Blue is for a name to go and
-  // use; this line is the user reporting they already used it, and weight says
-  // "this is the thing you just did" where a second blue would only repeat the
-  // sentence above.
-  //
-  // It names every variable too. This is the line the user says back, and a
-  // line that claims less than the instruction asked for is how someone
-  // confirms they have done a thing they have half done.
-  const said = `I have added ${nameList(applicationEnvKeys(input.host).map((name) => wizardEmphasis(name)))} to my production env.`;
-  await input.prompt(`${wizardAcknowledgement(said)} `);
-  // The variable stays bold in the settled copy too. Dimming a line that
-  // already carries a bold span would end the dim where the bold ends, so the
-  // weight is re-applied inside rather than composed around.
-  settleAcknowledgement(input.writers, said);
 }

@@ -3,7 +3,6 @@ import type { Writers } from "../../src/output.js";
 import {
   WIZARD_TITLE,
   hyperlinksSupported,
-  wizardAcknowledgement,
   wizardAside,
   wizardEmphasis,
   wizardEnvVar,
@@ -121,16 +120,6 @@ describe("colour", () => {
     expect(plain(wizardEnvVar("TRACEROOT_API_KEY"))).toBe("TRACEROOT_API_KEY");
     expect(plain(wizardAside("supporting detail"))).toBe("supporting detail");
     expect(plain(wizardEmphasis("TRACEROOT_API_KEY"))).toBe("TRACEROOT_API_KEY");
-  });
-
-  it("continues the rail through an acknowledgement", () => {
-    // The rail, not a marker and not a blank. A marker is how every other
-    // line says "a new thing starts here", and these do the opposite — they
-    // close the block above them. But three spaces stopped the frame's
-    // vertical line for two rows, which reads as the block ending early.
-    expect(
-      plain(wizardAcknowledgement("I have added TRACEROOT_API_KEY to my production env.")),
-    ).toBe("│  I have added TRACEROOT_API_KEY to my production env.  (Press Enter to continue)");
   });
 });
 
