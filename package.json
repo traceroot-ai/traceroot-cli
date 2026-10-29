@@ -1,6 +1,6 @@
 {
   "name": "traceroot-cli",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "description": "Set up TraceRoot in your repository, then work with your traces, findings, detectors and evaluations from the terminal.",
   "license": "Apache-2.0",
