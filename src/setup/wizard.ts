@@ -63,13 +63,23 @@ function painterFor(sink: Sink): Painter {
 export const WIZARD_TITLE = "TraceRoot Setup Wizard";
 
 /**
+ * The documentation's host, the same one the web app links to. Every
+ * documentation link setup prints starts here; `docs.traceroot.ai` does not
+ * resolve.
+ */
+const DOCS_BASE_URL = "https://traceroot.ai/docs";
+
+/**
  * Where a user goes next. All three are load-bearing at the end of a *failed*
  * run as much as a successful one, which is why the closing block prints them
  * either way.
  */
-export const DOCS_URL = "https://docs.traceroot.ai";
+export const DOCS_URL = `${DOCS_BASE_URL}/cli/get-started`;
 const ISSUES_URL = "https://github.com/traceroot-ai/traceroot-cli/issues/new";
 const SUPPORT_URL = "https://discord.gg/TM2m3CtKuC";
+
+/** Where a user goes when no trace shows up: the tracing guide's troubleshooting section. */
+export const TROUBLESHOOTING_URL = `${DOCS_BASE_URL}/tracing/get-started#troubleshoot`;
 
 /** Opens the frame. Everything the run prints from here on sits inside it. */
 export function wizardIntro(writers: Writers): void {

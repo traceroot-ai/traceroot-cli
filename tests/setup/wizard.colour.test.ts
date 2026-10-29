@@ -65,8 +65,8 @@ describe("hue, when the terminal can show it", () => {
     const { wizardMutedLink } = await import("../../src/setup/wizard.js");
     // One argument: the muted role takes no hyperlink flag, and the second
     // parameter is now the sink its colour is decided from.
-    expect(wizardMutedLink("https://docs.traceroot.ai")).toBe(
-      `${GREY}https://docs.traceroot.ai${OFF}`,
+    expect(wizardMutedLink("https://traceroot.ai/docs")).toBe(
+      `${GREY}https://traceroot.ai/docs${OFF}`,
     );
   });
 });

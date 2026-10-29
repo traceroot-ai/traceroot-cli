@@ -4,6 +4,7 @@ import { plain } from "./colour.js";
 import { makeWriters } from "./helpers.js";
 
 const TRACE_URL = "https://app.example.test/trace/t_1";
+const TROUBLESHOOTING_URL = "https://traceroot.ai/docs/tracing/get-started#troubleshoot";
 
 describe("what the block says", () => {
   it("says what to do, where the traces land, and where to go if they do not", () => {
@@ -12,7 +13,7 @@ describe("what the block says", () => {
     expect(text).toContain("Traces will appear here:");
     expect(text).toContain(TRACE_URL);
     expect(text).toContain("If traces do not show up, see the troubleshooting guide:");
-    expect(text).toContain("https://docs.traceroot.ai");
+    expect(text).toContain(TROUBLESHOOTING_URL);
   });
 
   it("writes each sentence as one line and lets the terminal wrap it", () => {
@@ -27,9 +28,7 @@ describe("what the block says", () => {
     // ends a sentence, ends in a colon, or is the URL itself.
     const prose = tracesNotice({ traceUrl: TRACE_URL })
       .map(plain)
-      .filter(
-        (line) => line !== "" && !line.includes(TRACE_URL) && !line.includes("docs.traceroot.ai"),
-      );
+      .filter((line) => line !== "" && line !== TRACE_URL && line !== TROUBLESHOOTING_URL);
     for (const line of prose) {
       expect(line.trimEnd().endsWith(".") || line.trimEnd().endsWith(":")).toBe(true);
     }
