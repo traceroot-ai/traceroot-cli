@@ -1972,14 +1972,17 @@ async function chooseProject(
     });
   }
 
+  const opensOn =
+    current ?? projects.find((p) => p.project_id === deps.resolvedAuth.projectId.value);
   const answer = await deps.select({
     stage,
     message: "Which project should receive these traces?",
     options: projectOptions(projects),
     // Opens on the project the repository already reports to, so accepting the
-    // question as asked keeps it there. A first run has none and opens on the
-    // first row, as it always has.
-    ...(current === undefined ? {} : { initialValue: current.project_id }),
+    // question as asked keeps it there. Without one, on the project the CLI
+    // reads by default, which the config names once a run has saved it there.
+    // A first run has neither and opens on the first row, as it always has.
+    ...(opensOn === undefined ? {} : { initialValue: opensOn.project_id }),
   });
   const picked = projects.find((p) => p.project_id === answer);
   if (picked === undefined) {

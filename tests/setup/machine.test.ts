@@ -3741,6 +3741,24 @@ describe("a repository that already reports to a project", () => {
     expect(JSON.parse(file.text ?? "").project_id).toBe("p_t2");
   });
 
+  it("opens the project question on the project the config names", async () => {
+    pythonRepo();
+    const world = server();
+    const each = setupRun(world, {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      answers: [""],
+      // What `resolveAuth` reads from the config below.
+      auth: { ...authEmpty(), projectId: { value: "p_t2", source: "config" } },
+      configFile: configFile(`{\n  "project_id": "p_t2"\n}\n`),
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(projectQuestion(each.asked)?.initialValue).toBe("p_t2");
+    expect(world.reportsTo()).toBe("p_t2");
+  });
+
   it("leaves a config later commands find the project in when a saved sign-in outranks its key", async () => {
     // A user credential belongs to no project, so every project-scoped read
     // after setup needs the config to name one.
