@@ -78,6 +78,9 @@ export const DOCS_URL = `${DOCS_BASE_URL}/cli/get-started`;
 const ISSUES_URL = "https://github.com/traceroot-ai/traceroot-cli/issues/new";
 const SUPPORT_URL = "https://discord.gg/TM2m3CtKuC";
 
+/** Where a user goes when no trace shows up: the tracing guide's troubleshooting section. */
+export const TROUBLESHOOTING_URL = `${DOCS_BASE_URL}/tracing/get-started#troubleshoot`;
+
 /** Opens the frame. Everything the run prints from here on sits inside it. */
 export function wizardIntro(writers: Writers): void {
   const color = painterFor(writers.err);

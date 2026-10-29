@@ -119,6 +119,7 @@ import type {
   StackLanguage,
 } from "./types.js";
 import {
+  TROUBLESHOOTING_URL,
   wizardAside,
   wizardEmphasis,
   wizardLine,
@@ -4559,6 +4560,7 @@ const verifyTrace: StageDefinition = {
           "To investigate:",
           `  ${setupCommand()} doctor`,
           `  ${cliCommand("traces list --limit 5")}`,
+          `  ${TROUBLESHOOTING_URL}`,
         ].join("\n"),
       });
     }

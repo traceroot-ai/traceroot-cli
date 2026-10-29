@@ -4524,6 +4524,7 @@ describe("failure handling", () => {
         "To investigate:",
         "  traceroot setup doctor",
         "  traceroot traces list --limit 5",
+        "  https://traceroot.ai/docs/tracing/get-started#troubleshoot",
       ].join("\n"),
     );
   });
