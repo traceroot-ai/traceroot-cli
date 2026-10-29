@@ -427,7 +427,12 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
     const prompt = deps.canPrompt
       ? (question: string) => deps.setupDeps.prompt(question, "complete")
       : null;
-    await acknowledgeTraces({ writers, traceUrl: result.trace.traceUrl, prompt });
+    await acknowledgeTraces({
+      writers,
+      traceUrl: result.trace.traceUrl,
+      attributed: result.trace.attributed,
+      prompt,
+    });
     await acknowledgeProduction({
       writers,
       language: result.checkpoint.service?.language ?? null,

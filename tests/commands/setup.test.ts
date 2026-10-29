@@ -51,6 +51,7 @@ import {
   fakeInput,
   fakeRunProcess,
   fakeSetupApi,
+  listTracesFrom,
   makeDeps,
   makeWriters,
   traceRow,
@@ -437,6 +438,77 @@ describe("runSetup", () => {
     expect(readCheckpoint(dir)?.completedStages).toContain("complete");
   });
 
+  it("closes on the trace that arrived, without asking for another", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+
+    const said = plain(err.data);
+    expect(said).toContain("◇  Your first trace:\n│  https://app.example.test/trace/t_1\n");
+    // The trace is the proof the application sends traces. Telling the user to
+    // run it, that traces "will appear", or where to look if they do not, is
+    // all about a state this run is already past.
+    expect(said).not.toContain("Run your application");
+    expect(said).not.toContain("will appear here");
+    expect(said).not.toContain("troubleshoot");
+  });
+
+  it("does not call the trace the user's own when the project already had traces", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+    const setupDeps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    // The read bounded by `end_before` asks whether anything sent to this
+    // project before setup started. Answering with an older trace makes this
+    // run's trace one that may have come from somewhere else.
+    const earlier = traceRow({ trace_id: "t_old", trace_start_time: "2026-07-25T09:00:00.000000" });
+    const createApi = setupDeps.createSetupApi;
+    setupDeps.createSetupApi = (options) => {
+      const api = createApi(options);
+      return {
+        ...api,
+        listTraces: async (params) =>
+          params?.endBefore === undefined
+            ? api.listTraces(params)
+            : listTracesFrom([earlier])(params),
+      };
+    };
+
+    const result = await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps,
+    });
+
+    expect(result.trace?.attributed).toBe(false);
+    const said = plain(err.data);
+    expect(said).toContain("may not come from this service");
+    expect(said).toContain(
+      "◇  First trace since setup started:\n│  https://app.example.test/trace/t_1\n",
+    );
+    expect(said).not.toContain("Your first trace");
+  });
+
   it("closes a skipped wait by saying where the trace will appear", async () => {
     // The run is finished: the service is instrumented and the only unobserved
     // fact is a trace arriving. So the closing block says where it will show up
@@ -608,9 +680,9 @@ describe("runSetup", () => {
     const docs = (plain(err.data).match(/https?:\/\/\S+/g) ?? []).filter((url) =>
       url.includes("docs"),
     );
-    // The closing block's link and the troubleshooting one, so the loop below
-    // cannot pass on a run that printed neither.
-    expect(docs.length).toBeGreaterThanOrEqual(2);
+    // At least the documentation link under the closed frame, so the loop below
+    // cannot pass on a run that printed none.
+    expect(docs.length).toBeGreaterThanOrEqual(1);
     for (const url of docs) {
       expect(url).toMatch(/^https:\/\/traceroot\.ai\/docs\//);
     }

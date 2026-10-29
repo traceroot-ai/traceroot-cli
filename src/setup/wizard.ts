@@ -78,9 +78,6 @@ export const DOCS_URL = `${DOCS_BASE_URL}/cli/get-started`;
 const ISSUES_URL = "https://github.com/traceroot-ai/traceroot-cli/issues/new";
 const SUPPORT_URL = "https://discord.gg/TM2m3CtKuC";
 
-/** Where a user goes when no trace shows up: the tracing guide's troubleshooting section. */
-export const TROUBLESHOOTING_URL = `${DOCS_BASE_URL}/tracing/get-started#troubleshoot`;
-
 /** Opens the frame. Everything the run prints from here on sits inside it. */
 export function wizardIntro(writers: Writers): void {
   const color = painterFor(writers.err);
@@ -243,11 +240,10 @@ export function wizardLink(url: string, hyperlinks?: boolean, sink: Sink = proce
 /**
  * A link that is there for reference rather than to be followed now.
  *
- * The troubleshooting guide under the closing block is the one place this is
- * used, and it is deliberately quieter than the trace permalink two lines
- * above it. Both are links; only one of them is what the user came for. Giving
- * them the same weight makes the block ask twice, and the branch nobody wants
- * to be on wins by being lower on the screen.
+ * The support and docs links under the closed frame are the case this is for:
+ * deliberately quieter than a link the user came for, such as the trace
+ * permalink. Giving both the same weight makes the screen ask twice, and the
+ * branch nobody wants to be on wins by being lower on the screen.
  *
  * Not wrapped for clicking — see below for why that is the only way it can
  * actually stay grey.

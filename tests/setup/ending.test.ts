@@ -4,34 +4,32 @@ import { plain } from "./colour.js";
 import { makeWriters } from "./helpers.js";
 
 const TRACE_URL = "https://app.example.test/trace/t_1";
-const TROUBLESHOOTING_URL = "https://traceroot.ai/docs/tracing/get-started#troubleshoot";
 
 describe("what the block says", () => {
-  it("says what to do, where the traces land, and where to go if they do not", () => {
-    const text = tracesNotice({ traceUrl: TRACE_URL }).join("\n");
-    expect(text).toContain("Run your application and exercise the code you just instrumented.");
-    expect(text).toContain("Traces will appear here:");
-    expect(text).toContain(TRACE_URL);
-    expect(text).toContain("If traces do not show up, see the troubleshooting guide:");
-    expect(text).toContain(TROUBLESHOOTING_URL);
+  it("hands over the trace that arrived, under a label that says what it is", () => {
+    const lines = tracesNotice({ traceUrl: TRACE_URL }).map(plain);
+    expect(lines).toEqual(["Your first trace:", TRACE_URL]);
   });
 
-  it("writes each sentence as one line and lets the terminal wrap it", () => {
-    // The block used to wrap itself at about seventy-five columns, which left
-    // "to confirm that" and "is here:" stranded at the ends of lines and made
-    // three sentences read as six fragments. A terminal knows its own width.
-    for (const line of tracesNotice({ traceUrl: TRACE_URL }).map(plain)) {
-      const sentences = line.match(/\. /g) ?? [];
-      expect(sentences.length).toBe(0);
-    }
-    // And no sentence is split across two entries: every non-empty line either
-    // ends a sentence, ends in a colon, or is the URL itself.
-    const prose = tracesNotice({ traceUrl: TRACE_URL })
-      .map(plain)
-      .filter((line) => line !== "" && line !== TRACE_URL && line !== TROUBLESHOOTING_URL);
-    for (const line of prose) {
-      expect(line.trimEnd().endsWith(".") || line.trimEnd().endsWith(":")).toBe(true);
-    }
+  it("does not tell a run that already has a trace to go and produce one", () => {
+    // The trace this block links to is the proof the application sends traces,
+    // so an instruction to run it, a label promising traces "will appear", and
+    // a guide for when they do not are all about a state the run is past.
+    const text = tracesNotice({ traceUrl: TRACE_URL }).map(plain).join("\n");
+    expect(text).not.toContain("Run your application");
+    expect(text).not.toContain("will appear");
+    expect(text).not.toContain("troubleshoot");
+  });
+
+  it("does not call the trace the user's own when the project had other senders", () => {
+    // The stage has already warned that this trace may come from somewhere
+    // else. A label claiming it as the user's first would contradict that.
+    const lines = tracesNotice({ traceUrl: TRACE_URL, attributed: false }).map(plain);
+    expect(lines).toEqual(["First trace since setup started:", TRACE_URL]);
+    // Unknown is not a doubt, and reads as the ordinary case.
+    expect(tracesNotice({ traceUrl: TRACE_URL, attributed: true }).map(plain)[0]).toBe(
+      "Your first trace:",
+    );
   });
 
   it("echoes the permalink verbatim rather than building one from it", () => {
@@ -73,9 +71,7 @@ describe("acknowledging it", () => {
     expect(question).toContain("(Press Enter to continue)");
     // A settled block: `◇` is what the transcript shows once the
     // acknowledgement under it has been given.
-    expect(plain(err.data)).toContain(
-      "◇  Run your application and exercise the code you just instrumented.",
-    );
+    expect(plain(err.data)).toContain("◇  Your first trace:");
     expect(plain(err.data)).toContain(`│  ${TRACE_URL}`);
   });
 

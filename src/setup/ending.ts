@@ -2,18 +2,16 @@ import type { Sink, Writers } from "../output.js";
 import type { Prompt } from "../prompt.js";
 import { cliCommand, setupCommand } from "./invocation.js";
 import {
-  TROUBLESHOOTING_URL,
   settleAcknowledgement,
   wizardAcknowledgement,
   wizardAside,
   wizardEmphasis,
   wizardLink,
-  wizardMutedLink,
   wizardNote,
 } from "./wizard.js";
 
 /**
- * The first of the two blocks that close a successful run.
+ * The first of the two blocks that close a run that received a trace.
  *
  * A wizard's last screen is the one a user acts on, so it is not spent on a
  * single sentence printed *outside* the frame — "TraceRoot is connected, your
@@ -21,11 +19,17 @@ import {
  * — a claim, a caveat and a URL crammed into one line that visibly does not
  * belong to the box the CLI has just drawn.
  *
- * Instead: two settled blocks, each one thing to read and one thing to
- * acknowledge, and then the frame closes. This block is the local half — the
- * application is
- * instrumented, here is where its traces land, here is what to do if they do
- * not — and {@link acknowledgeProduction} is the half about everywhere else.
+ * Instead: two settled blocks, and then the frame closes. This block is the
+ * local half — the trace this run received — and {@link acknowledgeProduction}
+ * is the half about everywhere else.
+ *
+ * Only a run that saw a trace prints it, so it says nothing about producing
+ * one. Telling the user to run their application, that traces "will appear",
+ * or where to look if they do not, would be about a state the run is past: the
+ * trace linked here is the evidence that the application sends traces. The
+ * runs that end without one close on blocks of their own — see
+ * {@link skippedTraceNotice} and the hand-over sentence in
+ * `commands/setup/run.ts` — and those say what is still to do.
  *
  * The trace URL is the backend's own permalink for the trace this run actually
  * saw, never a constructed one: a self-hosted deployment's UI does not live
@@ -36,40 +40,31 @@ import {
 export interface TracesNoticeInput {
   /** The backend's permalink for the first trace this run received. */
   traceUrl: string;
+  /**
+   * False when the project already had traces before setup started, so this
+   * one may come from another sender; see `TraceVerification.attributed`.
+   * Absent or true reads as the ordinary case.
+   */
+  attributed?: boolean;
 }
 
 /**
  * The block, as lines. Pure, so the wording is assertable without a terminal.
  *
- * One sentence per line, and no line broken by hand. Wrapping the block at
- * around seventy-five columns puts "to confirm that" and "is here:" alone at
- * the ends of lines and makes three sentences read as six fragments. A
- * terminal already knows its own width; the only thing hand-wrapping
- * adds is a guess about it that is wrong on every window but one.
+ * A label and the link, each on a line of its own so the link survives being
+ * copied. The label is "Your first trace" unless the run could not tell the
+ * trace was this service's: the stage has already warned about that, and a
+ * label claiming the trace as the user's would contradict the warning.
  *
- * `sink` is where the block is headed, because the bold line, the permalink
- * and the grey caveat are painted here rather than by whatever prints them:
- * the colour has to answer to the stream the lines land on, not to
- * `process.stderr` on the way past. Defaults to it for a caller that is only
- * reading the wording.
+ * `sink` is where the block is headed, because the bold label and the
+ * permalink are painted here rather than by whatever prints them: the colour
+ * has to answer to the stream the lines land on, not to `process.stderr` on
+ * the way past. Defaults to it for a caller that is only reading the wording.
  */
 export function tracesNotice(input: TracesNoticeInput, sink: Sink = process.stderr): string[] {
-  return [
-    // The instruction, and the only bold line in the block. Everything else
-    // here is where to look afterwards; this is the thing to go and do, and it
-    // is the step the wizard cannot take on the user's behalf.
-    wizardEmphasis("Run your application and exercise the code you just instrumented.", sink),
-    "",
-    "Traces will appear here:",
-    wizardLink(input.traceUrl, undefined, sink),
-    "",
-    // Grey, and a grey link with it: this is the branch nobody wants to be on.
-    // It has to be here — a dead end at the last step of onboarding is where a
-    // first-run tool loses people — but at full contrast it competes with the
-    // permalink above, which is the line that matters when things did work.
-    wizardAside("If traces do not show up, see the troubleshooting guide:", sink),
-    wizardMutedLink(TROUBLESHOOTING_URL, sink),
-  ];
+  const label =
+    input.attributed === false ? "First trace since setup started:" : "Your first trace:";
+  return [wizardEmphasis(label, sink), wizardLink(input.traceUrl, undefined, sink)];
 }
 
 /** Named once, because it is written twice: live, then greyed over itself. */
