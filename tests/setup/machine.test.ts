@@ -2814,6 +2814,46 @@ describe("a repository that already reports to a project", () => {
     expect(plain(each.err.data)).not.toContain("as --project asked");
   });
 
+  it("refuses a --project name that several projects share when the repository reports to none of them", async () => {
+    // Any one of them would be a guess, and a wrong guess sends the traces to a
+    // project nobody chose.
+    pythonRepo();
+    const each = setupRun(server(), {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      flags: { project: "test" },
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message.split("\n")[0]).toBe("More than one project is named 'test'.");
+    expect(result.error?.remedy).toBe(
+      [
+        "Choose one by its id with --project:",
+        "  traceroot setup --project p_t1   # 'test' in Acme (w_1)",
+        "  traceroot setup --project p_t2   # 'test' in Globex (w_2)",
+      ].join("\n"),
+    );
+    expect(projectQuestion(each.asked)).toBeUndefined();
+    expect(mints(each.calls)).toEqual([]);
+    expect(each.configured).toEqual([]);
+  });
+
+  it("takes a --project id among namesakes without asking", async () => {
+    pythonRepo();
+    const world = server();
+    const each = setupRun(world, {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      canPrompt: false,
+      flags: { project: "p_t2" },
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(world.reportsTo()).toBe("p_t2");
+  });
+
   it("replaces a key the server no longer accepts without asking", async () => {
     // A dead key sends traces nowhere, so there is nothing to keep.
     pythonRepo();

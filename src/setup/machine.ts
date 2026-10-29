@@ -1852,13 +1852,27 @@ async function chooseProject(
     // A name is unique only inside its workspace, so it can match several
     // projects. Among them, the one the repository already reports to: the
     // `--project` that set a repository up must not move it to a namesake on
-    // the next run. An exact id is looked up in the whole list, the demo's
-    // projects included.
+    // the next run. Any other choice among them would be a guess, so a name
+    // the repository does not already answer is refused. An exact id is
+    // looked up in the whole list, the demo's projects included.
     const matches = projects.filter((p) => p.project_id === wanted || p.project_name === wanted);
     const match =
       listed.find((p) => p.project_id === wanted) ??
       matches.find((p) => p === current) ??
-      matches[0];
+      (matches.length === 1 ? matches[0] : undefined);
+    if (match === undefined && matches.length > 1) {
+      throw new SetupError({
+        stage,
+        code: "AMBIGUOUS",
+        message: `More than one project is named '${wanted}'.`,
+        remedy: [
+          "Choose one by its id with --project:",
+          ...matches.map(
+            (p) => `  ${setupCommand()} --project ${p.project_id}   # ${describeProject(p)}`,
+          ),
+        ].join("\n"),
+      });
+    }
     if (match === undefined) {
       throw new SetupError({
         stage,
