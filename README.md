@@ -84,9 +84,9 @@ traceroot traces list
 A browser login identifies *you*, not a project, so project-scoped reads
 (traces, detectors, findings, datasets, evals) need a project id: `--project <id>` >
 `TRACEROOT_PROJECT_ID` > `project_id` in the config file. Run
-`traceroot projects list` to find one. `traceroot setup` saves the project it
-sets up as `project_id` there. API keys are already project-scoped and need
-none of this.
+`traceroot projects list` to find one. On a browser login, `traceroot setup`
+saves the project it sets up as `project_id` there. API keys are already
+project-scoped and need none of this.
 
 ## Commands
 
