@@ -6309,8 +6309,13 @@ describe("resume and rerun", () => {
   });
 
   /** The checkpoint of a run that finished, with the trace it saw in `projectId` on `host`. */
-  function writeFinishedCheckpoint(projectId: string, projectName: string, host: string): void {
-    const previous = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+  function writeFinishedCheckpoint(
+    projectId: string,
+    projectName: string,
+    host: string,
+    startedAt = "2026-07-26T12:00:00.000Z",
+  ): void {
+    const previous = newCheckpoint(new Date(startedAt));
     previous.completedStages.push(...SETUP_STAGES);
     previous.host = host;
     previous.projectId = projectId;
@@ -6391,6 +6396,21 @@ describe("resume and rerun", () => {
       expect(plain(run.err.data)).toContain(said);
     },
   );
+
+  it("does not count a trace the other project received before the resume moved to it", async () => {
+    // A trace that started after the earlier run began, but before this run
+    // gave the repository the new project's key, came from another sender.
+    pythonRepo();
+    writeFinishedCheckpoint("p_old", "old", "https://api.example.test", "2026-07-25T12:00:00.000Z");
+    const run = resumeOnProject1([
+      traceRow({ trace_id: "t_other", trace_start_time: "2026-07-26T09:00:00.000000" }),
+    ]);
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(result.trace).toBeNull();
+  });
 
   it("leaves no trace from another project on record when the check finds none", async () => {
     // Otherwise the next resume, now recorded against this project, would

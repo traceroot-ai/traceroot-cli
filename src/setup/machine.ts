@@ -738,6 +738,7 @@ const authenticate: StageDefinition = {
               ? "flag"
               : "env"
             : "existing-config",
+          () => deps.now(),
         );
         // Every way into this stage now opens with its own sentence, because
         // the generic "Sign in to TraceRoot" heading is gone. Without one this
@@ -861,7 +862,7 @@ const authenticate: StageDefinition = {
       host_url: host,
       project_id: who.project_id,
     });
-    adoptKeySession(ctx, host, pasted, who, "pasted-key");
+    adoptKeySession(ctx, host, pasted, who, "pasted-key", () => deps.now());
     return "ok";
   },
 };
@@ -884,6 +885,7 @@ function adoptKeySession(
   key: string,
   who: Awaited<ReturnType<ApiClient["whoami"]>>,
   via: NonNullable<SetupContext["session"]>["via"],
+  now: () => Date,
 ): void {
   ctx.session = {
     host,
@@ -901,7 +903,7 @@ function adoptKeySession(
   };
   ctx.checkpoint.uiBaseUrl = who.ui_base_url;
   ctx.checkpoint.workspaceId = who.workspace_id;
-  recordProject(ctx);
+  recordProject(ctx, now);
 }
 
 /** Hosts checked when the default deployment turns out not to support setup. */
@@ -1453,7 +1455,7 @@ async function userCredentialSignIn(
     ctx.checkpoint.projectKeyId = application.keyId;
   }
   ctx.checkpoint.projectKeyHint = application.key.hint;
-  recordProject(ctx);
+  recordProject(ctx, () => deps.now());
 
   wizardProgress(ctx, `Project ${chosen.project.projectName}.`);
   if (kept !== null) {
@@ -1673,13 +1675,13 @@ const selectContext: StageDefinition = {
         );
       }
       wizardProgress(ctx, `Project: ${ctx.project.projectName} (from the API key)`);
-      recordProject(ctx);
+      recordProject(ctx, () => deps.now());
       return "skipped";
     }
 
     const chosen = await chooseProject(ctx, deps, api, projects, "select_context");
     ctx.project = { ...chosen.project, origin: chosen.origin };
-    recordProject(ctx);
+    recordProject(ctx, () => deps.now());
     return "ok";
   },
 };
@@ -2114,10 +2116,13 @@ interface SwitchRoute {
  * restore that trace and report it as this project's, without ever looking in
  * the project its key and env file now name. So the trace, and the two stages
  * that found and reported it, come off the record and the run checks again.
+ * The check counts only traces that started after `startedAt`, so that moves
+ * to now: kept, it would take whatever the new project received from any
+ * sender since the earlier run began as this service's trace.
  * Everything else a resume restores is the code it changed, which does not
  * depend on the project.
  */
-function recordProject(ctx: SetupContext): void {
+function recordProject(ctx: SetupContext, now: () => Date): void {
   const project = ctx.project;
   if (project === undefined) {
     return;
@@ -2141,6 +2146,7 @@ function recordProject(ctx: SetupContext): void {
     record.completedStages = record.completedStages.filter(
       (stage) => stage !== "verify_trace" && stage !== "complete",
     );
+    record.startedAt = now().toISOString();
   }
   record.projectId = project.projectId;
   record.projectName = project.projectName;
