@@ -3,6 +3,7 @@
 // as a blank, and a page that is not the whole result set says so.
 import { describe, expect, it } from "vitest";
 import { buildProgram } from "../../../src/cli.js";
+import { CliError, ExitCode } from "../../../src/output.js";
 import {
   renderVersion,
   versionLabel,
@@ -105,6 +106,7 @@ describe("datasets list", () => {
       w,
     );
     expect(err.data).not.toContain("\u001b");
+    expect(err.data).not.toContain("\u0007");
     expect(err.data).toContain("--cursor c");
   });
 
@@ -650,7 +652,7 @@ describe("wiring", () => {
     );
   });
 
-  it("every cursor-paged evaluation read takes --cursor and rejects an empty one before any request", async () => {
+  it("every cursor-paged evaluation read takes --cursor and rejects a blank one as a usage error before any request", async () => {
     for (const argv of [
       ["datasets", "list"],
       ["datasets", "versions", "list", "ds_1"],
@@ -662,11 +664,14 @@ describe("wiring", () => {
       await ok.run(...argv, "--cursor", "c_1");
       expect(new URL(ok.fake.calls[0]?.url ?? "").searchParams.get("cursor")).toBe("c_1");
 
-      const empty = harness({});
-      await expect(empty.run(...argv, "--cursor", "")).rejects.toThrow(
-        /--cursor must not be empty/,
-      );
-      expect(empty.fake.calls).toHaveLength(0);
+      for (const blank of ["", "   "]) {
+        const h = harness({});
+        const err = await h.run(...argv, "--cursor", blank).catch((e) => e);
+        expect(err).toBeInstanceOf(CliError);
+        expect((err as CliError).message).toBe("--cursor must not be empty");
+        expect((err as CliError).exitCode).toBe(ExitCode.usage);
+        expect(h.fake.calls).toHaveLength(0);
+      }
     }
   });
 
