@@ -93,9 +93,10 @@ describe("resolveTimeRange", () => {
     expect(result.endBefore).toBe("2026-06-23T20:31:02.000Z");
   });
 
-  it("accepts a quoted STARTED value with a GMT±offset abbreviation (IST/JST/etc.)", () => {
-    // The STARTED column shows "GMT+5:30" in zones Intl renders as GMT offsets;
-    // the explicit offset is parsed directly (no local-zone lookup needed).
+  it("accepts a quoted STARTED value with a GMT±offset abbreviation", () => {
+    // In zones whose Intl short name is a GMT offset (e.g. Etc/GMT+5 → "GMT-5"),
+    // the STARTED column shows the offset form; the explicit offset is parsed
+    // directly (no local-zone lookup needed).
     // 17:30:00 +05:30 = 12:00:00 UTC; 21:00:00 +09:00 = 12:00:00 UTC.
     expect(resolveTimeRange({ from: "2026-06-23 17:30:00 GMT+5:30" }).startAfter).toBe(
       "2026-06-23T12:00:00.000Z",
@@ -342,5 +343,89 @@ describe("flag ordering independence", () => {
       tz,
     );
     expect(r1).toEqual(r2);
+  });
+});
+
+// ─── Issue #182: a copied STARTED value must round-trip in every zone ──────
+//
+// The STARTED column and the footer render through formatLocalDisplay, whose
+// locale differs from en-US on short zone names (en-CA renders "IST"/"AEST"
+// where en-US renders "GMT+5:30"/"GMT+10"). Whatever abbreviation the formatter
+// emits for a zone must be accepted by --from/--to and resolve back to the
+// exact same instant — the assertions below deliberately avoid hardcoding the
+// abbreviation so they hold on any ICU build.
+
+describe("STARTED column round trip (issue #182)", () => {
+  // The name may be a short abbreviation ("IST") or a multi-word fallback for
+  // zones with no short name ("Gulf Time" in en-CA).
+  const DISPLAY_SHAPE =
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (GMT[+-]\d{1,2}(?::\d{2})?|[A-Za-z][A-Za-z ]{0,38}[A-Za-z])$/;
+
+  function expectRoundTrip(iso: string, timeZone: string): void {
+    const shown = formatLocalDisplay(iso, timeZone);
+    expect(shown).toMatch(DISPLAY_SHAPE);
+    expect(resolveTimeRange({ from: shown }, Date.now, timeZone).startAfter).toBe(iso);
+    expect(resolveTimeRange({ to: shown }, Date.now, timeZone).endBefore).toBe(iso);
+  }
+
+  it("round-trips a copied STARTED value in Asia/Kolkata (the issue's IST case)", () => {
+    // 17:30:00 IST = 12:00:00 UTC
+    expectRoundTrip("2026-06-23T12:00:00.000Z", "Asia/Kolkata");
+  });
+
+  it("round-trips a copied STARTED value in Australia/Sydney (AEST winter)", () => {
+    // 12:00:00 AEST = 02:00:00 UTC
+    expectRoundTrip("2026-06-23T02:00:00.000Z", "Australia/Sydney");
+  });
+
+  it("round-trips a copied STARTED value in Australia/Sydney (AEDT summer)", () => {
+    // 12:00:00 AEDT = 01:00:00 UTC — the seasonal abbreviation must not be read
+    // as a fixed offset, so the same zone resolves a different UTC in summer.
+    expectRoundTrip("2027-01-15T01:00:00.000Z", "Australia/Sydney");
+  });
+
+  it("round-trips a copied STARTED value in America/Denver (MDT summer, MST winter)", () => {
+    expectRoundTrip("2026-06-23T20:31:02.000Z", "America/Denver"); // 14:31:02 MDT
+    expectRoundTrip("2026-12-23T21:31:02.000Z", "America/Denver"); // 14:31:02 MST
+  });
+
+  it("round-trips a copied STARTED value in UTC", () => {
+    expectRoundTrip("2026-06-23T12:00:00.000Z", "UTC");
+  });
+
+  it("round-trips a copied STARTED value in Asia/Dubai (multi-word 'Gulf Time' name)", () => {
+    // en-CA has no short name for the Gulf metazone, so the column shows the
+    // long form "Gulf Time"; the parser must accept the rendered form back.
+    expectRoundTrip("2026-06-23T08:00:00.000Z", "Asia/Dubai"); // 12:00:00 Gulf Time
+  });
+
+  it("still rejects a wrong abbreviation in Asia/Kolkata", () => {
+    expect(() =>
+      resolveTimeRange({ from: "2026-06-23 17:30:00 PST" }, Date.now, "Asia/Kolkata"),
+    ).toThrow(CliError);
+  });
+
+  it("mismatch error in Asia/Kolkata stays actionable", () => {
+    let message = "";
+    try {
+      resolveTimeRange({ from: "2026-06-23 17:30:00 PST" }, Date.now, "Asia/Kolkata");
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("PST");
+    expect(message).toContain("Asia/Kolkata");
+    expect(message).toContain("ISO 8601");
+  });
+
+  it("round-trips every supported IANA timezone at one winter and one summer instant", () => {
+    const zones = Intl.supportedValuesOf("timeZone");
+    expect(zones.length).toBeGreaterThan(100);
+    for (const timeZone of zones) {
+      for (const iso of ["2026-01-15T01:00:00.000Z", "2026-07-15T01:00:00.000Z"]) {
+        const shown = formatLocalDisplay(iso, timeZone);
+        const result = resolveTimeRange({ from: shown }, Date.now, timeZone);
+        expect(result.startAfter, `${timeZone}: ${shown}`).toBe(iso);
+      }
+    }
   });
 });
