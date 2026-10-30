@@ -44,6 +44,10 @@ describe("executeTool", () => {
     [401, ExitCode.auth],
     [403, ExitCode.auth],
     [404, ExitCode.notFound],
+    // A name already taken, a limit reached, state changed since the read: the
+    // request was understood but conflicts with current state, so it is neither
+    // a bad invocation (`usage`) nor a broken tool (`internal`).
+    [409, ExitCode.conflict],
     [422, ExitCode.usage],
     // A rate limit succeeds if you wait, which is what `network` classifies. As
     // `internal` it told a caller the tool was broken, so the retry never came.
