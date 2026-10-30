@@ -1,12 +1,33 @@
-import { describe, expect, it } from "vitest";
-import { skippedTraceNotice, tracesNotice } from "../../src/setup/ending.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  skippedTraceNotice,
+  type TracesNoticeInput,
+  tracesNotice,
+} from "../../src/setup/ending.js";
+import { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
 
 const TRACE_URL = "https://app.example.test/trace/t_1";
 
+/**
+ * The block as a log file would get it: not a terminal, and no
+ * `FORCE_HYPERLINK`, so the permalink is the bare URL these assertions name.
+ * Whether a link is wrapped for clicking is asserted in `wizard.test.ts`.
+ */
+function notice(input: TracesNoticeInput): string[] {
+  return tracesNotice(input, new StringSink(false)).map(plain);
+}
+
 describe("what the block says", () => {
+  beforeEach(() => {
+    vi.stubEnv("FORCE_HYPERLINK", undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("hands over the trace that arrived, under a label that says what it is", () => {
-    const lines = tracesNotice({ traceUrl: TRACE_URL }).map(plain);
+    const lines = notice({ traceUrl: TRACE_URL });
     expect(lines).toEqual(["Your first trace:", TRACE_URL]);
   });
 
@@ -14,7 +35,7 @@ describe("what the block says", () => {
     // The trace this block links to is the proof the application sends traces,
     // so an instruction to run it, a label promising traces "will appear", and
     // a guide for when they do not are all about a state the run is past.
-    const text = tracesNotice({ traceUrl: TRACE_URL }).map(plain).join("\n");
+    const text = notice({ traceUrl: TRACE_URL }).join("\n");
     expect(text).not.toContain("Run your application");
     expect(text).not.toContain("will appear");
     expect(text).not.toContain("troubleshoot");
@@ -23,23 +44,21 @@ describe("what the block says", () => {
   it("does not call the trace the user's own when the project had other senders", () => {
     // The stage has already warned that this trace may come from somewhere
     // else. A label claiming it as the user's first would contradict that.
-    const lines = tracesNotice({ traceUrl: TRACE_URL, attributed: false }).map(plain);
+    const lines = notice({ traceUrl: TRACE_URL, attributed: false });
     expect(lines).toEqual(["First trace since setup started:", TRACE_URL]);
     // Unknown is not a doubt, and reads as the ordinary case.
-    expect(tracesNotice({ traceUrl: TRACE_URL, attributed: true }).map(plain)[0]).toBe(
-      "Your first trace:",
-    );
+    expect(notice({ traceUrl: TRACE_URL, attributed: true })[0]).toBe("Your first trace:");
   });
 
   it("echoes the permalink verbatim rather than building one from it", () => {
     // A self-hosted UI does not live where its API does. Anything reconstructed
     // here 404s at the exact moment the user first clicks something.
     const odd = "https://selfhosted.internal:8443/x/y/trace/abc?tenant=1";
-    expect(tracesNotice({ traceUrl: odd }).map(plain)).toContain(odd);
+    expect(notice({ traceUrl: odd })).toContain(odd);
   });
 
   it("puts the link on a line of its own, so it survives being copied", () => {
-    const lines = tracesNotice({ traceUrl: TRACE_URL }).map(plain);
+    const lines = notice({ traceUrl: TRACE_URL });
     expect(lines.filter((line) => line.includes(TRACE_URL))).toEqual([TRACE_URL]);
   });
 });

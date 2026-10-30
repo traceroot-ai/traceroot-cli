@@ -838,8 +838,7 @@ describe("runSetup", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(asked.filter((q) => q.stage === "complete")).toEqual([]);
-    expect(asked.filter((q) => q.question.includes("Press Enter"))).toEqual([]);
+    expect(asked).toEqual([]);
     const said = plain(err.data);
     expect(said).not.toContain("I've confirmed");
     expect(said).not.toContain("I have added");
