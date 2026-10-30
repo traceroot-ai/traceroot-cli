@@ -143,6 +143,8 @@ need none of this.
 
 Add `--json` to any command for a single machine-readable document on stdout.
 Run `traceroot <command> --help` for the full flag list.
+Flags that `--help` shows as `--<flag> [true|false]` take `true` or `false` (`--enabled false`) or `--no-<flag>`, and mean true on their own.
+A word right after such a flag is read as its value, so put positional arguments first or write `--<flag>=true`.
 
 ### Creating things
 
