@@ -3,6 +3,7 @@
 // as a blank, and a page that is not the whole result set says so.
 import { describe, expect, it } from "vitest";
 import { buildProgram } from "../../../src/cli.js";
+import { CliError, ExitCode } from "../../../src/output.js";
 import {
   renderVersion,
   versionLabel,
@@ -83,10 +84,11 @@ describe("datasets list", () => {
       w,
     );
     expect(err.data).toContain("there are more");
-    expect(err.data).toContain("--limit");
+    // The next page is one flag away, and the warning names it with the cursor.
+    expect(err.data).toContain("--cursor more");
   });
 
-  it("pluralises by the count, and gives no advice to raise a --limit already at its maximum", () => {
+  it("pluralises by the count", () => {
     const { w, err } = sinks();
     renderDatasetList(
       { datasets: [{ dataset_id: "ds_1", name: "a" }], next_cursor: "more" },
@@ -94,7 +96,48 @@ describe("datasets list", () => {
       w,
     );
     expect(err.data).toContain("showing 1 dataset (--limit 200)");
+  });
+
+  it("escapes a cursor before printing it, as any other server text", () => {
+    const { w, err } = sinks();
+    renderDatasetList(
+      { datasets: [{ dataset_id: "ds_1", name: "a" }], next_cursor: "c\u001b]0;x\u0007" },
+      {},
+      w,
+    );
+    expect(err.data).not.toContain("\u001b");
+    expect(err.data).not.toContain("\u0007");
+    expect(err.data).toContain("--cursor c");
+  });
+
+  it("an empty page read after a cursor says there is nothing after it, in every paged read", () => {
+    const after = { cursor: "c_1" };
+    const cases: [string, (w: ReturnType<typeof sinks>["w"]) => void][] = [
+      ["no more datasets after this cursor", (w) => renderDatasetList({ datasets: [] }, after, w)],
+      ["no more versions after this cursor", (w) => renderVersionList({ versions: [] }, after, w)],
+      [
+        "no more evaluations after this cursor",
+        (w) => renderEvaluationList({ evaluations: [] }, after, w),
+      ],
+      ["no more evaluation runs after this cursor", (w) => renderRunList({ runs: [] }, after, w)],
+    ];
+    for (const [message, run] of cases) {
+      const { w, err } = sinks();
+      run(w);
+      expect(err.data).toContain(message);
+    }
+  });
+
+  it("with no cursor to continue from, gives no advice to raise a --limit already at its maximum", () => {
+    const { w, err } = sinks();
+    const datasets = Array.from({ length: 200 }, (_, i) => ({
+      dataset_id: `ds_${i}`,
+      name: `d${i}`,
+    }));
+    renderDatasetList({ datasets }, { limit: 200 }, w);
+    expect(err.data).toContain("there are more");
     expect(err.data).not.toContain("raise --limit");
+    expect(err.data).not.toContain("--cursor");
     expect(err.data).toContain("200 is the most a page holds");
   });
 
@@ -248,7 +291,7 @@ describe("datasets versions get", () => {
     expect(err.data).toContain("2 cases");
   });
 
-  it("says out loud that a capped page has an unreachable tail", () => {
+  it("says when a page is not the whole version, and names the --cursor for the next", () => {
     const { w, err } = sinks();
     renderVersion(
       { dataset_version_id: "dsv_1", items: many, next_cursor: "more" },
@@ -257,6 +300,19 @@ describe("datasets versions get", () => {
     );
     expect(err.data).toContain("there are more");
     expect(err.data).toContain("--limit 25");
+    expect(err.data).toContain("--cursor more");
+    expect(err.data).not.toContain("not reachable");
+  });
+
+  it("an empty page read after a cursor is the end of the version, not an empty version", () => {
+    const { w, err } = sinks();
+    renderVersion(
+      { dataset_version_id: "dsv_1", items: [], next_cursor: null },
+      { limit: 25, cursor: "tc_24" },
+      w,
+    );
+    expect(err.data).toContain("no test cases after this cursor");
+    expect(err.data).not.toContain("this version has no test cases");
   });
 
   it("labels a version without repeating a label that is already the derived name", () => {
@@ -572,7 +628,7 @@ describe("wiring", () => {
     );
   });
 
-  it("'datasets versions get' help describes the page it reads, not a cursor it lacks", () => {
+  it("'datasets versions get' help describes the page it reads and the cursor that reads the next", () => {
     const program = buildProgram({
       registry: {
         fetchImpl: createFakeFetch(() => jsonResponse({})).fetchImpl,
@@ -584,7 +640,39 @@ describe("wiring", () => {
       ?.commands.find((c) => c.name() === "versions")
       ?.commands.find((c) => c.name() === "get");
     expect(get?.description()).toContain("--limit");
-    expect(get?.description()).not.toMatch(/cursor/i);
+    expect(get?.description()).toContain("--cursor");
+    expect(get?.options.map((o) => o.long)).toContain("--cursor");
+  });
+
+  it("'datasets versions get' sends --cursor with the page size", async () => {
+    const h = harness({ dataset_version_id: "dsv_1", items: [], next_cursor: null });
+    await h.run("datasets", "versions", "get", "dsv_1", "--limit", "2", "--cursor", "tc_2");
+    expect(h.fake.calls[0]?.url).toBe(
+      "https://api.test/api/v1/public/dataset-versions/dsv_1?limit=2&cursor=tc_2",
+    );
+  });
+
+  it("every cursor-paged evaluation read takes --cursor and rejects a blank one as a usage error before any request", async () => {
+    for (const argv of [
+      ["datasets", "list"],
+      ["datasets", "versions", "list", "ds_1"],
+      ["datasets", "versions", "get", "dsv_1"],
+      ["evals", "list"],
+      ["evals", "runs", "list"],
+    ]) {
+      const ok = harness({});
+      await ok.run(...argv, "--cursor", "c_1");
+      expect(new URL(ok.fake.calls[0]?.url ?? "").searchParams.get("cursor")).toBe("c_1");
+
+      for (const blank of ["", "   "]) {
+        const h = harness({});
+        const err = await h.run(...argv, "--cursor", blank).catch((e) => e);
+        expect(err).toBeInstanceOf(CliError);
+        expect((err as CliError).message).toBe("--cursor must not be empty");
+        expect((err as CliError).exitCode).toBe(ExitCode.usage);
+        expect(h.fake.calls).toHaveLength(0);
+      }
+    }
   });
 
   it("no evaluation read takes --project-id: the project comes from the global --project", async () => {
@@ -654,6 +742,7 @@ describe("wiring", () => {
     await h.run("datasets", "versions", "get", "dsv_1", "--json");
     expect(JSON.parse(h.out.data)).toEqual(payload);
     expect(h.err.data).toContain("there are more");
+    expect(h.err.data).toContain("--cursor more");
   });
 
   it("--json stays silent on stderr when the page is the whole result", async () => {

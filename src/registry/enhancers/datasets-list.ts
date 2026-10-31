@@ -8,11 +8,13 @@ import { onceOption, rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
+  addCursorFlag,
   addLimitFlag,
   countLine,
   limitBounds,
   orDash,
   orNone,
+  parseCursor,
   renderEmptyPage,
   warnIfCapped,
   when,
@@ -31,7 +33,7 @@ export function renderDatasetList(
   const rows = res.datasets ?? [];
   if (rows.length === 0) {
     renderEmptyPage(
-      "no datasets",
+      state.cursor === undefined ? "no datasets" : "no more datasets after this cursor",
       state.limit,
       "list_datasets",
       res.next_cursor,
@@ -63,7 +65,7 @@ export function renderDatasetList(
 
 export const datasetsList: Enhancer = {
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "list_datasets", "datasets").option(
+    addCursorFlag(addLimitFlag(cmd, "list_datasets", "datasets")).option(
       "--name <substring>",
       "filter to datasets whose name contains this text, case-insensitively",
       onceOption("--name"),
@@ -75,13 +77,15 @@ export const datasetsList: Enhancer = {
       input.opts.limit as string | undefined,
       limitBounds("list_datasets").max,
     );
+    const cursor = parseCursor(input);
     const name = input.opts.name as string | undefined;
     return {
       args: {
         ...(limit === undefined ? {} : { limit }),
+        ...(cursor === undefined ? {} : { cursor }),
         ...(name === undefined ? {} : { name }),
       },
-      state: { limit } satisfies PagedState,
+      state: { limit, cursor } satisfies PagedState,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {

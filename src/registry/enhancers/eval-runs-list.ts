@@ -9,10 +9,12 @@ import { onceOption, rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
+  addCursorFlag,
   addLimitFlag,
   countLine,
   limitBounds,
   orDash,
+  parseCursor,
   renderEmptyPage,
   warnIfCapped,
   when,
@@ -43,7 +45,9 @@ export function renderRunList(
   const rows = res.runs ?? [];
   if (rows.length === 0) {
     renderEmptyPage(
-      "no evaluation runs",
+      state.cursor === undefined
+        ? "no evaluation runs"
+        : "no more evaluation runs after this cursor",
       state.limit,
       "list_evaluation_runs",
       res.next_cursor,
@@ -78,7 +82,7 @@ export const evalRunsList: Enhancer = {
     "List the project's evaluation runs, newest first, with the id each one is read by. Filter to " +
     "one evaluation with --evaluation-id, or to a status with --status.",
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "list_evaluation_runs", "runs")
+    addCursorFlag(addLimitFlag(cmd, "list_evaluation_runs", "runs"))
       .option(
         "--evaluation-id <id>",
         "only runs of this evaluation (from `traceroot evals list`)",
@@ -96,6 +100,7 @@ export const evalRunsList: Enhancer = {
       input.opts.limit as string | undefined,
       limitBounds("list_evaluation_runs").max,
     );
+    const cursor = parseCursor(input);
     const evaluationId = input.opts.evaluationId as string | undefined;
     const status = input.opts.status as string | undefined;
     const allowed = runStatuses();
@@ -105,10 +110,11 @@ export const evalRunsList: Enhancer = {
     return {
       args: {
         ...(limit === undefined ? {} : { limit }),
+        ...(cursor === undefined ? {} : { cursor }),
         ...(evaluationId === undefined ? {} : { evaluation_id: evaluationId }),
         ...(status === undefined ? {} : { status }),
       },
-      state: { limit } satisfies PagedState,
+      state: { limit, cursor } satisfies PagedState,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {

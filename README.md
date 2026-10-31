@@ -129,12 +129,12 @@ need none of this.
 | `workspaces delete <id>` | Permanently delete a workspace and everything in it. Not reversible. `--name <current-name>` (typed as confirmation), `--reason <text>` |
 | `sql [query]` | Run one read-only SQL query over your project's spans and traces. Prints a table, CSV with `--csv`, or JSON with `--json`. `--file <path>`, `--param <name=value>`, `--max-rows <n>`, `--output <file>` |
 | `sql schema` | List the tables and columns a query may reference, with their types. |
-| `datasets list` | List the project's evaluation datasets, newest first, with each one's current published version. `--limit <n>`, `--name <substring>` |
+| `datasets list` | List the project's evaluation datasets, newest first, with each one's current published version. `--limit <n>`, `--cursor <cursor>`, `--name <substring>` |
 | `datasets get <id>` | Show one dataset: name, key, description, and the version its cases are read from. A dataset with nothing published says so. |
-| `datasets versions list <dataset-id>` | List a dataset's published versions, newest first, with each one's case count; `*` marks the current one. `--limit <n>` |
-| `datasets versions get <version-id>` | Show one immutable version and one page of its test cases (input, expected, and the trace a case was captured from) — 200 by default, up to 1000. `--limit <n>` |
-| `evals list` | List the project's evaluations, newest first: how many runs each has and how its latest one ended. The `EVALUATION ID` column is what `evals runs list --evaluation-id` takes. `--limit <n>`, `--name <substring>` |
-| `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--evaluation-id <id>`, `--status <status>` |
+| `datasets versions list <dataset-id>` | List a dataset's published versions, newest first, with each one's case count; `*` marks the current one. `--limit <n>`, `--cursor <cursor>` |
+| `datasets versions get <version-id>` | Show one immutable version and one page of its test cases (input, expected, and the trace a case was captured from) — 200 by default, up to 1000. `--limit <n>`, `--cursor <cursor>` |
+| `evals list` | List the project's evaluations, newest first: how many runs each has and how its latest one ended. The `EVALUATION ID` column is what `evals runs list --evaluation-id` takes. `--limit <n>`, `--cursor <cursor>`, `--name <substring>` |
+| `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--cursor <cursor>`, `--evaluation-id <id>`, `--status <status>` |
 | `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, and a link to open it. |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
@@ -262,11 +262,12 @@ Four things these reads do deliberately:
   task-error or scorer-error count yet, and an em dash says so; `0` would claim a
   measurement nobody made. `(none)` is the third case: a thing that exists and
   has no value yet, like a dataset with no published version.
-- **Each read returns one page.** There is no cursor flag, so when more matched
-  than came back the command says so on stderr and names the ceiling. The lists
-  return 50 by default and take `--limit` up to 200; `datasets versions get`
-  reads 200 cases by default and takes `--limit` up to 1000. Past that ceiling is
-  not reachable from the CLI.
+- **Each read returns one page, and says how to read the next.** When more
+  matched than came back, the command says so on stderr, in `--json` too, and
+  prints the `--cursor` that reads the next page; `--json` also carries it as
+  `next_cursor`. The lists return 50 by default and take `--limit` up to 200;
+  `datasets versions get` reads 200 cases by default and takes `--limit` up to
+  1000.
 - **`evals runs get` reports means, not totals.** A numeric score's value is its
   mean over the results that carried it, a boolean score's is the share that came
   back true, and a categorical score has no mean at all. Cost and duration are
