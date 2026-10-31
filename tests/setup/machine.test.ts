@@ -28,8 +28,8 @@ import { openBrowserForPlatform, runDeviceFlow } from "../../src/auth/deviceFlow
 import { redeemHandoff } from "../../src/auth/handoff.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
-import { writeConfig as writeCliConfig } from "../../src/config/manager.js";
-import type { ResolvedAuth } from "../../src/config/resolve.js";
+import { loadConfigOrThrow, writeConfig as writeCliConfig } from "../../src/config/manager.js";
+import { type ResolvedAuth, resolveAuth } from "../../src/config/resolve.js";
 import { CliError, ExitCode } from "../../src/output.js";
 import { serviceArtifactDir } from "../../src/setup/artifacts.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
@@ -55,6 +55,7 @@ import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
 import type { StringSink } from "../helpers/stringSink.js";
 import { plain } from "./colour.js";
 import {
+  type FakeTraces,
   type MakeDepsOptions,
   type RecordedRun,
   authEmpty,
@@ -494,7 +495,7 @@ describe("authentication", () => {
         key: "tr-browser-minted-key-1234",
       }),
     });
-    const written: Array<{ api_key: string; host_url: string }> = [];
+    const written: Array<{ api_key: string; host_url: string; project_id: string }> = [];
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
@@ -512,7 +513,11 @@ describe("authentication", () => {
     expect(result.ok).toBe(true);
     expect(ctx.session?.via).toBe("user-credential");
     expect(written).toEqual([
-      { api_key: "tr-browser-minted-key-1234", host_url: "https://api.example.test" },
+      {
+        api_key: "tr-browser-minted-key-1234",
+        host_url: "https://api.example.test",
+        project_id: "p_1",
+      },
     ]);
     expect(ctx.credential?.origin).toBe("minted");
     expect(ctx.credential?.keyId).toBe("ak_1");
@@ -726,7 +731,7 @@ describe("authentication", () => {
         key: "tr-key-for-the-new-project",
       }),
     });
-    const written: Array<{ api_key: string; host_url: string }> = [];
+    const written: Array<{ api_key: string; host_url: string; project_id: string }> = [];
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
@@ -755,7 +760,11 @@ describe("authentication", () => {
     expect(ctx.project?.projectId).toBe("p_new");
     expect(ctx.credential?.origin).toBe("minted");
     expect(written).toEqual([
-      { api_key: "tr-key-for-the-new-project", host_url: "https://api.example.test" },
+      {
+        api_key: "tr-key-for-the-new-project",
+        host_url: "https://api.example.test",
+        project_id: "p_new",
+      },
     ]);
     expect(err.data).not.toContain("tr-key-for-the-new-project");
     expect(out.data).not.toContain("tr-key-for-the-new-project");
@@ -963,7 +972,7 @@ describe("authentication", () => {
         key: "tr-minted-without-a-browser",
       }),
     });
-    const written: Array<{ api_key: string; host_url: string }> = [];
+    const written: Array<{ api_key: string; host_url: string; project_id: string }> = [];
     const deps = makeDeps({
       auth: authEmpty(),
       setupApi,
@@ -1000,7 +1009,11 @@ describe("authentication", () => {
     expect(ctx.credential?.origin).toBe("minted");
     expect(ctx.project?.projectId).toBe("p_1");
     expect(written).toEqual([
-      { api_key: "tr-minted-without-a-browser", host_url: "https://api.example.test" },
+      {
+        api_key: "tr-minted-without-a-browser",
+        host_url: "https://api.example.test",
+        project_id: "p_1",
+      },
     ]);
     // Neither credential is printable.
     expect(err.data).not.toContain("saved-session-token");
@@ -1999,6 +2012,27 @@ describe("the pasted key", () => {
     });
   }
 
+  it("saves the pasted key's project with it, over the one the config named", async () => {
+    pythonRepo();
+    const written: unknown[] = [];
+    const deps = makeDeps({
+      auth: authEmpty(),
+      hiddenAnswers: [KEY],
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      config: { project_id: "p_other" },
+      onWriteConfig: (config) => written.push(config),
+    });
+    const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.error).toBeNull();
+    expect(written).toEqual([
+      { project_id: "p_1", api_key: KEY, host_url: "https://api.example.test" },
+    ]);
+  });
+
   it("treats a paste that is nothing but the variable name as empty", async () => {
     // Normalising before the empty check is what keeps this a local error
     // rather than a `401` from the server.
@@ -2814,6 +2848,46 @@ describe("a repository that already reports to a project", () => {
     expect(plain(each.err.data)).not.toContain("as --project asked");
   });
 
+  it("refuses a --project name that several projects share when the repository reports to none of them", async () => {
+    // Any one of them would be a guess, and a wrong guess sends the traces to a
+    // project nobody chose.
+    pythonRepo();
+    const each = setupRun(server(), {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      flags: { project: "test" },
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error?.code).toBe("AMBIGUOUS");
+    expect(result.error?.message.split("\n")[0]).toBe("More than one project is named 'test'.");
+    expect(result.error?.remedy).toBe(
+      [
+        "Choose one by its id with --project:",
+        "  traceroot setup --project p_t1   # 'test' in Acme (w_1)",
+        "  traceroot setup --project p_t2   # 'test' in Globex (w_2)",
+      ].join("\n"),
+    );
+    expect(projectQuestion(each.asked)).toBeUndefined();
+    expect(mints(each.calls)).toEqual([]);
+    expect(each.configured).toEqual([]);
+  });
+
+  it("takes a --project id among namesakes without asking", async () => {
+    pythonRepo();
+    const world = server();
+    const each = setupRun(world, {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      canPrompt: false,
+      flags: { project: "p_t2" },
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(world.reportsTo()).toBe("p_t2");
+  });
+
   it("replaces a key the server no longer accepts without asking", async () => {
     // A dead key sends traces nowhere, so there is nothing to keep.
     pythonRepo();
@@ -3471,9 +3545,9 @@ describe("a repository that already reports to a project", () => {
     expect(plain(each.err.data)).toContain("Restored the CLI's previous config.");
   });
 
-  it("keeps a field changed since, and puts back one this run's write dropped", async () => {
-    // The write replaces the whole file, so `project_id` went with it; the host
-    // was then moved by something else, and that move is not this run's to undo.
+  it("keeps a field changed since, and puts back the rest", async () => {
+    // The host was moved by something else after this run's write, and that
+    // move is not this run's to undo; the key goes back to the one before it.
     pythonRepo();
     const world = server(["tr-dead-cli", ALPHA]);
     world.refused.set("tr-dead-cli", "API key has expired");
@@ -3507,19 +3581,19 @@ describe("a repository that already reports to a project", () => {
       configFile: file,
       revoke: "ok",
       failAtInstrument: () => {
-        file.text = JSON.stringify({ ...JSON.parse(file.text ?? "{}"), project_id: "p_a" });
+        file.text = JSON.stringify({ ...JSON.parse(file.text ?? "{}"), project_id: "p_other" });
       },
     });
 
     await runSetupMachine(each.ctx, each.deps);
 
-    expect(JSON.parse(file.text ?? "")).toEqual({ project_id: "p_a" });
+    expect(JSON.parse(file.text ?? "")).toEqual({ project_id: "p_other" });
     expect(plain(each.err.data)).toContain("Removed the revoked key from the CLI's config.");
   });
 
   it("leaves the config alone when the run reused the CLI key in it", async () => {
     pythonRepo();
-    const text = `${JSON.stringify({ api_key: "tr-cli-key", host_url: HOST }, null, 2)}\n`;
+    const text = `${JSON.stringify({ api_key: "tr-cli-key", host_url: HOST, project_id: "p_a" }, null, 2)}\n`;
     const file = configFile(text);
     const each = setupRun(server(["tr-cli-key", ALPHA]), {
       listed: [ALPHA],
@@ -3627,6 +3701,92 @@ describe("a repository that already reports to a project", () => {
       expect(deps.readConfigText()).toBe(DEAD_CONFIG);
       deps.restoreConfigText(null);
       expect(existsSync(path)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // ── the project the CLI's config names ─────────────────────────────────────
+
+  it("keeps the project_id a config already names when the run chooses that project", async () => {
+    pythonRepo();
+    const file = configFile(`{\n  "project_id": "p_t2"\n}\n`);
+    const each = setupRun(server(), {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      answers: ["p_t2"],
+      configFile: file,
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(JSON.parse(file.text ?? "")).toEqual({
+      project_id: "p_t2",
+      api_key: "tr-admin-p_t2-1",
+      host_url: HOST,
+    });
+  });
+
+  it("replaces the config's project_id only with the project the run chose", async () => {
+    pythonRepo();
+    const file = configFile(`{\n  "project_id": "p_a"\n}\n`);
+    const each = setupRun(server(), {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      answers: ["p_t2"],
+      configFile: file,
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(JSON.parse(file.text ?? "").project_id).toBe("p_t2");
+  });
+
+  it("opens the project question on the project the config names", async () => {
+    pythonRepo();
+    const world = server();
+    const each = setupRun(world, {
+      listed: [ALPHA, TEST_ACME, TEST_GLOBEX],
+      answers: [""],
+      // What `resolveAuth` reads from the config below.
+      auth: { ...authEmpty(), projectId: { value: "p_t2", source: "config" } },
+      configFile: configFile(`{\n  "project_id": "p_t2"\n}\n`),
+    });
+
+    const result = await runSetupMachine(each.ctx, each.deps);
+
+    expect(result.error).toBeNull();
+    expect(projectQuestion(each.asked)?.initialValue).toBe("p_t2");
+    expect(world.reportsTo()).toBe("p_t2");
+  });
+
+  it("leaves a config later commands find the project in when a saved sign-in outranks its key", async () => {
+    // A user credential belongs to no project, so every project-scoped read
+    // after setup needs the config to name one.
+    const { vi } = await import("vitest");
+    const path = join(dir, "cli-config.json");
+    vi.stubEnv("TRACEROOT_CONFIG_PATH", path);
+    try {
+      pythonRepo();
+      const production = defaultSetupDeps(authEmpty());
+      const each = setupRun(server(), { listed: [ALPHA, TEST_ACME], answers: ["p_t1"] });
+      const deps: SetupDeps = {
+        ...each.deps,
+        writeConfig: production.writeConfig,
+        readConfig: production.readConfig,
+        readConfigText: production.readConfigText,
+        restoreConfigText: production.restoreConfigText,
+      };
+
+      const result = await runSetupMachine(each.ctx, deps);
+
+      expect(result.error).toBeNull();
+      const next = resolveAuth({
+        readConfig: () => loadConfigOrThrow(),
+        readCredential: () => ({ session_token: "saved-session-token" }),
+      });
+      expect(next.credential.kind).toBe("session");
+      expect(next.projectId).toEqual({ value: "p_t1", source: "config" });
     } finally {
       vi.unstubAllEnvs();
     }
@@ -6146,6 +6306,127 @@ describe("resume and rerun", () => {
       stage: "verify_trace",
       code: "TRACE_TIMEOUT",
     });
+  });
+
+  /** The checkpoint of a run that finished, with the trace it saw in `projectId` on `host`. */
+  function writeFinishedCheckpoint(
+    projectId: string,
+    projectName: string,
+    host: string,
+    startedAt = "2026-07-26T12:00:00.000Z",
+  ): void {
+    const previous = newCheckpoint(new Date(startedAt));
+    previous.completedStages.push(...SETUP_STAGES);
+    previous.host = host;
+    previous.projectId = projectId;
+    previous.projectName = projectName;
+    previous.agentId = "claude";
+    previous.instrumentHandover = "agent";
+    previous.trace = {
+      traceId: "t_old",
+      traceUrl: "https://app.example.test/trace/t_old",
+      observedAt: "2026-07-26T12:00:30.000Z",
+      waitedMs: 1000,
+    };
+    writeCheckpoint(dir, previous);
+  }
+
+  /** A resumed run whose key belongs to `p_1` on the test host, with `traces` to find there. */
+  function resumeOnProject1(traces: FakeTraces) {
+    const process = fakeRunProcess({ gitStatus: ["", " M main.py"] });
+    const deps = makeDeps({ auth: authWithKey(), traces, runProcess: process.run });
+    const harness = makeCtx({
+      flags: { agent: "claude", resume: true, traceTimeoutSec: 1 },
+      resumeFrom: readCheckpoint(dir) ?? undefined,
+    });
+    return { ...harness, deps, runs: process.runs };
+  }
+
+  const NEW_TRACE = traceRow({
+    trace_id: "t_new",
+    trace_url: "https://app.example.test/trace/t_new",
+  });
+
+  it("keeps the trace a resumed run saw in the same project", async () => {
+    pythonRepo();
+    writeFinishedCheckpoint("p_1", "demo", "https://api.example.test");
+    let polls = 0;
+    const run = resumeOnProject1(() => {
+      polls += 1;
+      return [NEW_TRACE];
+    });
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error).toBeNull();
+    expect(result.trace?.traceId).toBe("t_old");
+    expect(polls).toBe(0);
+  });
+
+  it.each([
+    [
+      "another project",
+      "p_old",
+      "https://api.example.test",
+      "The earlier run's trace is in project 'old', not 'demo', so setup checks again.",
+    ],
+    [
+      "another deployment",
+      "p_1",
+      "https://old.example.test",
+      "The earlier run's trace is in project 'old' on https://old.example.test, not 'demo' on https://api.example.test, so setup checks again.",
+    ],
+  ])(
+    "checks the trace again when a resumed run signs in to %s",
+    async (_, projectId, host, said) => {
+      // The trace on record proves another project receives this service's
+      // traces, not the one the key and env file now name.
+      pythonRepo();
+      writeFinishedCheckpoint(projectId, "old", host);
+      const run = resumeOnProject1([NEW_TRACE]);
+
+      const result = await runSetupMachine(run.ctx, run.deps);
+
+      expect(result.error).toBeNull();
+      expect(result.trace?.traceId).toBe("t_new");
+      expect(result.stagesRun.find((s) => s.stage === "verify_trace")?.status).toBe("ok");
+      // The code is the same code, so the agent is not run over it again.
+      expect(run.runs.filter((r) => r.program === "claude")).toHaveLength(0);
+      expect(readFileSync(join(dir, ".env"), "utf8")).toContain("tr-existing-key-value");
+      expect(plain(run.err.data)).toContain(said);
+    },
+  );
+
+  it("does not count a trace the other project received before the resume moved to it", async () => {
+    // A trace that started after the earlier run began, but before this run
+    // gave the repository the new project's key, came from another sender.
+    pythonRepo();
+    writeFinishedCheckpoint("p_old", "old", "https://api.example.test", "2026-07-25T12:00:00.000Z");
+    const run = resumeOnProject1([
+      traceRow({ trace_id: "t_other", trace_start_time: "2026-07-26T09:00:00.000000" }),
+    ]);
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    expect(result.trace).toBeNull();
+  });
+
+  it("leaves no trace from another project on record when the check finds none", async () => {
+    // Otherwise the next resume, now recorded against this project, would
+    // restore it as this project's.
+    pythonRepo();
+    writeFinishedCheckpoint("p_old", "old", "https://api.example.test");
+    const run = resumeOnProject1([]);
+
+    const result = await runSetupMachine(run.ctx, run.deps);
+
+    expect(result.error?.code).toBe("TRACE_TIMEOUT");
+    const recorded = readCheckpoint(dir);
+    expect(recorded?.projectId).toBe("p_1");
+    expect(recorded?.trace).toBeUndefined();
+    expect(recorded?.completedStages).not.toContain("verify_trace");
+    expect(recorded?.completedStages).not.toContain("complete");
   });
 
   it("does not revoke a minted key when the failure leaves a run to resume", async () => {
