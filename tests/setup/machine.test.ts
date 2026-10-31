@@ -564,8 +564,10 @@ describe("authentication", () => {
     const head = rows.findIndex((row) => row.startsWith("◇  Continue in your browser"));
     expect(rows.slice(head, head + 3)).toEqual([
       // Deliberately short: a heading that wraps would make this assertion
-      // depend on the terminal width of whoever runs the suite.
-      "◇  Continue in your browser to finish setup.",
+      // depend on the terminal width of whoever runs the suite. And no "to
+      // finish setup": only sign-in happens in the browser, and the run goes
+      // on in the terminal afterwards.
+      "◇  Continue in your browser.",
       "│",
       // Both routes named, neither asserted. The CLI cannot know which one this
       // person needs — detecting account existence would mean probing for it,
@@ -4522,6 +4524,7 @@ describe("failure handling", () => {
         "To investigate:",
         "  traceroot setup doctor",
         "  traceroot traces list --limit 5",
+        "  https://traceroot.ai/docs/tracing/get-started#troubleshoot",
       ].join("\n"),
     );
   });

@@ -57,9 +57,9 @@ export function slashPath(path: string, separator: string = sep): string {
  * report that named the key alone would reproduce exactly the omission that
  * silently sends a self-hosted user's traces to the wrong instance.
  *
- * Joined by {@link nameList}, the same helper the closing notice and the
- * closing sentence use, so the one rule this phrase follows — names in a
- * sentence, no Oxford comma — is stated once rather than reproduced here.
+ * Joined by {@link nameList}, the same helper the closing notice uses, so the
+ * one rule this phrase follows — names in a sentence, no Oxford comma — is
+ * stated once rather than reproduced here.
  */
 function productionKeys(host: string | undefined): string {
   return nameList(applicationEnvKeys(host).map((name) => `\`${name}\``));
