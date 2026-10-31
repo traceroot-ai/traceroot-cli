@@ -26,6 +26,7 @@ import {
 import type { CredentialEntry } from "../../src/auth/credentials.js";
 import { openBrowserForPlatform, runDeviceFlow } from "../../src/auth/deviceFlow.js";
 import { redeemHandoff } from "../../src/auth/handoff.js";
+import { createTokenProvider } from "../../src/auth/token.js";
 import { DEFAULT_HOST } from "../../src/commands/constants.js";
 import { setupContext } from "../../src/commands/setup/run.js";
 import { writeConfig as writeCliConfig } from "../../src/config/manager.js";
@@ -1055,7 +1056,159 @@ describe("authentication", () => {
     // A credential known not to work is forgotten, so later runs do not waste
     // a round trip rediscovering that.
     expect(cleared).toEqual(["https://api.example.test"]);
-    expect(err.data).toContain("expired");
+    // The server answers a revoked session and an expired one alike.
+    expect(plain(err.data)).toContain("the saved TraceRoot sign-in has expired or was revoked");
+  });
+
+  describe("naming the account a reused credential belongs to", () => {
+    const NOT_YOU = "Not you? Run `traceroot login` to sign in as someone else, then rerun setup.";
+
+    /** The run's output with the rail and its wrapping flattened. */
+    function said(data: string): string {
+      return plain(data)
+        .split("\n")
+        .map((line) => line.replace(/^[\u2502\u25c7\u25c6\u25b2\u25cf]/u, "").trim())
+        .join(" ")
+        .replace(/\s+/g, " ");
+    }
+
+    /** A rerun that signs in with `auth`, or with a sign-in saved on this machine. */
+    function rerun(options: { auth?: ResolvedAuth; stored?: CredentialEntry }) {
+      pythonRepo();
+      const deps = makeDeps({
+        auth: options.auth ?? authEmpty(),
+        setupApi: fakeSetupApi({
+          listProjects: async () => [
+            { project_id: "p_1", project_name: "demo", workspace_id: "w_1" },
+          ],
+          createProjectApiKey: async (input) => ({
+            id: "ak_new",
+            name: input.name,
+            hint: "tr-4444-5555",
+            project_id: input.projectId,
+            scope: "admin",
+            expires_at: null,
+            key: "tr-minted-on-a-rerun",
+          }),
+        }),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        storedCredential: options.stored ?? null,
+      });
+      return { deps, ...makeCtx({ canPrompt: true, flags: { agent: "claude" } }) };
+    }
+
+    it("names a saved sign-in's account from the token the run already holds", async () => {
+      // The saved email is stale on purpose: the token is the server's answer
+      // for this session now, so it wins.
+      const run = rerun({
+        stored: { session_token: "saved-session-token", email: "old@example.test" },
+      });
+      const fake = createFakeFetch(() =>
+        jsonResponse({ accessToken: jwtWithClaims({ email: "a@example.test" }), expiresIn: 600 }),
+      );
+      run.deps.createTokenProvider = (opts) =>
+        createTokenProvider({ ...opts, fetchImpl: fake.fetchImpl });
+      // Asks for a token before the listing, as the real setup client does.
+      const createSetupApi = run.deps.createSetupApi;
+      run.deps.createSetupApi = (opts) => {
+        const inner = createSetupApi(opts);
+        return {
+          ...inner,
+          listProjects: async (workspaceId) => {
+            await opts.tokenProvider?.getAccessToken();
+            return inner.listProjects(workspaceId);
+          },
+        };
+      };
+
+      const result = await runSetupMachine(run.ctx, run.deps);
+
+      expect(result.error).toBeNull();
+      expect(said(run.err.data)).toContain(
+        `Signed in as a@example.test. No browser needed. ${NOT_YOU}`,
+      );
+      // One mint, the listing's: the name was read off the token it left.
+      expect(fake.calls.map((call) => call.url)).toEqual([
+        "https://api.example.test/api/cli/token",
+      ]);
+    });
+
+    it("falls back to the email saved with the sign-in when the token names nobody", async () => {
+      // `makeDeps`' token is not a JWT, so it carries no claim to read.
+      const run = rerun({
+        stored: { session_token: "saved-session-token", email: "saved@example.test" },
+      });
+
+      expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
+      expect(said(run.err.data)).toContain(
+        `Signed in as saved@example.test. No browser needed. ${NOT_YOU}`,
+      );
+    });
+
+    it("keeps the returning-user line when nothing names the account", async () => {
+      const run = rerun({ stored: { session_token: "saved-session-token" } });
+
+      expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
+      expect(said(run.err.data)).toContain(
+        `Signed in as a returning user. No browser needed. ${NOT_YOU}`,
+      );
+    });
+
+    it("does not offer login for a session from TRACEROOT_TOKEN", async () => {
+      // Nothing on disk: the environment's token is the session, and the
+      // environment is where it changes.
+      const run = rerun({
+        auth: {
+          ...authEmpty(),
+          credential: { kind: "session", value: "env-session-token", source: "env" },
+        },
+      });
+
+      expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
+      expect(said(run.err.data)).toContain("Signed in as a returning user. No browser needed.");
+      expect(said(run.err.data)).not.toContain("Not you?");
+    });
+
+    it("says where a configured key came from, and how to sign in as someone else", async () => {
+      const cases: Array<[ResolvedAuth["credential"]["source"], string, string | undefined]> = [
+        ["config", "in your TraceRoot config file", NOT_YOU],
+        ["credentials-file", "in your TraceRoot credentials file", NOT_YOU],
+        // `login` saves a key it finds in the `.env` rather than opening the
+        // browser, so the key has to go first.
+        [
+          "auto-env-file",
+          "in this directory's .env",
+          "Not you? Remove TRACEROOT_API_KEY from this directory's .env, then run `traceroot login` to sign in as someone else and rerun setup.",
+        ],
+        // Chosen for this command, so the line naming it is the whole answer.
+        ["flag", "passed with --api-key", undefined],
+        ["env-file", "in the file passed with --env-file", undefined],
+        ["env", "set in the environment", undefined],
+      ];
+      for (const [source, where, aside] of cases) {
+        rmSync(dir, { recursive: true, force: true });
+        mkdirSync(dir, { recursive: true });
+        const run = rerun({
+          auth: {
+            ...authWithKey(),
+            credential: { kind: "api-key", value: "tr-existing-key-value", source },
+          },
+        });
+
+        await runSetupMachine(run.ctx, run.deps);
+
+        const text = said(run.err.data);
+        expect(text, source).toContain(
+          `Signed in with the API key ${where}. Workspace acme — no browser needed.`,
+        );
+        if (aside === undefined) {
+          expect(text, source).not.toContain("Not you?");
+        } else {
+          expect(text, source).toContain(`no browser needed. ${aside}`);
+        }
+      }
+    });
   });
 
   it("retries with a dated name when this repository already has a key", async () => {
@@ -1840,7 +1993,7 @@ describe("the handoff code from browser-first onboarding", () => {
     const text = said(run.err.data);
     expect(text).toContain("takes precedence");
     expect(text).toContain("the sign-in code from the browser is no longer valid");
-    expect(text).toContain("Signed in with the TraceRoot credential already configured.");
+    expect(text).toContain("Signed in with the API key in this directory's .env.");
   });
 
   it("redeems the code before any coding agent could read it", async () => {
@@ -2945,7 +3098,7 @@ describe("a repository that already reports to a project", () => {
     expect(result.error).toBeNull();
     expect(cleared).toEqual(["https://api.example.test"]);
     expect(plain(each.err.data)).toContain(
-      "the saved TraceRoot sign-in has expired; signing in again",
+      "the saved TraceRoot sign-in has expired or was revoked; signing in again",
     );
     expect(each.ctx.session?.via).toBe("user-credential");
   });

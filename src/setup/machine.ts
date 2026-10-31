@@ -628,12 +628,36 @@ function apiKeyFrom(auth: SetupDeps["resolvedAuth"]): string | undefined {
 }
 
 /**
+ * Where a resolved API key came from, as the end of a sentence about it.
+ *
+ * One spelling for the two lines that name a key's source: the sign-in line on
+ * the configured-key path, and the line that sets an ambient key aside for a
+ * handoff code.
+ */
+function keySource(source: ResolvedAuth["credential"]["source"]): string {
+  switch (source) {
+    case "flag":
+      return "passed with --api-key";
+    case "env-file":
+      return "in the file passed with --env-file";
+    case "env":
+      return "set in the environment";
+    case "auto-env-file":
+      return "in this directory's .env";
+    case "credentials-file":
+      return "in your TraceRoot credentials file";
+    default:
+      return "in your TraceRoot config file";
+  }
+}
+
+/**
  * The line that says an ambient API key was set aside for a handoff code.
  *
  * Named by where it came from, because "a key is configured" is not actionable
  * when the reader cannot see *which* key — and the places differ in how
- * surprising they are: a `.env` belongs to the repository the user is standing
- * in, while the config and credentials files belong to the machine.
+ * surprising they are: a `.env` and the config file belong to the directory the
+ * user is standing in, while the credentials file belongs to the machine.
  *
  * The credentials file is in here because `resolveAuth` reclassifies a
  * `tr_`-shaped value found in its session slot as an API key, source and all —
@@ -641,13 +665,34 @@ function apiKeyFrom(auth: SetupDeps["resolvedAuth"]): string | undefined {
  * file for it sends the reader to edit a file that has nothing in it.
  */
 function ambientKeySetAside(source: ResolvedAuth["credential"]["source"]): string {
-  const where =
-    source === "auto-env-file"
-      ? "in this directory's .env"
-      : source === "credentials-file"
-        ? "in your TraceRoot credentials file"
-        : "in your TraceRoot config file";
-  return `A TraceRoot API key is configured ${where}; the sign-in code from the browser takes precedence.`;
+  return `A TraceRoot API key is configured ${keySource(source)}; the sign-in code from the browser takes precedence.`;
+}
+
+/**
+ * The aside under a sign-in line that reused a credential: how to sign in as
+ * someone else instead, or nothing when that is not this CLI's to change.
+ *
+ * An interactive `login` offers to sign in again over a saved sign-in or a key
+ * in the config file. The new sign-in outranks that key, so the next run uses
+ * it, and asks before moving the repository to the new account's project. A key
+ * in this directory's `.env` is different: `login` saves that same key rather
+ * than opening the browser, so the key has to go first. A key or token passed
+ * with a flag, `--env-file` or the environment was chosen for this command, and
+ * the sign-in line already says where it came from.
+ */
+function switchAccountAside(source: ResolvedAuth["credential"]["source"]): string[] {
+  const login = `\`${cliCommand("login")}\``;
+  if (isExplicitSource(source)) {
+    return [];
+  }
+  if (source === "auto-env-file") {
+    return [
+      wizardAside(
+        `Not you? Remove ${KEY_ENV} from this directory's .env, then run ${login} to sign in as someone else and rerun setup.`,
+      ),
+    ];
+  }
+  return [wizardAside(`Not you? Run ${login} to sign in as someone else, then rerun setup.`)];
 }
 
 const authenticate: StageDefinition = {
@@ -739,9 +784,12 @@ const authenticate: StageDefinition = {
         wizardNote(
           ctx.writers,
           [
-            wizardEmphasis("Signed in with the TraceRoot credential already configured."),
+            wizardEmphasis(
+              `Signed in with the API key ${keySource(deps.resolvedAuth.credential.source)}.`,
+            ),
             "",
             wizardAside(`Workspace ${who.workspace_name ?? who.workspace_id} — no browser needed.`),
+            ...switchAccountAside(deps.resolvedAuth.credential.source),
           ],
           { settled: true },
         );
@@ -1031,11 +1079,28 @@ function storeSessionCredential(
  * How a sign-in line names the account: with the email when one is known, and
  * without pretending to one when it is not.
  *
- * One spelling for the three lines that announce a sign-in, because a user
- * reading two of them in the same run is comparing accounts.
+ * One spelling for the lines that announce a sign-in, because a user reading
+ * two of them in the same run is comparing accounts.
  */
 function signedInAs(email: string | undefined): string {
   return email === undefined ? "Signed in" : `Signed in as ${wizardValue(email)}`;
+}
+
+/**
+ * The `email` claim of the access token a provider already holds.
+ *
+ * `whoami` is API-key-only server-side, so the token is the only place a user
+ * credential says who it belongs to. Called after a request has gone out on
+ * the same provider, which caches the token it minted for it, so this sends
+ * nothing. Best-effort: a failure costs a display name, not a run.
+ */
+async function accessTokenEmail(tokenProvider: TokenProvider): Promise<string | undefined> {
+  try {
+    const claimed = decodeJwtClaims(await tokenProvider.getAccessToken())?.email;
+    return typeof claimed === "string" && claimed !== "" ? claimed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1326,7 +1391,7 @@ async function userCredentialSignIn(
       // this case.
       if (options.persisted !== false) {
         deps.deleteCredential(host);
-        wizardWarn(ctx, "the saved TraceRoot sign-in has expired; signing in again");
+        wizardWarn(ctx, "the saved TraceRoot sign-in has expired or was revoked; signing in again");
       } else {
         wizardWarn(ctx, "the configured TraceRoot token was rejected; signing in again");
       }
@@ -1345,9 +1410,27 @@ async function userCredentialSignIn(
     // otherwise be a bare "Which project should receive these traces?" — a
     // question with nothing above it saying which section of the run it belongs
     // to.
-    wizardNote(ctx.writers, [wizardEmphasis("Signed in as a returning user. No browser needed.")], {
-      settled: true,
-    });
+    //
+    // Named, because a saved sign-in outlives the browser's: signing the web
+    // app out of one account and into another leaves this one in place, and a
+    // rerun that only said "a returning user" kept using it unannounced. The
+    // listing above went out on this provider, so its token is already held.
+    const email = (await accessTokenEmail(tokenProvider)) ?? (stored.email || undefined);
+    // A session that is not on disk came from TRACEROOT_TOKEN, which is the
+    // environment's to change.
+    const aside = switchAccountAside(options.persisted === false ? "env" : "credentials-file");
+    wizardNote(
+      ctx.writers,
+      [
+        wizardEmphasis(
+          email === undefined
+            ? "Signed in as a returning user. No browser needed."
+            : `${signedInAs(email)}. No browser needed.`,
+        ),
+        ...(aside.length === 0 ? [] : ["", ...aside]),
+      ],
+      { settled: true },
+    );
   }
 
   // What the repository already reports to, if anything: read before the
@@ -2565,7 +2648,8 @@ function holdsKey(candidate: string | undefined, key: string): boolean {
  * Every other source is the CLI's and not the application's. `flag` lasts for
  * one invocation. `env-file` is a file named for the CLI with `--env-file` and
  * may sit anywhere, including outside the repository. `config` and
- * `credentials-file` are the CLI's own stores under the user's home directory,
+ * `credentials-file` are the CLI's own stores, `.traceroot/config.json` in the
+ * working directory and the credentials file under the user's home directory,
  * which no SDK reads — so a `traceroot login` followed by `traceroot setup`
  * lands here. And `none` is a key typed at setup's own prompt, which until this
  * stage runs exists in no file the application could open.
@@ -2600,7 +2684,7 @@ const configureRepository: StageDefinition = {
     // `origin === "existing-config"` is not that claim. The fast path in
     // `acquire_project_key` stamps that origin on the user's own key whatever
     // its provenance, so a key pasted at the prompt, passed as `--api-key`, or
-    // read from the CLI's config in the home directory all arrive here looking
+    // read from the CLI's config in the working directory all arrive here looking
     // like a key already in the environment — and the stage that writes the
     // only file the application can read is skipped for all three. `setup` then
     // closes by telling the user to run an application that cannot
