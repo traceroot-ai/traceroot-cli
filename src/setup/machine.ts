@@ -53,7 +53,13 @@ import { sleep } from "../util/sleep.js";
 import { createActivityParser, finalReply } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
 import { ensureGitignore, instrumentTaskPath, relativeToRoot } from "./artifacts.js";
-import { checkpointPath, hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
+import {
+  checkpointPath,
+  discardTrace,
+  hasCompleted,
+  markComplete,
+  writeCheckpoint,
+} from "./checkpoint.js";
 import {
   HOST_ENV,
   KEY_ENV,
@@ -2141,12 +2147,7 @@ function recordProject(ctx: SetupContext, now: () => Date): void {
         `The earlier run's trace is in project ${where(before, record.host)}, not ${where(project.projectName, host)}, so setup checks again.`,
       );
     }
-    record.trace = undefined;
-    record.traceWaitSkipped = undefined;
-    record.completedStages = record.completedStages.filter(
-      (stage) => stage !== "verify_trace" && stage !== "complete",
-    );
-    record.startedAt = now().toISOString();
+    discardTrace(record, now());
   }
   record.projectId = project.projectId;
   record.projectName = project.projectName;

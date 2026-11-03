@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCheckpoint,
+  discardTrace,
   hasCompleted,
   markComplete,
   newCheckpoint,
@@ -132,6 +133,27 @@ describe("checkpoint", () => {
       );
       expect(readCheckpoint(dir)).not.toHaveProperty("traceWaitSkipped");
     }
+  });
+
+  it("forgets the trace and the stages that reported it, and restarts the wait's clock", () => {
+    const checkpoint = newCheckpoint(new Date("2026-07-26T12:00:00.000Z"));
+    for (const stage of ["authenticate", "instrument", "verify_trace", "complete"] as const) {
+      markComplete(checkpoint, stage);
+    }
+    checkpoint.trace = {
+      traceId: "t_1",
+      traceUrl: "https://app.example.test/traces/t_1",
+      observedAt: "2026-07-26T12:05:00.000Z",
+      waitedMs: 1000,
+    };
+    checkpoint.traceWaitSkipped = true;
+
+    discardTrace(checkpoint, new Date("2026-07-27T09:00:00.000Z"));
+
+    expect(checkpoint.trace).toBeUndefined();
+    expect(checkpoint.traceWaitSkipped).toBeUndefined();
+    expect(checkpoint.completedStages).toEqual(["authenticate", "instrument"]);
+    expect(checkpoint.startedAt).toBe("2026-07-27T09:00:00.000Z");
   });
 
   it("does not count a hand-over whose trace wait was stopped as pending", () => {

@@ -255,6 +255,20 @@ export function hasCompleted(checkpoint: SetupCheckpoint, stage: SetupStage): bo
 }
 
 /**
+ * Forgets the recorded trace, and the two stages that found and reported it, so
+ * the next trace wait looks again. The wait counts only traces that started
+ * after `startedAt`, so that moves to `now`.
+ */
+export function discardTrace(checkpoint: SetupCheckpoint, now: Date): void {
+  checkpoint.trace = undefined;
+  checkpoint.traceWaitSkipped = undefined;
+  checkpoint.completedStages = checkpoint.completedStages.filter(
+    (stage) => stage !== "verify_trace" && stage !== "complete",
+  );
+  checkpoint.startedAt = now.toISOString();
+}
+
+/**
  * The hand-over a run that reached its last stage is still waiting on, or null.
  *
  * Holding every stage is not quite "finished". A hand-over nothing has acted on
