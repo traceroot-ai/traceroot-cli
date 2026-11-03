@@ -790,7 +790,7 @@ const authenticate: StageDefinition = {
     if (entry !== null) {
       const signedIn = await userCredentialSignIn(ctx, deps, host, entry, {
         announce: true,
-        persisted: stored !== null,
+        source: stored !== null ? "credentials-file" : resolved.source,
       });
       if (signedIn) {
         return "ok";
@@ -1125,7 +1125,10 @@ async function handoffSignIn(
     { settled: true },
   );
 
-  const signedIn = await userCredentialSignIn(ctx, deps, host, entry, { announce: false });
+  const signedIn = await userCredentialSignIn(ctx, deps, host, entry, {
+    announce: false,
+    source: "credentials-file",
+  });
   if (!signedIn) {
     throw new SetupError({
       stage: "authenticate",
@@ -1238,7 +1241,10 @@ async function browserSignIn(
   // spinner, which needs the settled line in hand before it erases what it drew.
   wizardNote(ctx.writers, [`${signedInAs(email)}.`], { settled: true });
 
-  const signedIn = await userCredentialSignIn(ctx, deps, host, entry, { announce: false });
+  const signedIn = await userCredentialSignIn(ctx, deps, host, entry, {
+    announce: false,
+    source: "credentials-file",
+  });
   if (!signedIn) {
     throw new SetupError({
       stage: "authenticate",
@@ -1281,17 +1287,18 @@ async function userCredentialSignIn(
      */
     announce: boolean;
     /**
-     * Whether the credential came off disk. A rejected environment token must not
-     * be "deleted" — there is nothing to delete — and calling it a saved sign-in
-     * that expired would be wrong.
+     * Where the credential came from. Only one from the credentials file is
+     * deleted when rejected: a rejected `TRACEROOT_TOKEN` has nothing on disk to
+     * delete, and calling it a saved sign-in that expired would be wrong. It also
+     * picks the aside under the sign-in line.
      */
-    persisted?: boolean;
+    source: ResolvedAuth["credential"]["source"];
     /**
      * Set when the caller already established which workspace this is for.
      * Without it the server refuses to guess across several workspaces.
      */
     workspaceId?: string;
-  } = { announce: true },
+  } = { announce: true, source: "credentials-file" },
 ): Promise<boolean> {
   // Reads go to the API host; the mint goes to the app. A split local stack
   // runs them on different ports, and the stored entry remembers which.
@@ -1311,7 +1318,7 @@ async function userCredentialSignIn(
       // wasted round trip on every future run. The shared token provider raises
       // an auth-class error for a revoked or expired session, which is exactly
       // this case.
-      if (options.persisted !== false) {
+      if (options.source === "credentials-file") {
         deps.deleteCredential(host);
         wizardWarn(ctx, "the saved TraceRoot sign-in has expired or was revoked; signing in again");
       } else {
@@ -1338,17 +1345,11 @@ async function userCredentialSignIn(
     // rerun that only said "a returning user" kept using it unannounced. The
     // listing above went out on this provider, so its token is already held.
     const email = (await accessTokenEmail(tokenProvider)) ?? (stored.email || undefined);
-    // A session that is not on disk came from TRACEROOT_TOKEN, which is the
-    // environment's to change.
-    const aside = switchAccountAside(options.persisted === false ? "env" : "credentials-file");
+    const aside = switchAccountAside(options.source);
     wizardNote(
       ctx.writers,
       [
-        wizardEmphasis(
-          email === undefined
-            ? "Signed in as a returning user. No browser needed."
-            : `${signedInAs(email)}. No browser needed.`,
-        ),
+        wizardEmphasis(`${signedInAs(email)}. No browser needed.`),
         ...(aside.length === 0 ? [] : ["", ...aside]),
       ],
       { settled: true },

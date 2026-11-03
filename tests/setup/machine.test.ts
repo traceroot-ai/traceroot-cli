@@ -992,7 +992,7 @@ describe("authentication", () => {
     // The entire point: no device code, no link, no waiting.
     expect(deviceFlowCalls).toBe(0);
     expect(tokens).toEqual(["saved-session-token"]);
-    expect(err.data).toContain("Signed in as a returning user. No browser needed.");
+    expect(err.data).toContain("Signed in. No browser needed.");
     expect(ctx.session?.via).toBe("user-credential");
     expect(ctx.credential?.origin).toBe("minted");
     expect(ctx.project?.projectId).toBe("p_1");
@@ -1054,6 +1054,57 @@ describe("authentication", () => {
     expect(cleared).toEqual(["https://api.example.test"]);
     // The server answers a revoked session and an expired one alike.
     expect(plain(err.data)).toContain("the saved TraceRoot sign-in has expired or was revoked");
+  });
+
+  it("keeps a rejected TRACEROOT_TOKEN from an --env-file off the saved sign-in", async () => {
+    pythonRepo();
+    const cleared: string[] = [];
+    let listProjectsCalls = 0;
+    const setupApi = fakeSetupApi({
+      listProjects: async () => {
+        listProjectsCalls += 1;
+        if (listProjectsCalls === 1) {
+          throw new SetupApiError("Invalid or expired session", 401);
+        }
+        return [{ project_id: "p_1", project_name: "demo", workspace_id: "w_1" }];
+      },
+      createProjectApiKey: async (input) => ({
+        id: "ak_1",
+        name: input.name,
+        hint: "tr-4444-5555",
+        project_id: input.projectId,
+        scope: "admin",
+        expires_at: null,
+        key: "tr-browser-minted-key-1234",
+      }),
+    });
+    const deps = makeDeps({
+      auth: {
+        ...authEmpty(),
+        credential: { kind: "session", value: "rejected-session-token", source: "env-file" },
+      },
+      setupApi,
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      storedCredential: null,
+      onDeleteCredential: (host) => {
+        cleared.push(host);
+        return true;
+      },
+    });
+    const { ctx, err } = makeCtx({
+      canPrompt: true,
+      flags: { browser: true, agent: "claude" },
+    });
+
+    const result = await runSetupMachine(ctx, deps);
+
+    expect(result.ok).toBe(true);
+    // The token lives in the file it was passed in, not in the credentials
+    // file, so there is nothing saved to forget.
+    expect(cleared).toEqual([]);
+    expect(plain(err.data)).toContain("the configured TraceRoot token was rejected");
+    expect(plain(err.data)).not.toContain("the saved TraceRoot sign-in");
   });
 
   describe("naming the account a reused credential belongs to", () => {
@@ -1142,28 +1193,30 @@ describe("authentication", () => {
       );
     });
 
-    it("keeps the returning-user line when nothing names the account", async () => {
+    it("says only that it signed in when nothing names the account", async () => {
       const run = rerun({ stored: { session_token: "saved-session-token" } });
 
       expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
-      expect(said(run.err.data)).toContain(
-        `Signed in as a returning user. No browser needed. ${NOT_YOU}`,
-      );
+      expect(said(run.err.data)).toContain(`Signed in. No browser needed. ${NOT_YOU}`);
     });
 
     it("does not offer login for a session from TRACEROOT_TOKEN", async () => {
-      // Nothing on disk: the environment's token is the session, and the
-      // environment is where it changes.
-      const run = rerun({
-        auth: {
-          ...authEmpty(),
-          credential: { kind: "session", value: "env-session-token", source: "env" },
-        },
-      });
+      // Nothing on disk: the token was passed in, from the environment or an
+      // --env-file, and that is where it changes.
+      for (const source of ["env", "env-file"] as const) {
+        rmSync(dir, { recursive: true, force: true });
+        mkdirSync(dir, { recursive: true });
+        const run = rerun({
+          auth: {
+            ...authEmpty(),
+            credential: { kind: "session", value: "passed-session-token", source },
+          },
+        });
 
-      expect((await runSetupMachine(run.ctx, run.deps)).error).toBeNull();
-      expect(said(run.err.data)).toContain("Signed in as a returning user. No browser needed.");
-      expect(said(run.err.data)).not.toContain("Not you?");
+        expect((await runSetupMachine(run.ctx, run.deps)).error, source).toBeNull();
+        expect(said(run.err.data), source).toContain("Signed in. No browser needed.");
+        expect(said(run.err.data), source).not.toContain("Not you?");
+      }
     });
 
     it("says where a configured key came from, and how to sign in as someone else", async () => {
