@@ -422,8 +422,8 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     // Offered exactly as production offers it, and taken only when the test
     // says so. Returning a no-op stop function matters as much as the press:
     // the stage calls it in a `finally`, and a test that left a dangling
-    // listener would be hiding the bug where the real one eats the keystroke
-    // belonging to the closing acknowledgements.
+    // listener would be hiding the bug where the real one keeps reading the
+    // terminal after the wait is over.
     watchForSkip: (onSkip) => {
       if (options.skipTraceWait === true) {
         onSkip();

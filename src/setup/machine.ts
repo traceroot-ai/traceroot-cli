@@ -126,6 +126,7 @@ import type {
   StackLanguage,
 } from "./types.js";
 import {
+  TROUBLESHOOTING_URL,
   wizardAside,
   wizardEmphasis,
   wizardLine,
@@ -198,8 +199,7 @@ export interface SetupDeps {
   openBrowser: (url: string) => Promise<boolean>;
   /**
    * A typed answer. `stage` is the one an interrupt is blamed on, as a `select`
-   * names its own; the closing acknowledgements, asked after the pipeline, name
-   * `complete`.
+   * names its own.
    */
   prompt: (question: string, stage?: SetupStage) => Promise<string>;
   promptHidden: (question: string, stage: SetupStage) => Promise<string>;
@@ -345,9 +345,8 @@ export async function readAnswer(
 ): Promise<string> {
   const { createInterface } = await import("node:readline");
   // Drained first, for the same reason every `select` is (see
-  // `discardTypeAhead`). The two closing acknowledgements are consecutive
-  // questions with a block of prose between them, so a spare Enter at the first
-  // scrolls the second past a user who never read it.
+  // `discardTypeAhead`): a spare Enter typed earlier would otherwise answer this
+  // question before the user has read it.
   await discardTypeAhead(terminal.input);
   return new Promise((resolve, reject) => {
     const rl = createInterface({ input: terminal.input, output: terminal.output, terminal: true });
@@ -1256,7 +1255,7 @@ async function browserSignIn(
   wizardNote(
     ctx.writers,
     [
-      wizardEmphasis("Continue in your browser to finish setup."),
+      wizardEmphasis("Continue in your browser."),
       "",
       wizardAside("Sign in — or create a free account — and approve this terminal."),
     ],
@@ -4639,8 +4638,8 @@ const verifyTrace: StageDefinition = {
       throw err;
     } finally {
       // Always, and before anything below can return or throw: a listener left
-      // on a resumed `process.stdin` eats the keystrokes belonging to the two
-      // acknowledgements that close the run.
+      // on a resumed `process.stdin` keeps reading the terminal after the wait
+      // is over and holds the process open.
       stopWatching?.();
     }
     // The size, whatever it is. This is the one line in the run where the
@@ -4737,6 +4736,7 @@ const verifyTrace: StageDefinition = {
           "To investigate:",
           `  ${setupCommand()} doctor`,
           `  ${cliCommand("traces list --limit 5")}`,
+          `  ${TROUBLESHOOTING_URL}`,
         ].join("\n"),
       });
     }
