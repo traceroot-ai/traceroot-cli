@@ -346,9 +346,9 @@ export interface MakeDepsOptions {
   answers?: string[];
   hiddenAnswers?: string[];
   sdk?: ResolvedSdk;
-  onWriteConfig?: (config: { api_key: string; host_url: string }) => void;
+  onWriteConfig?: (config: { api_key: string; host_url: string; project_id: string }) => void;
   /** The CLI's config as an earlier run left it; none by default, as on a first run. */
-  config?: { api_key?: string; host_url?: string } | null;
+  config?: { api_key?: string; host_url?: string; project_id?: string } | null;
   tempDir?: string;
   /** Whether a local TraceRoot API answers, for the missing-endpoint hint. */
   localHostResponds?: boolean;

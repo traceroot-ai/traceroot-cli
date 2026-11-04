@@ -45,6 +45,7 @@ import {
   writeConfig as realWriteConfig,
 } from "../config/manager.js";
 import { type ResolvedAuth, normalizeApiKey } from "../config/resolve.js";
+import type { Config } from "../config/schema.js";
 import { ExitCode, type Writers } from "../output.js";
 import { bundledSkillDir } from "../skills/bundled.js";
 import { installBundledSkill } from "../skills/install.js";
@@ -52,7 +53,13 @@ import { sleep } from "../util/sleep.js";
 import { createActivityParser, finalReply } from "./activity.js";
 import { detectAgents, detectConfiguredAgents, selectAgent } from "./agents.js";
 import { ensureGitignore, instrumentTaskPath, relativeToRoot } from "./artifacts.js";
-import { checkpointPath, hasCompleted, markComplete, writeCheckpoint } from "./checkpoint.js";
+import {
+  checkpointPath,
+  discardTrace,
+  hasCompleted,
+  markComplete,
+  writeCheckpoint,
+} from "./checkpoint.js";
 import {
   HOST_ENV,
   KEY_ENV,
@@ -197,13 +204,19 @@ export interface SetupDeps {
   prompt: (question: string, stage?: SetupStage) => Promise<string>;
   promptHidden: (question: string, stage: SetupStage) => Promise<string>;
   resolveSdk: (pkg: SdkPackage) => Promise<ResolvedSdk>;
-  /** Returns the absolute path written, which the report names. */
-  writeConfig: (config: { api_key: string; host_url: string }) => string;
+  /**
+   * Writes the whole file, so the caller passes every field it is to hold; see
+   * {@link saveCliConfig}. Returns the absolute path written, which the report
+   * names.
+   */
+  writeConfig: (
+    config: Config & { api_key: string; host_url: string; project_id: string },
+  ) => string;
   /**
    * The CLI's own config as an earlier run left it, or null when there is none:
    * where a rerun finds the CLI key it already has rather than minting another.
    */
-  readConfig: () => { api_key?: string; host_url?: string } | null;
+  readConfig: () => Config | null;
   /**
    * The same file's text as it is on disk, null when there is none; and putting
    * text back, null removing the file. Byte for byte, because a rollback that
@@ -776,6 +789,7 @@ const authenticate: StageDefinition = {
               ? "flag"
               : "env"
             : "existing-config",
+          () => deps.now(),
         );
         // Every way into this stage now opens with its own sentence, because
         // the generic "Sign in to TraceRoot" heading is gone. Without one this
@@ -897,8 +911,12 @@ const authenticate: StageDefinition = {
       timeoutMs: 15_000,
     });
     const who = await client.whoami();
-    ctx.configFile = deps.writeConfig({ api_key: pasted, host_url: host });
-    adoptKeySession(ctx, host, pasted, who, "pasted-key");
+    ctx.configFile = saveCliConfig(deps, {
+      api_key: pasted,
+      host_url: host,
+      project_id: who.project_id,
+    });
+    adoptKeySession(ctx, host, pasted, who, "pasted-key", () => deps.now());
     return "ok";
   },
 };
@@ -921,6 +939,7 @@ function adoptKeySession(
   key: string,
   who: Awaited<ReturnType<ApiClient["whoami"]>>,
   via: NonNullable<SetupContext["session"]>["via"],
+  now: () => Date,
 ): void {
   ctx.session = {
     host,
@@ -936,10 +955,9 @@ function adoptKeySession(
     workspaceId: who.workspace_id,
     origin: "from-whoami",
   };
-  ctx.checkpoint.host = host;
   ctx.checkpoint.uiBaseUrl = who.ui_base_url;
   ctx.checkpoint.workspaceId = who.workspace_id;
-  recordProject(ctx);
+  recordProject(ctx, now);
 }
 
 /** Hosts checked when the default deployment turns out not to support setup. */
@@ -1496,7 +1514,7 @@ async function userCredentialSignIn(
   // dead key. Only a mint has an id. A reused key is still good, and the config
   // holding it is left alone.
   const replaced = "id" in cli ? configText(deps) : undefined;
-  ctx.configFile = deps.writeConfig({ api_key: cli.key, host_url: host });
+  ctx.configFile = saveCliConfig(deps, { api_key: cli.key, host_url: host, project_id: projectId });
   const written = replaced === undefined ? undefined : configText(deps);
   if ("id" in cli && replaced !== undefined && typeof written === "string") {
     wroteConfig.set(ctx, { keyId: cli.id, key: cli.key, before: replaced, after: written });
@@ -1519,7 +1537,6 @@ async function userCredentialSignIn(
   // The application's key, not the CLI's. Everything downstream that writes a
   // credential into the repository or hands one to a child process reads this.
   ctx.credential = application;
-  ctx.checkpoint.host = host;
   ctx.checkpoint.uiBaseUrl = who.ui_base_url;
   ctx.checkpoint.workspaceId = chosen.project.workspaceId;
   // The key the report and the closing notice are about is the one the
@@ -1528,13 +1545,35 @@ async function userCredentialSignIn(
     ctx.checkpoint.projectKeyId = application.keyId;
   }
   ctx.checkpoint.projectKeyHint = application.key.hint;
-  recordProject(ctx);
+  recordProject(ctx, () => deps.now());
 
   wizardProgress(ctx, `Project ${chosen.project.projectName}.`);
   if (kept !== null) {
     wizardProgress(ctx, "Reusing the existing project API key.");
   }
   return true;
+}
+
+/**
+ * Saves the CLI's key in its config, with its host and the project it belongs
+ * to, and returns the path written.
+ *
+ * The project goes in because a saved sign-in outranks the key in this file,
+ * and a user credential belongs to no project: without one named here, every
+ * project-scoped command after setup fails until the user names it. Every
+ * other field already in the file is kept, as `login` keeps them.
+ */
+function saveCliConfig(
+  deps: SetupDeps,
+  fields: { api_key: string; host_url: string; project_id: string },
+): string {
+  let saved: Config | null = null;
+  try {
+    saved = deps.readConfig();
+  } catch {
+    // Unreadable, so there is nothing to keep: written from these fields alone.
+  }
+  return deps.writeConfig({ ...saved, ...fields });
 }
 
 /**
@@ -1726,13 +1765,13 @@ const selectContext: StageDefinition = {
         );
       }
       wizardProgress(ctx, `Project: ${ctx.project.projectName} (from the API key)`);
-      recordProject(ctx);
+      recordProject(ctx, () => deps.now());
       return "skipped";
     }
 
     const chosen = await chooseProject(ctx, deps, api, projects, "select_context");
     ctx.project = { ...chosen.project, origin: chosen.origin };
-    recordProject(ctx);
+    recordProject(ctx, () => deps.now());
     return "ok";
   },
 };
@@ -1936,13 +1975,27 @@ async function chooseProject(
     // A name is unique only inside its workspace, so it can match several
     // projects. Among them, the one the repository already reports to: the
     // `--project` that set a repository up must not move it to a namesake on
-    // the next run. An exact id is looked up in the whole list, the demo's
-    // projects included.
+    // the next run. Any other choice among them would be a guess, so a name
+    // the repository does not already answer is refused. An exact id is
+    // looked up in the whole list, the demo's projects included.
     const matches = projects.filter((p) => p.project_id === wanted || p.project_name === wanted);
     const match =
       listed.find((p) => p.project_id === wanted) ??
       matches.find((p) => p === current) ??
-      matches[0];
+      (matches.length === 1 ? matches[0] : undefined);
+    if (match === undefined && matches.length > 1) {
+      throw new SetupError({
+        stage,
+        code: "AMBIGUOUS",
+        message: `More than one project is named '${wanted}'.`,
+        remedy: [
+          "Choose one by its id with --project:",
+          ...matches.map(
+            (p) => `  ${setupCommand()} --project ${p.project_id}   # ${describeProject(p)}`,
+          ),
+        ].join("\n"),
+      });
+    }
     if (match === undefined) {
       throw new SetupError({
         stage,
@@ -2009,14 +2062,17 @@ async function chooseProject(
     });
   }
 
+  const opensOn =
+    current ?? projects.find((p) => p.project_id === deps.resolvedAuth.projectId.value);
   const answer = await deps.select({
     stage,
     message: "Which project should receive these traces?",
     options: projectOptions(projects),
     // Opens on the project the repository already reports to, so accepting the
-    // question as asked keeps it there. A first run has none and opens on the
-    // first row, as it always has.
-    ...(current === undefined ? {} : { initialValue: current.project_id }),
+    // question as asked keeps it there. Without one, on the project the CLI
+    // reads by default, which the config names once a run has saved it there.
+    // A first run has neither and opens on the first row, as it always has.
+    ...(opensOn === undefined ? {} : { initialValue: opensOn.project_id }),
   });
   const picked = projects.find((p) => p.project_id === answer);
   if (picked === undefined) {
@@ -2142,10 +2198,45 @@ interface SwitchRoute {
   keep: string;
 }
 
-function recordProject(ctx: SetupContext): void {
-  if (ctx.project !== undefined) {
-    ctx.checkpoint.projectId = ctx.project.projectId;
-    ctx.checkpoint.projectName = ctx.project.projectName;
+/**
+ * Records the project this run sends traces to, and the deployment it is on.
+ *
+ * A trace an earlier run recorded shows that its own project received one. A
+ * resumed run that lands on another project or deployment would otherwise
+ * restore that trace and report it as this project's, without ever looking in
+ * the project its key and env file now name. So the trace, and the two stages
+ * that found and reported it, come off the record and the run checks again.
+ * The check counts only traces that started after `startedAt`, so that moves
+ * to now: kept, it would take whatever the new project received from any
+ * sender since the earlier run began as this service's trace.
+ * Everything else a resume restores is the code it changed, which does not
+ * depend on the project.
+ */
+function recordProject(ctx: SetupContext, now: () => Date): void {
+  const project = ctx.project;
+  if (project === undefined) {
+    return;
+  }
+  const record = ctx.checkpoint;
+  const host = ctx.session?.host;
+  const otherHost = record.host !== undefined && host !== undefined && record.host !== host;
+  const otherProject = record.projectId !== undefined && record.projectId !== project.projectId;
+  if (otherHost || otherProject) {
+    const before = record.projectName ?? record.projectId;
+    if (record.trace !== undefined && before !== undefined) {
+      const where = (name: string, on: string | undefined): string =>
+        `'${name}'${otherHost ? ` on ${on}` : ""}`;
+      wizardProgress(
+        ctx,
+        `The earlier run's trace is in project ${where(before, record.host)}, not ${where(project.projectName, host)}, so setup checks again.`,
+      );
+    }
+    discardTrace(record, now());
+  }
+  record.projectId = project.projectId;
+  record.projectName = project.projectName;
+  if (host !== undefined) {
+    record.host = host;
   }
 }
 
