@@ -29,11 +29,12 @@ export type SetupErrorCode =
 /**
  * Stable code → exit status. Part of the command's contract; do not renumber.
  *
- * Two bands, because these numbers are not setup's to spend. 1–5 belong to the
- * whole CLI ({@link ExitCode}) and are referenced rather than repeated here, so
- * a script that reads 3 as "re-authenticate" is right whichever command handed
- * it back. Setup's own outcomes start at 10, and the gap is deliberate: the
- * shared table owns everything below it, including numbers it has not used yet.
+ * Two bands, because these numbers are not setup's to spend. Everything below
+ * 10 belongs to the whole CLI ({@link ExitCode}) and is referenced rather than
+ * repeated here, so a script that reads 3 as "re-authenticate" is right
+ * whichever command handed it back. Setup's own outcomes start at 10, and the
+ * gap is deliberate: the shared table owns everything below it, including
+ * numbers it has not used yet.
  *
  * They were numbered from 2 up, which collided with all of it —
  * `setup --trace-timeout abc` exits 2 as a usage error and so did a run that was

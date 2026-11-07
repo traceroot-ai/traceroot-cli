@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { REGISTRY } from "@traceroot-ai/tools";
 import { describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/cli.js";
-import { CliError, ExitCode } from "../../src/output.js";
+import { CliError, ExitCode, reportError } from "../../src/output.js";
 import { assertEnums, assertRequiredArgs, readBodyFile } from "../../src/registry/factory.js";
 import type { Placement } from "../../src/registry/naming.js";
-import { createFakeFetch, jsonResponse } from "../helpers/fakeFetch.js";
+import { createFakeFetch, errorResponse, jsonResponse } from "../helpers/fakeFetch.js";
 import { StringSink } from "../helpers/stringSink.js";
 
 const createAlert = REGISTRY.find((e) => e.name === "create_alert");
@@ -325,5 +325,60 @@ describe("generic write path (factory registration)", () => {
     } finally {
       ENHANCERS.create_workspace = undefined;
     }
+  });
+});
+
+// A rename onto a taken name is a 409 from the server. It must exit as `conflict`,
+// not `internal` (exit 1): the tool is not broken, the remedy is to change what
+// was asked for (another name), and an immediate retry fails the same way. Driven
+// through the real placements, the real error reporter and both output modes, so
+// the exit code and the envelope are what a script sees.
+describe("a 409 from a write command", () => {
+  const message = "A detector with this name already exists";
+
+  async function conflict(...flags: string[]) {
+    const fake = createFakeFetch(() => errorResponse(409, message));
+    const out = new StringSink();
+    const err = new StringSink();
+    const program = buildProgram({
+      registry: { fetchImpl: fake.fetchImpl, writers: { out, err } },
+    });
+    const thrown = await program
+      .parseAsync(
+        [
+          "--api-key",
+          "k",
+          "--host",
+          "https://api.test",
+          ...flags,
+          "detectors",
+          "update",
+          "det-1",
+          "--project-id",
+          "p-1",
+          "--name",
+          "taken",
+        ],
+        { from: "user" },
+      )
+      .catch((e) => e);
+    const exitCode = reportError(thrown, { json: flags.includes("--json") }, { out, err });
+    return { fake, out, err, exitCode };
+  }
+
+  it("exits 6 and carries the server's message in the human output", async () => {
+    const r = await conflict();
+    expect(r.fake.calls.length).toBe(1);
+    expect(r.exitCode).toBe(ExitCode.conflict);
+    expect(ExitCode.conflict).toBe(6);
+    expect(r.err.data).toContain(`error: ${message}`);
+    expect(r.out.data).toBe("");
+  });
+
+  it("reports code conflict with the unchanged message under --json", async () => {
+    const r = await conflict("--json");
+    expect(r.exitCode).toBe(6);
+    expect(JSON.parse(r.err.data)).toEqual({ error: { code: "conflict", message } });
+    expect(r.out.data).toBe("");
   });
 });

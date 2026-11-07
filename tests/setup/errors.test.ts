@@ -10,6 +10,7 @@ const SHARED: ReadonlyMap<number, string> = new Map([
   [ExitCode.auth, "auth"],
   [ExitCode.notFound, "not_found"],
   [ExitCode.network, "network"],
+  [ExitCode.conflict, "conflict"],
 ]);
 
 /**
@@ -94,7 +95,7 @@ describe("publishing the statuses a script is told it can rely on", () => {
     }
   });
 
-  it("says in `traceroot --help` that the shared five are not all of them", () => {
+  it("says in `traceroot --help` that the shared six are not all of them", () => {
     const { stdout, status } = runCli("--help");
     // Only the appendix: the band is a claim about exit codes, and the word
     // would also match a command summary that happened to mention setup.
