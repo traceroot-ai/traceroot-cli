@@ -1,12 +1,12 @@
-import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import type { SqlResult, SqlSchema } from "../../../src/api/client.js";
 import { buildProgram } from "../../../src/cli.js";
 import { CliError, ExitCode } from "../../../src/output.js";
 import { renderSqlSchema } from "../../../src/registry/enhancers/sql-schema.js";
 import { GROUPS, PLACEMENTS } from "../../../src/registry/naming.js";
-import { createFakeFetch, errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
+import { errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
 import { withoutForcedColor } from "../../helpers/plainColor.js";
+import { harness, sqlCommand } from "../../helpers/sqlHarness.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
 withoutForcedColor();
@@ -32,22 +32,6 @@ function makeSchema(): SqlSchema {
       },
     ],
   };
-}
-
-function harness(response: Response) {
-  const fake = createFakeFetch(() => response);
-  const out = new StringSink();
-  const err = new StringSink();
-  const program = buildProgram({ registry: { fetchImpl: fake.fetchImpl, writers: { out, err } } });
-  const run = (...argv: string[]) =>
-    program.parseAsync(["--api-key", "k", "--host", "https://api.test", ...argv], { from: "user" });
-  return { fake, out, err, run, program };
-}
-
-function sqlCommand(program: Command): Command {
-  const sql = program.commands.find((command) => command.name() === "sql");
-  if (sql === undefined) throw new Error("sql not registered");
-  return sql;
 }
 
 describe("renderSqlSchema", () => {
