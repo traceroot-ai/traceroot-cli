@@ -347,22 +347,21 @@ describe("boolean flags (detectors update/create)", () => {
   const update = ["detectors", "update", "det-1", "--project-id", "p-1"];
 
   it.each([
-    [["--enabled", "false"], false],
-    [["--enabled=false"], false],
-    [["--enabled", "FALSE"], false],
-    [["--no-enabled"], false],
-    [["--enabled", "true"], true],
-    [["--enabled"], true],
-  ])("%j sends enabled=%s", async (flags, expected) => {
+    [["--enabled", "false"], "enabled", false],
+    [["--enabled=false"], "enabled", false],
+    [["--enabled", "FALSE"], "enabled", false],
+    [["--no-enabled"], "enabled", false],
+    [["--enabled", "true"], "enabled", true],
+    [["--enabled"], "enabled", true],
+    // A bare flag before another flag still means true, and the next flag keeps its value.
+    [["--enabled", "--name", "n"], "enabled", true],
+    [["--enabled", "--name", "n"], "name", "n"],
+    [["--enable-rca", "false"], "enable_rca", false],
+    [["--no-enable-rca"], "enable_rca", false],
+  ])("%j sends %s=%j", async (flags, field, expected) => {
     const h = harness();
     await h.run(...update, ...flags);
-    expect(h.body().enabled).toBe(expected);
-  });
-
-  it("a bare --enabled before another flag still means true", async () => {
-    const h = harness();
-    await h.run("detectors", "update", "det-1", "--enabled", "--project-id", "p-1");
-    expect(h.body()).toMatchObject({ enabled: true, project_id: "p-1" });
+    expect(h.body()[field]).toBe(expected);
   });
 
   it("omitting the flag leaves the field out of the body", async () => {
@@ -372,31 +371,16 @@ describe("boolean flags (detectors update/create)", () => {
     expect(h.body()).not.toHaveProperty("enable_rca");
   });
 
-  it("--enable-rca false and --no-enable-rca send enable_rca=false", async () => {
-    for (const flags of [["--enable-rca", "false"], ["--no-enable-rca"]]) {
-      const h = harness();
-      await h.run(...update, ...flags);
-      expect(h.body().enable_rca).toBe(false);
-    }
-  });
-
-  it("a non-boolean value is a usage error and never dispatches", async () => {
+  // A value right after a bare flag is read as its value, so a leading positional fails this way too.
+  it.each([
+    [[...update, "--enabled", "nope"], "nope"],
+    [["detectors", "update", "--enabled", "det-1", "--project-id", "p-1"], "det-1"],
+  ])("%j is a usage error naming the value and never dispatches", async (argv, got) => {
     const h = harness();
-    const err = await h.run(...update, "--enabled", "nope").catch((e) => e);
+    const err = await h.run(...argv).catch((e) => e);
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).exitCode).toBe(ExitCode.usage);
-    expect((err as CliError).message).toContain("--enabled must be true or false, got 'nope'");
-    expect(h.fake.calls.length).toBe(0);
-  });
-
-  it("a positional swallowed by a leading --enabled fails loudly instead of misrouting", async () => {
-    const h = harness();
-    const err = await h
-      .run("detectors", "update", "--enabled", "det-1", "--project-id", "p-1")
-      .catch((e) => e);
-    expect(err).toBeInstanceOf(CliError);
-    expect((err as CliError).exitCode).toBe(ExitCode.usage);
-    expect((err as CliError).message).toContain("--enabled must be true or false, got 'det-1'");
+    expect((err as CliError).message).toContain(`--enabled must be true or false, got '${got}'`);
     expect((err as CliError).message).toContain(
       "put positional arguments first or write --enabled=true",
     );
