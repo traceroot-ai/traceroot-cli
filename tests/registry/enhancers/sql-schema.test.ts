@@ -123,6 +123,27 @@ describe("traceroot sql schema", () => {
     },
   );
 
+  it("runs with a global option before `sql`", async () => {
+    const h = harness(jsonResponse(makeSchema()));
+    await h.run("--project", "p", "sql", "schema");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sql/schema");
+    expect(h.program.opts().project).toBe("p");
+  });
+
+  it.each([
+    [["sql", "schema", "-- note"], "-- note"],
+    [["sql", "schema", "-- note\nSELECT 1"], "-- note\nSELECT 1"],
+    [["sql", "--csv", "schema", "-- note"], "-- note"],
+    [["sql", "schema", "--bogus"], "--bogus"],
+  ])("reports %j as an unknown option of the subcommand", async (argv, flag) => {
+    const h = harness(jsonResponse(makeSchema()));
+    await expect(h.run(...argv)).rejects.toMatchObject({
+      code: "commander.unknownOption",
+      message: expect.stringContaining(`unknown option '${flag}'`),
+    });
+    expect(h.fake.calls).toHaveLength(0);
+  });
+
   it("lists only the program's options as global in its help", () => {
     const { program } = harness(jsonResponse(makeSchema()));
     const schema = sqlCommand(program).commands.find((command) => command.name() === "schema");
