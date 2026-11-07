@@ -328,11 +328,6 @@ describe("generic write path (factory registration)", () => {
   });
 });
 
-// A rename onto a taken name is a 409 from the server. It must exit as `conflict`,
-// not `internal` (exit 1): the tool is not broken, the remedy is to change what
-// was asked for (another name), and an immediate retry fails the same way. Driven
-// through the real placements, the real error reporter and both output modes, so
-// the exit code and the envelope are what a script sees.
 describe("a 409 from a write command", () => {
   const message = "A detector with this name already exists";
 
@@ -369,8 +364,7 @@ describe("a 409 from a write command", () => {
   it("exits 6 and carries the server's message in the human output", async () => {
     const r = await conflict();
     expect(r.fake.calls.length).toBe(1);
-    expect(r.exitCode).toBe(ExitCode.conflict);
-    expect(ExitCode.conflict).toBe(6);
+    expect(r.exitCode).toBe(6);
     expect(r.err.data).toContain(`error: ${message}`);
     expect(r.out.data).toBe("");
   });

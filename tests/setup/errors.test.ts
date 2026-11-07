@@ -1,17 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ExitCode } from "../../src/output.js";
+import { ExitCode, exitCodeToString } from "../../src/output.js";
 import { SETUP_EXIT_CODES, type SetupErrorCode, SetupError } from "../../src/setup/errors.js";
 import { runCli } from "../helpers/runCli.js";
 
-/** The numbers the rest of the CLI has already spent, and what they mean there. */
-const SHARED: ReadonlyMap<number, string> = new Map([
-  [ExitCode.usage, "usage"],
-  [ExitCode.auth, "auth"],
-  [ExitCode.notFound, "not_found"],
-  [ExitCode.network, "network"],
-  [ExitCode.conflict, "conflict"],
-]);
+/**
+ * The numbers the rest of the CLI has already spent, and what they mean there.
+ * Derived, so a class added to `ExitCode` has to be published to pass below.
+ */
+const SHARED: ReadonlyMap<number, string> = new Map(
+  Object.values(ExitCode).map((code): [number, string] => [code, exitCodeToString(code)]),
+);
 
 /**
  * Setup's own outcomes: the ones no other command can produce and the shared
@@ -82,16 +81,23 @@ describe("publishing the statuses a script is told it can rely on", () => {
     [...markdown.matchAll(/^\| `(\d+)` \|/gm)].map((row) => Number(row[1]));
 
   const own = OWN.map((code) => SETUP_EXIT_CODES[code]);
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
 
   it("gives each of setup's own statuses a row in the README's table", () => {
     // The mapping above calls itself a stable, script-facing contract, while
     // the one table a script author can read published 1-5 as though they were
     // everything any command could hand back — so a caller that met 14, or a
     // 130 from an abandoned prompt, had nothing to look it up in.
-    const documented = tabulated(readFileSync(new URL("../../README.md", import.meta.url), "utf8"));
+    const documented = tabulated(readme);
 
     for (const code of [...own, SETUP_EXIT_CODES.INTERRUPTED]) {
       expect(documented).toContain(code);
+    }
+  });
+
+  it("gives each shared class a row in the README's table", () => {
+    for (const [code, name] of SHARED) {
+      expect(readme).toContain(`| \`${code}\` | ${name} | \`${name}\` |`);
     }
   });
 
@@ -102,6 +108,11 @@ describe("publishing the statuses a script is told it can rely on", () => {
     const published = stdout.slice(stdout.indexOf("Exit codes:"));
 
     expect(status).toBe(0);
+    expect(SHARED.size).toBe(6);
+    for (const [code, name] of SHARED) {
+      expect(published).toMatch(new RegExp(`^  ${code}  ${name} `, "m"));
+    }
+    expect(published).toContain("Those six belong to every command");
     expect(published).toContain("setup");
     // Derived, so a status added above cannot quietly fall outside the band
     // this advertises.

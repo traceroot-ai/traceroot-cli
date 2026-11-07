@@ -117,12 +117,7 @@ export const ExitCode = {
   notFound: 4,
   /** Network failure or timeout — transient; a retry may succeed. */
   network: 5,
-  /**
-   * The request was understood but conflicts with current state: HTTP 409 (a name
-   * already taken, a limit reached, a status that changed since it was read).
-   * The remedy is to change what was asked for (another name) or the state it
-   * collides with; an immediate retry fails the same way.
-   */
+  /** The request conflicts with current state: HTTP 409. */
   conflict: 6,
   /** Unexpected/internal failure. The default when nothing else applies. */
   internal: 1,
