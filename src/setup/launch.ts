@@ -14,6 +14,22 @@ import { type Secret, secretHint } from "./secret.js";
 const TRACEROOT_OFF = "TRACEROOT_ENABLED=false";
 
 /**
+ * How often, in seconds, the SDK exports its batch in what the agent runs.
+ *
+ * Both SDKs read `TRACEROOT_FLUSH_INTERVAL` as seconds and default it to 5:
+ * the TypeScript one through `Number()`, the Python one through `float()`,
+ * each multiplied into the batch processor's delay in milliseconds. Five
+ * seconds is fine for an application that runs until it exits, whose exit
+ * flushes the batch. It is not fine for a server, which the agent has to stop:
+ * the TypeScript SDK flushes only on `beforeExit`, which a signal never
+ * reaches, so a server stopped within five seconds of its request loses its
+ * trace. At one second the batch has gone out by the time the agent stops it.
+ *
+ * A string, because it is an environment value.
+ */
+export const AGENT_FLUSH_INTERVAL_SEC = "1";
+
+/**
  * An agent launch described as data rather than as an inline `spawn` call, so
  * the exact argv and stdin handling for each agent can be asserted in a test
  * without starting a process. The single most important property — that no
@@ -578,6 +594,11 @@ export interface LaunchAgentInput {
  * `host` is unconditional. It is not a credential, nothing exports without a
  * key, and an agent that inherits the wrong instance is a long debugging
  * session for a self-hosted or staging user.
+ *
+ * So is the flush interval, set over any the user exports: see
+ * {@link AGENT_FLUSH_INTERVAL_SEC}. It reaches only the agent and what the
+ * agent runs. Nothing writes it to the project's env file or its config, so
+ * the user's own runs keep the SDK's default.
  */
 export function buildAgentEnv(input: {
   parentEnv: NodeJS.ProcessEnv;
@@ -589,6 +610,7 @@ export function buildAgentEnv(input: {
   const env: NodeJS.ProcessEnv = {
     ...parentEnv,
     TRACEROOT_HOST_URL: input.host,
+    TRACEROOT_FLUSH_INTERVAL: AGENT_FLUSH_INTERVAL_SEC,
   };
   if (input.credentialFiles.length === 0) {
     env.TRACEROOT_API_KEY = input.credential.reveal();

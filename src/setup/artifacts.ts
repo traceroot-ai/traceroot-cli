@@ -86,6 +86,19 @@ export function serviceArtifactDir(input: ServiceArtifactDirInput): string {
 }
 
 /**
+ * Where the task-file route writes the instrumentation task.
+ *
+ * Named once because three readers have to agree on it: the run that writes
+ * the file, the `--resume` that restores the hand-over and has to name that
+ * file again without having written it, and `doctor`, which names it to the
+ * user it was handed to. Here rather than beside the stage that writes it, so
+ * `doctor` can reach it without loading the wizard.
+ */
+export function instrumentTaskPath(root: string): string {
+  return join(root, ".traceroot", "prompts", "setup-instrument.md");
+}
+
+/**
  * Best-effort safety net: a `.gitignore` containing `*` in the CLI's own
  * `.traceroot` directory, so nothing setup leaves there can be committed by
  * accident — not the credential config, not the checkpoint, and not the

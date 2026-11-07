@@ -66,6 +66,24 @@ export interface DeviceFlowResult {
   sessionToken: string;
 }
 
+/**
+ * A device login that ended without an approval: the user denied it in the
+ * browser, or the code expired first, which is also how a closed tab ends.
+ *
+ * Its own class so a caller can tell "nothing was approved" from a network or
+ * server fault without reading the message. The message is written for
+ * `login`, and `setup` needs to say something else.
+ */
+export class DeviceLoginNotApprovedError extends CliError {
+  readonly reason: "denied" | "expired";
+
+  constructor(reason: "denied" | "expired", message: string) {
+    super(message, ExitCode.auth);
+    this.name = "DeviceLoginNotApprovedError";
+    this.reason = reason;
+  }
+}
+
 interface DeviceCodeBody {
   device_code?: unknown;
   user_code?: unknown;
@@ -232,9 +250,9 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
 
   // ---- Step 3: poll until approved, denied, or expired. ----------------------
   const deadline = now() + expiresInS * 1000;
-  const expired = new CliError(
+  const expired = new DeviceLoginNotApprovedError(
+    "expired",
     "device login expired before approval — run `traceroot login` again",
-    ExitCode.auth,
   );
   while (true) {
     // Sleep no longer than the time left in the window: a poll interval longer
@@ -277,12 +295,12 @@ export async function runDeviceFlow(deps: DeviceFlowDeps): Promise<DeviceFlowRes
       continue;
     }
     if (error === "access_denied") {
-      throw new CliError("login denied in the browser", ExitCode.auth);
+      throw new DeviceLoginNotApprovedError("denied", "login denied in the browser");
     }
     if (error === "expired_token") {
-      throw new CliError(
+      throw new DeviceLoginNotApprovedError(
+        "expired",
         "device login expired before approval — run `traceroot login` again",
-        ExitCode.auth,
       );
     }
     // The error text is server-provided; if it echoes the device_code back

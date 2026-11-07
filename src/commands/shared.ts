@@ -1,21 +1,28 @@
 import type { Command } from "commander";
 import { type ApiClient, createApiClient } from "../api/client.js";
 import { createTokenProvider } from "../auth/token.js";
-import { type Context, buildContext } from "../context.js";
+import { type Context, type ContextDeps, buildContext } from "../context.js";
 import { CliError, ExitCode } from "../output.js";
 
-/** Build the per-invocation Context from a command's merged (global+local) options. */
-export function contextFromCommand(command: Command): Context {
+/**
+ * Build the per-invocation Context from a command's merged (global+local)
+ * options. `deps` swaps a source out, as `logout` does to ask what the
+ * directory resolves to without the stored session.
+ */
+export function contextFromCommand(command: Command, deps?: ContextDeps): Context {
   const opts = command.optsWithGlobals();
-  return buildContext({
-    apiKey: opts.apiKey as string | undefined,
-    host: opts.host as string | undefined,
-    authHost: opts.authHost as string | undefined,
-    project: opts.project as string | undefined,
-    envFile: opts.envFile as string | undefined,
-    json: opts.json as boolean | undefined,
-    timeout: opts.timeout as string | undefined,
-  });
+  return buildContext(
+    {
+      apiKey: opts.apiKey as string | undefined,
+      host: opts.host as string | undefined,
+      authHost: opts.authHost as string | undefined,
+      project: opts.project as string | undefined,
+      envFile: opts.envFile as string | undefined,
+      json: opts.json as boolean | undefined,
+      timeout: opts.timeout as string | undefined,
+    },
+    deps,
+  );
 }
 
 /** A resolved credential (kind + value) plus the hosts it authenticates against. */

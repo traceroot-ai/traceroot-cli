@@ -60,13 +60,13 @@ describe("hue, when the terminal can show it", () => {
   });
 
   it("keeps a reference link quieter than the one to act on", async () => {
-    // The troubleshooting guide is the branch nobody wants to be on. At the
-    // same weight as the trace permalink it won by sitting lower on the screen.
+    // A reference link is the branch nobody wants to be on. At the same weight
+    // as the trace permalink it wins by sitting lower on the screen.
     const { wizardMutedLink } = await import("../../src/setup/wizard.js");
     // One argument: the muted role takes no hyperlink flag, and the second
     // parameter is now the sink its colour is decided from.
-    expect(wizardMutedLink("https://docs.traceroot.ai")).toBe(
-      `${GREY}https://docs.traceroot.ai${OFF}`,
+    expect(wizardMutedLink("https://traceroot.ai/docs")).toBe(
+      `${GREY}https://traceroot.ai/docs${OFF}`,
     );
   });
 });
