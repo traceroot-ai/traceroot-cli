@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { type Dirent, existsSync, readdirSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { RunProcess } from "./exec.js";
 
 /**
@@ -99,10 +99,89 @@ export async function readGitState(input: ReadGitStateInput): Promise<GitState> 
  * Files changed since a baseline snapshot. Used after the agent runs to record
  * what *actually* changed, independent of what the agent claimed — the agent's
  * self-report is diagnostics, this is evidence.
+ *
+ * Less `own`, the paths setup wrote itself since the baseline, when given: see
+ * {@link withoutOwnWrites}.
  */
-export function changedSince(baseline: readonly string[], current: readonly string[]): string[] {
+export function changedSince(
+  baseline: readonly string[],
+  current: readonly string[],
+  own?: { root: string; paths: readonly string[] },
+): string[] {
   const before = new Set(baseline);
-  return current.filter((path) => !before.has(path));
+  const changed = current.filter((path) => !before.has(path));
+  return own === undefined ? changed : withoutOwnWrites(own.root, changed, own.paths);
+}
+
+/**
+ * Changed files with the ones setup wrote itself taken out, so what is left is
+ * what the agent changed.
+ *
+ * `own` is every path this run wrote, absolute: a file, or a directory whose
+ * whole contents are setup's. An entry inside one of them is setup's.
+ *
+ * So is a directory entry that holds nothing else. `git status` spells a
+ * directory with nothing tracked in it as the directory alone, so the skill
+ * setup installs into a new `.claude/skills/<name>/` arrives as `?? .claude/`,
+ * which says nothing about what else is in there. The directory is read to
+ * find out, and anything in it that is not setup's keeps the entry: an agent
+ * that wrote there changed something.
+ *
+ * Kept whenever that cannot be settled — a read that fails, or more than
+ * {@link OWN_WRITE_WALK_BUDGET} entries — because an entry left in can only
+ * stop a run being failed as having changed nothing.
+ */
+export function withoutOwnWrites(
+  root: string,
+  changed: readonly string[],
+  own: readonly string[],
+): string[] {
+  const owned = own.map((path) => resolve(path));
+  return changed.filter((entry) => !isOwnWrite(resolve(root, entry), entry.endsWith("/"), owned));
+}
+
+/** How many entries one directory entry may be read through before it is kept. */
+const OWN_WRITE_WALK_BUDGET = 500;
+
+function isOwnWrite(path: string, isDirectory: boolean, owned: readonly string[]): boolean {
+  if (owned.some((own) => isWithin(own, path))) {
+    return true;
+  }
+  if (!isDirectory || !owned.some((own) => isWithin(path, own))) {
+    return false;
+  }
+  const budget = { left: OWN_WRITE_WALK_BUDGET };
+  return holdsOnly(path, owned, budget);
+}
+
+/** Whether everything under `dir` is inside one of `owned`. */
+function holdsOnly(dir: string, owned: readonly string[], budget: { left: number }): boolean {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    budget.left -= 1;
+    if (budget.left < 0) {
+      return false;
+    }
+    const path = join(dir, entry.name);
+    if (owned.some((own) => isWithin(own, path))) {
+      continue;
+    }
+    if (!entry.isDirectory() || !holdsOnly(path, owned, budget)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Whether `path` is `dir` or inside it. */
+function isWithin(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /**

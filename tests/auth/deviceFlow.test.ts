@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DeviceLoginNotApprovedError,
   browserOpenCommand,
   formatUserCode,
   runDeviceFlow,
@@ -132,6 +133,9 @@ describe("runDeviceFlow", () => {
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).exitCode).toBe(ExitCode.auth);
     expect((err as CliError).message).toContain("denied");
+    // Typed, so `setup` can give its own remedy without reading the message.
+    expect(err).toBeInstanceOf(DeviceLoginNotApprovedError);
+    expect((err as DeviceLoginNotApprovedError).reason).toBe("denied");
   });
 
   it("fails with an auth error when the device code expires server-side", async () => {
@@ -148,6 +152,8 @@ describe("runDeviceFlow", () => {
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).exitCode).toBe(ExitCode.auth);
     expect((err as CliError).message).toContain("expired");
+    expect(err).toBeInstanceOf(DeviceLoginNotApprovedError);
+    expect((err as DeviceLoginNotApprovedError).reason).toBe("expired");
   });
 
   it("gives up when the window elapses while still pending", async () => {
@@ -164,6 +170,8 @@ describe("runDeviceFlow", () => {
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).exitCode).toBe(ExitCode.auth);
     expect((err as CliError).message).toContain("expired");
+    expect(err).toBeInstanceOf(DeviceLoginNotApprovedError);
+    expect((err as DeviceLoginNotApprovedError).reason).toBe("expired");
   });
 
   it("continues when the browser cannot be opened", async () => {

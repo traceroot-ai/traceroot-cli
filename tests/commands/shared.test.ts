@@ -163,4 +163,36 @@ describe("contextFromCommand", () => {
     expect(captured?.auth.hostUrl.value).toBe("https://h");
     expect(captured?.auth.projectId).toEqual({ value: "p-1", source: "flag" });
   });
+
+  it("resolves from the sources it is handed, as logout asks what is left without the session", () => {
+    // The directory setup leaves behind: a stored session that outranks the
+    // admin key in the config file.
+    const sources = {
+      env: {},
+      readConfig: () => ({ api_key: "tr_config_key", host_url: "https://h" }),
+      loadAutoEnvFile: () => ({}),
+    };
+    let withSession: ResolvedCredential | undefined;
+    let withoutSession: ResolvedCredential | undefined;
+    const program = new Command();
+    program.command("sub").action((_opts, command: Command) => {
+      withSession = contextFromCommand(command, {
+        ...sources,
+        readCredential: () => ({ session_token: "stored-session" }),
+      }).auth.credential;
+      withoutSession = contextFromCommand(command, {
+        ...sources,
+        readCredential: () => null,
+      }).auth.credential;
+    });
+
+    program.parse(["sub"], { from: "user" });
+
+    expect(withSession).toEqual({
+      kind: "session",
+      value: "stored-session",
+      source: "credentials-file",
+    });
+    expect(withoutSession).toEqual({ kind: "api-key", value: "tr_config_key", source: "config" });
+  });
 });

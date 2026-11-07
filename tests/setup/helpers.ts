@@ -175,6 +175,23 @@ export function codexCapture(task: string, reply: string): string {
   ].join("\n");
 }
 
+/**
+ * The event that closes what `claude -p --output-format stream-json` prints:
+ * the agent's final reply, as one line of JSON with its newlines escaped like
+ * every other string in the stream.
+ */
+export function claudeResult(reply: string): string {
+  return JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    duration_ms: 48210,
+    num_turns: 14,
+    result: reply,
+    session_id: "0b7f3c1e-5a2d-4e8f-9c61-2d4b8a7e9f10",
+  });
+}
+
 /** Minimal `whoami` payload; overridable per field. */
 export function whoami(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -329,9 +346,9 @@ export interface MakeDepsOptions {
   answers?: string[];
   hiddenAnswers?: string[];
   sdk?: ResolvedSdk;
-  onWriteConfig?: (config: { api_key: string; host_url: string }) => void;
+  onWriteConfig?: (config: { api_key: string; host_url: string; project_id: string }) => void;
   /** The CLI's config as an earlier run left it; none by default, as on a first run. */
-  config?: { api_key?: string; host_url?: string } | null;
+  config?: { api_key?: string; host_url?: string; project_id?: string } | null;
   tempDir?: string;
   /** Whether a local TraceRoot API answers, for the missing-endpoint hint. */
   localHostResponds?: boolean;
@@ -405,8 +422,8 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     // Offered exactly as production offers it, and taken only when the test
     // says so. Returning a no-op stop function matters as much as the press:
     // the stage calls it in a `finally`, and a test that left a dangling
-    // listener would be hiding the bug where the real one eats the keystroke
-    // belonging to the closing acknowledgements.
+    // listener would be hiding the bug where the real one keeps reading the
+    // terminal after the wait is over.
     watchForSkip: (onSkip) => {
       if (options.skipTraceWait === true) {
         onSkip();
@@ -416,7 +433,12 @@ export function makeDeps(options: MakeDepsOptions = {}): SetupDeps {
     prompt: async () => answers.shift() ?? "",
     promptHidden: async () => hidden.shift() ?? "",
     resolveSdk: async () => options.sdk ?? TEST_SDK,
-    writeConfig: options.onWriteConfig ?? (() => undefined),
+    // Writes nothing. The path is only what the report names, so it is one no
+    // test repository contains.
+    writeConfig: (config) => {
+      options.onWriteConfig?.(config);
+      return join(tmpdir(), "traceroot-setup-test-config", "config.json");
+    },
     readConfig: () => options.config ?? null,
     // No file behind the config by default, so a rollback finds nothing to put back.
     readConfigText: () => null,
