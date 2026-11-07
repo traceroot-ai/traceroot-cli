@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IgnoreState } from "../../src/setup/git.js";
-import { isPathIgnored, parsePorcelain } from "../../src/setup/git.js";
+import { isPathIgnored, parsePorcelain, withoutOwnWrites } from "../../src/setup/git.js";
 
 const NUL = String.fromCharCode(0);
 
@@ -84,5 +87,59 @@ describe("asking git whether a path is ignored", () => {
     expect(seen?.program).toBe("git");
     expect(seen?.args).toEqual(["--no-optional-locks", "check-ignore", "-q", "--", "api/.env"]);
     expect(seen?.cwd).toBe("/repo");
+  });
+});
+
+describe("leaving out what setup wrote itself", () => {
+  let root: string;
+  let skill: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "tr-git-own-"));
+    skill = join(root, ".claude", "skills", "traceroot-instrument-repo");
+    mkdirSync(join(skill, "references"), { recursive: true });
+    writeFileSync(join(skill, "SKILL.md"), "# skill\n");
+    writeFileSync(join(skill, "references", "python-instrument.md"), "# recipe\n");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("drops a file setup wrote, and anything inside a directory it wrote", () => {
+    const own = [skill, join(root, ".env"), join(root, ".traceroot")];
+    const changed = [
+      ".claude/skills/traceroot-instrument-repo/SKILL.md",
+      ".env",
+      ".traceroot/",
+      "main.py",
+    ];
+    expect(withoutOwnWrites(root, changed, own)).toEqual(["main.py"]);
+  });
+
+  it("drops a new directory that holds nothing but setup's skill", () => {
+    // `git status` reports a wholly untracked directory as the directory alone,
+    // so a new `.claude/` arrives as one entry above the skill.
+    expect(withoutOwnWrites(root, [".claude/"], [skill])).toEqual([]);
+  });
+
+  it("keeps that directory once anything else is in it", () => {
+    // The agent wrote beside the skill, and `git status` cannot say so.
+    writeFileSync(join(root, ".claude", "settings.local.json"), "{}\n");
+    expect(withoutOwnWrites(root, [".claude/"], [skill])).toEqual([".claude/"]);
+  });
+
+  it("keeps a path that only shares a prefix with one of setup's", () => {
+    const own = [join(root, ".env"), join(root, ".traceroot")];
+    expect(withoutOwnWrites(root, [".env.local", ".traceroot-old/"], own)).toEqual([
+      ".env.local",
+      ".traceroot-old/",
+    ]);
+  });
+
+  it("keeps a directory it cannot read", () => {
+    // Nothing on disk to settle it, and a kept entry can only stop a run being
+    // failed as having changed nothing.
+    expect(withoutOwnWrites(root, ["gone/"], [join(root, "gone", "skill")])).toEqual(["gone/"]);
   });
 });

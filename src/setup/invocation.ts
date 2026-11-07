@@ -26,8 +26,24 @@ export function setupCommand(
   argv: readonly string[] = process.argv,
   version: () => string = getVersion,
 ): string {
+  return cliCommand("setup", env, argv, version);
+}
+
+/**
+ * Any other command, spelled the way {@link setupCommand} spells `setup`.
+ *
+ * Setup and `setup doctor` also send the user to `login`, `traces list` and
+ * `skills install`. Those were written out by hand as `traceroot …`, so under
+ * npx they named the same missing command the `--resume` hint once did.
+ */
+export function cliCommand(
+  subcommand: string,
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+  version: () => string = getVersion,
+): string {
   if (env.npm_command === "exec" && NPX_CACHE_SEGMENT.test(argv[1] ?? "")) {
-    return `npx -y traceroot-cli@${version()} setup`;
+    return `npx -y traceroot-cli@${version()} ${subcommand}`;
   }
-  return "traceroot setup";
+  return `traceroot ${subcommand}`;
 }

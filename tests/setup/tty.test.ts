@@ -112,8 +112,8 @@ describe("letting the user end a wait with a keypress", () => {
 
   it("hears nothing more, and leaves the stream paused, after it is stopped", async () => {
     // The stage stops it in a `finally`, and this is why: a listener left on a
-    // resumed stdin eats the keystrokes belonging to the two acknowledgements
-    // that close the run.
+    // resumed stdin keeps reading the terminal after the wait is over and holds
+    // the process open.
     const input = fakeInput();
     const { stop, presses } = watch(input);
 

@@ -77,14 +77,19 @@ function present(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/** Trim and strip trailing slashes; the protocol `//` is never at the end. */
-function normalizeHostUrl(value: string): string {
+/**
+ * Trim and strip trailing slashes; the protocol `//` is never at the end.
+ *
+ * Exported so a host read straight out of the config file can be compared with
+ * a resolved one.
+ */
+export function normalizeHostUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
 /**
  * Tolerates an API key pasted in its env-assignment form. Copying the key from
- * the UI yields `TRACEROOT_API_KEY=tr_...`; if a user pastes that whole string
+ * the UI yields `TRACEROOT_API_KEY=tr-...`; if a user pastes that whole string
  * (e.g. into `--api-key`), strip the `TRACEROOT_API_KEY=` (optionally
  * `export `-prefixed) and any surrounding quotes so the bare key is used.
  *

@@ -4,7 +4,6 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { type Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -21,7 +20,6 @@ import {
   type SetupContextDeps,
   canPrompt,
   closingLine,
-  closingSentence,
   resumeQuestion,
   runSetup,
   runSetupCommand,
@@ -35,10 +33,9 @@ import type { DoctorCheck } from "../../src/doctor/types.js";
 import type { RepoDetection } from "../../src/repo/detect.js";
 import { newCheckpoint, readCheckpoint, writeCheckpoint } from "../../src/setup/checkpoint.js";
 import { ExitCode, isCliError, reportError } from "../../src/output.js";
-import { ALL_AGENTS } from "../../src/agents/index.js";
+import { ALL_AGENTS, displaySkillPath } from "../../src/agents/index.js";
 import { LAUNCHABLE_AGENTS } from "../../src/setup/agents.js";
 import { SetupError } from "../../src/setup/errors.js";
-import { readAnswer } from "../../src/setup/machine.js";
 import { SETUP_STAGES } from "../../src/setup/types.js";
 import { WIZARD_TITLE } from "../../src/setup/wizard.js";
 import { StringSink } from "../helpers/stringSink.js";
@@ -48,9 +45,9 @@ import {
   authWithKey,
   defaultFlags,
   fakeApiClient,
-  fakeInput,
   fakeRunProcess,
   fakeSetupApi,
+  listTracesFrom,
   makeDeps,
   makeWriters,
   traceRow,
@@ -339,30 +336,6 @@ describe("the line that closes the wizard", () => {
     expect(closingLine({ ...base, ok: true, trace: null })).toContain("paused");
   });
 
-  it("makes the production sentence conditional, because it is", () => {
-    // "You can now use TraceRoot in production." is what followed the frame,
-    // and no run that printed it had any reason to believe it: the user had
-    // just been *asked* to add the key there, and an unattended run has nobody
-    // to even read the asking.
-    expect(closingSentence({ ...base, ok: true, trace })).toBe(
-      "You can use TraceRoot in production once TRACEROOT_API_KEY is in its environment.",
-    );
-  });
-
-  it("names the host variable in that sentence off the default host", () => {
-    // Same list as the file the run wrote and the notice it printed, so this
-    // does not become the one line that forgets the second variable.
-    const checkpoint = { ...newCheckpoint(new Date()), host: "https://staging.traceroot.ai" };
-    expect(closingSentence({ ...base, checkpoint, ok: true, trace })).toBe(
-      "You can use TraceRoot in production once TRACEROOT_API_KEY and TRACEROOT_HOST_URL are in its environment.",
-    );
-  });
-
-  it("says nothing below the frame when the run earned nothing", () => {
-    expect(closingSentence({ ...base, ok: true, trace: null })).toBeNull();
-    expect(closingSentence({ ...base, ok: false, trace: null })).toBeNull();
-  });
-
   it("does not call a wait the user ended a pause", () => {
     // Two endings share "ok, and no trace". One has work outstanding and the
     // other does not, and "paused — rerun to finish" is the word for the first
@@ -372,18 +345,6 @@ describe("the line that closes the wizard", () => {
     expect(line).not.toContain("paused");
     // And it still does not claim the trace was seen.
     expect(line).toContain("no trace seen yet");
-  });
-
-  it("ties the production sentence to the trace, not to how the wait ended", () => {
-    // The sentence below the frame is earned by an observed trace. A skipped
-    // wait has not established that the instrumentation works, which is the
-    // whole of what that sentence would be claiming — so unlike `closingLine`
-    // above, `closingSentence` takes no ending at all, and the pair below is
-    // what says the skip cannot reach it.
-    expect(closingSentence({ ...base, ok: true, trace })).toBe(
-      "You can use TraceRoot in production once TRACEROOT_API_KEY is in its environment.",
-    );
-    expect(closingSentence({ ...base, ok: true, trace: null })).toBeNull();
   });
 
   it("does not call a cancellation a failure", () => {
@@ -437,6 +398,109 @@ describe("runSetup", () => {
     expect(readCheckpoint(dir)?.completedStages).toContain("complete");
   });
 
+  it("closes on the trace that arrived, without asking for another", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+
+    const said = plain(err.data);
+    expect(said).toContain("◇  Your first trace:\n│  https://app.example.test/trace/t_1\n");
+    // The trace is the proof the application sends traces. Telling the user to
+    // run it, that traces "will appear", or where to look if they do not, is
+    // all about a state this run is already past.
+    expect(said).not.toContain("Run your application");
+    expect(said).not.toContain("will appear here");
+    expect(said).not.toContain("troubleshoot");
+  });
+
+  it("gives the production instruction once, and nothing after the frame but where to get help", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+
+    const said = plain(err.data);
+    // Once, inside the frame, naming both variables this fixture's host needs.
+    // Asserted on the opening fragment, because the row wraps to the terminal.
+    expect(said.split("production").length - 1).toBe(1);
+    expect(said).toContain("◇  Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env");
+    // Below the frame, only where to get help: no sentence repeating it.
+    const after = said.split("└  TraceRoot local setup complete.\n")[1] ?? "";
+    expect(after.split("\n").filter((line) => line !== "")).toEqual([
+      "If you ran into anything during setup, please open an issue at https://github.com/traceroot-ai/traceroot-cli/issues/new",
+      "- Contact support: https://discord.gg/TM2m3CtKuC",
+      "- Further documentation: https://traceroot.ai/docs/cli/get-started",
+    ]);
+  });
+
+  it("does not call the trace the user's own when the project already had traces", async () => {
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+    const setupDeps = makeDeps({
+      auth: authWithKey(),
+      traces: [traceRow()],
+      runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+    });
+    // The read bounded by `end_before` asks whether anything sent to this
+    // project before setup started. Answering with an older trace makes this
+    // run's trace one that may have come from somewhere else.
+    const earlier = traceRow({ trace_id: "t_old", trace_start_time: "2026-07-25T09:00:00.000000" });
+    const createApi = setupDeps.createSetupApi;
+    setupDeps.createSetupApi = (options) => {
+      const api = createApi(options);
+      return {
+        ...api,
+        listTraces: async (params) =>
+          params?.endBefore === undefined
+            ? api.listTraces(params)
+            : listTracesFrom([earlier])(params),
+      };
+    };
+
+    const result = await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps,
+    });
+
+    expect(result.trace?.attributed).toBe(false);
+    const said = plain(err.data);
+    expect(said).toContain("may not come from this service");
+    expect(said).toContain(
+      "◇  First trace since setup started:\n│  https://app.example.test/trace/t_1\n",
+    );
+    expect(said).not.toContain("Your first trace");
+  });
+
   it("closes a skipped wait by saying where the trace will appear", async () => {
     // The run is finished: the service is instrumented and the only unobserved
     // fact is a trace arriving. So the closing block says where it will show up
@@ -477,8 +541,9 @@ describe("runSetup", () => {
     // Not the sentence for a run that stopped before the instrumentation was
     // done, which is the other way to end with no trace.
     expect(said).not.toContain("Finish the instrumentation task");
-    // Nor the claim that the instrumentation has been shown to work.
-    expect(said).not.toContain("You can now use TraceRoot in production");
+    // Nor the production instruction, which waits for a trace that shows the
+    // instrumentation works.
+    expect(said).not.toContain("production environment");
     // Still nothing on stdout: the closing blocks live inside the frame.
     expect(out.data).toBe("");
   });
@@ -577,11 +642,43 @@ describe("runSetup", () => {
     expect(plain(err.data)).toContain(`┌  ${WIZARD_TITLE}`);
     expect(plain(err.data)).toContain("└  TraceRoot local setup complete.");
     // Where to go next, on the way out — the moment it is most likely to be read.
-    expect(plain(err.data)).toContain("https://docs.traceroot.ai");
+    expect(plain(err.data)).toContain("https://traceroot.ai/docs/cli/get-started");
     expect(err.data).toContain("https://github.com/traceroot-ai/traceroot-cli/issues");
     // Opened before anything the run prints, so the sign-in half is inside it.
     expect(plain(err.data).indexOf("┌")).toBe(0);
     expect(plain(err.data).indexOf("┌")).toBeLessThan(plain(err.data).indexOf("└"));
+  });
+
+  it("prints every documentation link on the host the docs are served from", async () => {
+    // Pinned by host rather than by page. The links used to point at
+    // `docs.traceroot.ai`, which has no DNS record, and the tests that asserted
+    // them checked only that a link was printed, never where it went.
+    writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [traceRow()],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+      }),
+    });
+
+    const docs = (plain(err.data).match(/https?:\/\/\S+/g) ?? []).filter((url) =>
+      url.includes("docs"),
+    );
+    // At least the documentation link under the closed frame, so the loop below
+    // cannot pass on a run that printed none.
+    expect(docs.length).toBeGreaterThanOrEqual(1);
+    for (const url of docs) {
+      expect(url).toMatch(/^https:\/\/traceroot\.ai\/docs\//);
+    }
   });
 
   it("leaves no line of a whole run outside the frame, until the frame closes", async () => {
@@ -683,12 +780,14 @@ describe("runSetup", () => {
     // staging or self-hosted user who carried only what they were told to
     // carry pointed the SDK at the hosted product, which is not where their
     // credential works, and nothing anywhere said so.
-    expect(plain(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
+    expect(plain(err.data)).toContain("Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from");
     expect(plain(err.data)).toContain("Exporting only TRACEROOT_API_KEY leaves the SDK");
     // The service was Python, so the local caveat has to be there too.
     expect(plain(err.data)).toContain("os.environ");
     // Between everything the run printed and the line that closes the frame.
-    expect(plain(err.data).indexOf("Production Setup")).toBeLessThan(plain(err.data).indexOf("└"));
+    const at = plain(err.data).indexOf("Add TRACEROOT_API_KEY");
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(plain(err.data).indexOf("└"));
   });
 
   it("says nothing about production for a run that never got a trace", async () => {
@@ -710,97 +809,44 @@ describe("runSetup", () => {
     expect(err.data).not.toContain("In production");
   });
 
-  it("waits for both acknowledgements where there is somebody to ask", async () => {
+  it("asks nothing once the first trace has arrived", async () => {
+    // The trace is the confirmation, so there is nothing left to acknowledge,
+    // and a closing "I have added the key to production" would record a claim
+    // whatever the user typed.
     writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
     writeFileSync(join(dir, "main.py"), "x = 1\n");
-    const asked: string[] = [];
+    const asked: { question: string; stage: string | undefined }[] = [];
     const setupDeps = makeDeps({
       auth: authWithKey(),
       traces: [traceRow()],
       runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
     });
     const inner = setupDeps.prompt;
-    setupDeps.prompt = async (question) => {
-      asked.push(question);
-      return inner(question);
+    setupDeps.prompt = async (question, stage) => {
+      asked.push({ question: plain(question), stage });
+      return inner(question, stage);
     };
+    const { writers, err } = makeWriters();
 
-    await runSetup({
+    const result = await runSetup({
       ctx: ctxWith(),
       cwd: dir,
       flags: defaultFlags({ agent: "claude" }),
-      writers: makeWriters().writers,
+      writers,
       canPrompt: true,
       setupDeps,
     });
 
-    // One per closing block, in the order a user acts on them: this machine
-    // first, then everywhere else.
-    const acknowledged = asked.map(plain).filter((q) => q.includes("(Press Enter to continue)"));
-    expect(acknowledged).toHaveLength(2);
-    expect(acknowledged[0]).toContain("I've confirmed my application is sending traces.");
-    // Every variable, not just the key. A line that claims less than the
-    // instruction asked for is how someone confirms a thing they half did.
-    expect(acknowledged[1]).toContain(
-      "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
-    );
-    // Each one says how to answer it, once, on the right.
-    for (const line of acknowledged) {
-      expect(line).toContain("(Press Enter to continue)");
-    }
+    expect(result.ok).toBe(true);
+    expect(asked).toEqual([]);
+    const said = plain(err.data);
+    expect(said).not.toContain("I've confirmed");
+    expect(said).not.toContain("I have added");
+    // Both closing blocks are still there, and the frame still closes.
+    expect(said).toContain("◇  Your first trace:");
+    expect(said).toContain("◇  Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env");
+    expect(said).toContain("└  TraceRoot local setup complete.");
   });
-
-  for (const [at, which] of [
-    [0, "the traces one"],
-    [1, "the production one"],
-  ] as const) {
-    it(`ends with 130, not 0, on Ctrl+C at ${which} of the closing acknowledgements`, async () => {
-      // Readline closed on the keypress and the question never settled, so the
-      // event loop drained and `traceroot setup && <next step>` carried on.
-      writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
-      writeFileSync(join(dir, "main.py"), "x = 1\n");
-      const input = fakeInput();
-      const output = new PassThrough();
-      let screen = "";
-      output.on("data", (chunk) => {
-        screen += String(chunk);
-      });
-      const shown = async (count: number): Promise<void> => {
-        while (screen.split("(Press Enter to continue)").length - 1 < count) {
-          await new Promise((resolve) => setImmediate(resolve));
-        }
-      };
-      const setupDeps = makeDeps({
-        auth: authWithKey(),
-        traces: [traceRow()],
-        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
-      });
-      // The production prompt, against a terminal this test types into.
-      setupDeps.prompt = (question, stage) => readAnswer({ input, output }, question, { stage });
-
-      const run = runSetup({
-        ctx: ctxWith(),
-        cwd: dir,
-        flags: defaultFlags({ agent: "claude" }),
-        writers: makeWriters().writers,
-        canPrompt: true,
-        setupDeps,
-      });
-      for (let i = 0; i < at; i += 1) {
-        await shown(i + 1);
-        input.write("\r");
-      }
-      await shown(at + 1);
-      input.write("\x03");
-
-      await expect(run).rejects.toSatisfy((err: unknown) => {
-        expect(err).toBeInstanceOf(SetupError);
-        expect((err as SetupError).code).toBe("INTERRUPTED");
-        expect((err as SetupError).exitCode).toBe(130);
-        return true;
-      });
-    });
-  }
 
   it("notes when there is no checkpoint to resume", async () => {
     writeFileSync(join(dir, "go.mod"), "module x\n");
@@ -1088,6 +1134,33 @@ describe("a hand-over nothing has acted on yet", () => {
     expect(said.split("setup --resume").length - 1).toBe(2);
   });
 
+  it("says which directory to open the agent in, for a service below the root", async () => {
+    // The task's paths and commands are relative to `api/`, while the user is
+    // standing at the repository root where they ran setup. The task itself is
+    // at the root, so it is named as the agent opened in `api/` resolves it.
+    mkdirSync(join(dir, "api"), { recursive: true });
+    writeFileSync(join(dir, "api", "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(dir, "api", "main.py"), "x = 1\n");
+    const { writers, err } = makeWriters();
+    const result = await runSetup({
+      ctx: ctxWith(false),
+      cwd: dir,
+      flags: defaultFlags({ agent: "claude", instrument: false, service: "api" }),
+      writers,
+      canPrompt: false,
+      setupDeps: makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    });
+    const said = plain(err.data);
+
+    expect(result.ok).toBe(true);
+    const task = join("..", ".traceroot", "prompts", "setup-instrument.md");
+    expect(said).toContain(`Open Claude Code in api/ and run ${task} there, then rerun`);
+    expect(said).toContain(
+      `│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Open Claude Code in api/ and run ${task} there.\n`,
+    );
+    expect(existsSync(join(dir, "api", task))).toBe(true);
+  });
+
   it("points the manual route at the printed steps instead", async () => {
     const { result, err } = await handover({ agent: "claude", method: "manual" });
     const said = plain(err.data);
@@ -1354,6 +1427,246 @@ describe("doctor reports setup state", () => {
     const setupChecks = report.checks.filter((c) => c.category === "setup");
     expect(setupChecks.find((c) => c.name === "setup_completed")?.status).toBe("warn");
     expect(setupChecks.find((c) => c.name === "setup_first_trace")?.status).toBe("warn");
+  });
+});
+
+describe("doctor on a run that ended without a trace", () => {
+  // Every checkpoint here is the one a real run wrote, not one built by hand:
+  // the bug was a state no hand-built fixture had, a last stage recorded with
+  // neither a trace nor an error.
+  async function setupRun(
+    cwd: string,
+    flags: Parameters<typeof defaultFlags>[0],
+    options: { canPrompt?: boolean; skipTraceWait?: boolean } = {},
+  ): Promise<string> {
+    const { writers, err } = makeWriters();
+    await runSetup({
+      ctx: ctxWith(),
+      cwd,
+      flags: defaultFlags(flags),
+      writers,
+      canPrompt: options.canPrompt ?? false,
+      setupDeps: makeDeps({
+        auth: authWithKey(),
+        traces: [],
+        runProcess: fakeRunProcess({ gitStatus: ["", " M main.py"] }).run,
+        skipTraceWait: options.skipTraceWait,
+      }),
+    });
+    return plain(err.data);
+  }
+
+  async function setupChecks(cwd: string = dir): Promise<DoctorCheck[]> {
+    const report = await runDoctor({
+      ctx: ctxWith(),
+      cwd,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out: new StringSink(), err: new StringSink() },
+      includeSetup: true,
+    });
+    return report.checks.filter((c) => c.category === "setup");
+  }
+
+  function pythonService(at: string = dir): void {
+    mkdirSync(at, { recursive: true });
+    writeFileSync(join(at, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(at, "main.py"), "x = 1\n");
+  }
+
+  /** The entry point once it calls `initialize()`, so a trace wait has something to wait for. */
+  function instrumentEntryPoint(): void {
+    writeFileSync(
+      join(dir, "main.py"),
+      'import traceroot\n\nif __name__ == "__main__":\n    traceroot.initialize()\n',
+    );
+  }
+
+  /** What the next `setup` asks, given the checkpoint the last run left. */
+  function nextQuestion(): string | undefined {
+    const found = readCheckpoint(dir);
+    return found === null ? undefined : resumeQuestion(found).message;
+  }
+
+  it("calls a run whose wait the user ended complete, with no trace seen yet", async () => {
+    pythonService();
+    const said = await setupRun(
+      dir,
+      { agent: "claude", traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+    expect(said).toContain("└  TraceRoot local setup complete — no trace seen yet.");
+
+    const checks = await setupChecks();
+    const completed = checks.find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("pass");
+    expect(completed?.message).toMatch(/^Setup completed on .+ — no trace seen yet$/);
+    expect(completed?.message).not.toContain("stopped at");
+    // The trace is still what is missing, and the next step is still to look again.
+    expect(checks.find((c) => c.name === "setup_first_trace")?.status).toBe("warn");
+  });
+
+  it("names the task a task-file hand-over left to do", async () => {
+    pythonService();
+    const said = await setupRun(dir, { agent: "claude", instrument: false });
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("warn");
+    expect(completed?.message).toBe(
+      "Setup is paused, waiting for the instrumentation it handed over. Run the task in .traceroot/prompts/setup-instrument.md in your coding agent.",
+    );
+  });
+
+  it("names the manual steps a manual hand-over left to do", async () => {
+    pythonService();
+    await setupRun(dir, { agent: "claude", method: "manual" });
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("warn");
+    expect(completed?.message).toBe(
+      "Setup is paused, waiting for the instrumentation it handed over. Apply the manual steps it printed.",
+    );
+  });
+
+  it.each([
+    [
+      "after the task was done",
+      async () => {
+        await setupRun(dir, { agent: "claude", instrument: false });
+        instrumentEntryPoint();
+        return { agent: "claude", instrument: false, resume: true, traceTimeoutSec: 120 } as const;
+      },
+    ],
+    [
+      "in a repository that already called initialize()",
+      async () => {
+        instrumentEntryPoint();
+        return { agent: "claude", instrument: false, traceTimeoutSec: 120 } as const;
+      },
+    ],
+  ] as const)(
+    "calls a hand-over complete once the user stopped its wait, %s",
+    async (_, before) => {
+      // Something could send a trace, so the hand-over route got the full wait,
+      // and stopping it closed the run as complete. The route is still on the
+      // record, and read alone it called the run paused.
+      pythonService();
+      const flags = await before();
+      const said = await setupRun(dir, flags, { canPrompt: true, skipTraceWait: true });
+      expect(said).toContain("└  TraceRoot local setup complete — no trace seen yet.");
+
+      const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+      expect(completed?.status).toBe("pass");
+      expect(completed?.message).toMatch(/^Setup completed on .+ — no trace seen yet$/);
+      expect(nextQuestion()).toBe(
+        "A previous setup for this service already finished. Leave it as it is, or run setup again from the beginning?",
+      );
+    },
+  );
+
+  it("calls the hand-over paused again when a later resume pauses on it", async () => {
+    // The stopped wait belongs to the run that stopped it. A resume that finds
+    // nothing to wait for pauses as a hand-over does, and has to read as one.
+    pythonService();
+    instrumentEntryPoint();
+    await setupRun(
+      dir,
+      { agent: "claude", instrument: false, traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+    writeFileSync(join(dir, "main.py"), "x = 1\n");
+    const said = await setupRun(dir, { agent: "claude", instrument: false, resume: true });
+    expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("warn");
+    expect(completed?.message).toContain("Setup is paused");
+    expect(nextQuestion()).toBe(
+      "A previous setup for this service did not finish. It is waiting for the instrumentation it handed over. Continue from there?",
+    );
+  });
+
+  it("names the task at the repository root when run from a service directory", async () => {
+    // Setup writes the task at the root wherever it was run from, so from the
+    // service directory the path has to say so.
+    mkdirSync(join(dir, ".git"));
+    const api = join(dir, "api");
+    pythonService(api);
+    await setupRun(api, { agent: "claude", instrument: false });
+
+    const completed = (await setupChecks(api)).find((c) => c.name === "setup_completed");
+    expect(completed?.message).toBe(
+      `Setup is paused, waiting for the instrumentation it handed over. Run the task in ${displaySkillPath(api, join(dir, ".traceroot", "prompts", "setup-instrument.md"))} in your coding agent.`,
+    );
+  });
+
+  it("calls a resume that got past a timeout complete, not stopped at the timeout", async () => {
+    pythonService();
+    await setupRun(dir, { agent: "claude", traceTimeoutSec: 1 });
+    expect(readCheckpoint(dir)?.lastError?.code).toBe("TRACE_TIMEOUT");
+
+    await setupRun(
+      dir,
+      { agent: "claude", resume: true, traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+
+    const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
+    expect(completed?.status).toBe("pass");
+    expect(completed?.message).toContain("no trace seen yet");
+    expect((await setupChecks()).find((c) => c.name === "setup_last_error")).toBeUndefined();
+  });
+
+  it("still reports a later run that stopped, over an earlier one that finished", async () => {
+    pythonService();
+    await setupRun(
+      dir,
+      { agent: "claude", traceTimeoutSec: 120 },
+      { canPrompt: true, skipTraceWait: true },
+    );
+    await setupRun(dir, { agent: "claude", resume: true, traceTimeoutSec: 1 });
+
+    const checks = await setupChecks();
+    expect(checks.find((c) => c.name === "setup_completed")).toMatchObject({
+      status: "fail",
+      message: "Setup is incomplete; it stopped at 'verify_trace'. Run `traceroot setup --resume`.",
+    });
+    expect(checks.find((c) => c.name === "setup_last_error")?.message).toContain("TRACE_TIMEOUT");
+  });
+});
+
+describe("doctor's skill check after setup ran from a service directory", () => {
+  it("finds the skill setup installed at the repository root", async () => {
+    mkdirSync(join(dir, ".git"));
+    const api = join(dir, "api");
+    mkdirSync(api);
+    writeFileSync(join(api, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
+    writeFileSync(join(api, "main.py"), "x = 1\n");
+    await runSetup({
+      ctx: ctxWith(),
+      cwd: api,
+      flags: defaultFlags({ agent: "claude", instrument: false }),
+      writers: makeWriters().writers,
+      canPrompt: false,
+      setupDeps: makeDeps({ auth: authWithKey(), traces: [], runProcess: fakeRunProcess().run }),
+    });
+    expect(
+      existsSync(join(dir, ".claude", "skills", "traceroot-instrument-repo", "SKILL.md")),
+    ).toBe(true);
+
+    const report = await runDoctor({
+      ctx: ctxWith(),
+      cwd: api,
+      env: {},
+      configPath: join(dir, ".traceroot", "config.json"),
+      writers: { out: new StringSink(), err: new StringSink() },
+      includeSetup: true,
+    });
+    expect(report.checks.find((c) => c.name === "skill_instrument")).toMatchObject({
+      status: "pass",
+      message: "Instrumentation skill installed for Claude Code",
+    });
   });
 });
 
@@ -1812,7 +2125,7 @@ describe("the production block that closes a run", () => {
   /** A key distinctive enough that finding it in the output means something. */
   const KEY = "tr-production-step-secret-value";
 
-  async function run(options: { canPrompt?: boolean; json?: boolean; answer?: string } = {}) {
+  async function run(options: { canPrompt?: boolean; json?: boolean } = {}) {
     writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = ["pytest"]\n');
     writeFileSync(join(dir, "main.py"), "x = 1\n");
     const { writers, out, err } = makeWriters();
@@ -1833,7 +2146,7 @@ describe("the production block that closes a run", () => {
         ...base,
         prompt: async (question: string) => {
           asked.push(question);
-          return options.answer ?? "";
+          return "";
         },
       },
     });
@@ -1850,7 +2163,7 @@ describe("the production block that closes a run", () => {
     // sentence has to name the file this run chose and the variables that host
     // implies, both of which were separately capable of going stale.
     expect(flat(err.data)).toContain(
-      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local .env file to your production environment.",
+      "Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env to your production environment.",
     );
   });
 
@@ -1863,8 +2176,8 @@ describe("the production block that closes a run", () => {
 
     const { err } = await run({ canPrompt: true });
 
-    expect(flat(err.data)).toContain("variables from your local .env.local file");
-    expect(flat(err.data)).not.toContain("from your local .env file");
+    expect(flat(err.data)).toContain("from .env.local to your production environment");
+    expect(flat(err.data)).not.toContain("from .env to");
   });
 
   it("never puts the key itself in anything it prints", async () => {
@@ -1879,34 +2192,21 @@ describe("the production block that closes a run", () => {
     // died at `precheck`, or a block that stopped printing altogether, would
     // satisfy the test by printing nothing at all.
     expect(result.ok).toBe(true);
-    expect(flat(err.data)).toContain("Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables");
+    expect(flat(err.data)).toContain("Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from");
 
     expect(err.data).not.toContain(KEY);
     expect(out.data).not.toContain(KEY);
   });
 
-  it("asks for an acknowledgement, and takes any answer at all", async () => {
-    const { asked } = await run({ canPrompt: true, answer: "n" });
-
-    expect(
-      asked
-        .map(plain)
-        .some((question) =>
-          question.includes(
-            "I have added TRACEROOT_API_KEY and TRACEROOT_HOST_URL to my production env.",
-          ),
-        ),
-    ).toBe(true);
-  });
-
-  it("completes successfully when the acknowledgement is declined", async () => {
-    // An acknowledgement, not a gate. A user who says no has still had a
-    // successful run, and a tool that exits non-zero over a confirmation it
-    // did not need is a tool whose exit code means nothing.
-    const { result, err } = await run({ canPrompt: true, answer: "no" });
+  it("does not ask the user to say the key is in production", async () => {
+    // Nothing branched on the answer, so the run recorded "I have added …"
+    // whatever was typed. The instruction is enough, and the run ends without
+    // a question.
+    const { result, err, asked } = await run({ canPrompt: true });
 
     expect(result.ok).toBe(true);
-    expect(result.error).toBeNull();
+    expect(asked.map(plain).filter((q) => q.includes("production"))).toEqual([]);
+    expect(err.data).not.toContain("I have added");
     expect(setupFailureExit(result, false)).toEqual({ kind: "none" });
     expect(plain(err.data)).toContain("└  TraceRoot local setup complete.");
   });
@@ -1920,7 +2220,7 @@ describe("the production block that closes a run", () => {
     expect(asked).toEqual([]);
     expect(result.ok).toBe(true);
     expect(flat(err.data)).toContain(
-      "Add the TRACEROOT_API_KEY and TRACEROOT_HOST_URL variables from your local .env file",
+      "Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env to your production environment.",
     );
   });
 
