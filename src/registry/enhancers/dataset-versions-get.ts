@@ -3,20 +3,17 @@ import type { DatasetVersion } from "../../api/client.js";
 import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { parseLimit } from "../../time/range.js";
 import { rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
-  addCursorFlag,
-  addLimitFlag,
+  addPageFlags,
   compact,
   countLine,
-  limitBounds,
   orDash,
-  parseCursor,
   renderEmptyPage,
   renderFields,
+  resolvePageArgs,
   warnIfCapped,
 } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
@@ -56,10 +53,8 @@ export function renderVersion(res: VersionResponse, state: PagedState, writers: 
   const items = res.items ?? [];
   if (items.length === 0) {
     renderEmptyPage(
-      state.cursor === undefined
-        ? "this version has no test cases"
-        : "no test cases after this cursor",
-      state.limit,
+      state,
+      { none: "this version has no test cases", afterCursor: "no test cases after this cursor" },
       "get_dataset_version",
       res.next_cursor,
       "case",
@@ -102,23 +97,19 @@ export const datasetVersionsGet: Enhancer = {
     "1000 with --limit. When the version has more, it says so and prints the --cursor " +
     "that reads the next page.",
   flags(cmd: Command): void {
-    addCursorFlag(addLimitFlag(cmd, "get_dataset_version", "test cases", DEFAULT_CASE_PAGE));
+    addPageFlags(cmd, "get_dataset_version", "test cases", DEFAULT_CASE_PAGE);
   },
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
-    const limit =
-      parseLimit(input.opts.limit as string | undefined, limitBounds("get_dataset_version").max) ??
-      DEFAULT_CASE_PAGE;
-    const cursor = parseCursor(input);
+    const { args, state } = resolvePageArgs(input, "get_dataset_version", DEFAULT_CASE_PAGE);
     return {
       args: {
         ...(input.positionals.version_id === undefined
           ? {}
           : { version_id: input.positionals.version_id }),
-        limit,
-        ...(cursor === undefined ? {} : { cursor }),
+        ...args,
       },
-      state: { limit, cursor } satisfies PagedState,
+      state,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {

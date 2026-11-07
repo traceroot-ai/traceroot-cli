@@ -2,6 +2,7 @@ import { REGISTRY } from "@traceroot-ai/tools";
 import type { Command } from "commander";
 import { CliError, ExitCode, type Writers, logProgress, logWarn } from "../../output.js";
 import { createStyler } from "../../render/style.js";
+import { parseLimit } from "../../time/range.js";
 import { formatTimestamp } from "../../util/index.js";
 import { onceOption } from "../flags.js";
 import { sanitize } from "./sql.js";
@@ -45,11 +46,17 @@ export function limitBounds(tool: string): { serverDefault: number | undefined; 
 }
 
 /**
- * The `--limit` flag, described with the bound the server actually enforces.
- * `cliDefault` is for a read whose server default is "everything" — the CLI
- * always sends that default, so it is the one the help text names.
+ * The `--limit` and `--cursor` flags of a paged read.
+ *
+ * `--limit` is described with the bound the server actually enforces. `cliDefault`
+ * is for a read whose server default is "everything" — the CLI always sends that
+ * default, so it is the one the help text names.
+ *
+ * `--cursor` takes the `next_cursor` a previous page returned, passed back as it
+ * came: the server owns what a cursor means and rejects one that names no row in
+ * the set being paged.
  */
-export function addLimitFlag(
+export function addPageFlags(
   cmd: Command,
   tool: string,
   noun: string,
@@ -57,37 +64,46 @@ export function addLimitFlag(
 ): Command {
   const { serverDefault, max } = limitBounds(tool);
   const shown = cliDefault ?? serverDefault;
-  return cmd.option(
-    "--limit <n>",
-    `${noun} to return, 1-${max}${shown === undefined ? "" : ` (default ${shown})`}`,
-    onceOption("--limit"),
-  );
+  return cmd
+    .option(
+      "--limit <n>",
+      `${noun} to return, 1-${max}${shown === undefined ? "" : ` (default ${shown})`}`,
+      onceOption("--limit"),
+    )
+    .option(
+      "--cursor <cursor>",
+      "read the page after a previous one: the next_cursor it returned",
+      onceOption("--cursor"),
+    );
 }
 
 /**
- * The `--cursor` flag. Its value is the `next_cursor` a previous page returned,
- * passed back as it came: the server owns what a cursor means and rejects one
- * that names no row in the set being paged.
+ * Validates `--limit` and `--cursor` into the tool args (`limit` then `cursor`,
+ * undefined keys omitted) plus the state `render` needs. `defaultLimit` is what to
+ * send when `--limit` is not given. Callers with arguments of their own add them
+ * to `args`.
+ *
+ * An empty cursor is a usage error rather than "the first page": it is a variable
+ * that expanded to nothing, and reading page one again would loop a script forever.
  */
-export function addCursorFlag(cmd: Command): Command {
-  return cmd.option(
-    "--cursor <cursor>",
-    "read the page after a previous one: the next_cursor it returned",
-    onceOption("--cursor"),
-  );
-}
-
-/**
- * `--cursor`, validated. An empty cursor is a usage error rather than "the first
- * page": it is a variable that expanded to nothing, and reading page one again
- * would loop a script forever.
- */
-export function parseCursor(input: ResolveInput): string | undefined {
+export function resolvePageArgs(
+  input: ResolveInput,
+  tool: string,
+  defaultLimit?: number,
+): { args: Record<string, unknown>; state: PagedState } {
+  const limit =
+    parseLimit(input.opts.limit as string | undefined, limitBounds(tool).max) ?? defaultLimit;
   const cursor = input.opts.cursor as string | undefined;
   if (cursor !== undefined && cursor.trim() === "") {
     throw new CliError("--cursor must not be empty", ExitCode.usage);
   }
-  return cursor;
+  return {
+    args: {
+      ...(limit === undefined ? {} : { limit }),
+      ...(cursor === undefined ? {} : { cursor }),
+    },
+    state: { limit, cursor },
+  };
 }
 
 /**
@@ -160,18 +176,22 @@ export function countLine(count: number, noun: string, writers: Writers): void {
  * support. `--json` already warns on this response — it hands the body over and
  * calls {@link warnIfCapped} unconditionally — so an early return here would
  * make the two output modes disagree about the same bytes.
+ *
+ * With nothing more to give, `messages.none` says the result is empty, and
+ * `messages.afterCursor` says a read after `--cursor` reached the end of it.
  */
 export function renderEmptyPage(
-  message: string,
-  requested: number | undefined,
+  state: PagedState,
+  messages: { none: string; afterCursor: string },
   tool: string,
   nextCursor: unknown,
   noun: string,
   writers: Writers,
 ): void {
   const hasMore = typeof nextCursor === "string" && nextCursor !== "";
+  const message = state.cursor === undefined ? messages.none : messages.afterCursor;
   logProgress(hasMore ? `no ${plural(2, noun)} on this page` : message, writers);
-  warnIfCapped(0, requested, tool, nextCursor, noun, writers);
+  warnIfCapped(0, state.limit, tool, nextCursor, noun, writers);
 }
 
 /**
@@ -217,11 +237,14 @@ export function warnIfCapped(
   // A full page and no cursor to continue from: all that is left is to widen the
   // page. At the maximum there is nothing left to raise, so the advice changes
   // rather than telling someone to do what they already did.
-  const widen =
+  const advice =
     pageSize >= max
-      ? `The page came back full with no cursor to continue from, and ${max} is the most a page holds.`
-      : `The page came back full with no cursor to continue from: raise --limit up to ${max} to widen it.`;
-  logWarn(`${shown} and there are more. ${widen}`, writers);
+      ? `, and ${max} is the most a page holds.`
+      : `: raise --limit up to ${max} to widen it.`;
+  logWarn(
+    `${shown} and there are more. The page came back full with no cursor to continue from${advice}`,
+    writers,
+  );
 }
 
 /** State a paged read threads from `resolveArgs` to `render`. */

@@ -11,7 +11,7 @@ import {
 import { renderVersionList } from "../../../src/registry/enhancers/dataset-versions-list.js";
 import { renderDataset } from "../../../src/registry/enhancers/datasets-get.js";
 import { renderDatasetList } from "../../../src/registry/enhancers/datasets-list.js";
-import { limitBounds } from "../../../src/registry/enhancers/eval-reads.js";
+import { type PagedState, limitBounds } from "../../../src/registry/enhancers/eval-reads.js";
 import { renderRun, resultsLine } from "../../../src/registry/enhancers/eval-runs-get.js";
 import { renderRunList } from "../../../src/registry/enhancers/eval-runs-list.js";
 import { latestRun, renderEvaluationList } from "../../../src/registry/enhancers/evals-list.js";
@@ -108,24 +108,6 @@ describe("datasets list", () => {
     expect(err.data).not.toContain("\u001b");
     expect(err.data).not.toContain("\u0007");
     expect(err.data).toContain("--cursor c");
-  });
-
-  it("an empty page read after a cursor says there is nothing after it, in every paged read", () => {
-    const after = { cursor: "c_1" };
-    const cases: [string, (w: ReturnType<typeof sinks>["w"]) => void][] = [
-      ["no more datasets after this cursor", (w) => renderDatasetList({ datasets: [] }, after, w)],
-      ["no more versions after this cursor", (w) => renderVersionList({ versions: [] }, after, w)],
-      [
-        "no more evaluations after this cursor",
-        (w) => renderEvaluationList({ evaluations: [] }, after, w),
-      ],
-      ["no more evaluation runs after this cursor", (w) => renderRunList({ runs: [] }, after, w)],
-    ];
-    for (const [message, run] of cases) {
-      const { w, err } = sinks();
-      run(w);
-      expect(err.data).toContain(message);
-    }
   });
 
   it("with no cursor to continue from, gives no advice to raise a --limit already at its maximum", () => {
@@ -302,17 +284,6 @@ describe("datasets versions get", () => {
     expect(err.data).toContain("--limit 25");
     expect(err.data).toContain("--cursor more");
     expect(err.data).not.toContain("not reachable");
-  });
-
-  it("an empty page read after a cursor is the end of the version, not an empty version", () => {
-    const { w, err } = sinks();
-    renderVersion(
-      { dataset_version_id: "dsv_1", items: [], next_cursor: null },
-      { limit: 25, cursor: "tc_24" },
-      w,
-    );
-    expect(err.data).toContain("no test cases after this cursor");
-    expect(err.data).not.toContain("this version has no test cases");
   });
 
   it("labels a version without repeating a label that is already the derived name", () => {
@@ -594,6 +565,69 @@ describe("evals runs list", () => {
     renderRunList({ runs: [] }, {}, w);
     expect(err.data).toContain("no evaluation runs");
   });
+});
+
+describe("an empty page with nothing after it", () => {
+  type Render = (
+    nextCursor: null | undefined,
+    state: PagedState,
+    w: ReturnType<typeof sinks>["w"],
+  ) => void;
+
+  const reads: [string, string, string, Render][] = [
+    [
+      "datasets list",
+      "no datasets",
+      "no more datasets after this cursor",
+      (next_cursor, state, w) => renderDatasetList({ datasets: [], next_cursor }, state, w),
+    ],
+    [
+      "datasets versions list",
+      "no versions published for this dataset",
+      "no more versions after this cursor",
+      (next_cursor, state, w) => renderVersionList({ versions: [], next_cursor }, state, w),
+    ],
+    [
+      "datasets versions get",
+      "this version has no test cases",
+      "no test cases after this cursor",
+      (next_cursor, state, w) =>
+        renderVersion({ dataset_version_id: "dsv_1", items: [], next_cursor }, state, w),
+    ],
+    [
+      "evals list",
+      "no evaluations",
+      "no more evaluations after this cursor",
+      (next_cursor, state, w) => renderEvaluationList({ evaluations: [], next_cursor }, state, w),
+    ],
+    [
+      "evals runs list",
+      "no evaluation runs",
+      "no more evaluation runs after this cursor",
+      (next_cursor, state, w) => renderRunList({ runs: [], next_cursor }, state, w),
+    ],
+  ];
+
+  it.each(reads)(
+    "'%s' reads as an empty set, or after a cursor as the end of one",
+    (_read, none, afterCursor, render) => {
+      // A last page may carry a null next_cursor or no such field, at any page size.
+      for (const [nextCursor, limit] of [
+        [undefined, undefined],
+        [null, 25],
+      ] as const) {
+        const first = sinks();
+        render(nextCursor, { limit }, first.w);
+        expect(first.err.data).toContain(none);
+        expect(first.err.data).not.toContain(afterCursor);
+
+        const later = sinks();
+        render(nextCursor, { limit, cursor: "c_1" }, later.w);
+        expect(later.err.data).toContain(afterCursor);
+        expect(later.err.data).not.toContain(none);
+      }
+    },
+  );
 });
 
 describe("wiring", () => {

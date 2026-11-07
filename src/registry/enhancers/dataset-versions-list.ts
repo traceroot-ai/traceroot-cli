@@ -3,18 +3,15 @@ import type { DatasetVersionList } from "../../api/client.js";
 import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { parseLimit } from "../../time/range.js";
 import { rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
-  addCursorFlag,
-  addLimitFlag,
+  addPageFlags,
   countLine,
-  limitBounds,
   orDash,
-  parseCursor,
   renderEmptyPage,
+  resolvePageArgs,
   warnIfCapped,
   when,
 } from "./eval-reads.js";
@@ -32,10 +29,11 @@ export function renderVersionList(
   const rows = res.versions ?? [];
   if (rows.length === 0) {
     renderEmptyPage(
-      state.cursor === undefined
-        ? "no versions published for this dataset"
-        : "no more versions after this cursor",
-      state.limit,
+      state,
+      {
+        none: "no versions published for this dataset",
+        afterCursor: "no more versions after this cursor",
+      },
       "list_dataset_versions",
       res.next_cursor,
       "version",
@@ -74,24 +72,19 @@ export function renderVersionList(
 
 export const datasetVersionsList: Enhancer = {
   flags(cmd: Command): void {
-    addCursorFlag(addLimitFlag(cmd, "list_dataset_versions", "versions"));
+    addPageFlags(cmd, "list_dataset_versions", "versions");
   },
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
-    const limit = parseLimit(
-      input.opts.limit as string | undefined,
-      limitBounds("list_dataset_versions").max,
-    );
-    const cursor = parseCursor(input);
+    const { args, state } = resolvePageArgs(input, "list_dataset_versions");
     return {
       args: {
         ...(input.positionals.dataset_id === undefined
           ? {}
           : { dataset_id: input.positionals.dataset_id }),
-        ...(limit === undefined ? {} : { limit }),
-        ...(cursor === undefined ? {} : { cursor }),
+        ...args,
       },
-      state: { limit, cursor } satisfies PagedState,
+      state,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {
