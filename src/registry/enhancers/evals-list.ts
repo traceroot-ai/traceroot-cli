@@ -8,10 +8,12 @@ import { onceOption, rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
+  addCursorFlag,
   addLimitFlag,
   countLine,
   limitBounds,
   orDash,
+  parseCursor,
   renderEmptyPage,
   warnIfCapped,
   when,
@@ -45,7 +47,7 @@ export function renderEvaluationList(
   const rows = res.evaluations ?? [];
   if (rows.length === 0) {
     renderEmptyPage(
-      "no evaluations",
+      state.cursor === undefined ? "no evaluations" : "no more evaluations after this cursor",
       state.limit,
       "list_evaluations",
       res.next_cursor,
@@ -86,7 +88,7 @@ export const evalsList: Enhancer = {
     "List the project's evaluations, newest first: how many runs each has and how its latest run " +
     "ended. Start here when you need a run id for `evals runs get`.",
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "list_evaluations", "evaluations").option(
+    addCursorFlag(addLimitFlag(cmd, "list_evaluations", "evaluations")).option(
       "--name <substring>",
       "filter to evaluations whose name contains this text, case-insensitively",
       onceOption("--name"),
@@ -98,13 +100,15 @@ export const evalsList: Enhancer = {
       input.opts.limit as string | undefined,
       limitBounds("list_evaluations").max,
     );
+    const cursor = parseCursor(input);
     const name = input.opts.name as string | undefined;
     return {
       args: {
         ...(limit === undefined ? {} : { limit }),
+        ...(cursor === undefined ? {} : { cursor }),
         ...(name === undefined ? {} : { name }),
       },
-      state: { limit } satisfies PagedState,
+      state: { limit, cursor } satisfies PagedState,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {

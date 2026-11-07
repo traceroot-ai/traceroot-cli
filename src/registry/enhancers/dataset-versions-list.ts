@@ -8,10 +8,12 @@ import { rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
+  addCursorFlag,
   addLimitFlag,
   countLine,
   limitBounds,
   orDash,
+  parseCursor,
   renderEmptyPage,
   warnIfCapped,
   when,
@@ -30,7 +32,9 @@ export function renderVersionList(
   const rows = res.versions ?? [];
   if (rows.length === 0) {
     renderEmptyPage(
-      "no versions published for this dataset",
+      state.cursor === undefined
+        ? "no versions published for this dataset"
+        : "no more versions after this cursor",
       state.limit,
       "list_dataset_versions",
       res.next_cursor,
@@ -70,7 +74,7 @@ export function renderVersionList(
 
 export const datasetVersionsList: Enhancer = {
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "list_dataset_versions", "versions");
+    addCursorFlag(addLimitFlag(cmd, "list_dataset_versions", "versions"));
   },
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
@@ -78,14 +82,16 @@ export const datasetVersionsList: Enhancer = {
       input.opts.limit as string | undefined,
       limitBounds("list_dataset_versions").max,
     );
+    const cursor = parseCursor(input);
     return {
       args: {
         ...(input.positionals.dataset_id === undefined
           ? {}
           : { dataset_id: input.positionals.dataset_id }),
         ...(limit === undefined ? {} : { limit }),
+        ...(cursor === undefined ? {} : { cursor }),
       },
-      state: { limit } satisfies PagedState,
+      state: { limit, cursor } satisfies PagedState,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {

@@ -1,15 +1,16 @@
 import { REGISTRY } from "@traceroot-ai/tools";
 import type { Command } from "commander";
-import { type Writers, logProgress, logWarn } from "../../output.js";
+import { CliError, ExitCode, type Writers, logProgress, logWarn } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { formatTimestamp } from "../../util/index.js";
 import { onceOption } from "../flags.js";
 import { sanitize } from "./sql.js";
+import type { ResolveInput } from "./types.js";
 
 /**
  * The pieces the five evaluation reads share: how an absent value prints, how a
- * cursor-paged command flags an unreachable tail, and the `--limit` flag whose
- * bounds come from the registry rather than from a number copied into this file.
+ * cursor-paged command says there is a next page and how to read it, and the
+ * `--limit` and `--cursor` flags.
  */
 
 /**
@@ -61,6 +62,32 @@ export function addLimitFlag(
     `${noun} to return, 1-${max}${shown === undefined ? "" : ` (default ${shown})`}`,
     onceOption("--limit"),
   );
+}
+
+/**
+ * The `--cursor` flag. Its value is the `next_cursor` a previous page returned,
+ * passed back as it came: the server owns what a cursor means and rejects one
+ * that names no row in the set being paged.
+ */
+export function addCursorFlag(cmd: Command): Command {
+  return cmd.option(
+    "--cursor <cursor>",
+    "read the page after a previous one: the next_cursor it returned",
+    onceOption("--cursor"),
+  );
+}
+
+/**
+ * `--cursor`, validated. An empty cursor is a usage error rather than "the first
+ * page": it is a variable that expanded to nothing, and reading page one again
+ * would loop a script forever.
+ */
+export function parseCursor(input: ResolveInput): string | undefined {
+  const cursor = input.opts.cursor as string | undefined;
+  if (cursor !== undefined && cursor.trim() === "") {
+    throw new CliError("--cursor must not be empty", ExitCode.usage);
+  }
+  return cursor;
 }
 
 /**
@@ -148,11 +175,7 @@ export function renderEmptyPage(
 }
 
 /**
- * Says, out loud, when a page is all there is.
- *
- * These routes are cursor-paged and the CLI deliberately exposes no `--cursor`,
- * so a result set larger than one page has an unreachable tail — and the only
- * dishonest option is to print a full-looking table and say nothing.
+ * Says, out loud, when a page is not all there is, and how to read the next one.
  *
  * Triggered by evidence rather than arithmetic. When the response carries
  * `next_cursor` at all, it is the answer: a string means more, `null` means this
@@ -160,6 +183,9 @@ export function renderEmptyPage(
  * response with no `next_cursor` field falls back to "the page came back full",
  * where an occasional false positive is the safe direction to be wrong in. `noun`
  * is singular ("case"), and pluralised to match each count.
+ *
+ * The hint names the flag and the cursor, not a whole command line: rebuilding
+ * argv would echo a global `--api-key` into a terminal or a CI log.
  */
 export function warnIfCapped(
   received: number,
@@ -175,27 +201,32 @@ export function warnIfCapped(
   // look full and warn on every call, which trains people to ignore the warning.
   // With no page size at all, the server sent everything it had.
   const pageSize = requested ?? serverDefault;
-  const hasMore =
-    nextCursor === undefined
-      ? pageSize !== undefined && received > 0 && received >= pageSize
-      : typeof nextCursor === "string" && nextCursor !== "";
-  if (!hasMore) return;
   const ceiling = requested === undefined ? "" : ` (--limit ${requested})`;
-  // At the maximum there is nothing left to raise, so the advice changes rather
-  // than telling someone to do what they already did.
+  const shown = `showing ${received} ${plural(received, noun)}${ceiling}`;
+  if (typeof nextCursor === "string" && nextCursor !== "") {
+    logWarn(
+      `${shown} and there are more. For the next page, run this command again with ` +
+        `--cursor ${clean(nextCursor)}`,
+      writers,
+    );
+    return;
+  }
+  const full =
+    nextCursor === undefined && pageSize !== undefined && received > 0 && received >= pageSize;
+  if (!full) return;
+  // A full page and no cursor to continue from: all that is left is to widen the
+  // page. At the maximum there is nothing left to raise, so the advice changes
+  // rather than telling someone to do what they already did.
   const widen =
-    (pageSize ?? 0) >= max
-      ? `This command reads ONE page, and ${max} is the most a page holds.`
-      : `This command reads ONE page: raise --limit up to ${max} to widen it.`;
-  const beyond = `${max} ${plural(max, noun)}`;
-  logWarn(
-    `showing ${received} ${plural(received, noun)}${ceiling} and there are more. ${widen} ` +
-      `There is no cursor flag, so anything beyond ${beyond} is not reachable from the CLI.`,
-    writers,
-  );
+    pageSize >= max
+      ? `The page came back full with no cursor to continue from, and ${max} is the most a page holds.`
+      : `The page came back full with no cursor to continue from: raise --limit up to ${max} to widen it.`;
+  logWarn(`${shown} and there are more. ${widen}`, writers);
 }
 
 /** State a paged read threads from `resolveArgs` to `render`. */
 export interface PagedState {
   limit?: number;
+  /** The `--cursor` this page was read after; an empty page then says "no more". */
+  cursor?: string;
 }
