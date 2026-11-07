@@ -6,7 +6,7 @@ import { CliError, ExitCode, type Writers, defaultWriters } from "../output.js";
 import { ENHANCERS } from "./enhancers/index.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./enhancers/types.js";
 import { acceptsProjectScope, executeTool, transportFromContext } from "./execute.js";
-import { onceOption, rejectExtras } from "./flags.js";
+import { booleanOption, onceOption, rejectExtras } from "./flags.js";
 
 export { rejectExtras } from "./flags.js";
 import { GROUPS, PLACEMENTS, type Placement } from "./naming.js";
@@ -250,7 +250,11 @@ function addSchemaFlags(cmd: Command, entry: RegistryEntry, positionals: Set<str
     const flag = `--${kebab(prop)}`;
     const description = typeof schema.description === "string" ? schema.description : "";
     if (schema.type === "boolean") {
-      cmd.option(flag, description);
+      // `--flag` alone means true; `--flag false`, `--flag=false` and
+      // `--no-flag` send false. Declared after `--flag`, `--no-flag` sets no
+      // default, so an omitted flag still leaves the field out of the body.
+      cmd.option(`${flag} [true|false]`, description, booleanOption(flag));
+      cmd.option(`--no-${kebab(prop)}`, `same as ${flag} false`);
     } else {
       // Never .default(...) here — onceOption would falsely reject the first use.
       cmd.option(`${flag} <value>`, description, onceOption(flag));

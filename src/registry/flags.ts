@@ -28,3 +28,23 @@ export function onceOption(flag: string): (val: string, prev: string | undefined
     return val;
   };
 }
+
+/**
+ * Parser for a schema boolean's optional value. A presence-only switch can
+ * only send `true`, so a field whose `false` matters (a detector's `enabled`
+ * pause switch) needs this value form. Commander calls this only when a value
+ * follows the flag; a bare `--flag` still means true.
+ * Strict on purpose: an optional value swallows the next non-dash operand, so
+ * anything that is not true/false (a misplaced positional) must fail loudly.
+ */
+export function booleanOption(flag: string): (val: string) => boolean {
+  return (val: string): boolean => {
+    const normalized = val.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+    throw new CliError(
+      `${flag} must be true or false, got '${val}'; a value right after ${flag} is read as its value, so put positional arguments first or write ${flag}=true`,
+      ExitCode.usage,
+    );
+  };
+}
