@@ -104,6 +104,17 @@ export const PLACEMENTS: Record<string, Placement> = {
 };
 
 /**
+ * Flags whose name differs from the field's kebab-case spelling, keyed by field.
+ * Commander reads any flag that starts with `--no-` as switching another flag
+ * off, so a field named `no_*` cannot keep its derived spelling; the factory
+ * refuses to register one that has no entry here. The derived spelling is still
+ * accepted as a hidden alias, so a flag guessed from the API field works too.
+ */
+export const FLAG_NAMES: Record<string, string> = {
+  no_data_mode: "on-no-data",
+};
+
+/**
  * Group commands in `--help` order, with the description each group shows.
  * A nested group is keyed by its space-joined path ("datasets versions"), and
  * must be listed after its parent so `--help` ordering follows declaration.
