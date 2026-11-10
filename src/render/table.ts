@@ -1,3 +1,5 @@
+import { sanitizeTerminalText } from "./sanitize.js";
+
 /** Optional behavior for {@link renderTable}. */
 export interface RenderTableOptions {
   /**
@@ -27,9 +29,13 @@ export function renderTable(
 ): string {
   const headerStyle = options.headerStyle ?? ((line: string): string => line);
   const rowStyle = options.rowStyle ?? ((line: string): string => line);
-  const widths = headers.map((header, col) => {
+  // Sanitize before measuring or padding so untrusted newlines and terminal
+  // controls cannot affect layout. Styling is deliberately applied afterwards.
+  const safeHeaders = headers.map(sanitizeTerminalText);
+  const safeRows = rows.map((row) => row.map((cell) => sanitizeTerminalText(cell ?? "")));
+  const widths = safeHeaders.map((header, col) => {
     let max = header.length;
-    for (const row of rows) {
+    for (const row of safeRows) {
       const cell = row[col] ?? "";
       if (cell.length > max) {
         max = cell.length;
@@ -39,19 +45,19 @@ export function renderTable(
   });
 
   const renderRow = (cells: string[]): string =>
-    headers
+    safeHeaders
       .map((_, col) => {
         const cell = cells[col] ?? "";
         const width = widths[col] ?? cell.length;
         // Do not pad the final column: trailing whitespace serves no purpose.
-        return col === headers.length - 1 ? cell : cell.padEnd(width);
+        return col === safeHeaders.length - 1 ? cell : cell.padEnd(width);
       })
       .join("  ")
       .trimEnd();
 
   const lines = [
-    headerStyle(renderRow(headers)),
-    ...rows.map((row, i) => rowStyle(renderRow(row), i)),
+    headerStyle(renderRow(safeHeaders)),
+    ...safeRows.map((row, i) => rowStyle(renderRow(row), i)),
   ];
   return lines.join("\n");
 }

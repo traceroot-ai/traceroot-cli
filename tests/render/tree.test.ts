@@ -12,6 +12,34 @@ function span(partial: Partial<SpanLike> & { span_id: string }): SpanLike {
 }
 
 describe("renderTree", () => {
+  it("sanitizes untrusted span names, error messages and model names", () => {
+    const out = renderTree([
+      span({
+        span_id: "root",
+        name: "root\n\x1b[2J",
+        status: "ERROR",
+        status_message: "failed\r\n\t\x1b]0;injected title\x07details",
+        model_name: "模型\x1b[31m",
+      }),
+    ]);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting that controls are absent.
+    expect(out).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+    expect(out).not.toContain("injected title");
+    expect(out).toContain("root");
+    expect(out).toContain("模型");
+    expect(out).toContain("failed details");
+  });
+
+  it("preserves renderer-owned ANSI styling after sanitizing span text", () => {
+    const out = renderTree(
+      [span({ span_id: "bad", name: "bad\x1b[31m", status: "ERROR" })],
+      { color: true },
+    );
+    expect(out).toContain("\x1b[91m");
+    expect(out).toContain("\x1b[0m");
+    expect(out).not.toContain("31m");
+  });
+
   it("colors an error span red only when color is enabled", () => {
     const spans = [
       span({ span_id: "ok", name: "ok-span", status: "OK" }),
