@@ -1,5 +1,5 @@
 import { CliError, ExitCode } from "../output.js";
-import { formatTimestamp, parseDuration } from "../util/index.js";
+import { TIMESTAMP_DISPLAY_LOCALE, formatTimestamp, parseDuration } from "../util/index.js";
 
 /** Resolved, backend-ready ISO time bounds derived from the CLI time flags. */
 export interface TimeRange {
@@ -82,11 +82,14 @@ function wallClockToUtc(
 }
 
 /**
- * Resolves the abbreviation produced by Intl for a given UTC instant and zone.
- * Returns the short timezone name (e.g. "MDT").
+ * Resolves the abbreviation the STARTED column would print for a given UTC
+ * instant and zone (e.g. "MDT"). Uses the display locale, not en-US: Intl
+ * short zone names differ between locales (en-CA renders "IST"/"AEST" where
+ * en-US renders "GMT+5:30"/"GMT+10"), and the copied-value check below must
+ * accept exactly what {@link formatTimestamp} printed (issue #182).
  */
 function resolveAbbreviation(utcMs: number, timeZone: string): string {
-  const fmt = new Intl.DateTimeFormat("en-US", {
+  const fmt = new Intl.DateTimeFormat(TIMESTAMP_DISPLAY_LOCALE, {
     timeZone,
     timeZoneName: "short",
   });
@@ -129,8 +132,8 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
   const trimmed = raw.trim();
 
   // Quoted local display with a GMT±offset (e.g. "2026-06-23 17:30:00 GMT+5:30") —
-  // the form this CLI's STARTED column shows in zones Intl renders as GMT offsets
-  // (IST, JST, CET, BRT, …). The offset is explicit and unambiguous, so convert
+  // the form this CLI's STARTED column shows in zones whose Intl short name is a
+  // GMT offset (Etc/GMT±, …). The offset is explicit and unambiguous, so convert
   // straight to ISO; no local-zone lookup or abbreviation check is needed.
   const gmtMatch = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(
     trimmed,
@@ -165,10 +168,15 @@ function normalizeTimestamp(raw: string, flag: string, timeZone: string): string
     return d.toISOString();
   }
 
-  // Try the quoted local display format: "YYYY-MM-DD HH:mm:ss TZ_ABBR" (named abbr)
-  const displayMatch = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) ([A-Za-z]{2,5})$/.exec(
-    trimmed,
-  );
+  // Try the quoted local display format: "YYYY-MM-DD HH:mm:ss TZ_NAME" (named
+  // zone). The name is whatever the display locale renders for the local zone,
+  // so it can be a short abbreviation ("IST") or a multi-word fallback for
+  // zones with no short name ("Gulf Time" in en-CA) — either way the exact
+  // rendered form is what the STARTED column shows and what must parse back.
+  const displayMatch =
+    /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) ([A-Za-z][A-Za-z ]{0,38}[A-Za-z])$/.exec(
+      trimmed,
+    );
   if (displayMatch !== null) {
     const [, ys, ms, ds, hs, mins, ss, abbr] = displayMatch as unknown as [
       string,
