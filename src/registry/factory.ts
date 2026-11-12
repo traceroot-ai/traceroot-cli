@@ -284,7 +284,10 @@ function addSchemaFlags(
       options.push(alias);
     }
     for (const option of options) cmd.addOption(option);
-    keys.set(prop, options.map((option) => option.attributeName()));
+    keys.set(
+      prop,
+      options.map((option) => option.attributeName()),
+    );
   }
   return keys;
 }
