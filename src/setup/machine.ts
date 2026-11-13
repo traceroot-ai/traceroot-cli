@@ -1614,9 +1614,9 @@ async function configuredCliKey(
 /**
  * Whether `whoami` reports the key as admin-scoped.
  *
- * Read structurally because `key_scope` is newer than the vendored schema. A
- * deployment that predates scopes sends nothing, which reads as no, so nothing
- * changes there.
+ * Read structurally although the contract requires `key_scope`: a deployment
+ * that predates scopes sends nothing, which reads as no, so nothing changes
+ * there.
  */
 function isAdminScoped(who: Awaited<ReturnType<ApiClient["whoami"]>>): boolean {
   return (who as { key_scope?: unknown }).key_scope === "admin";

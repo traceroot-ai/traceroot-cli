@@ -170,7 +170,7 @@ describe("the Node floor setup checks for itself", () => {
 describe("the package's own engines floor", () => {
   const pkg = JSON.parse(
     readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
-  ) as { engines?: { node?: string } };
+  ) as { engines?: { node?: string }; dependencies?: Record<string, string> };
 
   it("is a plain lower bound that setup's own floor clears", () => {
     // Not `toBe(">=20.3")`, which restated the file under test and so could
@@ -185,12 +185,50 @@ describe("the package's own engines floor", () => {
     expect(meetsNodeFloor(MIN_SETUP_NODE, declared.replace(/[^\d.]/g, ""))).toBe(true);
   });
 
-  // Blocked on a decision, not on code: walking the runtime `dependencies` in
-  // `package-lock.json` finds `@traceroot-ai/tools@0.5.0` declaring `>=24`
-  // against this package's `>=20.3` (`@clack/prompts`' `>= 20.12.0` is setup's
-  // alone: loaded lazily, behind `MIN_SETUP_NODE`). The assertion fails until
-  // the supported Node range is chosen, so it is not written as one.
-  it.todo(
-    "is at least the floor every runtime dependency declares (fails today: @traceroot-ai/tools@0.5.0 declares >=24; the supported Node range is the product's call)",
-  );
+  it("is at least the floor every runtime dependency declares", () => {
+    // Walks the installed runtime `dependencies`, resolved the way Node resolves
+    // them, so it reads the manifests that actually load. The prompts are left
+    // out: `@clack`'s `>= 20.12.0` is setup's alone, loaded lazily behind
+    // `MIN_SETUP_NODE` and checked against it above.
+    const floor = (pkg.engines?.node ?? "").replace(/[^\d.]/g, "");
+    const root = fileURLToPath(new URL("..", import.meta.url));
+    const checked: string[] = [];
+    const queue: Array<[string, string]> = Object.keys(pkg.dependencies ?? {}).map((name) => [
+      name,
+      root,
+    ]);
+    for (let head = queue.shift(); head !== undefined; head = queue.shift()) {
+      const [name, from] = head;
+      if (isPrompts(name) || checked.includes(name)) continue;
+      checked.push(name);
+      const dir = installedDir(name, from);
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        engines?: { node?: string };
+        dependencies?: Record<string, string>;
+      };
+      const declared = manifest.engines?.node;
+      if (declared !== undefined) {
+        expect(declared, `${name} declares a range this check cannot compare`).toMatch(
+          /^>=\s*\d+(\.\d+){0,2}$/,
+        );
+        expect(
+          meetsNodeFloor(floor, declared.replace(/[^\d.]/g, "")),
+          `${name} declares ${declared}, above this package's ${pkg.engines?.node}`,
+        ).toBe(true);
+      }
+      for (const dep of Object.keys(manifest.dependencies ?? {})) queue.push([dep, dir]);
+    }
+    // The guard on the guard: a walk that resolved nothing would pass every
+    // assertion above while checking nothing at all.
+    expect(checked).toContain("@traceroot-ai/tools");
+  });
 });
+
+/** The directory `name` loads from, looked up from `from` as Node looks it up. */
+function installedDir(name: string, from: string): string {
+  for (let dir = from; ; dir = dirname(dir)) {
+    const candidate = join(dir, "node_modules", name);
+    if (existsFile(join(candidate, "package.json"))) return candidate;
+    if (dirname(dir) === dir) throw new Error(`${name} is not installed`);
+  }
+}

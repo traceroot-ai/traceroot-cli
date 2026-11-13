@@ -35,6 +35,7 @@ function span(over: Partial<TraceDetail["spans"][number]>): TraceDetail["spans"]
     total_tokens: null,
     cost: null,
     cost_details: {},
+    error_type: "",
     usage_details: {},
     ...over,
   };
@@ -71,8 +72,13 @@ function finding(over: Partial<FindingDetail> = {}): FindingDetail {
     timestamp: "2024-01-01T00:00:00Z",
     detectors: ["hallucination", "failure"],
     results: [],
-    rca: { status: "done", result: "Root cause: the model cited a source absent from the tools." },
+    rca: {
+      inherited: false,
+      status: "done",
+      result: "Root cause: the model cited a source absent from the tools.",
+    },
     run_ids: [],
+    signals: [],
     ...over,
   };
 }
@@ -356,7 +362,9 @@ describe("runGet (finding indicator)", () => {
       json: false,
       writers: w,
       traceId: "t-1",
-      getFinding: fakeGetFinding(finding({ rca: { status: "running", result: null } })),
+      getFinding: fakeGetFinding(
+        finding({ rca: { inherited: false, status: "running", result: null } }),
+      ),
     });
     expect(out.data).toContain("RCA:");
     expect(out.data).toContain("running");
@@ -386,7 +394,9 @@ describe("runGet (finding indicator)", () => {
       json: false,
       writers: w,
       traceId: "t-1",
-      getFinding: fakeGetFinding(finding({ rca: { status: "done", result: longResult } })),
+      getFinding: fakeGetFinding(
+        finding({ rca: { inherited: false, status: "done", result: longResult } }),
+      ),
     });
     expect(out.data).toContain("RCA:");
     expect(out.data).toContain("…");
@@ -402,7 +412,7 @@ describe("runGet (finding indicator)", () => {
       writers: w,
       traceId: "t-1",
       getFinding: fakeGetFinding(
-        finding({ rca: { status: "done", result: "- Root cause: boom" } }),
+        finding({ rca: { inherited: false, status: "done", result: "- Root cause: boom" } }),
       ),
     });
     expect(out.data).toContain("Root cause: boom");

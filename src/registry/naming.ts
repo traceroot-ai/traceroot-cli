@@ -101,6 +101,12 @@ export const PLACEMENTS: Record<string, Placement> = {
   list_evaluations: { kind: "command", path: ["evals", "list"] },
   list_evaluation_runs: { kind: "command", path: ["evals", "runs", "list"] },
   get_evaluation_run: { kind: "command", path: ["evals", "runs", "get"] },
+  list_signals: { kind: "command", path: ["signals", "list"] },
+  get_signal: { kind: "command", path: ["signals", "get"] },
+  set_signal_status: {
+    kind: "internal",
+    note: "no CLI surface until 'signals status' exists, so a signal is resolved or reopened in the web app; the one write exempt from being a command",
+  },
 };
 
 /**
@@ -114,6 +120,7 @@ export const GROUPS: Record<string, string> = {
   traces: "Work with traces",
   detectors: "Work with detectors",
   findings: "Work with detector findings",
+  signals: "Work with signals: the recurring problems detector findings are grouped into",
   alerts: "Work with threshold alerts",
   dashboards: "Work with dashboards",
   widgets: "Work with dashboard widgets",
