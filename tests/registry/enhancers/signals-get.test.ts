@@ -122,6 +122,16 @@ describe("signals get rendering", () => {
     expect(err.data).toContain("'traceroot signals get sig_0d2e'");
   });
 
+  it("a merged signal with no recent traces gives the merged pointer as the only reason", () => {
+    const { w, out, err } = sinks();
+    renderSignal(signal({ merged_into_id: "sig_0d2e", recent_hits: [] }), w, "UTC");
+    expect(out.data).not.toContain("TRACE ID");
+    expect(err.data).toBe(
+      "this signal was merged: read the one its findings moved to with " +
+        "'traceroot signals get sig_0d2e'\n",
+    );
+  });
+
   it("escapes control characters in server text instead of sending them to the terminal", () => {
     const hostile = "\u001b[2J\u001b]0;pwned\u0007x";
     const { w, out, err } = sinks();

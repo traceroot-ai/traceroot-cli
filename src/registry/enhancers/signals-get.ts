@@ -64,10 +64,14 @@ export function renderSignal(signal: Signal, writers: Writers, timeZone?: string
   const hits = signal.recent_hits;
   if (hits === undefined || hits === null) return;
   if (hits.length === 0) {
-    logProgress(
-      "no recent traces are shown: traces older than your plan's retention are left out",
-      writers,
-    );
+    // A merged signal's hits moved with its findings: the pointer above is why
+    // none are listed, not the retention window.
+    if (typeof signal.merged_into_id !== "string") {
+      logProgress(
+        "no recent traces are shown: traces older than your plan's retention are left out",
+        writers,
+      );
+    }
     return;
   }
 
