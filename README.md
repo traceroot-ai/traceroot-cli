@@ -126,6 +126,8 @@ project-scoped and need none of this.
 | `detectors get <id>` | Show one detector. |
 | `findings list` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id>`, `--trace <id>` |
 | `findings get [id]` | Show one finding: per-detector results and its free-text RCA. Look it up by finding id or with `--trace <id>` (exactly one). |
+| `signals list` | List the project's signals, the recurring problems findings are grouped into, newest created first: status, hits, when each was last seen, detector and title. Merged signals are left out. `--status <open\|resolved\|dismissed>`, `--detector-id <id>` (an id from `detectors list`, not a name), `--limit <n>`, `--page <n>` |
+| `signals get <id>` | Show one signal: its status (with when it was resolved and how often it reopened), detector, hit count, first and last seen, the state of its analysis, and up to 20 recent traces with their finding ids. Ends by naming `traces get` and `findings get` for the newest; a merged signal names the one it moved to. |
 | `alerts list` | List the project's threshold alerts with their status, severity and rule. `--limit <n>`, `--page <n>`, `--search <q>` |
 | `alerts get <id>` | Show one alert's full rule, filters, renotify and evaluation state. |
 | `alerts create` | Create a threshold alert. Takes the rule as JSON: `--from-file <path>` (or `-` for stdin), with flags overriding single fields. |
