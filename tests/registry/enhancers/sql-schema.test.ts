@@ -1,12 +1,12 @@
-import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import type { SqlResult, SqlSchema } from "../../../src/api/client.js";
 import { buildProgram } from "../../../src/cli.js";
 import { CliError, ExitCode } from "../../../src/output.js";
 import { renderSqlSchema } from "../../../src/registry/enhancers/sql-schema.js";
 import { GROUPS, PLACEMENTS } from "../../../src/registry/naming.js";
-import { createFakeFetch, errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
+import { errorResponse, jsonResponse } from "../../helpers/fakeFetch.js";
 import { withoutForcedColor } from "../../helpers/plainColor.js";
+import { harness, sqlCommand } from "../../helpers/sqlHarness.js";
 import { StringSink } from "../../helpers/stringSink.js";
 
 withoutForcedColor();
@@ -32,22 +32,6 @@ function makeSchema(): SqlSchema {
       },
     ],
   };
-}
-
-function harness(response: Response) {
-  const fake = createFakeFetch(() => response);
-  const out = new StringSink();
-  const err = new StringSink();
-  const program = buildProgram({ registry: { fetchImpl: fake.fetchImpl, writers: { out, err } } });
-  const run = (...argv: string[]) =>
-    program.parseAsync(["--api-key", "k", "--host", "https://api.test", ...argv], { from: "user" });
-  return { fake, out, err, run, program };
-}
-
-function sqlCommand(program: Command): Command {
-  const sql = program.commands.find((command) => command.name() === "sql");
-  if (sql === undefined) throw new Error("sql not registered");
-  return sql;
 }
 
 describe("renderSqlSchema", () => {
@@ -122,6 +106,27 @@ describe("traceroot sql schema", () => {
       expect(h.fake.calls).toHaveLength(0);
     },
   );
+
+  it("runs with a global option before `sql`", async () => {
+    const h = harness(jsonResponse(makeSchema()));
+    await h.run("--project", "p", "sql", "schema");
+    expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/sql/schema");
+    expect(h.program.opts().project).toBe("p");
+  });
+
+  it.each([
+    [["sql", "schema", "-- note"], "-- note"],
+    [["sql", "schema", "-- note\nSELECT 1"], "-- note\nSELECT 1"],
+    [["sql", "--csv", "schema", "-- note"], "-- note"],
+    [["sql", "schema", "--bogus"], "--bogus"],
+  ])("reports %j as an unknown option of the subcommand", async (argv, flag) => {
+    const h = harness(jsonResponse(makeSchema()));
+    await expect(h.run(...argv)).rejects.toMatchObject({
+      code: "commander.unknownOption",
+      message: expect.stringContaining(`unknown option '${flag}'`),
+    });
+    expect(h.fake.calls).toHaveLength(0);
+  });
 
   it("lists only the program's options as global in its help", () => {
     const { program } = harness(jsonResponse(makeSchema()));
