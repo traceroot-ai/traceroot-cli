@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { type ParamSchema, REGISTRY, type RegistryEntry } from "@traceroot-ai/tools";
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import { contextFromCommand } from "../commands/shared.js";
 import { CliError, ExitCode, type Writers, defaultWriters } from "../output.js";
 import { ENHANCERS } from "./enhancers/index.js";
@@ -9,7 +9,7 @@ import { acceptsProjectScope, executeTool, transportFromContext } from "./execut
 import { booleanOption, onceOption, rejectExtras } from "./flags.js";
 
 export { rejectExtras } from "./flags.js";
-import { GROUPS, PLACEMENTS, type Placement } from "./naming.js";
+import { FLAG_NAMES, GROUPS, PLACEMENTS, type Placement } from "./naming.js";
 import { renderDefault } from "./render.js";
 
 export interface RegistryDeps {
@@ -75,7 +75,16 @@ function pathParams(entry: RegistryEntry): string[] {
   return [...entry.path.matchAll(/\{([^{}]+)\}/g)].map((match) => match[1] as string);
 }
 
-/** Commander camel-cases `--start-after` to opts.startAfter; mirror it. */
+/** The flag that sets a body field: its kebab-case name unless FLAG_NAMES renames it. */
+function flagFor(prop: string): string {
+  return `--${FLAG_NAMES[prop] ?? kebab(prop)}`;
+}
+
+/**
+ * Commander camel-cases `--start-after` to opts.startAfter; mirror it. Only for
+ * flags an enhancer declared itself: addSchemaFlags reports the keys of the
+ * options it registers.
+ */
 function optKey(prop: string): string {
   return prop.replace(/_([a-z0-9])/g, (_match, ch: string) => ch.toUpperCase());
 }
@@ -125,10 +134,11 @@ function registerOne(
     }
   }
 
+  let flagKeys = new Map<string, string[]>();
   if (enhancer?.flags !== undefined) {
     enhancer.flags(cmd);
   } else {
-    addSchemaFlags(cmd, entry, new Set(positionals));
+    flagKeys = addSchemaFlags(cmd, entry, new Set(positionals));
   }
 
   // Write commands accept their whole body as one JSON document. Added by the
@@ -163,7 +173,7 @@ function registerOne(
     const resolved =
       enhancer?.resolveArgs !== undefined
         ? enhancer.resolveArgs(input)
-        : defaultResolveArgs(entry, input, positionals);
+        : defaultResolveArgs(entry, input, positionals, flagKeys);
 
     // Applied in the shared action path (not inside defaultResolveArgs) so
     // --from-file works the same regardless of which resolver ran — an
@@ -244,28 +254,65 @@ function rejectGroupOptions(command: Command, fullName: string): void {
   }
 }
 
-function addSchemaFlags(cmd: Command, entry: RegistryEntry, positionals: Set<string>): void {
+/**
+ * Registers a flag per body field and returns, per field, the opts() keys its
+ * flags write to. The keys come from the registered options rather than from
+ * the field name, so a renamed flag is never read back from the wrong key.
+ */
+function addSchemaFlags(
+  cmd: Command,
+  entry: RegistryEntry,
+  positionals: Set<string>,
+): Map<string, string[]> {
+  const keys = new Map<string, string[]>();
   for (const [prop, schema] of Object.entries(entry.inputSchema.properties)) {
     if (positionals.has(prop)) continue;
-    const flag = `--${kebab(prop)}`;
-    const description = typeof schema.description === "string" ? schema.description : "";
-    if (schema.type === "boolean") {
-      // `--flag` alone means true; `--flag false`, `--flag=false` and
-      // `--no-flag` send false. Declared after `--flag`, `--no-flag` sets no
-      // default, so an omitted flag still leaves the field out of the body.
-      cmd.option(`${flag} [true|false]`, description, booleanOption(flag));
-      cmd.option(`--no-${kebab(prop)}`, `same as ${flag} false`);
-    } else {
-      // Never .default(...) here — onceOption would falsely reject the first use.
-      cmd.option(`${flag} <value>`, description, onceOption(flag));
+    const flag = flagFor(prop);
+    if (flag.startsWith("--no-")) {
+      throw new Error(
+        `'${entry.name}' field '${prop}' would get the flag ${flag}, which commander reads as turning --${flag.slice(5)} off; name its flag in FLAG_NAMES (src/registry/naming.ts)`,
+      );
     }
+    const description = typeof schema.description === "string" ? schema.description : "";
+    const options = [fieldOption(flag, schema, description)];
+    const derived = `--${kebab(prop)}`;
+    if (derived !== flag) {
+      const alias = fieldOption(derived, schema, "").hideHelp();
+      // A `--no-` flag is otherwise a negation: commander would preset its key
+      // to true, and onceOption would read that as an earlier use.
+      alias.negate = false;
+      options.push(alias);
+    }
+    for (const option of options) cmd.addOption(option);
+    if (schema.type === "boolean") {
+      // Declared after `--flag`, `--no-flag` sets no default, so an omitted
+      // flag still leaves the field out of the body. It writes the same
+      // opts() key as `--flag`, so it is not listed in `keys` a second time.
+      cmd.option(`--no-${flag.slice(2)}`, `same as ${flag} false`);
+    }
+    keys.set(
+      prop,
+      options.map((option) => option.attributeName()),
+    );
   }
+  return keys;
+}
+
+function fieldOption(flag: string, schema: ParamSchema, description: string): Option {
+  if (schema.type === "boolean") {
+    // `--flag` alone means true; `--flag false`, `--flag=false` and `--no-flag`
+    // (registered in addSchemaFlags) send false.
+    return new Option(`${flag} [true|false]`, description).argParser(booleanOption(flag));
+  }
+  // Never .default(...) here — onceOption would falsely reject the first use.
+  return new Option(`${flag} <value>`, description).argParser(onceOption(flag));
 }
 
 function defaultResolveArgs(
   entry: RegistryEntry,
   input: ResolveInput,
   positionals: string[],
+  flagKeys: Map<string, string[]>,
 ): Resolved {
   rejectExtras(input);
   const args: Record<string, unknown> = {};
@@ -275,15 +322,25 @@ function defaultResolveArgs(
   }
   for (const [prop, schema] of Object.entries(entry.inputSchema.properties)) {
     if (prop in args) continue;
-    const raw = input.opts[optKey(prop)];
-    if (raw === undefined) continue;
-    args[prop] = coerce(prop, schema, raw);
+    const given = (flagKeys.get(prop) ?? [optKey(prop)]).filter(
+      (key) => input.opts[key] !== undefined,
+    );
+    if (given.length > 1) {
+      // Each spelling has its own onceOption, so one of each gets this far.
+      throw new CliError(
+        `${flagFor(prop)} may only be given once (--${kebab(prop)} is the same flag)`,
+        ExitCode.usage,
+      );
+    }
+    const [key] = given;
+    if (key === undefined) continue;
+    args[prop] = coerce(prop, schema, input.opts[key]);
   }
   return { args };
 }
 
 function coerce(prop: string, schema: ParamSchema, raw: unknown): unknown {
-  const flag = `--${kebab(prop)}`;
+  const flag = flagFor(prop);
   if (schema.type === "boolean") return raw === true;
   if (typeof raw !== "string") return raw;
   if (schema.type === "integer") {
@@ -416,7 +473,7 @@ export function assertRequiredArgs(
         : "";
     throw new CliError(
       `missing required ${missing.length === 1 ? "field" : "fields"}: ${missing
-        .map((name) => `--${kebab(name)}`)
+        .map((name) => flagFor(name))
         .join(", ")}${hint}`,
       ExitCode.usage,
     );
@@ -442,7 +499,7 @@ export function assertEnums(entry: RegistryEntry, args: Record<string, unknown>)
     const value = args[prop];
     if (value === undefined) continue;
     if (!allowed.includes(value)) {
-      throw new CliError(`--${kebab(prop)} must be one of: ${allowed.join(", ")}`, ExitCode.usage);
+      throw new CliError(`${flagFor(prop)} must be one of: ${allowed.join(", ")}`, ExitCode.usage);
     }
   }
 }

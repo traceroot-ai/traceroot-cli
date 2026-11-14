@@ -84,10 +84,10 @@ function isErrorBody(value: unknown): value is ErrorBody {
 
 /**
  * Classifies a non-2xx HTTP status into a CLI exit-code class so scripts can tell
- * re-auth (401/403) from give-up (404) from fix-your-input (400/422) from an
- * unexpected server error. Anything else (5xx, other 4xx) is treated as
- * internal (1). Shared with the registry executor so the exit-code contract has
- * exactly one definition.
+ * re-auth (401/403) from give-up (404) from fix-your-input (400/422) from a state
+ * conflict (409) from an unexpected server error. Anything else (5xx, other 4xx)
+ * is treated as internal (1). Shared with the registry executor so the exit-code
+ * contract has exactly one definition.
  */
 export function exitCodeForStatus(status: number): number {
   if (status === 401 || status === 403) {
@@ -110,6 +110,14 @@ export function exitCodeForStatus(status: number): number {
   // and spends the next budget too.
   if (status === 429) {
     return ExitCode.network;
+  }
+  // The request was well-formed but collides with current state (a taken name, a
+  // reached limit, a status that moved since the read). Not `usage`: the input is
+  // valid and the same flags can succeed once the state changes; the remedy is to
+  // change what was asked for (another name) or that state, since an immediate
+  // retry fails the same way. Not `internal`: nothing is broken.
+  if (status === 409) {
+    return ExitCode.conflict;
   }
   return ExitCode.internal;
 }

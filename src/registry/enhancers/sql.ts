@@ -17,6 +17,12 @@ const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent.
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
+// A query can open with a SQL line comment, which starts with `--` like an
+// option. An option name never has whitespace right after the dashes and never
+// holds a line break, so such an argument is the query. `--note` on its own
+// still reads as an option; `sql -- "--note"` sends it.
+const COMMENT_QUERY = /^--(?:\s|.*[\r\n])/;
+
 const maxRowsSchema = REGISTRY.find((entry) => entry.name === "run_sql")?.inputSchema.properties
   .max_rows;
 
@@ -56,6 +62,27 @@ export function resolveQuery(extras: string[], file: string | undefined): string
     throw new CliError("the query is empty", ExitCode.usage);
   }
   return query;
+}
+
+/** Makes `cmd` read an argument matching {@link COMMENT_QUERY} as an operand. */
+function acceptCommentQueries(cmd: Command): void {
+  const parseOptions = cmd.parseOptions.bind(cmd);
+  cmd.parseOptions = (argv) => {
+    let parsed = parseOptions(argv);
+    // A subcommand's arguments pass through here first, and it reports its own
+    // unknown options.
+    const isSubcommand = (name?: string) => cmd.commands.some((sub) => sub.name() === name);
+    if (isSubcommand(cmd.parent?.args[1]) || isSubcommand(parsed.operands[0])) return parsed;
+    let query = parsed.unknown[0];
+    while (query !== undefined && COMMENT_QUERY.test(query)) {
+      // Commander files everything after an unknown option as unknown too, so
+      // parse the rest again. Options it recognised are already out of the list.
+      const rest = parseOptions(parsed.unknown.slice(1));
+      parsed = { operands: [...parsed.operands, query, ...rest.operands], unknown: rest.unknown };
+      query = parsed.unknown[0];
+    }
+    return parsed;
+  };
 }
 
 /** `--max-rows` as a whole number inside the operation's published bounds. */
@@ -177,6 +204,7 @@ export function renderSqlResult(result: SqlResult, opts: RenderSqlOptions): void
 export const sql: Enhancer = {
   description: "Run a read-only SQL query over your project's spans and traces",
   flags(cmd: Command): void {
+    acceptCommentQueries(cmd);
     cmd
       .usage("[options] [query]")
       .option("-f, --file <path>", "read the query from a file", onceOption("--file"))
