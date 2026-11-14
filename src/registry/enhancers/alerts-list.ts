@@ -75,7 +75,7 @@ export function renderAlertsList(res: AlertListResponse, opts: RenderAlertsListO
  * page). Deliberately not `parseLimit`: that helper rejects `value < 1`,
  * which would wrongly reject the valid `--page 0`.
  */
-function parsePage(raw: string | undefined): number | undefined {
+export function parsePage(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   if (!/^\d+$/.test(raw)) {
     throw new CliError("--page must be a non-negative integer", ExitCode.usage);

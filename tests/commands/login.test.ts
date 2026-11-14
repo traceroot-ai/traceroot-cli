@@ -26,6 +26,7 @@ function makeWhoami(overrides: Partial<Whoami> = {}): Whoami {
     workspace_name: "My Workspace",
     key_name: "ci-key",
     key_hint: "tr_***1234",
+    key_scope: "admin",
     ui_base_url: "https://app.example.com",
     ...overrides,
   };

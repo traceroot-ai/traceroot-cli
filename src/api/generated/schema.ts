@@ -676,7 +676,7 @@ export interface paths {
          *
          *     Returns:
          *         PublicProjectListResponse: The accessible projects (id, name,
-         *             workspace_id, workspace_name).
+         *             workspace_id, workspace_name, workspace_is_demo).
          */
         get: operations["list_projects"];
         put?: never;
@@ -842,6 +842,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Signals
+         * @description List the signals in the caller's project (newest first). Merged signals are left out.
+         */
+        get: operations["list_signals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/signals/{signal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Signal
+         * @description Get one signal of the caller's project.
+         *
+         *     Lists up to 20 of the signal's recent traces inside the plan's retention
+         *     window, latest trace start first. A merged signal names the signal it moved to.
+         */
+        get: operations["get_signal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/signals/{signal_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Resolve or reopen a signal
+         * @description Resolve or reopen a signal. Dismissing is not possible here.
+         *
+         *     Requires MEMBER role or higher in the project's workspace (the write
+         *     service decides). Resolving needs a ``reason``; the reason ``other`` also
+         *     needs a ``note``. A resolved signal opens again by itself when its
+         *     detector finds the problem in a trace that started after the resolve. Send
+         *     ``expected_status`` to refuse the change when someone else changed the
+         *     status first. Setting the status the signal already has changes nothing.
+         *
+         *     Args:
+         *         request (Request): Incoming request (rate-limit plumbing).
+         *         response (Response): Outgoing response (rate-limit plumbing).
+         *         auth (AccountStampedAuth): Account-scope user auth (session token or
+         *             CLI access JWT); its resolved ``user_id`` becomes the actor.
+         *         signal_id (str): The signal to change.
+         *         payload (SignalStatusRequest): The project, the target status, and
+         *             the reason, note and expected status.
+         *         _live (None): Write-path liveness gate (blocks a revoked JWT session).
+         *
+         *     Returns:
+         *         SignalStatusResponse: The signal with its new status.
+         *
+         *     Raises:
+         *         HTTPException: The write service's 400/403/404/409 verbatim, or a
+         *             503 when its response is ambiguous.
+         */
+        patch: operations["set_signal_status"];
+        trace?: never;
+    };
     "/api/v1/public/sql": {
         parameters: {
             query?: never;
@@ -921,13 +1008,18 @@ export interface paths {
          * @description Ingest OTLP trace data.
          *
          *     Accepts OTLP protobuf format only (optionally gzip compressed).
-         *     Protobuf is converted to camelCase JSON before storage in S3.
+         *     The body is stored in S3 exactly as received and decoded asynchronously,
+         *     so a 200 means the batch was stored and queued, not that it decoded.
          *
-         *     S3 path: events/otel/{project_id}/{yyyy}/{mm}/{dd}/{hh}/{uuid}.json
+         *     S3 path: events/ingest/{project_id}/{yyyy}/{mm}/{dd}/{hh}/{uuid}.pb.gz
+         *     (``.pb`` when the body is not gzip-compressed)
+         *
+         *     Size limits: by default the body may be at most 16 MiB as sent and 32 MiB
+         *     once unzipped. A larger request gets 413.
          *
          *     Headers:
          *         Authorization: Bearer <api_key>
-         *         Content-Encoding: gzip (optional)
+         *         Content-Encoding: gzip (optional; any other coding gets 400)
          *         Content-Type: application/x-protobuf
          *
          *     Body:
@@ -1255,7 +1347,8 @@ export interface paths {
          *             rate-limit identity.
          *
          *     Returns:
-         *         PublicWorkspaceListResponse: The user's workspaces (id, name, role).
+         *         PublicWorkspaceListResponse: The user's workspaces (id, name, role,
+         *             is_demo); the public demo workspace, when present, comes last.
          */
         get: operations["list_workspaces"];
         put?: never;
@@ -1448,6 +1541,29 @@ export interface components {
             value: string | number;
         };
         /**
+         * AlertFilterItemRequest
+         * @description A row predicate an alert's measure is evaluated over.
+         */
+        AlertFilterItemRequest: {
+            /**
+             * Field
+             * @description A span field, e.g. model_name or metadata
+             */
+            field: string;
+            /**
+             * Key
+             * @description The map entry to compare; required for the metadata field
+             */
+            key?: string;
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "=" | "contains";
+            /** Value */
+            value: string | number;
+        };
+        /**
          * AlertListMeta
          * @description Pagination plus the project's alert capacity.
          */
@@ -1464,10 +1580,10 @@ export interface components {
          * AlertRenotify
          * @description How often an alert re-notifies while it stays in the alerting state.
          *
-         *     Kept a single-level object rather than a discriminated union: the tool
-         *     registry generator refuses nested schema references. The cross-field
-         *     rule is enforced by a validator instead, so a contradictory stored rule
-         *     fails the detail read closed rather than passing through half-typed.
+         *     Kept a single-level object rather than a discriminated union, matching
+         *     the request-side shape. The cross-field rule is enforced by a validator
+         *     instead, so a contradictory stored rule fails the detail read closed
+         *     rather than passing through half-typed.
          */
         AlertRenotify: {
             /** Interval Minutes */
@@ -1612,15 +1728,7 @@ export interface components {
              * Filters
              * @description Row predicates the measure is evaluated over
              */
-            filters?: {
-                /** @description A span field, e.g. model_name or metadata */
-                field: string;
-                /** @description The map entry to compare; required for the metadata field */
-                key?: string;
-                /** @enum {string} */
-                op: "=" | "contains";
-                value: string | number;
-            }[];
+            filters?: components["schemas"]["AlertFilterItemRequest"][];
             /**
              * Measure
              * @description A measure of the view, e.g. latency, cost, count
@@ -1796,7 +1904,7 @@ export interface components {
                  * Breakdown
                  * @enum {string|null}
                  */
-                breakdown?: "name" | "span_kind" | "model_name" | "environment" | null;
+                breakdown?: "name" | "span_kind" | "error_type" | "model_name" | "environment" | null;
                 /**
                  * WidgetDisplay
                  * @description Controls how the query result is rendered on the dashboard.
@@ -1814,16 +1922,16 @@ export interface components {
                      * Field
                      * @enum {string}
                      */
-                    field: "name" | "span_kind" | "status" | "model_name" | "environment" | "is_root" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "metadata";
+                    field: "name" | "span_kind" | "status" | "error_type" | "model_name" | "environment" | "is_root" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "metadata";
                     /** Key */
                     key?: string;
                     /**
                      * Op
                      * @enum {string}
                      */
-                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    op: "=" | "contains" | "in" | ">" | ">=" | "<" | "<=";
                     /** Value */
-                    value: ((string | number) | (number | string)) | string | number;
+                    value: ((string | number | string[]) | (number | string | string[]) | (unknown[] | string | number | string[])) | string | number | string[];
                 }[];
                 /**
                  * WidgetMetric
@@ -1876,9 +1984,9 @@ export interface components {
                      * Op
                      * @enum {string}
                      */
-                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    op: "=" | "contains" | "in" | ">" | ">=" | "<" | "<=";
                     /** Value */
-                    value: ((string | number) | (number | string)) | string | number;
+                    value: ((string | number | string[]) | (number | string | string[]) | (unknown[] | string | number | string[])) | string | number | string[];
                 }[];
                 /**
                  * WidgetMetric
@@ -1951,11 +2059,15 @@ export interface components {
          *
          *     Widgets keep the dashboard's order. ``window`` is the window they were all
          *     answered for — the one to name alongside any figure taken from here.
+         *     ``layout`` is the dashboard's grid placement, as ``get_dashboard`` returns
+         *     it.
          */
         DashboardDataResponse: {
             dashboard: components["schemas"]["DashboardSummary"];
             /** Failed */
             failed: number;
+            /** Layout */
+            layout?: components["schemas"]["DashboardLayoutItem"][] | null;
             /** Queried */
             queried: number;
             /** Skipped */
@@ -1967,6 +2079,9 @@ export interface components {
         /**
          * DashboardDetail
          * @description One dashboard with its widgets, ordered by creation time.
+         *
+         *     ``layout`` is the stored grid placement of the widgets that have one, or
+         *     None when the dashboard service did not report it.
          */
         DashboardDetail: {
             /**
@@ -1982,6 +2097,8 @@ export interface components {
             id: string;
             /** Is Default */
             is_default: boolean;
+            /** Layout */
+            layout?: components["schemas"]["DashboardLayoutItem"][] | null;
             /** Name */
             name: string;
             /**
@@ -1991,6 +2108,26 @@ export interface components {
             update_time: string;
             /** Widgets */
             widgets: components["schemas"]["DashboardWidgetItem"][];
+        };
+        /**
+         * DashboardLayoutItem
+         * @description One widget's place on a dashboard's grid, in grid units.
+         *
+         *     ``i`` is the widget id; ``x``/``w`` count columns of the twelve-column
+         *     grid and ``y``/``h`` count rows. A widget with no entry is placed by the
+         *     dashboard page itself, below everything that has one.
+         */
+        DashboardLayoutItem: {
+            /** H */
+            h: number;
+            /** I */
+            i: string;
+            /** W */
+            w: number;
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
         };
         /**
          * DashboardListItem
@@ -2073,7 +2210,8 @@ export interface components {
          *     is a feed widget (a trace list, not an aggregate — read those with
          *     ``list_traces`` and the feed's filters); ``error`` carries a short reason
          *     and no rows — a broken widget, or a query widget past the per-request cap
-         *     with a reason naming it — so neither fails the whole dashboard.
+         *     with a reason naming it — so neither fails the whole dashboard. ``spec``
+         *     is the widget's stored spec whatever the status, so a caller can draw it.
          */
         DashboardWidgetData: {
             /** Columns */
@@ -2088,6 +2226,8 @@ export interface components {
             } | null;
             /** Rows */
             rows?: unknown[][] | null;
+            /** Spec */
+            spec?: unknown | null;
             /**
              * Status
              * @enum {string}
@@ -2297,6 +2437,12 @@ export interface components {
             detector_name: string;
             /** Identified */
             identified: boolean;
+            /** Signal Id */
+            signal_id?: string | null;
+            /** Signal Status */
+            signal_status?: string | null;
+            /** Signal Title */
+            signal_title?: string | null;
             /** Summary */
             summary: string;
             /** Template */
@@ -2412,6 +2558,11 @@ export interface components {
              * @default []
              */
             run_ids: string[];
+            /**
+             * Signals
+             * @default []
+             */
+            signals: components["schemas"]["FindingSignal"][];
             /** Summary */
             summary: string;
             /**
@@ -2421,6 +2572,20 @@ export interface components {
             timestamp: string;
             /** Trace Id */
             trace_id: string;
+        };
+        /**
+         * FindingSignal
+         * @description The signal one detector's hit in a finding belongs to.
+         */
+        FindingSignal: {
+            /** Detector Id */
+            detector_id: string;
+            /** Signal Id */
+            signal_id: string;
+            /** Signal Status */
+            signal_status: string;
+            /** Signal Title */
+            signal_title: string;
         };
         /**
          * FindingSummary
@@ -2438,6 +2603,11 @@ export interface components {
              * @default []
              */
             run_ids: string[];
+            /**
+             * Signals
+             * @default []
+             */
+            signals: components["schemas"]["FindingSignal"][];
             /** Summary */
             summary: string;
             /**
@@ -2558,6 +2728,12 @@ export interface components {
             name: string;
             /** Workspace Id */
             workspace_id: string;
+            /**
+             * Workspace Is Demo
+             * @description True when the project is in the public demo workspace.
+             * @default false
+             */
+            workspace_is_demo: boolean;
             /** Workspace Name */
             workspace_name: string;
         };
@@ -2730,6 +2906,15 @@ export interface components {
         PublicProjectListResponse: {
             /** Data */
             data: components["schemas"]["ProjectListItem"][];
+        };
+        /**
+         * PublicSignalListResponse
+         * @description Paginated list of the project's signals for the public API (newest first).
+         */
+        PublicSignalListResponse: {
+            /** Data */
+            data: components["schemas"]["SignalSummary"][];
+            meta: components["schemas"]["PaginationMeta"];
         };
         /**
          * PublicTestCase
@@ -2908,6 +3093,11 @@ export interface components {
          *     the public trace endpoints, so advertising it here would be misleading.
          */
         RCAResult: {
+            /**
+             * Inherited
+             * @default false
+             */
+            inherited: boolean;
             /** Result */
             result: string | null;
             /** Status */
@@ -3229,6 +3419,193 @@ export interface components {
             user_id: string | null;
         };
         /**
+         * SignalDetail
+         * @description One signal, including when it was resolved, whether it was merged and the
+         *     traces it hit most recently.
+         *
+         *     A merged signal is still answered, with ``merged_into_id`` naming the signal
+         *     its findings moved to; lists leave merged signals out. ``recent_hits`` holds
+         *     up to 20 hits, latest trace start first, whose trace started inside the
+         *     plan's retention window, so each ``trace_id`` can be fetched.
+         */
+        SignalDetail: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detector Id */
+            detector_id: string;
+            /** Detector Name */
+            detector_name: string | null;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Hit Count */
+            hit_count: number;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Merged Into Id */
+            merged_into_id: string | null;
+            /** Rca State */
+            rca_state?: string | null;
+            /** Recent Hits */
+            recent_hits: components["schemas"]["SignalHit"][];
+            /** Reopen Count */
+            reopen_count: number;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Signal Id */
+            signal_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /** Title */
+            title: string;
+        };
+        /**
+         * SignalHit
+         * @description One trace a signal hit, with the finding its detector produced on it.
+         *
+         *     ``trace_start_time`` is when the trace started: the time the hits are sorted
+         *     and bounded on, and the one ``GET /api/v1/public/traces/{trace_id}`` checks
+         *     against the retention window.
+         */
+        SignalHit: {
+            /** Finding Id */
+            finding_id: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Start Time
+             * Format: date-time
+             */
+            trace_start_time: string;
+        };
+        /**
+         * SignalStatusRequest
+         * @description Body for resolving or reopening a signal.
+         *
+         *     Only ``resolved`` and ``open`` are settable here. A dismissed signal never
+         *     reopens on a new finding, so dismissing stays a decision a person makes in
+         *     the web app. Resolving needs a ``reason``; the reason ``other`` also needs
+         *     a ``note``. The write service is the single validator of those rules.
+         */
+        SignalStatusRequest: {
+            /**
+             * Expected Status
+             * @description The status the caller last read. When the signal's current status differs, nothing is written and the answer is a 409.
+             * @enum {string}
+             */
+            expected_status?: "open" | "resolved" | "dismissed";
+            /**
+             * Note
+             * @description A free-text note; required when reason is "other"
+             */
+            note?: string;
+            /** Project Id */
+            project_id: string;
+            /**
+             * Reason
+             * @description Why the signal is resolved; required when status is "resolved"
+             * @enum {string}
+             */
+            reason?: "fixed_elsewhere" | "fixed_by_pr" | "already_fixed_before" | "other";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "resolved" | "open";
+        };
+        /**
+         * SignalStatusResponse
+         * @description The signal after the write. ``changed`` is empty when it already had that status.
+         */
+        SignalStatusResponse: {
+            /** Changed */
+            changed: string[];
+            signal: components["schemas"]["SignalStatusRow"];
+            /** Updated */
+            updated: boolean;
+        };
+        /**
+         * SignalStatusRow
+         * @description A signal as the status write returns it.
+         */
+        SignalStatusRow: {
+            /** Detector Id */
+            detector_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Reopen Count */
+            reopen_count: number;
+            /**
+             * Resolved At
+             * Format: date-time
+             */
+            resolved_at: string | null;
+            /** Signal Id */
+            signal_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /** Title */
+            title: string;
+        };
+        /**
+         * SignalSummary
+         * @description A signal: a recurring problem that one detector's findings are grouped into.
+         *
+         *     ``reopen_count`` counts the automatic reopens (a new finding after the
+         *     signal was resolved). ``rca_state`` is the state of the root cause analysis
+         *     of the current opening, null when none ran for it.
+         */
+        SignalSummary: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detector Id */
+            detector_id: string;
+            /** Detector Name */
+            detector_name: string | null;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Hit Count */
+            hit_count: number;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Rca State */
+            rca_state?: string | null;
+            /** Reopen Count */
+            reopen_count: number;
+            /** Signal Id */
+            signal_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /** Title */
+            title: string;
+        };
+        /**
          * SpanResponse
          * @description A span skeleton plus its per-span I/O blobs (``input``/``output``/``metadata``).
          *
@@ -3257,6 +3634,11 @@ export interface components {
             cost_details: {
                 [key: string]: number;
             };
+            /**
+             * Error Type
+             * @default
+             */
+            error_type: string;
             /** Git Source File */
             git_source_file?: string | null;
             /** Git Source Function */
@@ -3309,6 +3691,10 @@ export interface components {
         /**
          * SqlColumn
          * @description One column of a result, named and typed as ClickHouse reported it.
+         *
+         *     A result with no rows carries no metadata from the driver, so the service
+         *     asks the server to describe the statement it just ran. Either way the name
+         *     and the type are the server's own, so neither is ever absent.
          */
         SqlColumn: {
             /** Name */
@@ -3479,15 +3865,7 @@ export interface components {
              * Filters
              * @description Row predicates the measure is evaluated over
              */
-            filters?: {
-                /** @description A span field, e.g. model_name or metadata */
-                field: string;
-                /** @description The map entry to compare; required for the metadata field */
-                key?: string;
-                /** @enum {string} */
-                op: "=" | "contains";
-                value: string | number;
-            }[];
+            filters?: components["schemas"]["AlertFilterItemRequest"][];
             /**
              * Measure
              * @description A measure of the view, e.g. latency, cost, count
@@ -3670,7 +4048,7 @@ export interface components {
                  * Breakdown
                  * @enum {string|null}
                  */
-                breakdown?: "name" | "span_kind" | "model_name" | "environment" | null;
+                breakdown?: "name" | "span_kind" | "error_type" | "model_name" | "environment" | null;
                 /**
                  * WidgetDisplay
                  * @description Controls how the query result is rendered on the dashboard.
@@ -3688,16 +4066,16 @@ export interface components {
                      * Field
                      * @enum {string}
                      */
-                    field: "name" | "span_kind" | "status" | "model_name" | "environment" | "is_root" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "metadata";
+                    field: "name" | "span_kind" | "status" | "error_type" | "model_name" | "environment" | "is_root" | "duration_ms" | "cost" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "total_tokens" | "metadata";
                     /** Key */
                     key?: string;
                     /**
                      * Op
                      * @enum {string}
                      */
-                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    op: "=" | "contains" | "in" | ">" | ">=" | "<" | "<=";
                     /** Value */
-                    value: ((string | number) | (number | string)) | string | number;
+                    value: ((string | number | string[]) | (number | string | string[]) | (unknown[] | string | number | string[])) | string | number | string[];
                 }[];
                 /**
                  * WidgetMetric
@@ -3750,9 +4128,9 @@ export interface components {
                      * Op
                      * @enum {string}
                      */
-                    op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+                    op: "=" | "contains" | "in" | ">" | ">=" | "<" | "<=";
                     /** Value */
-                    value: ((string | number) | (number | string)) | string | number;
+                    value: ((string | number | string[]) | (number | string | string[]) | (unknown[] | string | number | string[])) | string | number | string[];
                 }[];
                 /**
                  * WidgetMetric
@@ -3878,6 +4256,12 @@ export interface components {
          *     Name fields are nullable: they depend on what the internal key-validation
          *     contract returns, and the backend never fabricates them. The full API token
          *     is never included — only ``key_hint``.
+         *
+         *     ``key_scope`` is the exception to the nullability above, deliberately. A
+         *     holder asking what their key may do needs an answer, not a maybe: a null
+         *     would have to be handled by every caller and would mean the same thing the
+         *     narrow scope already means. It is a closed set of values rather than a free
+         *     string so a client can exhaust it.
          */
         WhoamiResponse: {
             /** Host */
@@ -3886,6 +4270,11 @@ export interface components {
             key_hint: string | null;
             /** Key Name */
             key_name: string | null;
+            /**
+             * Key Scope
+             * @enum {string}
+             */
+            key_scope: "ingest" | "admin";
             /** Project Id */
             project_id: string;
             /** Project Name */
@@ -3996,9 +4385,9 @@ export interface components {
              * Op
              * @enum {string}
              */
-            op: "=" | "contains" | ">" | ">=" | "<" | "<=";
+            op: "=" | "contains" | "in" | ">" | ">=" | "<" | "<=";
             /** Value */
-            value: ((string | number) | (number | string)) | string | number;
+            value: ((string | number | string[]) | (number | string | string[]) | (unknown[] | string | number | string[])) | string | number | string[];
         };
         /**
          * WidgetMetric
@@ -4056,12 +4445,18 @@ export interface components {
         /**
          * WidgetRef
          * @description The identity of the widget a data read answered, with its dashboard.
+         *
+         *     ``spec`` is the stored spec the read ran, as ``get_widget`` returns it.
          */
         WidgetRef: {
             /** Dashboard Id */
             dashboard_id: string;
+            /** Dashboard Name */
+            dashboard_name?: string | null;
             /** Id */
             id: string;
+            /** Spec */
+            spec?: unknown | null;
             /** Title */
             title: string;
             /** Type */
@@ -4109,6 +4504,12 @@ export interface components {
         WorkspaceListItem: {
             /** Id */
             id: string;
+            /**
+             * Is Demo
+             * @description True for the public demo workspace, which every user can read. It is listed last and is not one of the user's own workspaces.
+             * @default false
+             */
+            is_demo: boolean;
             /** Name */
             name: string;
             /** Role */
@@ -6927,6 +7328,214 @@ export interface operations {
             };
         };
     };
+    list_signals: {
+        parameters: {
+            query?: {
+                /** @description Items per page */
+                limit?: number;
+                /** @description 0-based page index */
+                page?: number;
+                /** @description Only signals with this status */
+                status?: ("open" | "resolved" | "dismissed") | null;
+                /** @description Only signals of this detector */
+                detector_id?: string | null;
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicSignalListResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_signal: {
+        parameters: {
+            query?: {
+                /** @description Target project for the request. Required when authenticating with a user session token (a user credential is only meaningful scoped to a project); for an API key it is optional and, if given, must match the key's project. */
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalDetail"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Signal not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Authentication service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_signal_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignalStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalStatusResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed or session revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Insufficient role or wrong credential kind */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The status changed since the caller read it, or the signal was merged */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Write service unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     run_sql: {
         parameters: {
             query?: {
@@ -7236,6 +7845,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Request body too large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Unsupported media type */
             415: {
                 headers: {
@@ -7263,9 +7881,11 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Authentication service unavailable */
+            /** @description Authentication service unavailable, or the batch could not be queued */
             503: {
                 headers: {
+                    /** @description Seconds to wait before sending the batch again. Sent only when the batch could not be queued. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {
