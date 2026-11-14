@@ -6,7 +6,7 @@ import { CliError, ExitCode, type Writers, defaultWriters } from "../output.js";
 import { ENHANCERS } from "./enhancers/index.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./enhancers/types.js";
 import { acceptsProjectScope, executeTool, transportFromContext } from "./execute.js";
-import { onceOption, rejectExtras } from "./flags.js";
+import { booleanOption, onceOption, rejectExtras } from "./flags.js";
 
 export { rejectExtras } from "./flags.js";
 import { FLAG_NAMES, GROUPS, PLACEMENTS, type Placement } from "./naming.js";
@@ -284,6 +284,12 @@ function addSchemaFlags(
       options.push(alias);
     }
     for (const option of options) cmd.addOption(option);
+    if (schema.type === "boolean") {
+      // Declared after `--flag`, `--no-flag` sets no default, so an omitted
+      // flag still leaves the field out of the body. It writes the same
+      // opts() key as `--flag`, so it is not listed in `keys` a second time.
+      cmd.option(`--no-${flag.slice(2)}`, `same as ${flag} false`);
+    }
     keys.set(
       prop,
       options.map((option) => option.attributeName()),
@@ -293,7 +299,11 @@ function addSchemaFlags(
 }
 
 function fieldOption(flag: string, schema: ParamSchema, description: string): Option {
-  if (schema.type === "boolean") return new Option(flag, description);
+  if (schema.type === "boolean") {
+    // `--flag` alone means true; `--flag false`, `--flag=false` and `--no-flag`
+    // (registered in addSchemaFlags) send false.
+    return new Option(`${flag} [true|false]`, description).argParser(booleanOption(flag));
+  }
   // Never .default(...) here — onceOption would falsely reject the first use.
   return new Option(`${flag} <value>`, description).argParser(onceOption(flag));
 }

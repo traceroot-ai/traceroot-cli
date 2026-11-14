@@ -376,3 +376,95 @@ describe("a 409 from a write command", () => {
     expect(r.out.data).toBe("");
   });
 });
+
+describe("boolean flags (detectors update/create)", () => {
+  function harness() {
+    const fake = createFakeFetch(() => jsonResponse({ id: "det-1" }));
+    const program = buildProgram({
+      registry: {
+        fetchImpl: fake.fetchImpl,
+        writers: { out: new StringSink(), err: new StringSink() },
+      },
+    });
+    const run = (...argv: string[]) =>
+      program.parseAsync(["--api-key", "k", "--host", "https://api.test", ...argv], {
+        from: "user",
+      });
+    const body = () => JSON.parse(String(fake.calls[0]?.init.body)) as Record<string, unknown>;
+    return { fake, run, body };
+  }
+  const update = ["detectors", "update", "det-1", "--project-id", "p-1"];
+
+  it.each([
+    [["--enabled", "false"], "enabled", false],
+    [["--enabled=false"], "enabled", false],
+    [["--enabled", "FALSE"], "enabled", false],
+    [["--no-enabled"], "enabled", false],
+    [["--enabled", "true"], "enabled", true],
+    [["--enabled"], "enabled", true],
+    // A bare flag before another flag still means true, and the next flag keeps its value.
+    [["--enabled", "--name", "n"], "enabled", true],
+    [["--enabled", "--name", "n"], "name", "n"],
+    [["--enable-rca", "false"], "enable_rca", false],
+    [["--no-enable-rca"], "enable_rca", false],
+  ])("%j sends %s=%j", async (flags, field, expected) => {
+    const h = harness();
+    await h.run(...update, ...flags);
+    expect(h.body()[field]).toBe(expected);
+  });
+
+  it("omitting the flag leaves the field out of the body", async () => {
+    const h = harness();
+    await h.run(...update, "--name", "n");
+    expect(h.body()).not.toHaveProperty("enabled");
+    expect(h.body()).not.toHaveProperty("enable_rca");
+  });
+
+  // A value right after a bare flag is read as its value, so a leading positional fails this way too.
+  it.each([
+    [[...update, "--enabled", "nope"], "nope"],
+    // Only the exact words: padding is not trimmed away.
+    [[...update, "--enabled", " true "], " true "],
+    [["detectors", "update", "--enabled", "det-1", "--project-id", "p-1"], "det-1"],
+  ])("%j is a usage error naming the value and never dispatches", async (argv, got) => {
+    const h = harness();
+    const err = await h.run(...argv).catch((e) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).exitCode).toBe(ExitCode.usage);
+    expect((err as CliError).message).toContain(`--enabled must be true or false, got '${got}'`);
+    expect((err as CliError).message).toContain(
+      "put positional arguments first or write --enabled=true",
+    );
+    expect(h.fake.calls.length).toBe(0);
+  });
+
+  it("a flag false overrides --from-file true", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tr-bool-"));
+    const p = join(dir, "on.json");
+    writeFileSync(p, JSON.stringify({ enabled: true }));
+    const h = harness();
+    await h.run(...update, "--from-file", p, "--enabled", "false");
+    expect(h.body().enabled).toBe(false);
+  });
+
+  it("create can start a detector paused with RCA off", async () => {
+    const h = harness();
+    await h.run(
+      "detectors",
+      "create",
+      "--project-id",
+      "p-1",
+      "--name",
+      "t",
+      "--template",
+      "custom",
+      "--prompt",
+      "x",
+      "--enabled",
+      "false",
+      "--enable-rca",
+      "false",
+    );
+    expect(h.body()).toMatchObject({ enabled: false, enable_rca: false });
+  });
+});
