@@ -39,7 +39,7 @@ export function onceOption(flag: string): (val: string, prev: string | undefined
  */
 export function booleanOption(flag: string): (val: string) => boolean {
   return (val: string): boolean => {
-    const normalized = val.trim().toLowerCase();
+    const normalized = val.toLowerCase();
     if (normalized === "true") return true;
     if (normalized === "false") return false;
     throw new CliError(

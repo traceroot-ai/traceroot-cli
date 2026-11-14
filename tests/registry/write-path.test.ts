@@ -374,6 +374,8 @@ describe("boolean flags (detectors update/create)", () => {
   // A value right after a bare flag is read as its value, so a leading positional fails this way too.
   it.each([
     [[...update, "--enabled", "nope"], "nope"],
+    // Only the exact words: padding is not trimmed away.
+    [[...update, "--enabled", " true "], " true "],
     [["detectors", "update", "--enabled", "det-1", "--project-id", "p-1"], "det-1"],
   ])("%j is a usage error naming the value and never dispatches", async (argv, got) => {
     const h = harness();
