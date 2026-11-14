@@ -3,17 +3,16 @@ import type { DatasetList } from "../../api/client.js";
 import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { parseLimit } from "../../time/range.js";
 import { onceOption, rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
-  addLimitFlag,
+  addPageFlags,
   countLine,
-  limitBounds,
   orDash,
   orNone,
   renderEmptyPage,
+  resolvePageArgs,
   warnIfCapped,
   when,
 } from "./eval-reads.js";
@@ -31,8 +30,8 @@ export function renderDatasetList(
   const rows = res.datasets ?? [];
   if (rows.length === 0) {
     renderEmptyPage(
-      "no datasets",
-      state.limit,
+      state,
+      { none: "no datasets", afterCursor: "no more datasets after this cursor" },
       "list_datasets",
       res.next_cursor,
       "dataset",
@@ -63,7 +62,7 @@ export function renderDatasetList(
 
 export const datasetsList: Enhancer = {
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "list_datasets", "datasets").option(
+    addPageFlags(cmd, "list_datasets", "datasets").option(
       "--name <substring>",
       "filter to datasets whose name contains this text, case-insensitively",
       onceOption("--name"),
@@ -71,17 +70,11 @@ export const datasetsList: Enhancer = {
   },
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
-    const limit = parseLimit(
-      input.opts.limit as string | undefined,
-      limitBounds("list_datasets").max,
-    );
+    const { args, state } = resolvePageArgs(input, "list_datasets");
     const name = input.opts.name as string | undefined;
     return {
-      args: {
-        ...(limit === undefined ? {} : { limit }),
-        ...(name === undefined ? {} : { name }),
-      },
-      state: { limit } satisfies PagedState,
+      args: { ...args, ...(name === undefined ? {} : { name }) },
+      state,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {
