@@ -216,7 +216,7 @@ function checkEvalsRun(fixture: Fixture): void {
       outcome: "ok",
       runs: [{ uploaded_run_id: expect.stringMatching(/^evr_stub_\d+$/) }],
     });
-    expect([...new Set(run.requests.map(route))].sort()).toEqual([...UPLOAD_ROUTES].sort());
+    expect(new Set(run.requests.map(route))).toEqual(new Set(UPLOAD_ROUTES));
     expect(
       run.requests.filter((request) => request.authorization !== `Bearer ${STUB_API_KEY}`),
     ).toEqual([]);
@@ -237,7 +237,7 @@ interface Run {
 }
 
 /**
- * Runs the built CLI's `evals run` from `cwd`, in an environment of its own: a scratch HOME, a fake
+ * Runs the built CLI's `evals run` from `cwd`, in an environment of its own: a temporary HOME, a fake
  * project key and the stub as the TraceRoot host. Started without blocking, so the stub can answer.
  */
 async function evalsRun(cwd: string, ...args: string[]): Promise<Run> {
