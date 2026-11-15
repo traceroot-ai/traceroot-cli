@@ -117,6 +117,8 @@ export const ExitCode = {
   notFound: 4,
   /** Network failure or timeout — transient; a retry may succeed. */
   network: 5,
+  /** The request conflicts with current state: HTTP 409. */
+  conflict: 6,
   /** Unexpected/internal failure. The default when nothing else applies. */
   internal: 1,
 } as const;
@@ -135,6 +137,8 @@ export function exitCodeToString(exitCode: number): string {
       return "not_found";
     case ExitCode.network:
       return "network";
+    case ExitCode.conflict:
+      return "conflict";
     default:
       return "internal";
   }
