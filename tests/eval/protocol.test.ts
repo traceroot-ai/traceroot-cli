@@ -1,6 +1,12 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  type CaseLine,
   ProtocolError,
+  type RunFile,
+  type RunnerEvent,
   parseCaseLines,
   parseEvents,
   parseRunFile,
@@ -256,6 +262,255 @@ describe("parseCaseLines", () => {
     ).toThrow('case line 2, scores[0]: "passed" should be true, false or null, found "yes"');
     expect(() => parseCaseLines(JSON.stringify({ ...caseLine, status: "passed" }))).toThrow(
       'case line 1: "status" should be one of errored, not_scored, found "passed"',
+    );
+  });
+});
+
+const FIXTURES = fileURLToPath(new URL("../fixtures/eval/", import.meta.url));
+
+const NEWEST = ["python-0.5.1", "typescript-0.8.1"];
+const OLDEST = ["python-0.3.0", "typescript-0.8.0"];
+const SCENARIOS = [
+  "all-pass",
+  "import-error",
+  "inline-rows-a",
+  "inline-rows-b",
+  "interrupted",
+  "no-evaluations",
+  "numeric-no-threshold",
+  "one-fails",
+  "sampled",
+  "scorer-error-unversioned",
+  "scorer-error-versioned",
+  "task-error",
+  "upload-plain-list",
+];
+
+interface Recording {
+  events: RunnerEvent[];
+  exitStatus: number;
+  /** The saved run, when the runner saved one. */
+  run?: { file: RunFile; raw: Record<string, unknown>; cases: CaseLine[] };
+}
+
+function directories(path: string): string[] {
+  return readdirSync(path, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function recorded(sdk: string, scenario: string): Recording {
+  const dir = join(FIXTURES, sdk, scenario);
+  const recording: Recording = {
+    events: parseEvents(readFileSync(join(dir, "events.jsonl"), "utf8")),
+    exitStatus: Number(readFileSync(join(dir, "exit-status"), "utf8")),
+  };
+  const runs = join(dir, "runs");
+  if (existsSync(runs)) {
+    const names = readdirSync(runs).sort();
+    expect(names).toEqual([
+      "run_00000000000000000000000001.cases.jsonl",
+      "run_00000000000000000000000001.json",
+    ]);
+    const text = readFileSync(join(runs, "run_00000000000000000000000001.json"), "utf8");
+    recording.run = {
+      file: parseRunFile(text),
+      raw: JSON.parse(text),
+      cases: parseCaseLines(
+        readFileSync(join(runs, "run_00000000000000000000000001.cases.jsonl"), "utf8"),
+      ),
+    };
+  }
+  return recording;
+}
+
+function only<T extends RunnerEvent["type"]>(
+  events: RunnerEvent[],
+  type: T,
+): Extract<RunnerEvent, { type: T }> {
+  const matches = events.filter((event) => event.type === type);
+  expect(matches).toHaveLength(1);
+  return matches[0] as Extract<RunnerEvent, { type: T }>;
+}
+
+function caseFor(recording: Recording, input: string): CaseLine {
+  const found = recording.run?.cases.find((item) => item.input === input);
+  if (found === undefined) {
+    throw new Error(`no recorded case for ${input}`);
+  }
+  return found;
+}
+
+describe("the recorded runs", () => {
+  it("cover every scenario on the newest releases, and two on the oldest", () => {
+    expect(directories(FIXTURES)).toEqual([...OLDEST, ...NEWEST].sort());
+    for (const sdk of NEWEST) {
+      expect(directories(join(FIXTURES, sdk))).toEqual(SCENARIOS);
+    }
+    for (const sdk of OLDEST) {
+      expect(directories(join(FIXTURES, sdk))).toEqual(["all-pass", "import-error"]);
+    }
+  });
+
+  const all = [...OLDEST, ...NEWEST].flatMap((sdk) =>
+    directories(join(FIXTURES, sdk)).map((scenario) => ({ sdk, scenario })),
+  );
+
+  it.each(all)("$sdk/$scenario parses", ({ sdk, scenario }) => {
+    const recording = recorded(sdk, scenario);
+
+    expect(recording.events[0]).toEqual({ type: "hello", eval_api_version: 1 });
+    if (recording.run !== undefined) {
+      const completed = only(recording.events, "evaluation_completed");
+      expect(recording.run.file.evaluation_name).toBe(completed.name);
+      expect(recording.run.file.status).toBe(completed.status);
+      expect(recording.run.cases).toHaveLength(completed.counts.cases);
+    }
+  });
+
+  it("contain no absolute path, hostname or credential", () => {
+    for (const { sdk, scenario } of all) {
+      const dir = join(FIXTURES, sdk, scenario);
+      const runs = join(dir, "runs");
+      const files = [
+        join(dir, "events.jsonl"),
+        join(dir, "exit-status"),
+        ...(existsSync(runs) ? readdirSync(runs).map((name) => join(runs, name)) : []),
+      ];
+      for (const file of files) {
+        const text = readFileSync(file, "utf8");
+        expect(text, file).not.toMatch(/(^|["'\s(=])\/[\w.@-]+\//m);
+        expect(text, file).not.toMatch(/file:\/\/|127\.0\.0\.1|localhost/);
+        expect(text, file).not.toMatch(/\btr-[\w-]{4,}/);
+      }
+    }
+  });
+});
+
+describe.each(NEWEST)("what %s's runner writes", (sdk) => {
+  it("exits 0 after a fatal event", () => {
+    const importError = recorded(sdk, "import-error");
+
+    expect(importError.exitStatus).toBe(0);
+    expect(only(importError.events, "fatal").kind).toBe("import_error");
+    expect(importError.run).toBeUndefined();
+  });
+
+  it("refuses to upload a plain-list dataset before any case runs", () => {
+    const upload = recorded(sdk, "upload-plain-list");
+
+    expect(upload.exitStatus).toBe(0);
+    expect(only(upload.events, "fatal")).toMatchObject({
+      kind: "harness_error",
+      message: expect.stringContaining("no synced dataset to report against"),
+    });
+    expect(upload.events.map((event) => event.type)).not.toContain("case_started");
+    expect(upload.run).toBeUndefined();
+  });
+
+  it("ends a file with no module-level evaluation with zero evaluations", () => {
+    const none = recorded(sdk, "no-evaluations");
+
+    expect(none.events).toEqual([
+      { type: "hello", eval_api_version: 1 },
+      { type: "suite_completed", evaluations: 0, cancelled: false },
+    ]);
+  });
+
+  it("ends an interrupted run cancelled and incomplete, with no fatal event", () => {
+    const interrupted = recorded(sdk, "interrupted");
+
+    expect(interrupted.exitStatus).toBe(130);
+    expect(only(interrupted.events, "suite_completed").cancelled).toBe(true);
+    expect(only(interrupted.events, "evaluation_completed").status).toBe("incomplete");
+    expect(interrupted.events.map((event) => event.type)).not.toContain("fatal");
+    expect(interrupted.run?.file).toMatchObject({ status: "incomplete", is_final: false });
+  });
+
+  it("marks a sampled run as not final", () => {
+    expect(recorded(sdk, "sampled").run?.file).toMatchObject({
+      run_mode: "sample",
+      is_final: false,
+    });
+  });
+
+  it("records pass and fail on each score, never on the case", () => {
+    const run = recorded(sdk, "one-fails");
+
+    expect(run.run?.cases.map((item) => item.status)).toEqual([
+      "not_scored",
+      "not_scored",
+      "not_scored",
+    ]);
+    expect(caseFor(run, "beta").scores).toEqual([
+      { scorer_name: "exact_match", scorer_version: null, value: false, passed: false },
+      { scorer_name: "not_empty", scorer_version: "2", value: true, passed: true },
+    ]);
+  });
+
+  it("records a numeric score with no threshold as neither passing nor failing", () => {
+    const run = recorded(sdk, "numeric-no-threshold");
+
+    expect(caseFor(run, "beta").scores).toContainEqual({
+      scorer_name: "output_length",
+      scorer_version: null,
+      value: 4,
+      passed: null,
+    });
+  });
+
+  it("records a task error as an errored case with no scores", () => {
+    const beta = caseFor(recorded(sdk, "task-error"), "beta");
+
+    expect(beta).toMatchObject({ status: "errored", scores: [], scorer_errors: [] });
+    expect(beta.task_error).toContain("cannot convert");
+  });
+
+  it("records a raising scorer under its scorer name, with no version", () => {
+    const unversioned = caseFor(recorded(sdk, "scorer-error-unversioned"), "beta");
+    const versioned = recorded(sdk, "scorer-error-versioned");
+
+    expect(unversioned.status).toBe("errored");
+    expect(unversioned.scorer_errors).toMatchObject([
+      { scorer_name: "exact_match", scorer_version: null },
+    ]);
+    expect(caseFor(versioned, "beta").scorer_errors).toMatchObject([
+      { scorer_name: "not_empty", scorer_version: null },
+    ]);
+    expect(versioned.run?.file.scorers).toContainEqual({ name: "not_empty", version: "2" });
+  });
+
+  it("records upload.status as uploaded for a run that never left the machine", () => {
+    const run = recorded(sdk, "all-pass");
+
+    expect(only(run.events, "evaluation_completed").run_id).toBeNull();
+    expect(run.run?.raw.upload).toMatchObject({ status: "uploaded" });
+  });
+
+  it("gives an inline dataset positional case ids, and a Dataset content ones", () => {
+    const inline = recorded(sdk, "inline-rows-a");
+    const dataset = recorded(sdk, "all-pass");
+
+    expect(inline.run?.cases.map((item) => item.case_id)).toEqual(["case-0", "case-1"]);
+    for (const item of dataset.run?.cases ?? []) {
+      expect(item.case_id).toMatch(/^tc_[0-9a-f]{20}$/);
+    }
+  });
+});
+
+describe("an inline dataset's revision", () => {
+  const revision = (sdk: string, scenario: string) =>
+    recorded(sdk, scenario).run?.file.dataset?.revision;
+
+  it("is its case count in @traceroot-ai/traceroot, whatever the rows", () => {
+    expect(revision("typescript-0.8.1", "inline-rows-a")).toBe("local-2");
+    expect(revision("typescript-0.8.1", "inline-rows-b")).toBe("local-2");
+  });
+
+  it("follows the rows in traceroot", () => {
+    expect(revision("python-0.5.1", "inline-rows-a")).not.toBe(
+      revision("python-0.5.1", "inline-rows-b"),
     );
   });
 });

@@ -1,0 +1,134 @@
+{
+  "schema_version": "1",
+  "kind": "eval_run",
+  "local_run_id": "run_00000000000000000000000001",
+  "run_id": null,
+  "created_at": "2000-01-01T00:00:00.000Z",
+  "evaluation_name": "uppercase",
+  "status": "completed_with_errors",
+  "candidate_version": null,
+  "run_mode": "full",
+  "is_final": true,
+  "sample": {
+    "count": null,
+    "seed": null
+  },
+  "dataset": {
+    "dataset_id": "ds_dba36bffa5cab0f922d087a3ae",
+    "revision": "rev_2b0e1558fbb2be57",
+    "dataset_version_id": null,
+    "case_count": 3
+  },
+  "scorers": [
+    {
+      "name": "exact_match",
+      "version": null
+    },
+    {
+      "name": "not_empty",
+      "version": "2"
+    }
+  ],
+  "counts": {
+    "cases": 3,
+    "errored": 1,
+    "task_errors": 0,
+    "scorer_errors": 1,
+    "not_scored": 2
+  },
+  "scores": {
+    "exact_match": {
+      "name": "exact_match",
+      "mean": 1,
+      "count": 3
+    },
+    "not_empty": {
+      "name": "not_empty",
+      "mean": 1,
+      "count": 2
+    }
+  },
+  "upload": {
+    "status": "uploaded",
+    "dashboard_url": null,
+    "failed_result_count": 0
+  },
+  "artifact": {
+    "run": ".traceroot/eval/runs/run_00000000000000000000000001.json",
+    "cases": ".traceroot/eval/runs/run_00000000000000000000000001.cases.jsonl",
+    "payloads": "complete"
+  },
+  "cases": [
+    {
+      "case_id": "tc_7498af1b5adef7e84e04",
+      "status": "not_scored",
+      "scores": [
+        {
+          "scorer_name": "exact_match",
+          "scorer_version": null,
+          "value": true,
+          "passed": true,
+          "explanation": null
+        },
+        {
+          "scorer_name": "not_empty",
+          "scorer_version": "2",
+          "value": true,
+          "passed": true,
+          "explanation": null
+        }
+      ],
+      "task_error": null,
+      "scorer_errors": [],
+      "trace_id": null,
+      "duration_ms": 1.5
+    },
+    {
+      "case_id": "tc_7d6e5d505f6ca7767380",
+      "status": "errored",
+      "scores": [
+        {
+          "scorer_name": "exact_match",
+          "scorer_version": null,
+          "value": true,
+          "passed": true,
+          "explanation": null
+        }
+      ],
+      "task_error": null,
+      "scorer_errors": [
+        {
+          "scorer_name": "not_empty",
+          "scorer_version": null,
+          "message": "Error: cannot check \"beta\""
+        }
+      ],
+      "trace_id": null,
+      "duration_ms": 1.5
+    },
+    {
+      "case_id": "tc_a361d792d474d4c2e312",
+      "status": "not_scored",
+      "scores": [
+        {
+          "scorer_name": "exact_match",
+          "scorer_version": null,
+          "value": true,
+          "passed": true,
+          "explanation": null
+        },
+        {
+          "scorer_name": "not_empty",
+          "scorer_version": "2",
+          "value": true,
+          "passed": true,
+          "explanation": null
+        }
+      ],
+      "task_error": null,
+      "scorer_errors": [],
+      "trace_id": null,
+      "duration_ms": 1.5
+    }
+  ]
+}

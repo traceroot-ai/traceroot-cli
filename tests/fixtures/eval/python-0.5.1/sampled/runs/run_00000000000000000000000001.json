@@ -1,0 +1,104 @@
+{
+  "schema_version": "1",
+  "kind": "eval_run",
+  "local_run_id": "run_00000000000000000000000001",
+  "run_id": null,
+  "created_at": "2000-01-01T00:00:00.000000+00:00",
+  "evaluation_name": "uppercase",
+  "status": "completed",
+  "candidate_version": null,
+  "run_mode": "sample",
+  "is_final": false,
+  "sample": {
+    "count": 1,
+    "seed": 0
+  },
+  "dataset": {
+    "dataset_id": "ds_dba36bffa5cab0f922d087a3ae",
+    "revision": "rev_eb05411a70ac2a60",
+    "dataset_version_id": null,
+    "case_count": 1
+  },
+  "scorers": [
+    {
+      "name": "exact_match",
+      "version": null
+    },
+    {
+      "name": "not_empty",
+      "version": "2"
+    }
+  ],
+  "scorer_specs": [
+    {
+      "key": "exact_match",
+      "name": "exact_match",
+      "scorer_type": "code",
+      "language": "python",
+      "source": "def exact_match(ctx):\n    return ctx.output == ctx.expected"
+    },
+    {
+      "key": "not_empty",
+      "name": "not_empty",
+      "version": "2",
+      "scorer_type": "code",
+      "language": "python",
+      "source": "def check_not_empty(ctx):\n    return len(ctx.output) > 0"
+    }
+  ],
+  "counts": {
+    "cases": 1,
+    "errored": 0,
+    "task_errors": 0,
+    "scorer_errors": 0,
+    "not_scored": 1
+  },
+  "scores": {
+    "exact_match": {
+      "name": "exact_match",
+      "mean": 1.0,
+      "count": 1
+    },
+    "not_empty": {
+      "name": "not_empty",
+      "mean": 1.0,
+      "count": 1
+    }
+  },
+  "upload": {
+    "status": "uploaded",
+    "dashboard_url": null,
+    "failed_result_count": 0
+  },
+  "artifact": {
+    "run": ".traceroot/eval/runs/run_00000000000000000000000001.json",
+    "cases": ".traceroot/eval/runs/run_00000000000000000000000001.cases.jsonl",
+    "payloads": "complete"
+  },
+  "cases": [
+    {
+      "case_id": "tc_7d6e5d505f6ca7767380",
+      "status": "not_scored",
+      "scores": [
+        {
+          "scorer_name": "exact_match",
+          "scorer_version": null,
+          "value": true,
+          "passed": true,
+          "explanation": null
+        },
+        {
+          "scorer_name": "not_empty",
+          "scorer_version": "2",
+          "value": true,
+          "passed": true,
+          "explanation": null
+        }
+      ],
+      "task_error": null,
+      "scorer_errors": [],
+      "trace_id": null,
+      "duration_ms": 1.5
+    }
+  ]
+}
