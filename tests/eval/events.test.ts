@@ -212,6 +212,26 @@ describe("outcomeOf", () => {
         outcome: "fatal",
         kind: "import_error",
         message: "ModuleNotFoundError: No module named 'helpers'",
+        evaluations: [],
+      });
+    });
+
+    it("keeps the evaluations that finished before it", () => {
+      const harnessError = { type: "fatal", kind: "harness_error", message: "flush failed" };
+      const text = stream(
+        hello,
+        started,
+        evaluationCompleted(),
+        { ...started, name: "lowercase" },
+        caseStarted,
+        harnessError,
+      );
+
+      expect(outcomeOf(text, exit())).toEqual({
+        outcome: "fatal",
+        kind: "harness_error",
+        message: "flush failed",
+        evaluations: [evaluationCompleted()],
       });
     });
 
@@ -241,6 +261,16 @@ describe("outcomeOf", () => {
       expect(outcome).toMatchObject({ outcome: "fatal", kind: PROTOCOL_ERROR_KIND });
       expect(outcome).toHaveProperty("message", expect.stringContaining("event line 2"));
     });
+
+    it("carries no evaluations from a stream the CLI can't read, even ones before the bad line", () => {
+      const text = `${stream(hello, started, evaluationCompleted())}not json\n${stream(suiteCompleted())}`;
+
+      expect(outcomeOf(text, exit())).toMatchObject({
+        outcome: "fatal",
+        kind: PROTOCOL_ERROR_KIND,
+        evaluations: [],
+      });
+    });
   });
 
   describe("a crash", () => {
@@ -252,6 +282,24 @@ describe("outcomeOf", () => {
         outcome: "crashed",
         exitStatus: 137,
         outputTail,
+        evaluations: [],
+      });
+    });
+
+    it("keeps the evaluations that finished before the runner stopped", () => {
+      const text = stream(
+        hello,
+        started,
+        evaluationCompleted(),
+        { ...started, name: "lowercase" },
+        caseStarted,
+      );
+
+      expect(outcomeOf(text, exit({ status: 137 }))).toEqual({
+        outcome: "crashed",
+        exitStatus: 137,
+        outputTail: [],
+        evaluations: [evaluationCompleted()],
       });
     });
 
@@ -296,6 +344,7 @@ describe.each([
       outcome: "fatal",
       kind: "import_error",
       message: written.message,
+      evaluations: [],
     });
   });
 

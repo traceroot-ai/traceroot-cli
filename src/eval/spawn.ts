@@ -65,6 +65,12 @@ export interface RunEvalRunnerOptions {
   output?: Sink;
   /** How long the runner has after the first Ctrl+C. Defaults to {@link INTERRUPT_GRACE_MS}. */
   interruptGraceMs?: number;
+  /**
+   * The exit code the CLI ends with in place of 0 if it exits while the runner is still running,
+   * as when a reader closes its stdout or stderr early: the run was cut short, so a 0 would read
+   * as a run that worked. Without it, the exit code is left as it is.
+   */
+  earlyExitCode?: number;
 }
 
 /**
@@ -81,6 +87,14 @@ export interface RunEvalRunnerOptions {
  * - either way the event file is read and removed, and the outcome is `interrupted`, carrying the
  *   first signal.
  *
+ * The CLI can also end before this returns: through `process.exit`, as when a reader closes the
+ * CLI's stdout or stderr early (EPIPE), through an uncaught exception, or through SIGQUIT (Ctrl+\).
+ * The runner's process group is its own, so nothing else would stop it. While it runs, an `exit`
+ * listener and a SIGQUIT listener send SIGTERM to that group and remove the event folder. SIGQUIT
+ * then ends the CLI as it would have. An exit with code 0 ends with
+ * {@link RunEvalRunnerOptions.earlyExitCode} instead, when one is given. The CLI is gone by then,
+ * so no SIGKILL follows.
+ *
  * The listeners stay until the event file is removed, so no signal can end the CLI between the
  * runner's exit and the removal, and are gone when this returns.
  */
@@ -92,6 +106,12 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
   const output = options.output ?? process.stderr;
   const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS);
   let folder: string | undefined;
+  const exits = listenForExit(() => {
+    interrupts.kill();
+    if (folder !== undefined) {
+      removeFolder(folder);
+    }
+  }, options.earlyExitCode);
   try {
     folder = mkdtempSync(join(tmpdir(), "traceroot-eval-"));
     const eventFile = join(folder, "events.jsonl");
@@ -115,6 +135,7 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
     if (folder !== undefined) {
       removeFolder(folder);
     }
+    exits.stop();
     interrupts.stop();
   }
 }
@@ -124,6 +145,8 @@ interface InterruptListener {
   signal: AbortSignal;
   /** The first of the signals to arrive, if any has. */
   received(): InterruptSignal | null;
+  /** Kills the runner's process group now, as the end of the grace period does. */
+  kill(): void;
   /** Removes the listeners and clears the deadline. */
   stop(): void;
 }
@@ -155,6 +178,7 @@ function listenForInterrupts(graceMs: number): InterruptListener {
   return {
     signal: controller.signal,
     received: () => received,
+    kill: () => controller.abort(),
     stop: () => {
       clearTimeout(deadline);
       for (const [signal, handler] of handlers) {
@@ -162,6 +186,41 @@ function listenForInterrupts(graceMs: number): InterruptListener {
       }
     },
   };
+}
+
+/**
+ * Calls `cleanUp` when the CLI is about to end without the runner's outcome: on `exit`, or on
+ * SIGQUIT, which is re-raised once `cleanUp` has run and the listeners are removed, so it still ends
+ * the CLI unless something else handles it. `cleanUp` must be synchronous, because an `exit`
+ * listener can't wait. `stop` removes both listeners.
+ *
+ * On an exit with code 0, `earlyExitCode`, when given, becomes the code the CLI ends with: Node
+ * reads `process.exitCode` once the `exit` listeners have run. Any other code is left as it is.
+ *
+ * Registered before the event folder exists, so a SIGQUIT can't end the CLI between its creation
+ * and these listeners.
+ */
+function listenForExit(cleanUp: () => void, earlyExitCode: number | undefined): { stop(): void } {
+  const onExit = (code: number): void => {
+    cleanUp();
+    if (code === 0 && earlyExitCode !== undefined) {
+      process.exitCode = earlyExitCode;
+    }
+  };
+  const onQuit = (): void => {
+    cleanUp();
+    stop();
+    if (process.listenerCount("SIGQUIT") === 0) {
+      process.kill(process.pid, "SIGQUIT");
+    }
+  };
+  const stop = (): void => {
+    process.off("exit", onExit);
+    process.off("SIGQUIT", onQuit);
+  };
+  process.on("exit", onExit);
+  process.on("SIGQUIT", onQuit);
+  return { stop };
 }
 
 /**

@@ -49,6 +49,10 @@ export interface RunnerExit {
  * - `no_evaluations`: the runner found no evaluation in the file.
  * - `completed`: every evaluation ran, and `evaluations` has each one's `evaluation_completed`
  *   event, in the order they ran.
+ *
+ * A `fatal` or `crashed` run can still have finished, and saved, the evaluations before the one that
+ * failed. Their `evaluations` has the `evaluation_completed` events written before the failure, in
+ * the order they ran. It is empty for a stream the CLI can't read.
  */
 export type RunOutcome =
   | {
@@ -56,8 +60,13 @@ export type RunOutcome =
       signal: InterruptSignal | null;
       evaluations: EvaluationCompletedEvent[];
     }
-  | { outcome: "fatal"; kind: string; message: string }
-  | { outcome: "crashed"; exitStatus: number; outputTail: string[] }
+  | { outcome: "fatal"; kind: string; message: string; evaluations: EvaluationCompletedEvent[] }
+  | {
+      outcome: "crashed";
+      exitStatus: number;
+      outputTail: string[];
+      evaluations: EvaluationCompletedEvent[];
+    }
   | { outcome: "no_evaluations" }
   | { outcome: "completed"; evaluations: EvaluationCompletedEvent[] };
 
@@ -104,14 +113,24 @@ export function outcomeOf(eventText: string, exit: RunnerExit): RunOutcome {
     return { outcome: "interrupted", signal: exit.signal, evaluations };
   }
   if (unreadable !== null) {
-    return { outcome: "fatal", kind: PROTOCOL_ERROR_KIND, message: unreadable.message };
+    return {
+      outcome: "fatal",
+      kind: PROTOCOL_ERROR_KIND,
+      message: unreadable.message,
+      evaluations: [],
+    };
   }
   const [fatal] = fatals;
   if (fatal !== undefined) {
-    return { outcome: "fatal", kind: fatal.kind, message: fatal.message };
+    return { outcome: "fatal", kind: fatal.kind, message: fatal.message, evaluations };
   }
   if (suite === undefined || exit.status !== 0) {
-    return { outcome: "crashed", exitStatus: exit.status, outputTail: exit.outputTail };
+    return {
+      outcome: "crashed",
+      exitStatus: exit.status,
+      outputTail: exit.outputTail,
+      evaluations,
+    };
   }
   if (suite.evaluations === 0) {
     return { outcome: "no_evaluations" };

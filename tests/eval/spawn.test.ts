@@ -190,9 +190,9 @@ describe("runEvalRunner", () => {
     expect(output).toContain("a warning\n");
   });
 
-  it("removes its signal listeners once the runner has exited", async () => {
+  it("removes its signal and exit listeners once the runner has exited", async () => {
     const listeners = () =>
-      ["SIGINT", "SIGTERM", "SIGHUP"].map((name) => process.listenerCount(name));
+      ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "exit"].map((name) => process.listenerCount(name));
     const before = listeners();
 
     await run(stub("ready();"));
@@ -268,11 +268,13 @@ describe("runEvalRunner", () => {
         outcome: "fatal",
         kind: "import_error",
         message: expect.stringContaining("helpers"),
+        evaluations: [],
       },
       "upload-plain-list": {
         outcome: "fatal",
         kind: "harness_error",
         message: expect.stringContaining("no synced dataset to report against"),
+        evaluations: [],
       },
     };
 
@@ -342,7 +344,11 @@ describe("runEvalRunner", () => {
           ),
         );
 
-        expect(outcome).toMatchObject({ outcome: "crashed", exitStatus: 128 + 9 });
+        expect(outcome).toMatchObject({
+          outcome: "crashed",
+          exitStatus: 128 + 9,
+          evaluations: [evaluationCompleted("completed")],
+        });
       },
     );
 
@@ -363,29 +369,36 @@ describe("runEvalRunner", () => {
 });
 
 /**
- * The Ctrl+C tests signal the process that runs {@link runEvalRunner}, so it has to be a process of
- * its own: this harness, run from the built CLI. It prints the outcome and its signal listener
- * counts on stdout, and the runner's output goes to its stderr, as it would in the CLI.
+ * These tests signal or end the process that runs {@link runEvalRunner}, so it has to be a process
+ * of its own: this harness, run from the built CLI. It prints the outcome and its signal and exit
+ * listener counts on stdout, and the runner's output goes to its stderr, as it would in the CLI. As
+ * in the CLI, a closed stderr (EPIPE) ends it through `handlePipeError`. A SIGUSR2 makes it throw
+ * an exception nothing catches. It passes on the early exit code it is started with, if any.
  */
-describe.skipIf(WINDOWS)("a Ctrl+C while the runner is running", () => {
+describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => {
   let harnessFolder = "";
   let harnessFile = "";
   const harnesses: ChildProcess[] = [];
 
   beforeAll(() => {
     const spawnModule = new URL("../../dist/eval/spawn.js", import.meta.url).href;
+    const outputModule = new URL("../../dist/output.js", import.meta.url).href;
     harnessFolder = mkdtempSync(join(tmpdir(), "traceroot-eval-harness-"));
     harnessFile = join(harnessFolder, "harness.mjs");
     writeFileSync(
       harnessFile,
       [
         `const { runEvalRunner } = await import(${JSON.stringify(spawnModule)});`,
-        "const [argv, interruptGraceMs] = JSON.parse(process.argv[2]);",
-        'const signals = ["SIGINT", "SIGTERM", "SIGHUP"];',
+        `const { handlePipeError } = await import(${JSON.stringify(outputModule)});`,
+        'process.stderr.on("error", (error) => handlePipeError(error));',
+        'process.on("SIGUSR2", () => { throw new Error("an exception nothing catches"); });',
+        "const [argv, interruptGraceMs, earlyExitCode] = JSON.parse(process.argv[2]);",
+        'const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "exit"];',
         "const listeners = () => signals.map((name) => process.listenerCount(name));",
         "const before = listeners();",
         'const env = { PATH: process.env.PATH ?? "" };',
-        "const outcome = await runEvalRunner({ argv, interruptGraceMs, env });",
+        "const options = { argv, interruptGraceMs, env, earlyExitCode: earlyExitCode ?? undefined };",
+        "const outcome = await runEvalRunner(options);",
         "const result = { outcome, listeners: { before, after: listeners() } };",
         "process.stdout.write(`${JSON.stringify(result)}\\n`);",
       ].join("\n"),
@@ -406,13 +419,15 @@ describe.skipIf(WINDOWS)("a Ctrl+C while the runner is running", () => {
 
   interface Finished {
     code: number | null;
+    signal: NodeJS.Signals | null;
     stdout: string;
     stderr: string;
   }
 
   /** Starts the harness on a stub runner, and waits until the stub says it is ready. */
-  async function startHarness(argv: string[], interruptGraceMs: number) {
-    const child = spawn(NODE, [harnessFile, JSON.stringify([argv, interruptGraceMs])], {
+  async function startHarness(argv: string[], interruptGraceMs: number, earlyExitCode?: number) {
+    const options = [argv, interruptGraceMs, earlyExitCode ?? null];
+    const child = spawn(NODE, [harnessFile, JSON.stringify(options)], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     harnesses.push(child);
@@ -433,10 +448,10 @@ describe.skipIf(WINDOWS)("a Ctrl+C while the runner is running", () => {
       recheck();
     });
     const finished = new Promise<Finished>((resolve) => {
-      child.on("close", (code) => {
+      child.on("close", (code, signal) => {
         closed = true;
         recheck();
-        resolve({ code, stdout, stderr });
+        resolve({ code, signal, stdout, stderr });
       });
     });
 
@@ -498,7 +513,7 @@ describe.skipIf(WINDOWS)("a Ctrl+C while the runner is running", () => {
     "ready();",
   );
 
-  it("lets the runner finish its case, then reads the event file and removes it", async () => {
+  it("lets the runner finish its case on a Ctrl+C, then reads the event file and removes it", async () => {
     // Like @traceroot-ai/traceroot: the case in flight finishes, then the run ends cancelled.
     const finishesItsCase = stub(
       emit(hello),
@@ -524,7 +539,7 @@ describe.skipIf(WINDOWS)("a Ctrl+C while the runner is running", () => {
     expectInterrupted(result, runner, "SIGINT", [evaluationCompleted("incomplete")]);
   });
 
-  it("kills a runner that ignores the signal once the deadline passes", async () => {
+  it("kills a runner that ignores a Ctrl+C once the deadline passes", async () => {
     const graceMs = 1000;
     const { child, runner, finished, waitFor } = await startHarness(stubborn, graceMs);
 
@@ -580,5 +595,72 @@ describe.skipIf(WINDOWS)("a Ctrl+C while the runner is running", () => {
     child.kill("SIGHUP");
 
     expectInterrupted(await finished, runner, "SIGHUP");
+  });
+
+  /**
+   * Checks that the CLI ended before the outcome was read, and left neither the runner nor its event
+   * folder behind. The runner may take a moment to act on its SIGTERM once the CLI has gone.
+   */
+  async function expectNothingLeft(
+    finished: Finished,
+    runner: { pid: number; eventFile: string },
+  ): Promise<void> {
+    expect(finished.stdout).toBe("");
+    expect(existsSync(dirname(runner.eventFile))).toBe(false);
+    const deadline = Date.now() + 5000;
+    while (isRunning(runner.pid) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(isRunning(runner.pid), `runner ${runner.pid} outlived the CLI`).toBe(false);
+  }
+
+  /** A runner that writes a line every 50 ms until it is stopped. */
+  const chatty = stub(
+    emit(hello),
+    emit(started),
+    "ready();",
+    'setInterval(() => say("still running"), 50);',
+  );
+
+  it("kills the runner and removes the event folder when a closed stderr ends the CLI", async () => {
+    const { child, runner, finished } = await startHarness(chatty, 60_000);
+
+    // Like `evals run … 2>&1 | head`: the reader goes, and the next line the CLI passes on fails.
+    child.stderr?.destroy();
+    const result = await finished;
+
+    expect(result.code).toBe(0);
+    await expectNothingLeft(result, runner);
+  });
+
+  it("ends a CLI that exits 0 while the runner runs with the early exit code it was given", async () => {
+    const { child, runner, finished } = await startHarness(chatty, 60_000, 17);
+
+    child.stderr?.destroy();
+    const result = await finished;
+
+    expect(result.code).toBe(17);
+    await expectNothingLeft(result, runner);
+  });
+
+  it("kills the runner and removes the event folder when an uncaught exception ends the CLI, keeping its exit code", async () => {
+    const { child, runner, finished } = await startHarness(quiet, 60_000, 17);
+
+    child.kill("SIGUSR2");
+    const result = await finished;
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("an exception nothing catches");
+    await expectNothingLeft(result, runner);
+  });
+
+  it("kills the runner and removes the event folder on SIGQUIT, which then ends the CLI", async () => {
+    const { child, runner, finished } = await startHarness(quiet, 60_000);
+
+    child.kill("SIGQUIT");
+    const result = await finished;
+
+    expect(result.signal).toBe("SIGQUIT");
+    await expectNothingLeft(result, runner);
   });
 });
