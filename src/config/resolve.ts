@@ -169,6 +169,65 @@ function firstCredential(candidates: CredentialCandidate[]): ResolvedCredential 
   return { kind: "none", value: undefined, source: "none" };
 }
 
+/** What the sources other than the session store hold, each read once. */
+interface Sources {
+  flags: AuthFlags;
+  env: NodeJS.ProcessEnv;
+  /** The variables in the `--env-file`; empty without the flag. */
+  fileMap: Record<string, string>;
+  config: Partial<Config>;
+  autoEnv: Record<string, string>;
+}
+
+function readSources(options: ResolveAuthOptions): Sources {
+  const flags = options.flags ?? {};
+  const loadEnvFile = options.loadEnvFile ?? (() => ({}));
+  const readConfig = options.readConfig ?? (() => null);
+  return {
+    flags,
+    env: options.env ?? {},
+    fileMap: present(flags.envFile) ? loadEnvFile(flags.envFile) : {},
+    config: readConfig() ?? ({} as Partial<Config>),
+    autoEnv: options.autoEnvFile ?? {},
+  };
+}
+
+/**
+ * Every source a credential can come from, highest first.
+ *
+ * @param storedSession the session the credentials file holds for the resolved
+ * host, if any.
+ */
+function credentialCandidates(
+  { flags, env, fileMap, config, autoEnv }: Sources,
+  storedSession: string | undefined,
+): CredentialCandidate[] {
+  return [
+    { kind: "api-key", value: flags.apiKey, source: "flag", normalize: normalizeApiKey },
+    { kind: "session", value: fileMap.TRACEROOT_TOKEN, source: "env-file" },
+    {
+      kind: "api-key",
+      value: fileMap.TRACEROOT_API_KEY,
+      source: "env-file",
+      normalize: normalizeApiKey,
+    },
+    { kind: "session", value: env.TRACEROOT_TOKEN, source: "env" },
+    { kind: "session", value: storedSession, source: "credentials-file" },
+    { kind: "api-key", value: env.TRACEROOT_API_KEY, source: "env", normalize: normalizeApiKey },
+    { kind: "api-key", value: config.api_key, source: "config", normalize: normalizeApiKey },
+    // The auto-discovered .env deliberately contributes only an API key, never
+    // TRACEROOT_TOKEN: a personal session credential does not belong in a
+    // repo-shared .env, and honoring one there would silently impersonate its
+    // committer. An explicit --env-file is a deliberate act and honors both.
+    {
+      kind: "api-key",
+      value: autoEnv.TRACEROOT_API_KEY,
+      source: "auto-env-file",
+      normalize: normalizeApiKey,
+    },
+  ];
+}
+
 /**
  * Resolves the credential, hosts, and default project from (high → low) flags,
  * an explicit env file, the process environment, the home-directory session
@@ -180,15 +239,9 @@ function firstCredential(candidates: CredentialCandidate[]): ResolvedCredential 
  * (e.g. {@link EnvFileNotFoundError}) is allowed to propagate.
  */
 export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
-  const flags = options.flags ?? {};
-  const env = options.env ?? {};
-  const readConfig = options.readConfig ?? (() => null);
-  const loadEnvFile = options.loadEnvFile ?? (() => ({}));
-  const autoEnv = options.autoEnvFile ?? {};
+  const sources = readSources(options);
+  const { flags, env, fileMap, config, autoEnv } = sources;
   const readCredential = options.readCredential ?? readCredentialFromDisk;
-
-  const fileMap: Record<string, string> = present(flags.envFile) ? loadEnvFile(flags.envFile) : {};
-  const config = readConfig() ?? ({} as Partial<Config>);
 
   // The host resolves first: the session-store lookup is keyed by it.
   const hostUrl = firstPresent(
@@ -205,30 +258,7 @@ export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
 
   const storedEntry = hostUrl.value !== undefined ? readCredential(hostUrl.value) : null;
 
-  const credential = firstCredential([
-    { kind: "api-key", value: flags.apiKey, source: "flag", normalize: normalizeApiKey },
-    { kind: "session", value: fileMap.TRACEROOT_TOKEN, source: "env-file" },
-    {
-      kind: "api-key",
-      value: fileMap.TRACEROOT_API_KEY,
-      source: "env-file",
-      normalize: normalizeApiKey,
-    },
-    { kind: "session", value: env.TRACEROOT_TOKEN, source: "env" },
-    { kind: "session", value: storedEntry?.session_token, source: "credentials-file" },
-    { kind: "api-key", value: env.TRACEROOT_API_KEY, source: "env", normalize: normalizeApiKey },
-    { kind: "api-key", value: config.api_key, source: "config", normalize: normalizeApiKey },
-    // The auto-discovered .env deliberately contributes only an API key, never
-    // TRACEROOT_TOKEN: a personal session credential does not belong in a
-    // repo-shared .env, and honoring one there would silently impersonate its
-    // committer. An explicit --env-file is a deliberate act and honors both.
-    {
-      kind: "api-key",
-      value: autoEnv.TRACEROOT_API_KEY,
-      source: "auto-env-file",
-      normalize: normalizeApiKey,
-    },
-  ]);
+  const credential = firstCredential(credentialCandidates(sources, storedEntry?.session_token));
 
   const authHost = firstPresent(
     [
@@ -261,4 +291,23 @@ export function resolveAuth(options: ResolveAuthOptions = {}): ResolvedAuth {
   ]);
 
   return { credential, hostUrl, authHost, projectId };
+}
+
+/**
+ * The project API key: from `--api-key`, the `--env-file`'s TRACEROOT_API_KEY,
+ * the TRACEROOT_API_KEY variable, the config file's `api_key`, or the
+ * auto-discovered `.env`, the first that holds one. That is
+ * {@link resolveAuth}'s order with every session left out.
+ *
+ * For what only a project API key can do. `resolveAuth` ranks a browser login
+ * above TRACEROOT_API_KEY and the config's key, so its credential can be a
+ * session while a key is set; this returns the key. It reads neither the
+ * credentials file nor TRACEROOT_TOKEN, even when that holds a `tr_` key.
+ */
+export function resolveApiKey(options: ResolveAuthOptions = {}): ResolvedField {
+  const keys = credentialCandidates(readSources(options), undefined).filter(
+    (candidate) => candidate.kind === "api-key",
+  );
+  const { value, source } = firstCredential(keys);
+  return { value, source };
 }
