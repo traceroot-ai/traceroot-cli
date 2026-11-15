@@ -20,6 +20,7 @@ import { createTokenProvider } from "../auth/token.js";
 import { configPath } from "../config/manager.js";
 import { MAX_TIMEOUT_MS } from "../context.js";
 import { CliError, ExitCode, defaultWriters } from "../output.js";
+import { meetsNodeFloor } from "../util/index.js";
 import { runDoctor } from "./doctor.js";
 import { contextFromCommand } from "./shared.js";
 
@@ -113,24 +114,6 @@ export function resolveServiceOption(command: Command): string | undefined {
  * whole package over a single command's dependency is not true.
  */
 export const MIN_SETUP_NODE = "20.12.0";
-
-/** `major.minor.patch` as numbers, ignoring any pre-release suffix. */
-function versionTriple(version: string): [number, number, number] {
-  const part = (index: number): number => {
-    const value = Number.parseInt(version.split(".")[index] ?? "", 10);
-    return Number.isFinite(value) ? value : 0;
-  };
-  return [part(0), part(1), part(2)];
-}
-
-/** Whether `version` is at least `floor`, both `major.minor.patch`. */
-export function meetsNodeFloor(version: string, floor: string): boolean {
-  const [haveMajor, haveMinor, havePatch] = versionTriple(version);
-  const [needMajor, needMinor, needPatch] = versionTriple(floor);
-  if (haveMajor !== needMajor) return haveMajor > needMajor;
-  if (haveMinor !== needMinor) return haveMinor > needMinor;
-  return havePatch >= needPatch;
-}
 
 /**
  * Rejects a runtime that cannot load the wizard, before anything tries to.
