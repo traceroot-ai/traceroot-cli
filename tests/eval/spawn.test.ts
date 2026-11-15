@@ -236,6 +236,100 @@ describe("runEvalRunner", () => {
     });
   });
 
+  it.each([0, 1, 8, 15, 16, 17])(
+    "scrubs a key whose first %i characters end one chunk of the runner's output",
+    async (split) => {
+      const key = "tr-test-upload-04";
+      // Two writes far enough apart to reach the CLI as two chunks, the key split between them.
+      const { output } = await run(
+        stub(
+          "ready();",
+          "const key = process.env.TRACEROOT_API_KEY;",
+          `fs.writeSync(2, \`before \${key.slice(0, ${split})}\`);`,
+          `setTimeout(() => fs.writeSync(2, \`\${key.slice(${split})} after\`), 200);`,
+        ),
+        { env: BASE_ENV, upload: { host: "https://traceroot.example", apiKey: makeSecret(key) } },
+      );
+
+      expect(output).not.toContain(key);
+      expect(output.slice(output.lastIndexOf("\n") + 1)).toBe("before <redacted> after");
+    },
+  );
+
+  it("passes on output that no key could start at the end of at once, while the runner runs", async () => {
+    const key = "tr-test-upload-0006";
+    const folder = mkdtempSync(join(tmpdir(), "traceroot-eval-shown-"));
+    const shown = join(folder, "shown");
+    let output = "";
+    // Tells the runner once its line has come through.
+    const sink = {
+      write: (text: string): boolean => {
+        output += text;
+        if (output.includes("Calling the model for case 1\n")) {
+          writeFileSync(shown, "");
+        }
+        return true;
+      },
+    };
+    // The runner prints a line, then waits until the CLI has passed it on, or 5 seconds.
+    const argv = stub(
+      "ready();",
+      'say("Calling the model for case 1");',
+      "const since = Date.now();",
+      "const poll = setInterval(() => {",
+      `  if (fs.existsSync(${JSON.stringify(shown)})) {`,
+      '    say("case 1 done");',
+      "    clearInterval(poll);",
+      "  } else if (Date.now() - since > 5000) {",
+      '    say("gave up waiting");',
+      "    clearInterval(poll);",
+      "  }",
+      "}, 20);",
+    );
+
+    try {
+      await runEvalRunner({
+        argv,
+        output: sink,
+        env: BASE_ENV,
+        upload: { host: "https://traceroot.example", apiKey: makeSecret(key) },
+      });
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+    runners.push(runnerLine(output).pid);
+
+    expect(output).toContain("Calling the model for case 1\ncase 1 done\n");
+    expect(output).not.toContain("gave up waiting");
+  });
+
+  it("never cuts a character in two where it holds back the end of a chunk", async () => {
+    const key = "tr-test-upload-0005";
+    // The chunk ends with the start of the key, held back from right after the emoji's two units.
+    const chunk = `a😀${key.slice(0, 5)}`;
+    const bytes: Buffer[] = [];
+    // A sink that encodes each write on its own, as a stream does, so half a character shows.
+    const sink = {
+      write: (text: string) => bytes.push(Buffer.from(text, "utf8")) > 0,
+    };
+    const argv = stub(
+      "ready();",
+      `setTimeout(() => fs.writeSync(2, ${JSON.stringify(chunk)}), 200);`,
+      "setTimeout(() => fs.writeSync(2, ' after'), 400);",
+    );
+
+    await runEvalRunner({
+      argv,
+      output: sink,
+      env: BASE_ENV,
+      upload: { host: "https://traceroot.example", apiKey: makeSecret(key) },
+    });
+    const output = Buffer.concat(bytes).toString("utf8");
+    runners.push(runnerLine(output).pid);
+
+    expect(output.slice(output.lastIndexOf("\n") + 1)).toBe(`${chunk} after`);
+  });
+
   it("runs the runner in the CLI's directory unless told otherwise", async () => {
     const where = stub("ready();", "say(`cwd ${process.cwd()}`);");
     const folder = mkdtempSync(join(tmpdir(), "traceroot-eval-cwd-"));

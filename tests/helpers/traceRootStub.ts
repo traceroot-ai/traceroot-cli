@@ -8,7 +8,8 @@ import type { AddressInfo } from "node:net";
  * - `GET /api/v1/public/whoami`, the key check;
  * - the dataset routes an SDK publishes a `Dataset` through: it knows no dataset, so a runner
  *   publishes one before every uploaded run;
- * - the evaluation run routes: registering a run, a result per case, and completing the run;
+ * - the evaluation run routes: registering a run, a result per case, completing the run, and
+ *   reading one, which it answers as a completed run of `uppercase` whatever the id;
  * - `POST /api/v1/public/traces`, where the SDKs export spans.
  *
  * Every other request gets a 404. A request without the accepted key as its bearer gets a 401.
@@ -90,6 +91,13 @@ export async function startTraceRootStub(
       } else if (/^POST \/api\/v1\/public\/datasets\/[^/]+\/versions$/.test(route)) {
         versions += 1;
         send(res, 200, { dataset_version_id: `dsv_stub_${versions}`, version_number: versions });
+      } else if (/^GET \/api\/v1\/public\/evaluation-runs\/[^/]+$/.test(route)) {
+        const id = decodeURIComponent(route.slice(route.lastIndexOf("/") + 1));
+        send(res, 200, {
+          evaluation_run_id: id,
+          evaluation_name: "uppercase",
+          status: "completed",
+        });
       } else if (route === `POST ${PUBLIC}/evaluation-runs`) {
         runs += 1;
         send(res, 200, { evaluation_run_id: `evr_stub_${runs}` });

@@ -343,20 +343,32 @@ traceroot evals run evals/triage_eval.py --upload   # prints the command that op
   uses the key even when you're also signed in through the browser, and exits `3`
   when there's no key.
 - **The key is checked before the runner starts.** A key TraceRoot rejects exits
-  `3`, and a host it can't reach exits `5`, before any case runs.
+  `3`, and a host it can't reach exits `5`, before any case runs. A check that
+  fails another way exits with the shared code for its HTTP status, such as `4`
+  for a 404 or `1` for a server error, and nothing runs either way.
 - **The cases have to be a `Dataset`.** TraceRoot records an uploaded run against
   a dataset, and the runner publishes a `Dataset` TraceRoot doesn't have yet
-  before the run. Cases given as a plain list exit `17` before any case runs.
-- **An upload that fails saves no run here either**, even when it fails after the
-  cases ran, as when TraceRoot can't complete the run. The command exits `17` with
-  the runner's message; rerun without `--upload` to check the evaluation locally.
+  before the run. An evaluation whose cases are a plain list exits `17` before
+  any of its cases run.
+- **An evaluation whose upload fails saves no run here either**, even when it
+  fails after its cases ran, as when TraceRoot can't complete the run. The
+  command exits `17` with the runner's message; rerun without `--upload` to check
+  the evaluation locally.
+- **The evaluations that finished before a failure keep their runs.** In a file
+  with several evaluations, a later one failing doesn't undo an earlier one: its
+  run stays saved here and uploaded. The summary prints each as for a completed
+  run, with the command that opens it, and the `--json` document carries its
+  `uploaded_run_id`. The error names it too when what failed was the later
+  evaluation's upload, but not after a crash or any other failure.
 - **An evaluation that finishes without a TraceRoot run id**, such as one defined
   with `local=True` (`local: true` in TypeScript), is named and exits `17`, unless
   a case regressed, which exits `18`.
 - **The summary ends with the command that opens each uploaded run**,
   `traceroot evals runs get <id> --project <project id>`. It names the key's
-  project, so it works under a browser login too. Like the hint for a missing key,
-  it's spelled the way the CLI was started: under npx, as
+  project, so it works under a browser login too. It repeats `--host` and
+  `--env-file` when the host or the key came from them, and when the key came
+  from `--api-key` it adds `--api-key <key>`, never the key itself. Like the hint
+  for a missing key, it's spelled the way the CLI was started: under npx, as
   `npx -y traceroot-cli@<version> …`.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,

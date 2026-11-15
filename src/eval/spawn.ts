@@ -93,7 +93,8 @@ export interface RunEvalRunnerOptions {
   env?: NodeJS.ProcessEnv;
   /**
    * Where the run is uploaded to. Without it the run stays on this machine. With it, the API key is
-   * scrubbed from everything the runner writes before the CLI passes it on.
+   * scrubbed from everything the runner writes before the CLI passes it on, a key split across two
+   * chunks of its output included.
    */
   upload?: UploadTarget;
   /** Where the runner's stdout and stderr both go. Defaults to the CLI's stderr. */
@@ -140,6 +141,7 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
   }
   const output = options.output ?? process.stderr;
   const secrets = options.upload === undefined ? [] : [options.upload.apiKey];
+  const scrubbed = redactAcrossChunks((text) => output.write(text), secrets);
   const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS);
   let folder: string | undefined;
   const exits = listenForExit(() => {
@@ -157,12 +159,11 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
       cwd: options.cwd ?? process.cwd(),
       env: runnerEnv(options.env ?? process.env, eventFile, options.upload),
       stdio: "capture",
-      onData: (chunk) => {
-        output.write(chunk);
-      },
+      onData: (chunk) => scrubbed.write(chunk),
       signal: interrupts.signal,
       secrets,
     });
+    scrubbed.flush();
     // A runner's `fatal` message is printed too, so it is scrubbed like its output.
     return outcomeOf(redact(readEvents(eventFile), secrets), {
       status: result.exitCode,
@@ -259,6 +260,74 @@ function listenForExit(cleanUp: () => void, earlyExitCode: number | undefined): 
   process.on("exit", onExit);
   process.on("SIGQUIT", onQuit);
   return { stop };
+}
+
+/** Where the runner's output goes once its secrets are scrubbed. */
+interface ScrubbedOutput {
+  /** Takes the next chunk of the runner's output. */
+  write(chunk: string): void;
+  /** Passes on what is held back, once the runner has ended. */
+  flush(): void;
+}
+
+/**
+ * Passes the runner's output to `write` with every secret redacted, a secret that two chunks split
+ * between them included. `runProcess` redacts each chunk on its own, which misses a secret that
+ * crosses a read boundary. So the end of each chunk that a secret could start at, the longest such
+ * end (see {@link secretStartAtEnd}), is held back until the next chunk or
+ * {@link ScrubbedOutput.flush} shows whether the rest of the secret follows. Any other text passes
+ * on at once, so the last line the runner wrote shows while it works. The text and its order are
+ * otherwise unchanged: a character written as two UTF-16 units is never cut between them, so a sink
+ * that encodes each write gets whole characters.
+ */
+function redactAcrossChunks(
+  write: (text: string) => void,
+  secrets: readonly Secret[],
+): ScrubbedOutput {
+  let held = "";
+  return {
+    write: (chunk) => {
+      const text = redact(held + chunk, secrets);
+      let cut = text.length - secretStartAtEnd(text, secrets);
+      if (cut > 0 && isHighSurrogate(text.charCodeAt(cut - 1))) {
+        cut -= 1;
+      }
+      held = text.slice(cut);
+      if (cut > 0) {
+        write(text.slice(0, cut));
+      }
+    },
+    flush: () => {
+      if (held !== "") {
+        write(held);
+      }
+      held = "";
+    },
+  };
+}
+
+/**
+ * How many characters at the end of `text` a secret could start at: the length of the longest end
+ * of it that is the start of one of `secrets`, short of the whole secret, or 0 when none is. A
+ * secret that crosses into the next chunk always leaves such an end behind.
+ */
+function secretStartAtEnd(text: string, secrets: readonly Secret[]): number {
+  let longest = 0;
+  for (const secret of secrets) {
+    const value = secret.reveal();
+    for (let length = Math.min(text.length, value.length - 1); length > longest; length -= 1) {
+      if (text.endsWith(value.slice(0, length))) {
+        longest = length;
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
+/** Whether a UTF-16 unit is the first of the two a character outside the BMP is written as. */
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
 }
 
 /**

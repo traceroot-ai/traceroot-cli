@@ -23,6 +23,7 @@ import { existsSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import type { Command } from "commander";
 import { type Whoami, createApiClient } from "../api/client.js";
+import type { AuthSource, ResolvedField } from "../config/resolve.js";
 import type { InterruptSignal, RunOutcome } from "../eval/events.js";
 import { EVALS_RUN_EXIT_CODES, INTERRUPTED_EXIT_CODES } from "../eval/exit-codes.js";
 import { type EvalRunner, findEvalRunner } from "../eval/lookup.js";
@@ -106,6 +107,11 @@ export interface UploadAccess {
   host: string;
   /** How long the key check may take. */
   timeoutMs: number;
+  /**
+   * The flags that gave the key or the host, which the command that opens an uploaded run repeats
+   * (see {@link readFlags}).
+   */
+  readFlags: string[];
 }
 
 /** An upload whose key TraceRoot accepted. */
@@ -113,6 +119,8 @@ interface Upload {
   target: UploadTarget;
   /** The project the key belongs to, which the command that opens an uploaded run names. */
   projectId: string;
+  /** {@link UploadAccess.readFlags}. */
+  readFlags: string[];
 }
 
 /** A baseline run, read and checked. */
@@ -202,6 +210,10 @@ const HELP = [
   `  ${EVALS_RUN_EXIT_CODES.regressed}   regressed: a case newly fails or newly errors`,
   `  ${INTERRUPTED_EXIT_CODES.SIGINT}  Ctrl+C (${INTERRUPTED_EXIT_CODES.SIGTERM} for SIGTERM, ${INTERRUPTED_EXIT_CODES.SIGHUP} for SIGHUP)`,
   "",
+  "With --upload, a key check that fails another way exits with the shared code",
+  "for its HTTP status, such as 4 for a 404 or 1 for a server error. Nothing runs",
+  "either way.",
+  "",
   "A score from a new version of its scorer is never a regression; the summary",
   "names each one that passed in the baseline and doesn't now. When the runner",
   "fails after some evaluations finished, those are still compared and printed",
@@ -244,11 +256,40 @@ export function registerEvalsRun(evals: Command): void {
  */
 function uploadAccess(command: Command): UploadAccess {
   const context = contextFromCommand(command);
+  const key = apiKeyFromCommand(command);
+  const host = context.auth.hostUrl;
   return {
-    apiKey: apiKeyFromCommand(command).value,
-    host: context.auth.hostUrl.value ?? DEFAULT_HOST,
+    apiKey: key.value,
+    host: host.value ?? DEFAULT_HOST,
     timeoutMs: context.timeoutMs,
+    readFlags: readFlags(key.source, host, command.optsWithGlobals().envFile as string | undefined),
   };
+}
+
+/**
+ * The flags a later command needs to read an uploaded run from the same host with the same key.
+ * Only a flag holds for this command alone, so only the flags that gave the key or the host are
+ * repeated: `--host` and `--env-file` as given, and `--api-key <key>` for a key given with
+ * `--api-key`, which is never printed. A key or host from the environment, the config file or
+ * `./.env` reaches the later command the same way.
+ */
+function readFlags(key: AuthSource, host: ResolvedField, envFile: string | undefined): string[] {
+  const flags: string[] = [];
+  if (host.source === "flag" && host.value !== undefined) {
+    flags.push(`--host ${shellWord(host.value)}`);
+  }
+  if ((key === "env-file" || host.source === "env-file") && envFile !== undefined) {
+    flags.push(`--env-file ${shellWord(envFile)}`);
+  }
+  if (key === "flag") {
+    flags.push("--api-key <key>");
+  }
+  return flags;
+}
+
+/** A value as one POSIX shell word: as it is when a shell reads it that way, otherwise quoted. */
+function shellWord(text: string): string {
+  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
 }
 
 /**
@@ -445,6 +486,7 @@ async function checkUpload(
   return {
     target: { host: access.host, apiKey: makeSecret(access.apiKey) },
     projectId: who.project_id,
+    readFlags: access.readFlags,
   };
 }
 
@@ -484,8 +526,10 @@ function harness(message: string): CliError {
 
 /**
  * What stopped a runner that failed, for the `--json` document, and the harness error that reports
- * it. Both carry the same message, whether or not some evaluations finished first: the error's is
- * escaped for the terminal, and the document's is kept as it is, like the rest of its text.
+ * it. Both carry the same message: the error's is escaped for the terminal, and the document's is
+ * kept as it is, like the rest of its text. The message is the same whether or not some
+ * evaluations finished first, except for an uploaded run's `harness_error`, whose message names
+ * them (see {@link fatalMessage}).
  */
 function failureOf(
   outcome: FailedOutcome,
@@ -505,10 +549,12 @@ function failureOf(
 
 /**
  * What a `fatal` event exits 17 with: the runner's kind and message, and for an uploaded run's
- * `harness_error`, what to do about it. A run whose cases are a plain list can't be uploaded. Any
- * other failure of an uploaded run leaves no saved run behind, whether it happened before the
- * cases ran or after, as when TraceRoot fails to register or complete the run. The text is left
- * unescaped; {@link failureOf} escapes it for the terminal.
+ * `harness_error`, what to do about it. An evaluation whose cases are a plain list can't be
+ * uploaded. Any other failure of an uploaded evaluation leaves no saved run of it behind, whether
+ * it happened before its cases ran or after, as when TraceRoot fails to register or complete the
+ * run. The evaluations that finished before it keep the runs the runner saved and uploaded, and the
+ * message names each one. The text is left unescaped; {@link failureOf} escapes it for the
+ * terminal.
  */
 function fatalMessage(
   fatal: Extract<RunOutcome, { outcome: "fatal" }>,
@@ -520,15 +566,40 @@ function fatalMessage(
   if (!uploading || fatal.kind !== HARNESS_ERROR) {
     return failed;
   }
+  const finished = fatal.evaluations.map(finishedBefore);
   if (fatal.message.includes(NO_SYNCED_DATASET)) {
-    return notADataset(file, language);
+    return notADataset(file, language, finished);
   }
-  return `${failed}\n\nThe runner saved no run on this machine either. To check the evaluation without uploading it, rerun without --upload.`;
+  if (finished.length === 0) {
+    return `${failed}\n\nThe runner saved no run on this machine either. To check the evaluation without uploading it, rerun without --upload.`;
+  }
+  return `${failed}\n\nThe evaluation that failed saved no run on this machine either. ${finished.join(" ")} To check the evaluation that failed without uploading it, rerun without --upload.`;
 }
 
-/** Says why cases given as a plain list can't be uploaded, and how to give them as a Dataset. */
-function notADataset(file: string, language: StackLanguage): string {
-  const found = `${file} gives an evaluation its cases as a plain list, which can't be uploaded: TraceRoot records an uploaded run against a Dataset, which the runner publishes before the run if TraceRoot doesn't have it yet. No case ran.`;
+/**
+ * Says what became of an evaluation that finished before an uploaded run failed: the runner saved
+ * its run on this machine, and uploaded it unless it finished without a TraceRoot run id.
+ */
+function finishedBefore(event: EvaluationCompletedEvent): string {
+  const saved = `${JSON.stringify(event.name)} finished before it, and was saved on this machine as ${event.local_run_id}`;
+  if (event.run_id === null) {
+    return `${saved} but not uploaded.`;
+  }
+  return `${saved} and uploaded to TraceRoot as ${event.run_id}.`;
+}
+
+/**
+ * Says why cases given as a plain list can't be uploaded, and how to give them as a Dataset.
+ *
+ * @param finished what became of each evaluation that finished before this one, from
+ * {@link finishedBefore}.
+ */
+function notADataset(file: string, language: StackLanguage, finished: string[]): string {
+  const ran =
+    finished.length === 0
+      ? "No case ran."
+      : `None of that evaluation's cases ran. ${finished.join(" ")}`;
+  const found = `${file} gives an evaluation its cases as a plain list, which can't be uploaded: TraceRoot records an uploaded run against a Dataset, which the runner publishes before the run if TraceRoot doesn't have it yet. ${ran}`;
   const example =
     language === "python"
       ? '`cases = Dataset("cases")`, then `cases.add(input, expected=...)` for each case'
@@ -830,7 +901,8 @@ function verdictLines(report: Report, bold: (text: string) => string): string[] 
  * Each uploaded evaluation's TraceRoot run id, with the command that opens it, then the
  * evaluations that weren't uploaded. The command is spelled the way the CLI was started, and names
  * the project, which a read needs under a browser login; the key check said which project the run
- * went to.
+ * went to. It repeats the flags that gave the key or the host, so it reads from the same host with
+ * the same key.
  */
 function uploadLines({ upload, runs, outcome, runner }: Report, env: NodeJS.ProcessEnv): string[] {
   if (upload === null) {
@@ -840,9 +912,13 @@ function uploadLines({ upload, runs, outcome, runner }: Report, env: NodeJS.Proc
   for (const { event } of runs) {
     if (event.run_id !== null) {
       const id = clean(event.run_id);
+      const read = [
+        `evals runs get ${id} --project ${clean(upload.projectId)}`,
+        ...upload.readFlags.map(clean),
+      ];
       lines.push(
         `Uploaded ${clean(JSON.stringify(event.name))} to TraceRoot as run ${id}. To open it:`,
-        `  ${cliCommand(`evals runs get ${id} --project ${clean(upload.projectId)}`, env)}`,
+        `  ${cliCommand(read.join(" "), env)}`,
       );
     }
   }
