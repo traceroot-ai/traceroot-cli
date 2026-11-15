@@ -10,30 +10,38 @@
  * The types cover only the fields the CLI reads. The parsers check those fields, drop every other
  * one, and fail with a {@link ProtocolError} that names the field and where it was. Runs recorded
  * from the released SDKs live in tests/fixtures/eval.
+ *
+ * traceroot's events can hold a bare `NaN`, `Infinity` or `-Infinity`, which is how Python writes
+ * a float that is NaN or infinite, and isn't JSON. Every parser here reads such a token outside a
+ * string as null.
  */
 
 /** The protocol version the CLI reads. A runner announces its own in its `hello` event. */
 export const EVAL_API_VERSION = 1;
 
+const RUN_STATUSES = ["completed", "completed_with_errors", "incomplete"] as const;
 /**
  * How a run ended. `completed_with_errors` means a task or a scorer raised on at least one case.
  *
  * An interrupted run (SIGINT) ends `incomplete`, and its stream ends with a `suite_completed`
  * whose `cancelled` is true. The runner doesn't report an interrupt with a `fatal` event.
  */
-export type RunStatus = "completed" | "completed_with_errors" | "incomplete";
+export type RunStatus = (typeof RUN_STATUSES)[number];
 
+const RUN_MODES = ["full", "first", "sample"] as const;
 /** `full` ran every case. `first` and `sample` ran a subset, and their run is never final. */
-export type RunMode = "full" | "first" | "sample";
+export type RunMode = (typeof RUN_MODES)[number];
 
+const CASE_STATUSES = ["errored", "not_scored"] as const;
 /**
  * A case's own status is never pass or fail: it is `errored` when the task or any scorer raised,
  * and `not_scored` otherwise. Pass and fail live on each score's `passed`.
  */
-export type CaseStatus = "errored" | "not_scored";
+export type CaseStatus = (typeof CASE_STATUSES)[number];
 
+const PAYLOADS = ["complete", "truncated"] as const;
 /** Whether the run file stores each case's payloads in full or cut down to a preview. */
-export type Payloads = "complete" | "truncated";
+export type Payloads = (typeof PAYLOADS)[number];
 
 /** The first event. Any version other than {@link EVAL_API_VERSION} is rejected. */
 export interface HelloEvent {
@@ -108,7 +116,11 @@ export type RunnerEvent =
   | SuiteCompletedEvent
   | FatalEvent;
 
-/** A score name the run produced, with the version its scorer declared. */
+/**
+ * A score name the run produced, with the version its scorer declared. Both SDKs save a version
+ * declared as a number (`version=2`) as that number; it reads as its string form, `"2"`. The
+ * same goes for every `scorer_version`.
+ */
 export interface RunScorer {
   name: string;
   version: string | null;
@@ -192,17 +204,16 @@ export class ProtocolError extends Error {
 
 /**
  * Parses an event stream: one JSON event per line, blank lines skipped. Events of a type the CLI
- * doesn't know are dropped. A last line with no newline that isn't valid JSON is an event the
- * runner never finished writing, and is dropped too.
+ * doesn't know are dropped. A last line with no newline that doesn't parse is an event the runner
+ * never finished writing, and is dropped too.
  *
  * @throws {ProtocolError} for a line that isn't a JSON object, an event that lacks a field the CLI
  * reads, or a `hello` with an `eval_api_version` other than 1.
  */
 export function parseEvents(text: string): RunnerEvent[] {
   const lines = text.split("\n");
-  const unfinished = lines.pop() ?? "";
-  if (unfinished.trim() !== "" && isJson(unfinished)) {
-    lines.push(unfinished);
+  if (!isJson(lines.at(-1) ?? "")) {
+    lines.pop();
   }
   const events: RunnerEvent[] = [];
   for (const [index, line] of lines.entries()) {
@@ -235,7 +246,7 @@ export function parseRunFile(text: string): RunFile {
     dataset: dataset === null ? null : { revision: dataset.string("revision") },
     scorers: file.objects("scorers").map((scorer) => ({
       name: scorer.string("name"),
-      version: scorer.nullableString("version"),
+      version: scorer.scorerVersion("version"),
     })),
     artifact: { payloads: artifact.oneOf("payloads", PAYLOADS) },
   };
@@ -262,12 +273,12 @@ export function parseCaseLines(text: string): CaseLine[] {
       task_error: item.nullableString("task_error"),
       scorer_errors: item.objects("scorer_errors").map((error) => ({
         scorer_name: error.string("scorer_name"),
-        scorer_version: error.nullableString("scorer_version"),
+        scorer_version: error.scorerVersion("scorer_version"),
         message: error.string("message"),
       })),
       scores: item.objects("scores").map((score) => ({
         scorer_name: score.string("scorer_name"),
-        scorer_version: score.nullableString("scorer_version"),
+        scorer_version: score.scorerVersion("scorer_version"),
         value: score.value("value"),
         passed: score.nullableBoolean("passed"),
       })),
@@ -275,11 +286,6 @@ export function parseCaseLines(text: string): CaseLine[] {
   }
   return cases;
 }
-
-const RUN_STATUSES: readonly RunStatus[] = ["completed", "completed_with_errors", "incomplete"];
-const RUN_MODES: readonly RunMode[] = ["full", "first", "sample"];
-const CASE_STATUSES: readonly CaseStatus[] = ["errored", "not_scored"];
-const PAYLOADS: readonly Payloads[] = ["complete", "truncated"];
 
 function readEvent(raw: Record<string, unknown>, lineNumber: number): RunnerEvent | null {
   const type = raw.type;
@@ -339,7 +345,7 @@ function readEvent(raw: Record<string, unknown>, lineNumber: number): RunnerEven
 function parseObject(text: string, where: string): Record<string, unknown> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = parseJson(text);
   } catch (error) {
     throw new ProtocolError(`${where}: not valid JSON (${(error as Error).message})`);
   }
@@ -351,11 +357,60 @@ function parseObject(text: string, where: string): Record<string, unknown> {
 
 function isJson(text: string): boolean {
   try {
-    JSON.parse(text);
+    parseJson(text);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * JSON.parse, tried once more on text that fails, with every bare `NaN`, `Infinity` and
+ * `-Infinity` outside a string read as null. When that fails too, it throws the first error.
+ */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    try {
+      return JSON.parse(nonFiniteAsNull(text));
+    } catch {
+      throw error;
+    }
+  }
+}
+
+/** `-Infinity` comes before `Infinity`, so that its sign goes too. */
+const NON_FINITE_TOKENS = ["-Infinity", "Infinity", "NaN"];
+
+/**
+ * `text` with each `NaN`, `Infinity` and `-Infinity` outside a JSON string replaced by `null`.
+ * It follows strings and their escapes, so a string that holds those words is left as it is.
+ */
+function nonFiniteAsNull(text: string): string {
+  let result = "";
+  let copied = 0;
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (char === "\\") {
+        index += 1; // The escaped character, which may be a quote, can't end the string.
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else if (char === '"') {
+      inString = true;
+    } else {
+      const token = NON_FINITE_TOKENS.find((word) => text.startsWith(word, index));
+      if (token !== undefined) {
+        result += `${text.slice(copied, index)}null`;
+        index += token.length - 1;
+        copied = index + 1;
+      }
+    }
+  }
+  return result + text.slice(copied);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -391,6 +446,18 @@ class Fields {
     const value = this.raw[key] ?? null;
     if (value !== null && typeof value !== "string") {
       throw this.wrong(key, "a string or null");
+    }
+    return value as string | null;
+  }
+
+  /** A string or null, or a finite number, which reads as its string form. */
+  scorerVersion(key: string): string | null {
+    const value = this.raw[key] ?? null;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (value !== null && typeof value !== "string") {
+      throw this.wrong(key, "a string, a number or null");
     }
     return value as string | null;
   }

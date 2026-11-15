@@ -176,6 +176,18 @@ describe("parseRunFile", () => {
     expect(parseRunFile(JSON.stringify({ ...runFile, dataset: null })).dataset).toBeNull();
   });
 
+  it("reads a scorer version saved as a number as its string form", () => {
+    const scorers = [
+      { name: "exact_match", version: null },
+      { name: "not_empty", version: 2 },
+    ];
+
+    expect(parseRunFile(JSON.stringify({ ...runFile, scorers })).scorers).toEqual([
+      { name: "exact_match", version: null },
+      { name: "not_empty", version: "2" },
+    ]);
+  });
+
   it("names the field that is wrong", () => {
     expect(() => parseRunFile(JSON.stringify({ ...runFile, run_mode: "partial" }))).toThrow(
       'run file: "run_mode" should be one of full, first, sample, found "partial"',
@@ -249,6 +261,26 @@ describe("parseCaseLines", () => {
 
   it("reads an empty file as no cases", () => {
     expect(parseCaseLines("")).toEqual([]);
+  });
+
+  it("reads a scorer version saved as a number as its string form", () => {
+    const withNumbers = {
+      ...caseLine,
+      scores: [{ scorer_name: "exact_match", scorer_version: 2, value: true, passed: true }],
+      scorer_errors: [{ scorer_name: "not_empty", scorer_version: 1.5, message: "ValueError" }],
+    };
+
+    const [item] = parseCaseLines(JSON.stringify(withNumbers));
+
+    expect(item?.scores[0]?.scorer_version).toBe("2");
+    expect(item?.scorer_errors[0]?.scorer_version).toBe("1.5");
+    const versionAsBoolean = {
+      ...withNumbers,
+      scores: [{ scorer_name: "exact_match", scorer_version: true, value: true, passed: true }],
+    };
+    expect(() => parseCaseLines(JSON.stringify(versionAsBoolean))).toThrow(
+      'case line 1, scores[0]: "scorer_version" should be a string, a number or null, found true',
+    );
   });
 
   it("names the line and the field that is wrong", () => {
@@ -512,5 +544,70 @@ describe("an inline dataset's revision", () => {
     expect(revision("python-0.5.1", "inline-rows-a")).not.toBe(
       revision("python-0.5.1", "inline-rows-b"),
     );
+  });
+});
+
+/**
+ * traceroot writes a float that is NaN or infinite as a bare `NaN`, `Infinity` or `-Infinity`,
+ * which isn't JSON. These tests put such tokens into copies of a recorded run.
+ */
+describe("a bare NaN, Infinity or -Infinity", () => {
+  const dir = join(FIXTURES, "python-0.5.1", "numeric-no-threshold");
+  const run = "run_00000000000000000000000001";
+  const read = (...path: string[]): string => readFileSync(join(dir, ...path), "utf8");
+
+  /** `text` with its first `from` replaced by `to`. Fails when `text` has no `from`. */
+  function swap(text: string, from: string, to: string): string {
+    expect(text).toContain(from);
+    return text.replace(from, to);
+  }
+
+  it("reads as null in an event line", () => {
+    const original = read("events.jsonl");
+    let text = swap(original, '"value": 5,', '"value": NaN,');
+    text = swap(text, '"value": 4,', '"value": Infinity,');
+    text = swap(text, '"value": 5,', '"value": -Infinity,');
+
+    expect(parseEvents(text)).toEqual(parseEvents(original));
+  });
+
+  it("keeps a last event with no newline when it parses with them read as null", () => {
+    const original = read("events.jsonl");
+    const upToSummary = original.slice(0, original.indexOf('{"type": "suite_completed"') - 1);
+    const text = swap(upToSummary, '"mean": 4.666666666666667', '"mean": NaN');
+
+    expect(parseEvents(text).at(-1)).toMatchObject({
+      type: "evaluation_completed",
+      name: "uppercase",
+    });
+  });
+
+  it("still rejects a line that isn't JSON with them read as null", () => {
+    expect(() => parseEvents(`${stream(hello)}{"value": NaN,\n`)).toThrow(
+      "event line 2: not valid JSON",
+    );
+  });
+
+  it("reads as null in a case line, and leaves the same words inside a string as they are", () => {
+    let text = swap(read("runs", `${run}.cases.jsonl`), '"value": 4,', '"value": NaN,');
+    text = swap(text, '"input": "beta"', '"input": "NaN, \\"Infinity\\" or -Infinity"');
+
+    const [, beta] = parseCaseLines(text);
+
+    expect(beta?.input).toBe('NaN, "Infinity" or -Infinity');
+    expect(beta?.scores).toContainEqual({
+      scorer_name: "output_length",
+      scorer_version: null,
+      value: null,
+      passed: null,
+    });
+  });
+
+  it("reads as null in a run file", () => {
+    const original = read("runs", `${run}.json`);
+    let text = swap(original, '"mean": 4.666666666666667', '"mean": NaN');
+    text = swap(text, '"value": 4,', '"value": -Infinity,');
+
+    expect(parseRunFile(text)).toEqual(parseRunFile(original));
   });
 });
