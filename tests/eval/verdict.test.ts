@@ -43,6 +43,10 @@ function scoreOn(run: SavedRun, caseId: string, scorer: string): CaseScore {
 
 const SDKS = ["python-0.5.1", "typescript-0.8.1"];
 
+const ALPHA = "tc_7498af1b5adef7e84e04";
+const BETA = "tc_7d6e5d505f6ca7767380";
+const GAMMA = "tc_a361d792d474d4c2e312";
+
 describe("loadRun", () => {
   let dir: string;
 
@@ -239,6 +243,49 @@ describe("compareRuns: whether two runs can be compared", () => {
     );
   });
 
+  it("refuses a run that lists one score name twice on a case, so neither score can hide a failure", () => {
+    const run = recorded("python-0.5.1", "all-pass");
+    // Two scorers can each give a score named exact_match. On beta, the second one fails now.
+    const withSecond = (passed: boolean) =>
+      changed(run, (copy) => {
+        const beta = copy.cases.find((item) => item.case_id === BETA) as CaseLine;
+        beta.scores.push({
+          scorer_name: "exact_match",
+          scorer_version: null,
+          value: passed,
+          passed,
+        });
+      });
+
+    expect(compareRuns(withSecond(true), withSecond(false))).toEqual({
+      outcome: "not_comparable",
+      newly_failing: [],
+      newly_errored: [],
+      changed: [],
+      not_comparable_reason: `the baseline run has more than one score named "exact_match" on case "${BETA}", so its scores can't be paired by scorer`,
+      payloads: "complete",
+    });
+    expect(compareRuns(run, withSecond(false)).not_comparable_reason).toBe(
+      `the new run has more than one score named "exact_match" on case "${BETA}", so its scores can't be paired by scorer`,
+    );
+  });
+
+  it("refuses a run that lists one scorer error name twice on a case", () => {
+    const run = recorded("python-0.5.1", "scorer-error-unversioned");
+    const twice = changed(run, (copy) => {
+      const beta = copy.cases.find((item) => item.case_id === BETA) as CaseLine;
+      beta.scorer_errors.push({
+        scorer_name: "exact_match",
+        scorer_version: null,
+        message: "other",
+      });
+    });
+
+    expect(compareRuns(recorded("python-0.5.1", "all-pass"), twice).not_comparable_reason).toBe(
+      `the new run has more than one scorer error named "exact_match" on case "${BETA}", so its scorer errors can't be paired by scorer`,
+    );
+  });
+
   it("names the case ids only one run has", () => {
     const baseline = recorded("python-0.5.1", "all-pass");
     const current = changed(baseline, (run) => {
@@ -302,10 +349,6 @@ describe("compareRuns: whether two runs can be compared", () => {
     });
   });
 });
-
-const ALPHA = "tc_7498af1b5adef7e84e04";
-const BETA = "tc_7d6e5d505f6ca7767380";
-const GAMMA = "tc_a361d792d474d4c2e312";
 
 describe("compareRuns: what regressed", () => {
   it.each(SDKS)("finds nothing in two runs that both pass on %s", (sdk) => {
@@ -433,6 +476,46 @@ describe("compareRuns: what regressed", () => {
         changed: [],
       });
     }
+  });
+
+  it("blames a raising scorer for the pairs whose scores it gives under other names", () => {
+    const baseline = recorded("python-0.5.1", "all-pass");
+    // One scorer, check_doc, gives both scores. A scorer that raises is recorded under its own name.
+    const raised = changed(baseline, (run) => {
+      const beta = run.cases.find((item) => item.case_id === BETA) as CaseLine;
+      beta.status = "errored";
+      beta.scores = [];
+      beta.scorer_errors = [
+        { scorer_name: "check_doc", scorer_version: null, message: "KeyError: 'title'" },
+      ];
+    });
+    const twoRaised = changed(raised, (run) => {
+      const beta = run.cases.find((item) => item.case_id === BETA) as CaseLine;
+      beta.scorer_errors.unshift({
+        scorer_name: "check_title",
+        scorer_version: null,
+        message: "ValueError: empty",
+      });
+    });
+    const blamed = (scorer: string, error: string) => ({
+      case_id: BETA,
+      scorer_name: scorer,
+      reason: "scorer_error",
+      value: null,
+      error,
+    });
+
+    const one = "check_doc: KeyError: 'title'";
+    expect(compareRuns(baseline, raised)).toMatchObject({
+      outcome: "regressed",
+      newly_failing: [blamed("exact_match", one), blamed("not_empty", one)],
+      newly_errored: [{ case_id: BETA }],
+    });
+    const both = "check_doc: KeyError: 'title'; check_title: ValueError: empty";
+    expect(compareRuns(baseline, twoRaised).newly_failing).toEqual([
+      blamed("exact_match", both),
+      blamed("not_empty", both),
+    ]);
   });
 
   it.each(SDKS)(

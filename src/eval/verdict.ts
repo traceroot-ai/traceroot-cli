@@ -113,10 +113,13 @@ export type RunSide = "baseline" | "new";
  * - `unjudged`: the scorer ran under the same version, and its score now neither passes nor fails,
  *   as when its threshold was removed. Removing a threshold can't hide a failure.
  * - `scorer_error`: the scorer raised. A raising scorer may be recorded without the version it
- *   declares, so this counts whatever version it records.
+ *   declares, so this counts whatever version it records. A raising scorer is recorded under its
+ *   own name, even one whose scores carry other names, such as one that gives several named scores.
+ *   So a pair with no score is also blamed on any scorer error on the case named after none of the
+ *   baseline's pairs.
  * - `task_error`: the task raised on the case, so no scorer ran on it.
- * - `missing`: the new run has no score and no error for the scorer on the case, as when the scorer
- *   was removed or renamed.
+ * - `missing`: the new run has no score for the pair, no scorer error that could be its scorer's,
+ *   and no task error, as when the scorer was removed or renamed.
  */
 export type FailingReason = "failed" | "unjudged" | "scorer_error" | "task_error" | "missing";
 
@@ -127,7 +130,11 @@ export interface NewlyFailingPair {
   reason: FailingReason;
   /** The new run's score when the reason is `failed` or `unjudged`, otherwise null. */
   value: unknown;
-  /** What raised when the reason is `scorer_error` or `task_error`, otherwise null. */
+  /**
+   * What raised when the reason is `scorer_error` or `task_error`, otherwise null. An error from a
+   * scorer named after none of the baseline's pairs starts with that scorer's name, as in
+   * `check_doc: KeyError: 'title'`, and several are joined with `; `.
+   */
   error: string | null;
 }
 
@@ -212,11 +219,15 @@ export interface Verdict {
  * - they are runs of the same evaluation;
  * - each ran every case to the end ({@link partialRunReason});
  * - they record the same dataset revision;
+ * - neither lists a case id twice, or a scorer name twice on one case, among the case's scores or
+ *   among its scorer errors;
  * - they have the same case ids, and each case id has the same stored input and expected in both.
  *
  * The last check is needed because @traceroot-ai/traceroot records an inline dataset's revision as
  * `local-<case count>`, and both SDKs give its rows positional ids. Two inline datasets of the same
- * size then share a revision, and a case id would pair unrelated rows.
+ * size then share a revision, and a case id would pair unrelated rows. A scorer name is checked
+ * because two scorers can give scores of the same name, and a pair matched by that name would
+ * stand for only one of them, so a failing score could hide behind a passing one.
  *
  * The new run regressed when a case and scorer pair that passed in the baseline doesn't pass now
  * ({@link FailingReason}), or a case errors now that didn't. A pair is matched by scorer name, the
@@ -298,6 +309,11 @@ function pairCases(baseline: SavedRun, current: SavedRun): CasePair[] | string {
   if (typeof currentCases === "string") {
     return currentCases;
   }
+  const repeated =
+    repeatedNameReason(baseline.cases, "baseline") ?? repeatedNameReason(current.cases, "new");
+  if (repeated !== null) {
+    return repeated;
+  }
 
   const onlyBaseline = [...baselineCases.keys()].filter((id) => !currentCases.has(id));
   const onlyNew = [...currentCases.keys()].filter((id) => !baselineCases.has(id));
@@ -348,6 +364,37 @@ function indexCases(cases: CaseLine[], side: RunSide): Map<string, CaseLine> | s
   return index;
 }
 
+/**
+ * Why a run's scores can't be paired by scorer name, or null when they can: a case, taken in case
+ * id order, lists one name twice among its scores, or among its scorer errors.
+ */
+function repeatedNameReason(cases: CaseLine[], side: RunSide): string | null {
+  for (const item of [...cases].sort((a, b) => byCodeUnit(a.case_id, b.case_id))) {
+    const score = repeatedName(item.scores);
+    if (score !== null) {
+      return `the ${side} run has more than one score named ${quote(score)} on case ${quote(item.case_id)}, so its scores can't be paired by scorer`;
+    }
+    const error = repeatedName(item.scorer_errors);
+    if (error !== null) {
+      return `the ${side} run has more than one scorer error named ${quote(error)} on case ${quote(item.case_id)}, so its scorer errors can't be paired by scorer`;
+    }
+  }
+  return null;
+}
+
+/** The first, in name order, of the scorer names listed more than once, or null when none is. */
+function repeatedName(items: { scorer_name: string }[]): string | null {
+  const seen = new Set<string>();
+  const repeated: string[] = [];
+  for (const { scorer_name: name } of items) {
+    if (seen.has(name)) {
+      repeated.push(name);
+    }
+    seen.add(name);
+  }
+  return repeated.sort(byCodeUnit)[0] ?? null;
+}
+
 /** Names the case ids that only one run has. */
 function differentCasesReason(onlyBaseline: string[], onlyNew: string[]): string {
   const sides = [
@@ -375,9 +422,12 @@ function differentRowsReason(
     return null;
   }
   const others = differing.length - 1;
-  const reason = `case ${quote(first.id)} has a different stored ${first.fields} in the two runs${
-    others === 0 ? "" : others === 1 ? ", as does 1 other case" : `, as do ${others} other cases`
-  }`;
+  let reason = `case ${quote(first.id)} has a different stored ${first.fields} in the two runs`;
+  if (others === 1) {
+    reason += ", as does 1 other case";
+  } else if (others > 1) {
+    reason += `, as do ${others} other cases`;
+  }
   const note = truncationNote(baseline, current);
   return note === null ? reason : `${reason} (${note})`;
 }
@@ -399,12 +449,17 @@ function rowDifference(baseline: CaseLine, current: CaseLine): string | null {
 function truncationNote(baseline: RunFile, current: RunFile): string | null {
   const before = baseline.artifact.payloads === "truncated";
   const after = current.artifact.payloads === "truncated";
-  if (!before && !after) {
-    return null;
+  const note = "truncated payloads, so the stored, truncated values were compared";
+  if (before && after) {
+    return `both runs store ${note}`;
   }
-  const which =
-    before && after ? "both runs store" : before ? "the baseline run stores" : "the new run stores";
-  return `${which} truncated payloads, so the stored, truncated values were compared`;
+  if (before) {
+    return `the baseline run stores ${note}`;
+  }
+  if (after) {
+    return `the new run stores ${note}`;
+  }
+  return null;
 }
 
 /** How many ids there are, and the first three of them in order. */
@@ -432,6 +487,7 @@ function compareCase({ baseline, current }: CasePair, verdict: Verdict): void {
   const scores = byScorer(current.scores);
   const errors = byScorer(current.scorer_errors);
   const names = new Set([...oldScores.keys(), ...oldErrors.keys()]);
+  const unmatched = unmatchedErrors(current.scorer_errors, names);
   for (const name of [...names].sort(byCodeUnit)) {
     const pair = { case_id: baseline.case_id, scorer_name: name };
     const old = oldScores.get(name);
@@ -451,7 +507,7 @@ function compareCase({ baseline, current }: CasePair, verdict: Verdict): void {
     }
     if (now === undefined) {
       if (old.passed === true) {
-        verdict.newly_failing.push({ ...pair, ...unscored(current, errors.get(name)) });
+        verdict.newly_failing.push({ ...pair, ...unscored(current, errors.get(name), unmatched) });
       }
       continue;
     }
@@ -464,16 +520,37 @@ function compareCase({ baseline, current }: CasePair, verdict: Verdict): void {
   }
 }
 
-/** Why a pair that passed in the baseline has no score in the new run. */
+/**
+ * The case's scorer errors named after none of the baseline's pairs, each after its scorer's name
+ * and in name order, or null when there are none. Such a scorer gives its scores under other names,
+ * so any of them may be the scorer behind a pair that has no score now.
+ */
+function unmatchedErrors(errors: ScorerError[], names: Set<string>): string | null {
+  const unmatched = errors.filter((error) => !names.has(error.scorer_name)).sort(byScorerName);
+  if (unmatched.length === 0) {
+    return null;
+  }
+  return unmatched.map((error) => `${error.scorer_name}: ${error.message}`).join("; ");
+}
+
+/**
+ * Why a pair that passed in the baseline has no score in the new run: its scorer's error, the
+ * task's error, or else the case's {@link unmatchedErrors}. `missing` only when none of them is
+ * there.
+ */
 function unscored(
   current: CaseLine,
   error: ScorerError | undefined,
+  unmatched: string | null,
 ): Pick<NewlyFailingPair, "reason" | "value" | "error"> {
   if (error !== undefined) {
     return { reason: "scorer_error", value: null, error: error.message };
   }
   if (current.task_error !== null) {
     return { reason: "task_error", value: null, error: current.task_error };
+  }
+  if (unmatched !== null) {
+    return { reason: "scorer_error", value: null, error: unmatched };
   }
   return { reason: "missing", value: null, error: null };
 }
@@ -503,15 +580,12 @@ function pairScore(score: CaseScore): PairScore {
   return { scorer_version: score.scorer_version, value: score.value, passed: score.passed };
 }
 
-/** A case's scores or scorer errors by scorer name, keeping the first of any name listed twice. */
+/**
+ * A case's scores or scorer errors by scorer name. Runs that list a name twice on a case are never
+ * compared ({@link repeatedNameReason}), so each name is listed once.
+ */
 function byScorer<T extends { scorer_name: string }>(items: T[]): Map<string, T> {
-  const index = new Map<string, T>();
-  for (const item of items) {
-    if (!index.has(item.scorer_name)) {
-      index.set(item.scorer_name, item);
-    }
-  }
-  return index;
+  return new Map(items.map((item) => [item.scorer_name, item]));
 }
 
 /**
