@@ -34,3 +34,29 @@ jobs:
       - name: Test
         timeout-minutes: 15
         run: npm test
+
+  evals-run-smoke:
+    name: Evals run smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run the released SDK runners through evals run
+        # Installs pinned traceroot and @traceroot-ai/traceroot releases into fixture projects and
+        # runs their files through the built CLI. Not part of `npm test`: it needs the registries.
+        timeout-minutes: 15
+        run: npx vitest run --config tests/smoke/evals/vitest.config.ts
