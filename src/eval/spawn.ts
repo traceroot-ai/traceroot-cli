@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sink } from "../output.js";
 import { runProcess } from "../setup/exec.js";
+import { type Secret, redact } from "../setup/secret.js";
 import { type InterruptSignal, type RunOutcome, outcomeOf } from "./events.js";
 
 /** How long the runner has after the first Ctrl+C before its process group is killed. */
@@ -41,6 +42,26 @@ const LOCAL_RUN: Readonly<Record<string, string | undefined>> = {
   TRACEROOT_EVAL_OPTIONS: "{}",
 };
 
+/** Where a run that is uploaded goes: a TraceRoot host, and a project API key for it. */
+export interface UploadTarget {
+  /** The host, as the CLI resolved it. */
+  host: string;
+  apiKey: Secret;
+}
+
+/**
+ * What an uploaded run sets instead: the project API key and its host, reporting on, and tracing
+ * on, so a TRACEROOT_ENABLED=false left in the environment can't drop the cases' traces.
+ */
+function uploadedRun(target: UploadTarget): Record<string, string> {
+  return {
+    TRACEROOT_API_KEY: target.apiKey.reveal(),
+    TRACEROOT_HOST_URL: target.host,
+    TRACEROOT_ENABLED: "true",
+    TRACEROOT_EVAL_OPTIONS: JSON.stringify({ reporting: true }),
+  };
+}
+
 /**
  * The runner's environment: the CLI's own, with the variables that decide what the run may reach
  * replaced, and the event file named.
@@ -49,9 +70,15 @@ const LOCAL_RUN: Readonly<Record<string, string | undefined>> = {
  * such as the lookup's Python version probe: the same replacements, and no event file.
  *
  * @param parent the CLI's environment, which is not modified.
+ * @param upload where the run is uploaded to; without it, the run stays on this machine.
  */
-export function runnerEnv(parent: NodeJS.ProcessEnv, eventFile?: string): NodeJS.ProcessEnv {
-  return withVariables(parent, { ...LOCAL_RUN, TRACEROOT_EVAL_EVENT_FILE: eventFile });
+export function runnerEnv(
+  parent: NodeJS.ProcessEnv,
+  eventFile?: string,
+  upload?: UploadTarget,
+): NodeJS.ProcessEnv {
+  const run = upload === undefined ? LOCAL_RUN : uploadedRun(upload);
+  return withVariables(parent, { ...run, TRACEROOT_EVAL_EVENT_FILE: eventFile });
 }
 
 export interface RunEvalRunnerOptions {
@@ -64,6 +91,11 @@ export interface RunEvalRunnerOptions {
   cwd?: string;
   /** The CLI's environment, which the runner's is built from (see {@link runnerEnv}). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Where the run is uploaded to. Without it the run stays on this machine. With it, the API key is
+   * scrubbed from everything the runner writes before the CLI passes it on.
+   */
+  upload?: UploadTarget;
   /** Where the runner's stdout and stderr both go. Defaults to the CLI's stderr. */
   output?: Sink;
   /** How long the runner has after the first Ctrl+C. Defaults to {@link INTERRUPT_GRACE_MS}. */
@@ -107,6 +139,7 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
     throw new Error("runEvalRunner needs a runner command");
   }
   const output = options.output ?? process.stderr;
+  const secrets = options.upload === undefined ? [] : [options.upload.apiKey];
   const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS);
   let folder: string | undefined;
   const exits = listenForExit(() => {
@@ -122,14 +155,16 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
       program,
       args,
       cwd: options.cwd ?? process.cwd(),
-      env: runnerEnv(options.env ?? process.env, eventFile),
+      env: runnerEnv(options.env ?? process.env, eventFile, options.upload),
       stdio: "capture",
       onData: (chunk) => {
         output.write(chunk);
       },
       signal: interrupts.signal,
+      secrets,
     });
-    return outcomeOf(readEvents(eventFile), {
+    // A runner's `fatal` message is printed too, so it is scrubbed like its output.
+    return outcomeOf(redact(readEvents(eventFile), secrets), {
       status: result.exitCode,
       signal: interrupts.received(),
       outputTail: lastLines(result.output, OUTPUT_TAIL_LINES),
