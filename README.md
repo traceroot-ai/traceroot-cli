@@ -160,7 +160,7 @@ project-scoped and need none of this.
 | `evals list` | List the project's evaluations, newest first: how many runs each has and how its latest one ended. The `EVALUATION ID` column is what `evals runs list --evaluation-id` takes. `--limit <n>`, `--cursor <cursor>`, `--name <substring>` |
 | `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--cursor <cursor>`, `--evaluation-id <id>`, `--status <status>` |
 | `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, and a link to open it. |
-| `evals run <file>` | Run an evaluation file on this machine with the project's own SDK, save the run, and print each evaluation's run id and score means. With `--baseline`, compare the new run with an earlier one and exit 18 if a case regressed. `--baseline <run id or path>` |
+| `evals run <file>` | Run an evaluation file on this machine with the project's own SDK, save the run, and print each evaluation's run id and score means. With `--baseline`, compare the new run with an earlier one and exit 18 if a case regressed. With `--upload`, also send the run and its traces to TraceRoot. `--baseline <run id or path>`, `--upload` |
 | `skills list` | List first-party TraceRoot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
@@ -301,9 +301,9 @@ your own data can move the cursor or repaint the terminal.
 
 `traceroot evals run` runs one evaluation file on this machine, through the eval
 runner of the SDK the project already has, and saves each evaluation's run under
-`.traceroot/eval/runs/<run id>.json`. The runner gets no API key and runs with
-tracing off, so the run stays on the machine. Run it once, change the code, and
-run it again against the first run:
+`.traceroot/eval/runs/<run id>.json`. Unless you pass `--upload`, the runner gets
+no API key and runs with tracing off, so the run stays on the machine. Run it once,
+change the code, and run it again against the first run:
 
 ```sh
 traceroot evals run evals/triage_eval.py                       # prints the run id
@@ -329,18 +329,49 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
 - **`--baseline`** takes a run id, read from `.traceroot/eval/runs` under the
   current directory, or the path of a run file.
 
+`--upload` also sends the run and each case's trace to TraceRoot, where the rest
+of the team can see it. The run is still saved under `.traceroot/eval/runs`, and
+`--baseline` still compares the runs saved there:
+
+```sh
+traceroot evals run evals/triage_eval.py --upload   # prints the command that opens the run
+```
+
+- **It takes a project API key:** from `--api-key`, `--env-file`,
+  `TRACEROOT_API_KEY`, the config file `traceroot login --api-key` writes, or
+  `./.env`, the first that has one. A browser login can't upload, so `--upload`
+  uses the key even when you're also signed in through the browser, and exits `3`
+  when there's no key.
+- **The key is checked before the runner starts.** A key TraceRoot rejects exits
+  `3`, and a host it can't reach exits `5`, before any case runs.
+- **The cases have to be a `Dataset`.** TraceRoot records an uploaded run against
+  a dataset, and the runner publishes a `Dataset` TraceRoot doesn't have yet
+  before the run. Cases given as a plain list exit `17` before any case runs.
+- **An upload that fails saves no run here either**, even when it fails after the
+  cases ran, as when TraceRoot can't complete the run. The command exits `17` with
+  the runner's message; rerun without `--upload` to check the evaluation locally.
+- **An evaluation that finishes without a TraceRoot run id**, such as one defined
+  with `local=True` (`local: true` in TypeScript), is named and exits `17`, unless
+  a case regressed, which exits `18`.
+- **The summary ends with the command that opens each uploaded run**,
+  `traceroot evals runs get <id> --project <project id>`. It names the key's
+  project, so it works under a browser login too. Like the hint for a missing key,
+  it's spelled the way the CLI was started: under npx, as
+  `npx -y traceroot-cli@<version> …`.
+
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,
-`outcome` (`ok`, `regressed`, `not_comparable`, `interrupted` or `failed`), the
-file, the SDK, each run with its counts and score means, the baseline, a `verdict`
-with `newly_failing` (each with its `reason`), `newly_errored`, `changed`,
-`not_comparable_reason` and `payloads`, and `failure`. `failure` is null unless
-the runner failed after some evaluations finished; then it holds the failure's
-`kind` (the runner's own, or `crashed`) and `message`, the text of the `error:`
-line human mode prints, and `outcome` is `failed`, or `regressed` when one of the
-evaluations that finished regressed. Case ids, scorer names and the runner's
-messages print with control characters escaped, as the evaluation reads' text
-does.
+`outcome` (`ok`, `regressed`, `not_comparable`, `not_uploaded`, `interrupted` or
+`failed`), the file, the SDK, `project_id` (the key's project under `--upload`,
+otherwise null), each run with its counts, score means and `uploaded_run_id`
+(null unless it was uploaded), the baseline, a `verdict` with `newly_failing`
+(each with its `reason`), `newly_errored`, `changed`, `not_comparable_reason` and
+`payloads`, and `failure`. `failure` is null unless the runner failed after some
+evaluations finished; then it holds the failure's `kind` (the runner's own, or
+`crashed`) and `message`, the text of the `error:` line human mode prints, and
+`outcome` is `failed`, or `regressed` when one of the evaluations that finished
+regressed. Case ids, scorer names and the runner's messages print with control
+characters escaped, as the evaluation reads' text does.
 
 ### Exit codes
 
@@ -400,8 +431,10 @@ envelope:
 | ---- | ------- |
 | `0` | Nothing newly fails or newly errors, or no baseline was given. |
 | `2` | Invalid arguments, or a baseline the new run can't be compared with: sampled, interrupted, of another evaluation or dataset, or with a case that repeats a score name. The reason is printed. |
+| `3` | `--upload` found no project API key, or TraceRoot rejected it. Nothing ran. |
 | `4` | The baseline run doesn't exist. |
-| `17` | The evaluation couldn't run: no interpreter or tsx, an SDK too old to run it, a failure the runner reported, no evaluation in the file, a runner that crashed, or a reader that closed the CLI's output while the runner ran. The message carries the fix, or the runner's own kind and message. The evaluations that finished before the failure are still compared and reported, and a regression among them exits `18`. |
+| `5` | `--upload` couldn't reach TraceRoot. Nothing ran. |
+| `17` | The evaluation couldn't run: no interpreter or tsx, an SDK too old to run it, a failure the runner reported, no evaluation in the file, a runner that crashed, or a reader that closed the CLI's output while the runner ran. The message carries the fix, or the runner's own kind and message. With `--upload`, also cases that aren't a `Dataset`, an upload that failed, or an evaluation that finished without a TraceRoot run id. The evaluations that finished before the failure are still compared and reported, and a regression among them exits `18`. |
 | `18` | A case and scorer pair newly fails, or a case newly errors. |
 | `130` | Ctrl+C. A `SIGTERM` exits `143` and a `SIGHUP` `129`, the shell's status for each. The summary names any run the runner saved before it stopped, with that run's own status. |
 
