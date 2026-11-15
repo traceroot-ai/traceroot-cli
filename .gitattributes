@@ -2,3 +2,5 @@
 # identical to the backend artifact (see OPENAPI.md) on every checkout.
 openapi.json -text
 src/api/generated/schema.ts text eol=lf
+# Recorded eval runner output: preserve exact bytes, so re-recording can be checked with git diff.
+tests/fixtures/eval/** -text
