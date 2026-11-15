@@ -45,9 +45,12 @@ const LOCAL_RUN: Readonly<Record<string, string | undefined>> = {
  * The runner's environment: the CLI's own, with the variables that decide what the run may reach
  * replaced, and the event file named.
  *
+ * Without an event file, it is the environment for a process the CLI starts before the runner,
+ * such as the lookup's Python version probe: the same replacements, and no event file.
+ *
  * @param parent the CLI's environment, which is not modified.
  */
-export function runnerEnv(parent: NodeJS.ProcessEnv, eventFile: string): NodeJS.ProcessEnv {
+export function runnerEnv(parent: NodeJS.ProcessEnv, eventFile?: string): NodeJS.ProcessEnv {
   return withVariables(parent, { ...LOCAL_RUN, TRACEROOT_EVAL_EVENT_FILE: eventFile });
 }
 

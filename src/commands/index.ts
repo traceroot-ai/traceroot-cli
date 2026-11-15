@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { type RegistryDeps, ensureGroup, registerRegistryCommands } from "../registry/factory.js";
 import { GROUPS } from "../registry/naming.js";
 import { registerDoctor } from "./doctor.js";
+import { registerEvalsRun } from "./evals-run.js";
 import { registerInstrument } from "./instrument.js";
 import { registerLogin } from "./login.js";
 import { registerLogout } from "./logout.js";
@@ -30,6 +31,9 @@ export function registerCommands(program: Command, deps: RegistryDeps = {}): voi
     if (!group.includes(" ")) ensureGroup(program, group, groups);
   }
   registerRegistryCommands(program, deps);
+  // Beside the platform reads (`evals list`, `evals runs`), against the real
+  // GROUPS: a test that registers its own groups needn't know about this one.
+  registerEvalsRun(ensureGroup(program, "evals"));
   registerSkills(program);
   registerInstrument(program);
   registerDoctor(program);
