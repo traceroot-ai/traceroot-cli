@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { CaseLine } from "../../src/eval/protocol.js";
+import type { CaseLine, CaseScore } from "../../src/eval/protocol.js";
 import { type SavedRun, compareRuns, loadRun, partialRunReason } from "../../src/eval/verdict.js";
 
 const FIXTURES = fileURLToPath(new URL("../fixtures/eval/", import.meta.url));
@@ -28,6 +28,17 @@ function changed(run: SavedRun, change: (copy: SavedRun) => void): SavedRun {
   const copy = structuredClone(run);
   change(copy);
   return copy;
+}
+
+/** One case's score from one scorer, to change in a copied run. */
+function scoreOn(run: SavedRun, caseId: string, scorer: string): CaseScore {
+  const score = run.cases
+    .find((item) => item.case_id === caseId)
+    ?.scores.find((item) => item.scorer_name === scorer);
+  if (score === undefined) {
+    throw new Error(`the run has no ${scorer} score on ${caseId}`);
+  }
+  return score;
 }
 
 const SDKS = ["python-0.5.1", "typescript-0.8.1"];
@@ -281,10 +292,358 @@ describe("compareRuns: whether two runs can be compared", () => {
       payloads: "truncated",
     });
     expect(compareRuns(complete, truncated)).toEqual({
+      outcome: "not_comparable",
+      newly_failing: [],
+      newly_errored: [],
+      changed: [],
       not_comparable_reason:
         'case "tc_7498af1b5adef7e84e04" has a different stored input in the two runs, as do 2 other cases (the new run stores truncated payloads, so the stored, truncated values were compared)',
       payloads: "truncated",
     });
+  });
+});
+
+const ALPHA = "tc_7498af1b5adef7e84e04";
+const BETA = "tc_7d6e5d505f6ca7767380";
+const GAMMA = "tc_a361d792d474d4c2e312";
+
+describe("compareRuns: what regressed", () => {
+  it.each(SDKS)("finds nothing in two runs that both pass on %s", (sdk) => {
+    expect(compareRuns(recorded(sdk, "all-pass"), recorded(sdk, "all-pass"))).toEqual({
+      outcome: "ok",
+      newly_failing: [],
+      newly_errored: [],
+      changed: [],
+      not_comparable_reason: null,
+      payloads: "complete",
+    });
+  });
+
+  it.each(SDKS)("lists exactly the recorded pair that newly fails on %s", (sdk) => {
+    expect(compareRuns(recorded(sdk, "all-pass"), recorded(sdk, "one-fails"))).toEqual({
+      outcome: "regressed",
+      newly_failing: [
+        { case_id: BETA, scorer_name: "exact_match", reason: "failed", value: false, error: null },
+      ],
+      newly_errored: [],
+      changed: [],
+      not_comparable_reason: null,
+      payloads: "complete",
+    });
+  });
+
+  it.each(SDKS)("lists a case whose task raises as newly errored on %s", (sdk) => {
+    const verdict = compareRuns(recorded(sdk, "all-pass"), recorded(sdk, "task-error"));
+    const raised = expect.stringContaining("cannot convert");
+
+    expect(verdict.outcome).toBe("regressed");
+    expect(verdict.newly_errored).toEqual([
+      { case_id: BETA, task_error: raised, scorer_errors: [] },
+    ]);
+    // No scorer ran on the case, so each pair that passed there is newly failing too.
+    expect(verdict.newly_failing).toEqual([
+      {
+        case_id: BETA,
+        scorer_name: "exact_match",
+        reason: "task_error",
+        value: null,
+        error: raised,
+      },
+      { case_id: BETA, scorer_name: "not_empty", reason: "task_error", value: null, error: raised },
+    ]);
+    expect(verdict.changed).toEqual([]);
+  });
+
+  it.each(SDKS)(
+    "counts a raising scorer as newly failing, never as a version change, on %s",
+    (sdk) => {
+      const baseline = recorded(sdk, "all-pass");
+      const unversioned = compareRuns(baseline, recorded(sdk, "scorer-error-unversioned"));
+      // not_empty declares version 2, and its error is recorded with no version.
+      const versioned = compareRuns(baseline, recorded(sdk, "scorer-error-versioned"));
+
+      expect(unversioned.newly_failing).toEqual([
+        {
+          case_id: BETA,
+          scorer_name: "exact_match",
+          reason: "scorer_error",
+          value: null,
+          error: expect.stringContaining("cannot compare"),
+        },
+      ]);
+      expect(versioned.newly_failing).toEqual([
+        {
+          case_id: BETA,
+          scorer_name: "not_empty",
+          reason: "scorer_error",
+          value: null,
+          error: expect.stringContaining("cannot check"),
+        },
+      ]);
+      for (const verdict of [unversioned, versioned]) {
+        expect(verdict.outcome).toBe("regressed");
+        expect(verdict.changed).toEqual([]);
+        expect(verdict.newly_errored).toMatchObject([{ case_id: BETA, task_error: null }]);
+      }
+    },
+  );
+
+  it("doesn't count a case that already errored in the baseline as newly errored", () => {
+    const taskError = recorded("python-0.5.1", "task-error");
+    const scorerError = recorded("python-0.5.1", "scorer-error-unversioned");
+
+    expect(compareRuns(taskError, taskError).outcome).toBe("ok");
+    // The task raised on beta in the baseline, so no pair passed there to newly fail.
+    expect(compareRuns(taskError, scorerError)).toMatchObject({
+      outcome: "ok",
+      newly_failing: [],
+      newly_errored: [],
+    });
+  });
+
+  it("lists a pair whose scorer is gone from the new run as newly failing", () => {
+    const baseline = recorded("typescript-0.8.1", "all-pass");
+    const removed = changed(baseline, (run) => {
+      run.file.scorers = run.file.scorers.filter((scorer) => scorer.name !== "not_empty");
+      for (const item of run.cases) {
+        item.scores = item.scores.filter((score) => score.scorer_name !== "not_empty");
+      }
+    });
+    const renamed = changed(baseline, (run) => {
+      for (const item of run.cases) {
+        for (const score of item.scores) {
+          if (score.scorer_name === "not_empty") {
+            score.scorer_name = "non_empty";
+          }
+        }
+      }
+    });
+    const missing = (caseId: string) => ({
+      case_id: caseId,
+      scorer_name: "not_empty",
+      reason: "missing",
+      value: null,
+      error: null,
+    });
+
+    for (const current of [removed, renamed]) {
+      expect(compareRuns(baseline, current)).toMatchObject({
+        outcome: "regressed",
+        newly_failing: [missing(ALPHA), missing(BETA), missing(GAMMA)],
+        changed: [],
+      });
+    }
+  });
+
+  it.each(SDKS)(
+    "reports a changed numeric score with no threshold, without calling it a regression, on %s",
+    (sdk) => {
+      const baseline = recorded(sdk, "numeric-no-threshold");
+      const longer = changed(baseline, (run) => {
+        scoreOn(run, BETA, "output_length").value = 7;
+      });
+
+      expect(compareRuns(baseline, longer)).toEqual({
+        outcome: "ok",
+        newly_failing: [],
+        newly_errored: [],
+        changed: [
+          {
+            case_id: BETA,
+            scorer_name: "output_length",
+            change: "value",
+            baseline: { scorer_version: null, value: 4, passed: null },
+            current: { scorer_version: null, value: 7, passed: null },
+          },
+        ],
+        not_comparable_reason: null,
+        payloads: "complete",
+      });
+    },
+  );
+
+  it("lists a pair that passed and now neither passes nor fails as newly failing", () => {
+    const baseline = recorded("python-0.5.1", "all-pass");
+    const unjudged = (version: string | null) =>
+      changed(baseline, (run) => {
+        const score = scoreOn(run, BETA, "exact_match");
+        score.scorer_version = version;
+        score.value = 0.5;
+        score.passed = null;
+      });
+
+    expect(compareRuns(baseline, unjudged(null))).toMatchObject({
+      outcome: "regressed",
+      newly_failing: [
+        { case_id: BETA, scorer_name: "exact_match", reason: "unjudged", value: 0.5, error: null },
+      ],
+      changed: [],
+    });
+    // Under another version, the two scores may not mean the same thing.
+    expect(compareRuns(baseline, unjudged("2"))).toMatchObject({
+      outcome: "ok",
+      newly_failing: [],
+      changed: [{ case_id: BETA, scorer_name: "exact_match", change: "scorer_version" }],
+    });
+  });
+
+  it.each(SDKS)(
+    "reports a scorer that raised in the baseline and has a score now, without calling it a regression, on %s",
+    (sdk) => {
+      const allPass = recorded(sdk, "all-pass");
+      const unversioned = compareRuns(recorded(sdk, "scorer-error-unversioned"), allPass);
+      const versioned = compareRuns(recorded(sdk, "scorer-error-versioned"), allPass);
+
+      expect(unversioned).toEqual({
+        outcome: "ok",
+        newly_failing: [],
+        newly_errored: [],
+        changed: [
+          {
+            case_id: BETA,
+            scorer_name: "exact_match",
+            change: "scorer_recovered",
+            baseline: { scorer_version: null, message: expect.stringContaining("cannot compare") },
+            current: { scorer_version: null, value: true, passed: true },
+          },
+        ],
+        not_comparable_reason: null,
+        payloads: "complete",
+      });
+      // The error carries no version and the score carries version 2: not a version change.
+      expect(versioned.changed).toEqual([
+        {
+          case_id: BETA,
+          scorer_name: "not_empty",
+          change: "scorer_recovered",
+          baseline: { scorer_version: null, message: expect.stringContaining("cannot check") },
+          current: { scorer_version: "2", value: true, passed: true },
+        },
+      ]);
+    },
+  );
+
+  it("keeps a case's changes in scorer order, whether the baseline scored a scorer or saw it raise", () => {
+    // On beta, the baseline saw exact_match raise and scored not_empty.
+    const baseline = recorded("python-0.5.1", "scorer-error-unversioned");
+    const current = changed(recorded("python-0.5.1", "all-pass"), (run) => {
+      scoreOn(run, BETA, "not_empty").scorer_version = "3";
+    });
+
+    expect(
+      compareRuns(baseline, current).changed.map((pair) => [pair.scorer_name, pair.change]),
+    ).toEqual([
+      ["exact_match", "scorer_recovered"],
+      ["not_empty", "scorer_version"],
+    ]);
+  });
+
+  it("reports a pair that went from failing to passing, without calling it a regression", () => {
+    const verdict = compareRuns(
+      recorded("python-0.5.1", "one-fails"),
+      recorded("python-0.5.1", "all-pass"),
+    );
+
+    expect(verdict).toMatchObject({ outcome: "ok", newly_failing: [], newly_errored: [] });
+    expect(verdict.changed).toEqual([
+      {
+        case_id: BETA,
+        scorer_name: "exact_match",
+        change: "passed",
+        baseline: { scorer_version: null, value: false, passed: false },
+        current: { scorer_version: null, value: true, passed: true },
+      },
+    ]);
+  });
+
+  it("reports a scorer whose version changed, even where its score now fails", () => {
+    const baseline = recorded("python-0.5.1", "all-pass");
+    const bumped = changed(baseline, (run) => {
+      for (const item of run.cases) {
+        for (const score of item.scores) {
+          if (score.scorer_name === "not_empty") {
+            score.scorer_version = "3";
+            if (item.case_id === BETA) {
+              score.value = false;
+              score.passed = false;
+            }
+          }
+        }
+      }
+    });
+
+    const verdict = compareRuns(baseline, bumped);
+
+    expect(verdict).toMatchObject({ outcome: "ok", newly_failing: [], newly_errored: [] });
+    expect(verdict.changed).toEqual(
+      [ALPHA, BETA, GAMMA].map((caseId) => ({
+        case_id: caseId,
+        scorer_name: "not_empty",
+        change: "scorer_version",
+        baseline: { scorer_version: "2", value: true, passed: true },
+        current: {
+          scorer_version: "3",
+          value: caseId !== BETA,
+          passed: caseId !== BETA,
+        },
+      })),
+    );
+  });
+
+  it("gives the same verdict, sorted by case id then scorer, whatever order the runs list things in", () => {
+    const baseline = recorded("python-0.5.1", "all-pass");
+    const failing = changed(baseline, (run) => {
+      for (const item of run.cases) {
+        for (const score of item.scores) {
+          score.value = false;
+          score.passed = false;
+        }
+      }
+    });
+    const reversed = (run: SavedRun) =>
+      changed(run, (copy) => {
+        copy.cases.reverse();
+        for (const item of copy.cases) {
+          item.scores.reverse();
+        }
+      });
+
+    const verdict = compareRuns(baseline, failing);
+
+    expect(compareRuns(reversed(baseline), reversed(failing))).toEqual(verdict);
+    expect(compareRuns(baseline, reversed(failing))).toEqual(verdict);
+    expect(verdict.newly_failing.map((pair) => [pair.case_id, pair.scorer_name])).toEqual([
+      [ALPHA, "exact_match"],
+      [ALPHA, "not_empty"],
+      [BETA, "exact_match"],
+      [BETA, "not_empty"],
+      [GAMMA, "exact_match"],
+      [GAMMA, "not_empty"],
+    ]);
+  });
+
+  it("lists a newly errored case's scorer errors by scorer name", () => {
+    const baseline = recorded("python-0.5.1", "all-pass");
+    const twoErrors = changed(baseline, (run) => {
+      const beta = run.cases.find((item) => item.case_id === BETA) as CaseLine;
+      beta.status = "errored";
+      beta.scores = [];
+      beta.scorer_errors = [
+        { scorer_name: "not_empty", scorer_version: null, message: "second" },
+        { scorer_name: "exact_match", scorer_version: null, message: "first" },
+      ];
+    });
+
+    expect(compareRuns(baseline, twoErrors).newly_errored).toEqual([
+      {
+        case_id: BETA,
+        task_error: null,
+        scorer_errors: [
+          { scorer_name: "exact_match", scorer_version: null, message: "first" },
+          { scorer_name: "not_empty", scorer_version: null, message: "second" },
+        ],
+      },
+    ]);
   });
 });
 

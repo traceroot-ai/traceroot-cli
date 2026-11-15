@@ -1,6 +1,6 @@
 /**
- * Reads runs the eval runners saved on this machine, and decides whether a new run can be compared
- * with a baseline run.
+ * Reads runs the eval runners saved on this machine, and compares a new run with a baseline run:
+ * whether the two can be compared at all, and if they can, which cases regressed.
  *
  * A runner saves each evaluation it runs as `<run id>.json` (the run file) and
  * `<run id>.cases.jsonl` (its case lines), side by side in `.traceroot/eval/runs`.
@@ -14,9 +14,11 @@ import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import {
   type CaseLine,
+  type CaseScore,
   type Payloads,
   ProtocolError,
   type RunFile,
+  type ScorerError,
   parseCaseLines,
   parseRunFile,
 } from "./protocol.js";
@@ -105,8 +107,93 @@ function readIfPresent(path: string): string | null {
 /** Which of the two compared runs a reason is about. */
 export type RunSide = "baseline" | "new";
 
-/** What comparing a new run with a baseline run found. */
+/**
+ * Why a case and scorer pair that passed in the baseline run doesn't pass in the new run:
+ * - `failed`: the scorer ran under the same version, and its score doesn't pass.
+ * - `unjudged`: the scorer ran under the same version, and its score now neither passes nor fails,
+ *   as when its threshold was removed. Removing a threshold can't hide a failure.
+ * - `scorer_error`: the scorer raised. A raising scorer may be recorded without the version it
+ *   declares, so this counts whatever version it records.
+ * - `task_error`: the task raised on the case, so no scorer ran on it.
+ * - `missing`: the new run has no score and no error for the scorer on the case, as when the scorer
+ *   was removed or renamed.
+ */
+export type FailingReason = "failed" | "unjudged" | "scorer_error" | "task_error" | "missing";
+
+/** A case and scorer pair that passed in the baseline run, and doesn't in the new run. */
+export interface NewlyFailingPair {
+  case_id: string;
+  scorer_name: string;
+  reason: FailingReason;
+  /** The new run's score when the reason is `failed` or `unjudged`, otherwise null. */
+  value: unknown;
+  /** What raised when the reason is `scorer_error` or `task_error`, otherwise null. */
+  error: string | null;
+}
+
+/** A case whose status is `errored` in the new run and wasn't in the baseline run. */
+export interface NewlyErroredCase {
+  case_id: string;
+  /** What the task raised, or null when only scorers raised. */
+  task_error: string | null;
+  scorer_errors: ScorerError[];
+}
+
+/**
+ * What changed about a pair, without making it a regression:
+ * - `scorer_version`: the scorer's version changed, so its two scores may not mean the same thing.
+ *   This holds whatever the scores are, failing ones included.
+ * - `passed`: a score that didn't pass in the baseline changed whether it passes. From failing to
+ *   passing is the usual one.
+ * - `value`: a score that neither passes nor fails, such as a number from a scorer with no
+ *   threshold, has a new value.
+ * - `scorer_recovered`: the scorer raised in the baseline, and has a score in the new run.
+ */
+export type PairChange = "scorer_version" | "passed" | "value" | "scorer_recovered";
+
+/** A score, without the scorer name its pair already gives. */
+export type PairScore = Omit<CaseScore, "scorer_name">;
+
+/** A scorer error, without the scorer name its pair already gives. */
+export type PairError = Omit<ScorerError, "scorer_name">;
+
+/** A case and scorer pair scored in both runs whose score changed in a way that isn't a regression. */
+export interface ChangedScore {
+  case_id: string;
+  scorer_name: string;
+  change: Exclude<PairChange, "scorer_recovered">;
+  baseline: PairScore;
+  current: PairScore;
+}
+
+/** A case and scorer pair whose scorer raised in the baseline run, and has a score in the new run. */
+export interface RecoveredScorer {
+  case_id: string;
+  scorer_name: string;
+  change: "scorer_recovered";
+  /** What the scorer raised in the baseline run. */
+  baseline: PairError;
+  current: PairScore;
+}
+
+/** A pair whose result changed in a way that isn't a regression. `change` tells which kind. */
+export type ChangedPair = ChangedScore | RecoveredScorer;
+
+/**
+ * What comparing a new run with a baseline run found.
+ *
+ * Every list is sorted by case id, then scorer name, and is empty when the runs can't be compared.
+ */
 export interface Verdict {
+  /**
+   * `not_comparable` when the runs can't be compared, `regressed` when a pair newly fails or a case
+   * newly errors, and `ok` otherwise.
+   */
+  outcome: "ok" | "regressed" | "not_comparable";
+  newly_failing: NewlyFailingPair[];
+  newly_errored: NewlyErroredCase[];
+  /** Reported, but never a regression. */
+  changed: ChangedPair[];
   /** Why the two runs can't be compared, or null when they can. */
   not_comparable_reason: string | null;
   /**
@@ -118,7 +205,8 @@ export interface Verdict {
 }
 
 /**
- * Compares a new run with a baseline run of the same evaluation. Reads nothing but its arguments.
+ * Compares a new run with a baseline run of the same evaluation. Reads nothing but its arguments,
+ * and gives the same verdict for the same runs, whatever order they list their cases and scores in.
  *
  * Two runs can be compared when all of these hold, checked in this order:
  * - they are runs of the same evaluation;
@@ -129,16 +217,37 @@ export interface Verdict {
  * The last check is needed because @traceroot-ai/traceroot records an inline dataset's revision as
  * `local-<case count>`, and both SDKs give its rows positional ids. Two inline datasets of the same
  * size then share a revision, and a case id would pair unrelated rows.
+ *
+ * The new run regressed when a case and scorer pair that passed in the baseline doesn't pass now
+ * ({@link FailingReason}), or a case errors now that didn't. A pair is matched by scorer name, the
+ * name a raising scorer is recorded under too. A case whose task raises now counts both ways: the
+ * case newly errors, and each of its pairs that passed is newly failing.
  */
 export function compareRuns(baseline: SavedRun, current: SavedRun): Verdict {
   const truncated =
     baseline.file.artifact.payloads === "truncated" ||
     current.file.artifact.payloads === "truncated";
-  const pairs = pairCases(baseline, current);
-  return {
-    not_comparable_reason: typeof pairs === "string" ? pairs : null,
+  const verdict: Verdict = {
+    outcome: "ok",
+    newly_failing: [],
+    newly_errored: [],
+    changed: [],
+    not_comparable_reason: null,
     payloads: truncated ? "truncated" : "complete",
   };
+  const pairs = pairCases(baseline, current);
+  if (typeof pairs === "string") {
+    verdict.outcome = "not_comparable";
+    verdict.not_comparable_reason = pairs;
+    return verdict;
+  }
+  for (const pair of pairs) {
+    compareCase(pair, verdict);
+  }
+  if (verdict.newly_failing.length > 0 || verdict.newly_errored.length > 0) {
+    verdict.outcome = "regressed";
+  }
+  return verdict;
 }
 
 /**
@@ -307,6 +416,105 @@ function someIds(ids: string[]): string {
 }
 
 /**
+ * Adds what regressed or changed on one case to the verdict. The scorers the baseline scored or
+ * saw raise are taken in name order, so the verdict's lists stay sorted.
+ */
+function compareCase({ baseline, current }: CasePair, verdict: Verdict): void {
+  if (current.status === "errored" && baseline.status !== "errored") {
+    verdict.newly_errored.push({
+      case_id: current.case_id,
+      task_error: current.task_error,
+      scorer_errors: [...current.scorer_errors].sort(byScorerName),
+    });
+  }
+  const oldScores = byScorer(baseline.scores);
+  const oldErrors = byScorer(baseline.scorer_errors);
+  const scores = byScorer(current.scores);
+  const errors = byScorer(current.scorer_errors);
+  const names = new Set([...oldScores.keys(), ...oldErrors.keys()]);
+  for (const name of [...names].sort(byCodeUnit)) {
+    const pair = { case_id: baseline.case_id, scorer_name: name };
+    const old = oldScores.get(name);
+    const now = scores.get(name);
+    if (old === undefined) {
+      // The scorer raised in the baseline, which never counts as passing.
+      const raised = oldErrors.get(name);
+      if (raised !== undefined && now !== undefined) {
+        verdict.changed.push({
+          ...pair,
+          change: "scorer_recovered",
+          baseline: { scorer_version: raised.scorer_version, message: raised.message },
+          current: pairScore(now),
+        });
+      }
+      continue;
+    }
+    if (now === undefined) {
+      if (old.passed === true) {
+        verdict.newly_failing.push({ ...pair, ...unscored(current, errors.get(name)) });
+      }
+      continue;
+    }
+    const change = scoreChange(old, now);
+    if (change === "failed" || change === "unjudged") {
+      verdict.newly_failing.push({ ...pair, reason: change, value: now.value, error: null });
+    } else if (change !== null) {
+      verdict.changed.push({ ...pair, change, baseline: pairScore(old), current: pairScore(now) });
+    }
+  }
+}
+
+/** Why a pair that passed in the baseline has no score in the new run. */
+function unscored(
+  current: CaseLine,
+  error: ScorerError | undefined,
+): Pick<NewlyFailingPair, "reason" | "value" | "error"> {
+  if (error !== undefined) {
+    return { reason: "scorer_error", value: null, error: error.message };
+  }
+  if (current.task_error !== null) {
+    return { reason: "task_error", value: null, error: current.task_error };
+  }
+  return { reason: "missing", value: null, error: null };
+}
+
+/**
+ * How a pair's score changed between the runs. Under the same scorer version, a score that passed
+ * and now fails is `failed`, and one that now neither passes nor fails is `unjudged`. Anything else
+ * is a change that isn't a regression, or null when nothing worth reporting changed.
+ */
+function scoreChange(
+  old: CaseScore,
+  now: CaseScore,
+): "failed" | "unjudged" | ChangedScore["change"] | null {
+  if (old.scorer_version !== now.scorer_version) {
+    return "scorer_version";
+  }
+  if (old.passed === true && now.passed !== true) {
+    return now.passed === false ? "failed" : "unjudged";
+  }
+  if (old.passed !== now.passed) {
+    return "passed";
+  }
+  return now.passed === null && !isDeepStrictEqual(old.value, now.value) ? "value" : null;
+}
+
+function pairScore(score: CaseScore): PairScore {
+  return { scorer_version: score.scorer_version, value: score.value, passed: score.passed };
+}
+
+/** A case's scores or scorer errors by scorer name, keeping the first of any name listed twice. */
+function byScorer<T extends { scorer_name: string }>(items: T[]): Map<string, T> {
+  const index = new Map<string, T>();
+  for (const item of items) {
+    if (!index.has(item.scorer_name)) {
+      index.set(item.scorer_name, item);
+    }
+  }
+  return index;
+}
+
+/**
  * Text from a run, quoted, with any control character escaped, so a reason that quotes it can't
  * repaint a terminal.
  */
@@ -320,4 +528,8 @@ function quote(text: string): string {
  */
 function byCodeUnit(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function byScorerName(a: { scorer_name: string }, b: { scorer_name: string }): number {
+  return byCodeUnit(a.scorer_name, b.scorer_name);
 }
