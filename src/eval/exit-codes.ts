@@ -15,11 +15,16 @@ import type { InterruptSignal } from "./events.js";
  */
 export const EVALS_RUN_EXIT_CODES = {
   /**
-   * The evaluation didn't run: no interpreter or tsx, an SDK too old to run it, a failure the
-   * runner reported (`fatal`), no evaluation in the file, or a runner that crashed.
+   * The evaluation didn't run, or didn't run to the end: no interpreter or tsx, an SDK too old to
+   * run it, a failure the runner reported (`fatal`), no evaluation in the file, or a runner that
+   * crashed. The evaluations that finished before a failure are still compared, and a regression
+   * among them exits 18 instead.
    */
   harness: 17,
-  /** A case and scorer pair that passed in the baseline run doesn't now, or a case newly errors. */
+  /**
+   * A case and scorer pair newly fails, or a case newly errors. A score from a new version of its
+   * scorer is never a regression.
+   */
   regressed: 18,
 } as const;
 

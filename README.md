@@ -318,22 +318,29 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   later) on Node 20.6 or later, with @traceroot-ai/traceroot 0.8.0 or later.
 - **A regression** is a case and scorer pair that passed in the baseline run and
   doesn't pass now, or a case that ran cleanly there and errors now. The summary
-  names each one.
+  names each one. A score from a new version of its scorer is never a regression:
+  it's listed under `changed`, and the summary names each one that passed in the
+  baseline run and doesn't now.
 - **Two runs are compared only when the comparison means something:** the same
-  evaluation over the same dataset, every case run in both, and each case id
-  naming the same input and expected in both. Otherwise the command exits `2` and
-  says why. A sampled or interrupted baseline is refused before the runner
-  starts, so a wrong `--baseline` doesn't cost a run.
+  evaluation over the same dataset, every case run in both, each case id naming
+  the same input and expected in both, and no case repeating a score name.
+  Otherwise the command exits `2` and says why. A sampled or interrupted baseline
+  is refused before the runner starts, so a wrong `--baseline` doesn't cost a run.
 - **`--baseline`** takes a run id, read from `.traceroot/eval/runs` under the
   current directory, or the path of a run file.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,
-`outcome` (`ok`, `regressed`, `not_comparable` or `interrupted`), the file, the
-SDK, each run with its counts and score means, the baseline, and a `verdict` with
-`newly_failing` (each with its `reason`), `newly_errored`, `changed`,
-`not_comparable_reason` and `payloads`. Case ids, scorer names and the runner's
-messages print with control characters escaped, as the evaluation reads' text does.
+`outcome` (`ok`, `regressed`, `not_comparable`, `interrupted` or `failed`), the
+file, the SDK, each run with its counts and score means, the baseline, a `verdict`
+with `newly_failing` (each with its `reason`), `newly_errored`, `changed`,
+`not_comparable_reason` and `payloads`, and `failure`. `failure` is null unless
+the runner failed after some evaluations finished; then it holds the failure's
+`kind` (the runner's own, or `crashed`) and `message`, the text of the `error:`
+line human mode prints, and `outcome` is `failed`, or `regressed` when one of the
+evaluations that finished regressed. Case ids, scorer names and the runner's
+messages print with control characters escaped, as the evaluation reads' text
+does.
 
 ### Exit codes
 
@@ -355,9 +362,10 @@ On failure the human-readable message goes to stderr as `error: <message>`. Unde
 `--json` the failure is written to stderr instead as exactly one line —
 `{"error":{"code":"<class>","message":"<text>"}}` — while stdout stays empty, so a
 `jq` pipeline over stdout is never corrupted by an error. `evals run` is the one
-exception: once the evaluation has run, its document goes to stdout even when it
-exits `2` or `18`, because the caller needs the new run's id either way. When it
-stops before the evaluation runs, it uses the envelope like any other command.
+exception: once its runner has run, its document goes to stdout even when it
+exits `2`, `17` or `18`, because the caller needs the new run's id either way.
+When it stops before the runner starts, or the runner fails before any evaluation
+finishes, it uses the envelope like any other command.
 
 The six classes above belong to the whole CLI and mean the same thing whichever
 command handed them back, which is why every number below `10` stays reserved for
@@ -390,11 +398,11 @@ envelope:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0` | Nothing that passed in the baseline run fails now, or no baseline was given. |
-| `2` | Invalid arguments, or a baseline the new run can't be compared with: sampled, interrupted, or of another evaluation or dataset. The reason is printed. |
+| `0` | Nothing newly fails or newly errors, or no baseline was given. |
+| `2` | Invalid arguments, or a baseline the new run can't be compared with: sampled, interrupted, of another evaluation or dataset, or with a case that repeats a score name. The reason is printed. |
 | `4` | The baseline run doesn't exist. |
-| `17` | The evaluation couldn't run: no interpreter or tsx, an SDK too old to run it, a failure the runner reported, no evaluation in the file, or a runner that crashed. The message carries the fix, or the runner's own kind and message. |
-| `18` | A case and scorer pair that passed in the baseline run doesn't now, or a case newly errors. |
+| `17` | The evaluation couldn't run: no interpreter or tsx, an SDK too old to run it, a failure the runner reported, no evaluation in the file, a runner that crashed, or a reader that closed the CLI's output while the runner ran. The message carries the fix, or the runner's own kind and message. The evaluations that finished before the failure are still compared and reported, and a regression among them exits `18`. |
+| `18` | A case and scorer pair newly fails, or a case newly errors. |
 | `130` | Ctrl+C. A `SIGTERM` exits `143` and a `SIGHUP` `129`, the shell's status for each. The summary names any run the runner saved before it stopped, with that run's own status. |
 
 ## Skills & agents

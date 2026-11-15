@@ -1,7 +1,7 @@
 /**
  * `traceroot evals run <file> [--baseline <run id or path>]`: runs one evaluation file on this
- * machine through its SDK's own eval runner and, given a baseline run, says whether a case that
- * passed there doesn't now.
+ * machine through its SDK's own eval runner and, given a baseline run, says whether a case newly
+ * fails or newly errors.
  *
  * The pieces live in src/eval: the lookup finds the runner, `runEvalRunner` runs it without
  * credentials and reads its outcome, and `compareRuns` compares the run it saved with the baseline.
@@ -18,12 +18,13 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import type { Command } from "commander";
-import type { InterruptSignal } from "../eval/events.js";
+import type { InterruptSignal, RunOutcome } from "../eval/events.js";
 import { EVALS_RUN_EXIT_CODES, INTERRUPTED_EXIT_CODES } from "../eval/exit-codes.js";
 import { type EvalRunner, findEvalRunner } from "../eval/lookup.js";
 import type { CaseLine, EvaluationCompletedEvent } from "../eval/protocol.js";
 import { runEvalRunner, runnerEnv } from "../eval/spawn.js";
 import {
+  type ChangedPair,
   type NewlyErroredCase,
   type NewlyFailingPair,
   type SavedRun,
@@ -38,6 +39,7 @@ import {
   type Writers,
   defaultWriters,
   logProgress,
+  reportError,
   writeJson,
 } from "../output.js";
 import { clean, compact, formatMean, plural } from "../registry/enhancers/eval-reads.js";
@@ -104,9 +106,27 @@ interface SavedEvaluation {
 /** An evaluation whose saved run was read. */
 type ReadEvaluation = SavedEvaluation & { run: SavedRun };
 
+/** A runner outcome that reports a failure. */
+type FailedOutcome = Extract<RunOutcome, { outcome: "fatal" | "crashed" }>;
+
+/** What stopped a runner that failed after some of the file's evaluations finished. */
+interface Failure {
+  /** The runner's `fatal` kind, or `crashed` for a runner that stopped without one. */
+  kind: string;
+  /**
+   * The message of the error that reports the failure, as human mode's `error:` line says it but
+   * without its escaping: the runner's kind and message, or what the crash was.
+   */
+  message: string;
+}
+
 /** What a run that the runner saved came to, for the summary and the `--json` document. */
 interface Report {
-  outcome: Verdict["outcome"] | "interrupted";
+  /**
+   * The verdict's outcome, `interrupted`, or `failed` for a runner that failed after some
+   * evaluations finished, unless one of those regressed: `regressed` outranks the failure.
+   */
+  outcome: Verdict["outcome"] | "interrupted" | "failed";
   file: string;
   runner: EvalRunner;
   runs: SavedEvaluation[];
@@ -115,6 +135,8 @@ interface Report {
   verdict: Verdict | null;
   /** For an interrupted run: the signal the CLI received, or null when only the runner saw one. */
   signal: InterruptSignal | null;
+  /** What stopped a runner that failed after some evaluations finished, otherwise null. */
+  failure: Failure | null;
 }
 
 /** What `evals run --help` adds after the flags: where the run goes, and the exit codes. */
@@ -124,12 +146,17 @@ const HELP = [
   `${join(RUNS_DIR, "<run id>")}.json; evals runs reads runs recorded on TraceRoot.`,
   "",
   "Exit codes:",
-  "  0    nothing that passed in the baseline fails now, or no baseline was given",
+  "  0    nothing newly fails or newly errors, or no baseline was given",
   "  2    invalid arguments, or a baseline the new run can't be compared with",
   "  4    the baseline run doesn't exist",
   `  ${EVALS_RUN_EXIT_CODES.harness}   harness: the evaluation couldn't run`,
   `  ${EVALS_RUN_EXIT_CODES.regressed}   regressed: a case newly fails or newly errors`,
   `  ${INTERRUPTED_EXIT_CODES.SIGINT}  Ctrl+C (${INTERRUPTED_EXIT_CODES.SIGTERM} for SIGTERM, ${INTERRUPTED_EXIT_CODES.SIGHUP} for SIGHUP)`,
+  "",
+  "A score from a new version of its scorer is never a regression; the summary",
+  "names each one that passed in the baseline and doesn't now. When the runner",
+  "fails after some evaluations finished, those are still compared and printed",
+  `before the error, and a regression among them exits ${EVALS_RUN_EXIT_CODES.regressed}.`,
 ].join("\n");
 
 export function registerEvalsRun(evals: Command): void {
@@ -160,9 +187,14 @@ export function registerEvalsRun(evals: Command): void {
 
 /**
  * Runs the command, prints what the run came to, and returns the exit code: 0, 18, 2 for runs that
- * can't be compared, or the interrupting signal's status.
+ * can't be compared, 17 for a runner that failed after some evaluations finished, or the
+ * interrupting signal's status.
  *
- * When nothing ran, or the evaluation couldn't run, it throws a {@link CliError} instead, which the
+ * The evaluations that finished before a runner failed are compared and printed as for a completed
+ * run, and the failure is reported after them: in the `--json` document's `failure`, or as the
+ * usual `error:` line on stderr. A regression among them exits 18, which outranks the failure's 17.
+ *
+ * When nothing ran, or no evaluation finished, it throws a {@link CliError} instead, which the
  * central handler reports on stderr: 2 for a bad file or baseline, 4 for a baseline that doesn't
  * exist, and 17 when the runner couldn't be found or failed.
  */
@@ -179,7 +211,14 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
     `Running ${clean(options.file)} with ${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)}${under}`,
     writers,
   );
-  const outcome = await runEvalRunner({ argv: runner.argv, cwd, env, output: writers.err });
+  const outcome = await runEvalRunner({
+    argv: runner.argv,
+    cwd,
+    env,
+    output: writers.err,
+    // A CLI that exits while the runner runs, as when a reader closes its output, cuts the run short.
+    earlyExitCode: EVALS_RUN_EXIT_CODES.harness,
+  });
 
   const report: Report = {
     outcome: "ok",
@@ -189,39 +228,46 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
     baseline,
     verdict: null,
     signal: null,
+    failure: null,
   };
+  let failed: CliError | null = null;
   switch (outcome.outcome) {
     case "fatal":
-      throw harness(
-        `the eval runner failed with ${clean(outcome.kind)}: ${cleanLines(outcome.message)}`,
-      );
-    case "crashed":
-      throw harness(
-        `the eval runner exited with status ${outcome.exitStatus} before it reported the end of the run; its output is above`,
-      );
+    case "crashed": {
+      const { failure, error } = failureOf(outcome);
+      if (outcome.evaluations.length === 0) {
+        throw error;
+      }
+      report.failure = failure;
+      failed = error;
+      compareFinished(report, outcome.evaluations, cwd);
+      // A regression in what finished outranks the failure.
+      report.outcome = report.outcome === "regressed" ? "regressed" : "failed";
+      break;
+    }
     case "no_evaluations":
       throw harness(noEvaluations(options.file, runner.language));
     case "interrupted":
       report.outcome = "interrupted";
       report.signal = outcome.signal;
       report.runs = outcome.evaluations.map((event) => readSaved(event, cwd));
-      print(report, options);
-      return INTERRUPTED_EXIT_CODES[outcome.signal ?? "SIGINT"];
-    case "completed": {
-      const runs = outcome.evaluations.map((event) => requireSaved(event, cwd));
-      report.runs = runs;
-      if (baseline !== null) {
-        report.verdict = compareWithBaseline(baseline, runs);
-        report.outcome = report.verdict.outcome;
-      }
       break;
-    }
+    case "completed":
+      compareFinished(report, outcome.evaluations, cwd);
+      break;
   }
 
   print(report, options);
+  if (failed !== null && !options.json) {
+    reportError(failed, {}, writers);
+  }
   switch (report.outcome) {
+    case "interrupted":
+      return INTERRUPTED_EXIT_CODES[report.signal ?? "SIGINT"];
     case "regressed":
       return EVALS_RUN_EXIT_CODES.regressed;
+    case "failed":
+      return EVALS_RUN_EXIT_CODES.harness;
     case "not_comparable":
       return ExitCode.usage;
     default:
@@ -303,6 +349,25 @@ function harness(message: string): CliError {
   return new CliError(message, EVALS_RUN_EXIT_CODES.harness);
 }
 
+/**
+ * What stopped a runner that failed, for the `--json` document, and the harness error that reports
+ * it. Both carry the same message, whether or not some evaluations finished first: the error's is
+ * escaped for the terminal, and the document's is kept as it is, like the rest of its text.
+ */
+function failureOf(outcome: FailedOutcome): { failure: Failure; error: CliError } {
+  const failure: Failure =
+    outcome.outcome === "fatal"
+      ? {
+          kind: outcome.kind,
+          message: `the eval runner failed with ${outcome.kind}: ${outcome.message}`,
+        }
+      : {
+          kind: "crashed",
+          message: `the eval runner exited with status ${outcome.exitStatus} before it reported the end of the run; its output is above`,
+        };
+  return { failure, error: harness(cleanLines(failure.message)) };
+}
+
 /** Says where an evaluation has to be for the runner to find it, which differs by language. */
 function noEvaluations(file: string, language: StackLanguage): string {
   const found = `${clean(file)} defines no evaluation the runner can find, so nothing ran.`;
@@ -336,17 +401,38 @@ function requireSaved(event: EvaluationCompletedEvent, cwd: string): ReadEvaluat
 }
 
 /**
- * Compares the baseline with the new run of the same evaluation. A file can define several
- * evaluations, and the runner runs them all.
+ * Reads the runs the finished evaluations saved into the report and, given a baseline, compares it
+ * with the new run of its evaluation. Set the report's `failure` first: it changes what the
+ * comparison says when the baseline's evaluation didn't finish.
  */
-function compareWithBaseline(baseline: Baseline, runs: ReadEvaluation[]): Verdict {
+function compareFinished(
+  report: Report,
+  evaluations: EvaluationCompletedEvent[],
+  cwd: string,
+): void {
+  const runs = evaluations.map((event) => requireSaved(event, cwd));
+  report.runs = runs;
+  if (report.baseline !== null) {
+    report.verdict = compareWithBaseline(report.baseline, runs, report.failure !== null);
+    report.outcome = report.verdict.outcome;
+  }
+}
+
+/**
+ * Compares the baseline with the new run of the same evaluation. A file can define several
+ * evaluations, and the runner runs them all, unless it `stopped` partway, after a failure.
+ */
+function compareWithBaseline(
+  baseline: Baseline,
+  runs: ReadEvaluation[],
+  stopped: boolean,
+): Verdict {
   const name = baseline.run.file.evaluation_name;
   const matches = runs.filter((saved) => saved.event.name === name);
   const [match] = matches;
   if (match !== undefined && matches.length === 1) {
     return compareRuns(baseline.run, match.run);
   }
-  const ran = runs.map((saved) => JSON.stringify(saved.event.name)).join(", ");
   return {
     outcome: "not_comparable",
     newly_failing: [],
@@ -354,10 +440,22 @@ function compareWithBaseline(baseline: Baseline, runs: ReadEvaluation[]): Verdic
     changed: [],
     not_comparable_reason:
       matches.length === 0
-        ? `the file ran no evaluation named ${JSON.stringify(name)}, which the baseline run is of; it ran ${ran === "" ? "none" : ran}`
+        ? noNewRunReason(name, runs, stopped)
         : `the file ran ${matches.length} evaluations named ${JSON.stringify(name)}, so which one to compare with the baseline run is ambiguous`,
     payloads: baseline.run.file.artifact.payloads,
   };
+}
+
+/**
+ * Why there is no new run of the baseline's evaluation: the file didn't run it, or the runner
+ * stopped before it finished. Names the evaluations that did finish.
+ */
+function noNewRunReason(name: string, runs: ReadEvaluation[], stopped: boolean): string {
+  const ran = runs.map((saved) => JSON.stringify(saved.event.name)).join(", ");
+  if (stopped) {
+    return `no evaluation named ${JSON.stringify(name)}, which the baseline run is of, finished before the eval runner stopped; it finished ${ran}`;
+  }
+  return `the file ran no evaluation named ${JSON.stringify(name)}, which the baseline run is of; it ran ${ran === "" ? "none" : ran}`;
 }
 
 /**
@@ -435,6 +533,7 @@ function toDocument(report: Report): Record<string, unknown> {
             not_comparable_reason: verdict.not_comparable_reason,
             payloads: verdict.payloads,
           },
+    failure: report.failure,
     ...(report.outcome === "interrupted" ? { signal: report.signal } : {}),
   };
 }
@@ -500,27 +599,34 @@ function verdictLines(report: Report, bold: (text: string) => string): string[] 
   }
   const lines: string[] = [];
   if (verdict.outcome === "ok") {
-    lines.push(`No regression against ${against}: nothing that passed there fails now.`);
+    lines.push(`No regression against ${against}: nothing newly fails or newly errors.`);
   } else {
     const failing = verdict.newly_failing.length;
     const errored = verdict.newly_errored.length;
-    const what = [
-      failing === 0
-        ? null
-        : `${failing} ${plural(failing, "case and scorer pair")} newly ${failing === 1 ? "fails" : "fail"}`,
-      errored === 0
-        ? null
-        : `${errored} ${plural(errored, "case")} newly ${errored === 1 ? "errors" : "error"}`,
-    ];
-    lines.push(
-      `Regressed against ${against}: ${what.filter((part) => part !== null).join(", and ")}.`,
-    );
+    const what: string[] = [];
+    const tables: string[] = [];
     if (failing > 0) {
-      lines.push("", bold("Newly failing"), ...indent(failingTable(verdict.newly_failing, bold)));
+      what.push(
+        `${failing} ${plural(failing, "case and scorer pair")} newly ${failing === 1 ? "fails" : "fail"}`,
+      );
+      tables.push("", bold("Newly failing"), ...indent(failingTable(verdict.newly_failing, bold)));
     }
     if (errored > 0) {
-      lines.push("", bold("Newly errored"), ...indent(erroredTable(verdict.newly_errored, bold)));
+      what.push(
+        `${errored} ${plural(errored, "case")} newly ${errored === 1 ? "errors" : "error"}`,
+      );
+      tables.push("", bold("Newly errored"), ...indent(erroredTable(verdict.newly_errored, bold)));
     }
+    lines.push(`Regressed against ${against}: ${what.join(", and ")}.`, ...tables);
+  }
+  const rescored = failingUnderNewVersion(verdict.changed);
+  if (rescored.length > 0) {
+    const count = rescored.length;
+    lines.push(
+      "",
+      `${count} ${plural(count, "case and scorer pair")} that passed there ${count === 1 ? "doesn't" : "don't"} pass under a new scorer version, which isn't a regression:`,
+      ...indent(failingTable(rescored, bold)),
+    );
   }
   const changed = verdict.changed.length;
   if (changed > 0) {
@@ -544,6 +650,31 @@ function failingTable(pairs: NewlyFailingPair[], bold: (text: string) => string)
     pairs.map((pair) => [clean(pair.case_id), clean(pair.scorer_name), failingResult(pair)]),
     { headerStyle: bold },
   );
+}
+
+/**
+ * The pairs that passed in the baseline run and don't pass under a new version of their scorer.
+ * A new version is never a regression, so the verdict lists them only under `changed`, and the
+ * summary names them so that "no regression" isn't read as "everything that passed still does".
+ */
+function failingUnderNewVersion(changed: ChangedPair[]): NewlyFailingPair[] {
+  const pairs: NewlyFailingPair[] = [];
+  for (const pair of changed) {
+    if (
+      pair.change === "scorer_version" &&
+      pair.baseline.passed === true &&
+      pair.current.passed !== true
+    ) {
+      pairs.push({
+        case_id: pair.case_id,
+        scorer_name: pair.scorer_name,
+        reason: pair.current.passed === false ? "failed" : "unjudged",
+        value: pair.current.value,
+        error: null,
+      });
+    }
+  }
+  return pairs;
 }
 
 /** What became of a pair that passed in the baseline run. */

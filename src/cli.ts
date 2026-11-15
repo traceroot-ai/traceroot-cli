@@ -83,7 +83,7 @@ export function buildProgram(overrides: BuildOverrides = {}): Command {
       "  5   network    network failure or timeout (retryable)",
       "  6   conflict   the request conflicts with current state (HTTP 409)",
       "  17  harness    evals run: the evaluation couldn't run",
-      "  18  regressed  evals run: a case that passed in the baseline run doesn't now",
+      "  18  regressed  evals run: a case newly fails or newly errors",
       "",
       "Those six belong to every command, and only evals run returns 17 and 18.",
       "setup has outcomes of its own, which it returns as 10-16 (the README gives",
@@ -92,7 +92,7 @@ export function buildProgram(overrides: BuildOverrides = {}): Command {
       "",
       'Under --json, failures also print {"error":{"code","message"}} to stderr.',
       "evals run prints its document on stdout instead whenever the evaluation ran,",
-      "including when it exits 2 or 18.",
+      "including when it exits 2, 17 or 18.",
     ].join("\n"),
   );
   // Root action: lets global flags parse without a subcommand, while still

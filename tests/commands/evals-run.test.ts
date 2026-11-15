@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -100,9 +100,11 @@ interface RunSpec {
   replay?: string;
   run_id?: string;
   replace?: [string, string][];
+  unfinished?: boolean;
   events?: object[];
   exit?: number;
   wait?: boolean;
+  chatty?: boolean;
 }
 
 /** An evaluation file that tells the stub what to do. `replay` names a recorded scenario. */
@@ -164,7 +166,15 @@ function evalsRun(...args: string[]): Result {
 }
 
 /** Starts the CLI on a waiting stub, sends it `signal` once the runner is running, and waits. */
-async function interrupt(signal: NodeJS.Signals, ...args: string[]): Promise<Result> {
+function interrupt(signal: NodeJS.Signals, ...args: string[]): Promise<Result> {
+  return whileRunning((child) => child.kill(signal), ...args);
+}
+
+/** Starts the CLI on a waiting stub, does `act` to it once the runner is running, and waits. */
+async function whileRunning(
+  act: (child: ChildProcessWithoutNullStreams) => void,
+  ...args: string[]
+): Promise<Result> {
   const child = spawn(process.execPath, [BIN, "evals", "run", ...args], {
     cwd: project,
     env: cliEnv(),
@@ -184,7 +194,7 @@ async function interrupt(signal: NodeJS.Signals, ...args: string[]): Promise<Res
     });
     void closed.then(() => reject(new Error(`the CLI exited first:\n${stdout}${stderr}`)));
   });
-  child.kill(signal);
+  act(child);
   return result(await closed, stdout, stderr);
 }
 
@@ -309,6 +319,7 @@ describe("evals run without a baseline", () => {
       ],
       baseline: null,
       verdict: null,
+      failure: null,
     });
     expect(run.stderr).not.toContain('"error"');
   });
@@ -401,7 +412,7 @@ describe("evals run with a baseline", () => {
     );
   });
 
-  it("exits 0 when nothing that passed fails, and counts what changed", () => {
+  it("exits 0 when nothing newly fails, and counts what changed", () => {
     pythonProject();
     saveRun(`${PYTHON}/one-fails`, "run_first");
     evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, run_id: "run_second" });
@@ -410,7 +421,38 @@ describe("evals run with a baseline", () => {
 
     expect(run.status).toBe(0);
     expect(run.stdout).toContain(
-      "No regression against baseline run_first: nothing that passed there fails now.\n\n1 score changed without regressing; --json lists it.\n",
+      "No regression against baseline run_first: nothing newly fails or newly errors.\n\n1 score changed without regressing; --json lists it.\n",
+    );
+  });
+
+  it("exits 0 for a pair that passed and fails under a new scorer version, and names it", () => {
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first");
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/one-fails`,
+      run_id: "run_second",
+      replace: [
+        [
+          '"scorer_name": "exact_match", "scorer_version": null',
+          '"scorer_name": "exact_match", "scorer_version": "2"',
+        ],
+      ],
+    });
+
+    const run = evalsRun("x_eval.py", "--baseline", "run_first");
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain(
+      [
+        "No regression against baseline run_first: nothing newly fails or newly errors.",
+        "",
+        "1 case and scorer pair that passed there doesn't pass under a new scorer version, which isn't a regression:",
+        "  CASE                     SCORER       RESULT",
+        `  ${BETA}  exact_match  failed: false`,
+        "",
+        "3 scores changed without regressing; --json lists them.",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -685,6 +727,154 @@ describe("evals run when the evaluation can't run", () => {
   });
 });
 
+describe("evals run when the runner fails after an evaluation finished", () => {
+  /** A failure the runner reports for the file's next evaluation, after the first one finished. */
+  const FATAL = {
+    type: "fatal",
+    kind: "harness_error",
+    message: "TypeError: EvalCase.__init__() got an unexpected keyword argument 'expectd'",
+  };
+  const FATAL_ERROR = `the eval runner failed with harness_error: ${FATAL.message}`;
+  const CRASH =
+    "the eval runner exited with status 1 before it reported the end of the run; its output is above";
+
+  it("exits 18 when an evaluation that finished regressed, and still reports the failure", () => {
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first");
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/one-fails`,
+      run_id: "run_second",
+      unfinished: true,
+      events: [FATAL],
+    });
+
+    const human = evalsRun("x_eval.py", "--baseline", "run_first");
+    const machine = evalsRun("x_eval.py", "--baseline", "run_first", "--json");
+
+    expect(human.status).toBe(18);
+    expect(human.stdout).toContain("uppercase · run_second · completed\n");
+    expect(human.stdout).toContain(
+      [
+        "Regressed against baseline run_first: 1 case and scorer pair newly fails.",
+        "",
+        "Newly failing",
+        "  CASE                     SCORER       RESULT",
+        `  ${BETA}  exact_match  failed: false`,
+      ].join("\n"),
+    );
+    expect(human.stderr).toContain(`error: ${FATAL_ERROR}\n`);
+    expect(machine.status).toBe(18);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "regressed",
+      runs: [{ local_run_id: "run_second", status: "completed" }],
+      verdict: {
+        newly_failing: [{ case_id: BETA, scorer_name: "exact_match", reason: "failed" }],
+      },
+      failure: { kind: "harness_error", message: FATAL_ERROR },
+    });
+    expect(machine.stderr).not.toContain('"error"');
+  });
+
+  it("exits 17 with the outcome failed when the evaluations that finished didn't regress", () => {
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first");
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_second",
+      unfinished: true,
+      events: [FATAL],
+    });
+
+    const human = evalsRun("x_eval.py", "--baseline", "run_first");
+    const machine = evalsRun("x_eval.py", "--baseline", "run_first", "--json");
+
+    expect(human.status).toBe(17);
+    expect(human.stdout).toContain("uppercase · run_second · completed\n");
+    expect(human.stdout).toContain(
+      "No regression against baseline run_first: nothing newly fails or newly errors.\n",
+    );
+    expect(human.stderr).toContain(`error: ${FATAL_ERROR}\n`);
+    expect(machine.status).toBe(17);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "failed",
+      runs: [{ local_run_id: "run_second" }],
+      verdict: { newly_failing: [], newly_errored: [], not_comparable_reason: null },
+      failure: { kind: "harness_error", message: FATAL_ERROR },
+    });
+    expect(machine.stderr).not.toContain('"error"');
+  });
+
+  it("exits 17 and says so when the baseline's evaluation didn't finish before the failure", () => {
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first", [['"uppercase"', '"titlecase"']]);
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_second",
+      unfinished: true,
+      events: [FATAL],
+    });
+
+    const human = evalsRun("x_eval.py", "--baseline", "run_first");
+    const machine = evalsRun("x_eval.py", "--baseline", "run_first", "--json");
+
+    const reason =
+      'no evaluation named "titlecase", which the baseline run is of, finished before the eval runner stopped; it finished "uppercase"';
+    expect(human.status).toBe(17);
+    expect(human.stdout).toContain(`Not compared with baseline run_first: ${reason}.\n`);
+    expect(human.stderr).toContain(`error: ${FATAL_ERROR}\n`);
+    expect(machine.status).toBe(17);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "failed",
+      verdict: { not_comparable_reason: reason },
+      failure: { kind: "harness_error", message: FATAL_ERROR },
+    });
+  });
+
+  it("exits 17 for a runner that crashes after an evaluation finished, and prints it", () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      unfinished: true,
+      exit: 1,
+    });
+
+    const human = evalsRun("x_eval.py");
+    const machine = evalsRun("x_eval.py", "--json");
+
+    expect(human.status).toBe(17);
+    expect(human.stdout).toContain("uppercase · run_first · completed\n");
+    expect(human.stderr).toContain(`error: ${CRASH}\n`);
+    expect(machine.status).toBe(17);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "failed",
+      runs: [{ local_run_id: "run_first", status: "completed" }],
+      baseline: null,
+      verdict: null,
+      failure: { kind: "crashed", message: CRASH },
+    });
+    expect(machine.stderr).not.toContain('"error"');
+  });
+
+  it("exits 17 with the error envelope and nothing on stdout when no evaluation finished", () => {
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first");
+    const hello = { type: "hello", eval_api_version: 1 };
+
+    evalFile("x_eval.py", { events: [hello, FATAL] });
+    const fatal = evalsRun("x_eval.py", "--baseline", "run_first", "--json");
+    evalFile("x_eval.py", { events: [hello], exit: 1 });
+    const crashed = evalsRun("x_eval.py", "--baseline", "run_first", "--json");
+
+    expect(fatal.status).toBe(17);
+    expect(fatal.stdout).toBe("");
+    expect(envelope(fatal.stderr)).toEqual({ code: "harness", message: FATAL_ERROR });
+    expect(crashed.status).toBe(17);
+    expect(crashed.stdout).toBe("");
+    expect(envelope(crashed.stderr)).toEqual({ code: "harness", message: CRASH });
+  });
+});
+
 describe("evals run interrupted", () => {
   it.each([
     { signal: "SIGINT", status: 130 },
@@ -717,6 +907,24 @@ describe("evals run interrupted", () => {
     expect(run.status).toBe(130);
     expect(run.stdout).toContain("uppercase · run_second · incomplete\n");
     expect(run.stdout).toContain("The runner was interrupted.\n");
+  });
+
+  it("exits 17 and leaves no runner when a reader closes the CLI's output while the runner runs", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { wait: true, chatty: true, replay: `${PYTHON}/all-pass` });
+
+    // Like `evals run … 2>&1 | head`: the reader goes, and the next line the CLI passes on fails.
+    const run = await whileRunning((child) => child.stderr.destroy(), "x_eval.py");
+
+    expect(run.status).toBe(17);
+    expect(run.stdout).toBe("");
+    const pid = runnerPid() as number;
+    // The runner may take a moment to act on its SIGTERM once the CLI has gone.
+    const deadline = Date.now() + 5000;
+    while (isRunning(pid) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(isRunning(pid), `runner ${pid} outlived the CLI`).toBe(false);
   });
 
   it("names a saved run as complete when the runner finished every case in flight", async () => {
@@ -762,6 +970,25 @@ describe("evals run's escaping", () => {
     expect(run.raw.stdout).not.toContain(ESCAPE);
     expect(run.stdout).toContain(`  tc_${ESCAPED}  exact_match  failed: false`);
     expect(run.stdout).toContain(`upper${ESCAPED} · run_second · completed`);
+  });
+
+  it("keeps a failure's message as written in the --json document, and escapes it on the error line", () => {
+    pythonProject();
+    const fatal = { type: "fatal", kind: "harness_error", message: `boom${ESCAPE}` };
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, unfinished: true, events: [fatal] });
+
+    const human = evalsRun("x_eval.py");
+    const machine = evalsRun("x_eval.py", "--json");
+
+    const message = "the eval runner failed with harness_error: boom";
+    expect(human.status).toBe(17);
+    expect(human.raw.stderr).not.toContain(ESCAPE);
+    expect(human.stderr).toContain(`error: ${message}${ESCAPED}\n`);
+    expect(machine.status).toBe(17);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "failed",
+      failure: { kind: "harness_error", message: `${message}${ESCAPE}` },
+    });
   });
 
   it("prints a fatal message with escape sequences escaped", () => {

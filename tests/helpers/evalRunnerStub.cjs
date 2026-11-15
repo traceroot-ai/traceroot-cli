@@ -14,10 +14,13 @@
  *   under `.traceroot/eval/runs`, and the runner exits with its recorded status;
  * - `run_id`: the id the replayed run is saved under, in place of the recorded one;
  * - `replace`: `[from, to]` pairs applied to every replayed file;
- * - `events`: events written instead of a replay;
+ * - `unfinished`: leave the replay's `suite_completed` event out, as a runner that stops after the
+ *   replayed evaluation does;
+ * - `events`: events written instead of a replay, or after it;
  * - `exit`: the exit status, in place of the recorded one;
  * - `wait`: write `events` and wait for SIGINT, SIGTERM or SIGHUP, then do the `replay` and exit
- *   130, the way both runners end a cancelled run.
+ *   130, the way both runners end a cancelled run;
+ * - `chatty`: while it waits, write a line to stderr every 50 ms.
  *
  * Whichever way it starts, it records the environment it was given and its pid in the folder it
  * runs in, so a test can check what reached it.
@@ -79,6 +82,9 @@ function run(file) {
       process.on(signal, stop);
     }
     setInterval(() => {}, 1000);
+    if (spec.chatty) {
+      setInterval(() => process.stderr.write("runner still running\n"), 50);
+    }
     process.stderr.write("runner ready\n");
     return;
   }
@@ -100,7 +106,11 @@ function replay(spec) {
   const edit = (text) => pairs.reduce((out, [from, to]) => out.split(from).join(to), text);
   const read = (name) => fs.readFileSync(path.join(spec.replay, name), "utf8");
 
-  fs.appendFileSync(process.env.TRACEROOT_EVAL_EVENT_FILE, edit(read("events.jsonl")));
+  const events = edit(read("events.jsonl"))
+    .split("\n")
+    .filter((line) => !(spec.unfinished && line.includes('"suite_completed"')))
+    .join("\n");
+  fs.appendFileSync(process.env.TRACEROOT_EVAL_EVENT_FILE, events);
   const runs = path.join(spec.replay, "runs");
   if (fs.existsSync(runs)) {
     const saved = path.join(".traceroot", "eval", "runs");
