@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { describe, expect, it } from "vitest";
 import { EVALS_RUN_EXIT_CODES, INTERRUPTED_EXIT_CODES } from "../../src/eval/exit-codes.js";
 import { ExitCode } from "../../src/output.js";
 import { SETUP_EXIT_CODES } from "../../src/setup/errors.js";
+import { runCli } from "../helpers/runCli.js";
 
 const own = Object.values(EVALS_RUN_EXIT_CODES);
 
@@ -31,5 +33,35 @@ describe("evals run's exit codes", () => {
       expect(code).toBe(128 + constants.signals[signal as keyof typeof constants.signals]);
     }
     expect(INTERRUPTED_EXIT_CODES.SIGINT).toBe(130);
+  });
+});
+
+describe("publishing evals run's exit codes", () => {
+  it("gives each of them a row in the README", () => {
+    const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    const tabulated = [...readme.matchAll(/^\| `(\d+)` \|/gm)].map((row) => Number(row[1]));
+
+    for (const code of [...own, INTERRUPTED_EXIT_CODES.SIGINT]) {
+      expect(tabulated).toContain(code);
+    }
+  });
+
+  it("names them, and the command that returns them, in `traceroot --help`", () => {
+    const { stdout, status } = runCli("--help");
+    const published = stdout.slice(stdout.indexOf("Exit codes:"));
+
+    expect(status).toBe(0);
+    expect(published).toMatch(/^ {2}17 +harness +evals run: /m);
+    expect(published).toMatch(/^ {2}18 +regressed +evals run: /m);
+  });
+
+  it("lists them in `traceroot evals run --help`", () => {
+    const { stdout, status } = runCli("evals", "run", "--help");
+    const published = stdout.slice(stdout.indexOf("Exit codes:"));
+
+    expect(status).toBe(0);
+    for (const code of [0, 2, 4, ...own, INTERRUPTED_EXIT_CODES.SIGINT]) {
+      expect(published).toMatch(new RegExp(`^ {2}${code} `, "m"));
+    }
   });
 });

@@ -117,6 +117,21 @@ interface Report {
   signal: InterruptSignal | null;
 }
 
+/** What `evals run --help` adds after the flags: where the run goes, and the exit codes. */
+const HELP = [
+  "",
+  "The runner gets no API key and runs with tracing off. The run is saved under",
+  `${join(RUNS_DIR, "<run id>")}.json; evals runs reads runs recorded on TraceRoot.`,
+  "",
+  "Exit codes:",
+  "  0    nothing that passed in the baseline fails now, or no baseline was given",
+  "  2    invalid arguments, or a baseline the new run can't be compared with",
+  "  4    the baseline run doesn't exist",
+  `  ${EVALS_RUN_EXIT_CODES.harness}   harness: the evaluation couldn't run`,
+  `  ${EVALS_RUN_EXIT_CODES.regressed}   regressed: a case newly fails or newly errors`,
+  `  ${INTERRUPTED_EXIT_CODES.SIGINT}  Ctrl+C (${INTERRUPTED_EXIT_CODES.SIGTERM} for SIGTERM, ${INTERRUPTED_EXIT_CODES.SIGHUP} for SIGHUP)`,
+].join("\n");
+
 export function registerEvalsRun(evals: Command): void {
   evals
     .command("run")
@@ -130,6 +145,7 @@ export function registerEvalsRun(evals: Command): void {
       onceOption("--baseline"),
     )
     .allowExcessArguments(false)
+    .addHelpText("after", HELP)
     .action(async (file: string, opts: { baseline?: string }, command: Command) => {
       process.exitCode = await runEvalsRun({
         file,
