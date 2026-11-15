@@ -4,16 +4,15 @@ import type { EvaluationRunList } from "../../api/client.js";
 import { CliError, ExitCode, type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { parseLimit } from "../../time/range.js";
 import { onceOption, rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
-  addLimitFlag,
+  addPageFlags,
   countLine,
-  limitBounds,
   orDash,
   renderEmptyPage,
+  resolvePageArgs,
   warnIfCapped,
   when,
 } from "./eval-reads.js";
@@ -43,8 +42,8 @@ export function renderRunList(
   const rows = res.runs ?? [];
   if (rows.length === 0) {
     renderEmptyPage(
-      "no evaluation runs",
-      state.limit,
+      state,
+      { none: "no evaluation runs", afterCursor: "no more evaluation runs after this cursor" },
       "list_evaluation_runs",
       res.next_cursor,
       "evaluation run",
@@ -78,7 +77,7 @@ export const evalRunsList: Enhancer = {
     "List the project's evaluation runs, newest first, with the id each one is read by. Filter to " +
     "one evaluation with --evaluation-id, or to a status with --status.",
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "list_evaluation_runs", "runs")
+    addPageFlags(cmd, "list_evaluation_runs", "runs")
       .option(
         "--evaluation-id <id>",
         "only runs of this evaluation (from `traceroot evals list`)",
@@ -92,10 +91,7 @@ export const evalRunsList: Enhancer = {
   },
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
-    const limit = parseLimit(
-      input.opts.limit as string | undefined,
-      limitBounds("list_evaluation_runs").max,
-    );
+    const { args, state } = resolvePageArgs(input, "list_evaluation_runs");
     const evaluationId = input.opts.evaluationId as string | undefined;
     const status = input.opts.status as string | undefined;
     const allowed = runStatuses();
@@ -104,11 +100,11 @@ export const evalRunsList: Enhancer = {
     }
     return {
       args: {
-        ...(limit === undefined ? {} : { limit }),
+        ...args,
         ...(evaluationId === undefined ? {} : { evaluation_id: evaluationId }),
         ...(status === undefined ? {} : { status }),
       },
-      state: { limit } satisfies PagedState,
+      state,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {

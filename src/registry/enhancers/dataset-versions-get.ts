@@ -3,18 +3,17 @@ import type { DatasetVersion } from "../../api/client.js";
 import { type Writers, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { parseLimit } from "../../time/range.js";
 import { rejectExtras } from "../flags.js";
 import {
   type PagedState,
   type Wire,
-  addLimitFlag,
+  addPageFlags,
   compact,
   countLine,
-  limitBounds,
   orDash,
   renderEmptyPage,
   renderFields,
+  resolvePageArgs,
   warnIfCapped,
 } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
@@ -54,8 +53,8 @@ export function renderVersion(res: VersionResponse, state: PagedState, writers: 
   const items = res.items ?? [];
   if (items.length === 0) {
     renderEmptyPage(
-      "this version has no test cases",
-      state.limit,
+      state,
+      { none: "this version has no test cases", afterCursor: "no test cases after this cursor" },
       "get_dataset_version",
       res.next_cursor,
       "case",
@@ -85,33 +84,32 @@ export function renderVersion(res: VersionResponse, state: PagedState, writers: 
  * Cases per page when `--limit` is not given. Always sent: without a `limit`
  * the server returns the WHOLE version (so SDK pulls are never silently cut),
  * which in a terminal is thousands of table rows. The CLI reads one bounded
- * page and says when there is more.
+ * page, says when there is more, and `--cursor` reads the next one.
  */
 export const DEFAULT_CASE_PAGE = 200;
 
 export const datasetVersionsGet: Enhancer = {
-  // Its own text, not the registry's: the tool tells an agent to follow
-  // next_cursor, and this command has no cursor flag. It reads one page.
+  // Its own text, not the registry's: the tool's text is written for an agent
+  // calling it directly, and names no CLI flag.
   description:
     "Read one immutable dataset version: its identity and one page of its test cases " +
     "(input, expected, and the trace a case was captured from), 200 by default and up to " +
-    "1000 with --limit. It reads a single page, and says when the version has more.",
+    "1000 with --limit. When the version has more, it says so and prints the --cursor " +
+    "that reads the next page.",
   flags(cmd: Command): void {
-    addLimitFlag(cmd, "get_dataset_version", "test cases", DEFAULT_CASE_PAGE);
+    addPageFlags(cmd, "get_dataset_version", "test cases", DEFAULT_CASE_PAGE);
   },
   resolveArgs(input: ResolveInput): Resolved {
     rejectExtras(input);
-    const limit =
-      parseLimit(input.opts.limit as string | undefined, limitBounds("get_dataset_version").max) ??
-      DEFAULT_CASE_PAGE;
+    const { args, state } = resolvePageArgs(input, "get_dataset_version", DEFAULT_CASE_PAGE);
     return {
       args: {
         ...(input.positionals.version_id === undefined
           ? {}
           : { version_id: input.positionals.version_id }),
-        limit,
+        ...args,
       },
-      state: { limit } satisfies PagedState,
+      state,
     };
   },
   render(payload: unknown, ctx: RenderContext): void {
