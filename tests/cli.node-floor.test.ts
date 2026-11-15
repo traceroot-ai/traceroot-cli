@@ -199,9 +199,12 @@ describe("the package's own engines floor", () => {
     ]);
     for (let head = queue.shift(); head !== undefined; head = queue.shift()) {
       const [name, from] = head;
-      if (isPrompts(name) || checked.includes(name)) continue;
-      checked.push(name);
+      if (isPrompts(name)) continue;
+      // Once per installed copy, not per name: a nested copy at another version
+      // loads too, and declares its own floor.
       const dir = installedDir(name, from);
+      if (checked.includes(dir)) continue;
+      checked.push(dir);
       const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
         engines?: { node?: string };
         dependencies?: Record<string, string>;
@@ -220,7 +223,7 @@ describe("the package's own engines floor", () => {
     }
     // The guard on the guard: a walk that resolved nothing would pass every
     // assertion above while checking nothing at all.
-    expect(checked).toContain("@traceroot-ai/tools");
+    expect(checked).toContain(installedDir("@traceroot-ai/tools", root));
   });
 });
 
