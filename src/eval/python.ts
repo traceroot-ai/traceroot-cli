@@ -1,6 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { type RunProcess, type RunProcessResult, runProcess } from "../setup/exec.js";
 import { findGitRoot } from "../setup/git.js";
 import { detectPythonEnvironment } from "../setup/python.js";
@@ -18,9 +18,12 @@ const PATH_PYTHON = process.platform === "win32" ? "python" : "python3";
 
 const PROBE_TIMEOUT_MS = 30_000;
 
+/** Asks an interpreter for its own path, as one JSON line. */
+const WHERE = "import json, sys\nprint(json.dumps({'executable': sys.executable}))\n";
+
 /**
- * Asks the interpreter for its own path, its version and the installed
- * traceroot version, as one JSON line.
+ * Asks the interpreter for its version and the installed traceroot version,
+ * as one JSON line.
  *
  * The version comes from distribution metadata, so neither the SDK nor any
  * user code is imported: a slow or failing import can't pass for "not
@@ -32,16 +35,25 @@ const PROBE = [
   "    v = m.version('traceroot')",
   "except m.PackageNotFoundError:",
   "    v = None",
-  "print(json.dumps({'executable': sys.executable, 'python': '%d.%d.%d' % sys.version_info[:3], 'traceroot': v}))",
+  "print(json.dumps({'python': '%d.%d.%d' % sys.version_info[:3], 'traceroot': v}))",
 ].join("\n");
 
 interface ProbeAnswer {
-  /** `sys.executable`; empty when the interpreter can't say. */
-  executable: string;
   python: string;
   /** Null when traceroot isn't installed for this interpreter. */
   traceroot: string | null;
 }
+
+/** An interpreter that didn't answer: which one, what it was asked, and what came back. */
+interface Unanswered {
+  ok: false;
+  program: string;
+  /** Completes "<program> did not …". */
+  asked: string;
+  result: RunProcessResult;
+}
+
+type Probed = { ok: true; interpreter: string; answer: ProbeAnswer } | Unanswered;
 
 export interface PythonLookupOptions {
   /** Where to look for a virtual environment when the file is in no repository. */
@@ -56,8 +68,9 @@ export interface PythonLookupOptions {
  *
  * First match wins: a `.venv`, `venv` or `env` in the file's folder, then at
  * the repository root (the working directory outside a repository), then
- * `$VIRTUAL_ENV`, then `python3` on PATH. The first three are setup's own
- * search, so `setup` and this pick the same interpreter.
+ * `$VIRTUAL_ENV`, then the interpreter `python3` on PATH starts in the file's
+ * folder. The first three are setup's own search, so `setup` and this pick
+ * the same interpreter.
  *
  * @param file absolute path of the evaluation file.
  */
@@ -67,24 +80,24 @@ export async function findPythonRunner(
 ): Promise<RunnerLookup> {
   const dir = dirname(file);
   const root = findGitRoot(dir) ?? options.cwd;
-  const venv = detectPythonEnvironment(root, relative(root, dir) || ".", options.env).interpreter;
-  const program = venv ?? PATH_PYTHON;
+  const found = detectPythonEnvironment(root, relative(root, dir) || ".", options.env).interpreter;
+  // Made absolute against the working directory, where the search found it: a
+  // relative $VIRTUAL_ENV names another path from the folder the probe runs in.
+  const venv = found === null ? null : resolve(found);
 
-  const { answer, result } = await probe(program, options);
-  if (answer === null) {
+  const probed = await probe(venv, dir, options);
+  if (!probed.ok) {
     return {
       ok: false,
       failure: {
         kind: "no_interpreter",
-        message: noInterpreterMessage(program, venv !== null, result, dir, root),
+        message: noInterpreterMessage(probed, dir, root),
         fix: "Create a virtual environment beside the evaluation file (python3 -m venv .venv) and install traceroot into it, or activate the one that has it.",
       },
     };
   }
 
-  // A PATH name is replaced by the path the interpreter reports for itself, so
-  // the runner is the interpreter whose packages were just checked.
-  const interpreter = venv ?? (answer.executable === "" ? program : answer.executable);
+  const { interpreter, answer } = probed;
   const named = `${interpreter} (Python ${answer.python})`;
   if (answer.traceroot === null) {
     return {
@@ -117,79 +130,122 @@ export async function findPythonRunner(
 }
 
 /**
- * Runs {@link PROBE} from a new, empty folder.
+ * Settles which interpreter runs and reads its versions with {@link PROBE},
+ * in a new temporary folder that is removed afterwards.
  *
- * Not `-I`: isolated mode also drops user site-packages and `PYTHONPATH`, so
- * it misses a traceroot the runner can import, installed with `pip install
- * --user` or reachable only through `PYTHONPATH`. The empty folder keeps what
- * `-I` would be for: `python -c` puts the working directory first on
- * `sys.path`, and nothing in an empty folder can shadow the standard library
- * or the installed metadata.
+ * A virtual environment's interpreter is the one that runs. Otherwise
+ * `python3` on PATH is first asked for its own path ({@link WHERE}) from the
+ * evaluation file's folder, because a pyenv, asdf or mise shim picks its
+ * Python from the folder it starts in, and from any other folder that is the
+ * global one. That question runs with `-I`, so nothing in the project's
+ * folder is imported, and from a file rather than `-c`, so a Windows batch
+ * shim isn't refused for the quotes and line breaks in the code. When it
+ * gets no path, the lookup reports no interpreter rather than ask `python3`
+ * from another folder, where it may start another Python. The runner is then
+ * the interpreter whose packages the probe checked.
+ *
+ * The probe itself runs from an empty folder, not with `-I`: isolated mode
+ * also drops user site-packages and `PYTHONPATH`, so it misses a traceroot the
+ * runner can import, installed with `pip install --user` or reachable only
+ * through `PYTHONPATH`. The empty folder keeps what `-I` would be for:
+ * `python -c` puts the working directory first on `sys.path`, and nothing in
+ * an empty folder can shadow the standard library or the installed metadata.
  */
 async function probe(
-  program: string,
+  venv: string | null,
+  dir: string,
   options: PythonLookupOptions,
-): Promise<{ answer: ProbeAnswer | null; result: RunProcessResult }> {
-  const cwd = await mkdtemp(join(tmpdir(), "traceroot-python-probe-"));
+): Promise<Probed> {
+  const temp = await mkdtemp(join(tmpdir(), "traceroot-python-probe-"));
   try {
-    const result = await (options.runProcess ?? runProcess)({
-      program,
-      args: ["-c", PROBE],
-      cwd,
-      env: options.env,
-      stdio: "capture",
-      timeoutMs: PROBE_TIMEOUT_MS,
-    });
-    return { answer: result.spawnFailed ? null : parseProbe(result.output), result };
+    let interpreter = venv;
+    if (interpreter === null) {
+      const where = join(temp, "where.py");
+      await writeFile(where, WHERE);
+      const result = await ask(PATH_PYTHON, ["-I", where], dir, options);
+      const path = lastAnswer(result, "executable")?.executable;
+      if (typeof path !== "string" || path === "") {
+        return { ok: false, program: PATH_PYTHON, asked: "report its path", result };
+      }
+      interpreter = path;
+    }
+
+    const empty = join(temp, "empty");
+    await mkdir(empty);
+    const result = await ask(interpreter, ["-c", PROBE], empty, options);
+    const answer = lastAnswer(result, "python");
+    if (answer === null) {
+      return {
+        ok: false,
+        program: interpreter,
+        asked: "report its Python and traceroot versions",
+        result,
+      };
+    }
+    return {
+      ok: true,
+      interpreter,
+      answer: {
+        python: answer.python as string,
+        traceroot: typeof answer.traceroot === "string" ? answer.traceroot : null,
+      },
+    };
   } finally {
-    await rm(cwd, { recursive: true, force: true });
+    await rm(temp, { recursive: true, force: true });
   }
 }
 
+/** Runs one question to an interpreter, in the environment the runner gets. */
+function ask(
+  program: string,
+  args: string[],
+  cwd: string,
+  options: PythonLookupOptions,
+): Promise<RunProcessResult> {
+  return (options.runProcess ?? runProcess)({
+    program,
+    args,
+    cwd,
+    env: options.env,
+    stdio: "capture",
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
+}
+
 /**
- * The probe's answer, read from the last line that is one.
+ * The last line of output that is a JSON object with a string `key`, or null.
  *
  * The output is stdout and stderr together, and a `.pth` file or
  * `sitecustomize` may print on either, so no other line is assumed absent.
  */
-function parseProbe(output: string): ProbeAnswer | null {
-  for (const line of output.split(/\r?\n/).reverse()) {
+function lastAnswer(result: RunProcessResult, key: string): Record<string, unknown> | null {
+  if (result.spawnFailed) return null;
+  for (const line of result.output.split(/\r?\n/).reverse()) {
     if (!line.startsWith("{")) continue;
     try {
       const value = JSON.parse(line) as Record<string, unknown>;
-      if (typeof value.python === "string") {
-        return {
-          executable: typeof value.executable === "string" ? value.executable : "",
-          python: value.python,
-          traceroot: typeof value.traceroot === "string" ? value.traceroot : null,
-        };
-      }
+      if (typeof value[key] === "string") return value;
     } catch {
-      // Not the probe's line.
+      // Not the answer's line.
     }
   }
   return null;
 }
 
-function noInterpreterMessage(
-  program: string,
-  fromVenv: boolean,
-  result: RunProcessResult,
-  dir: string,
-  root: string,
-): string {
+function noInterpreterMessage(unanswered: Unanswered, dir: string, root: string): string {
+  const { program, asked, result } = unanswered;
   if (result.spawnFailed) {
-    if (fromVenv) {
+    if (program !== PATH_PYTHON) {
       return `${program} could not be started.`;
     }
     const searched = dir === root ? dir : `${dir} or ${root}`;
     return `No Python interpreter found: no .venv, venv or env in ${searched}, no usable $VIRTUAL_ENV, and no ${program} on PATH.`;
   }
   if (result.timedOut) {
-    return `${program} did not report its Python and traceroot versions within ${PROBE_TIMEOUT_MS / 1000} seconds.`;
+    return `${program} did not ${asked} within ${PROBE_TIMEOUT_MS / 1000} seconds.`;
   }
   const lastLine = result.output.trim().split(/\r?\n/).at(-1)?.trim() ?? "";
-  return `${program} did not report its Python and traceroot versions${lastLine === "" ? "." : `: ${lastLine}`}`;
+  return `${program} did not ${asked}${lastLine === "" ? "." : `: ${lastLine}`}`;
 }
 
 /** A path as one POSIX shell word, quoted the way setup quotes the interpreter in its install command. */

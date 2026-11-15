@@ -1,9 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PYTHON_SDK_FLOOR, findPythonRunner } from "../../src/eval/python.js";
+import {
+  type RunProcess,
+  type RunProcessOptions,
+  resolveSpawnTarget,
+} from "../../src/setup/exec.js";
 
 /** The stub interpreters below are shell scripts. */
 const WINDOWS = process.platform === "win32";
@@ -51,6 +56,36 @@ function evalFile(base: string): string {
   const file = join(base, "x_eval.py");
   writeFileSync(file, "");
   return file;
+}
+
+/**
+ * A `python3` that picks its interpreter the way a pyenv, asdf or mise shim
+ * does: the nearest `.python-version` above the folder it runs in selects
+ * `pinned`, and without one it runs `global`. A null `pinned` is a version
+ * that isn't installed, which fails. Returns the folder to put on PATH.
+ */
+function versionShim(pinned: string | null, global: string): string {
+  const shims = join(dir, "shims");
+  mkdirSync(shims, { recursive: true });
+  const runPinned =
+    pinned === null
+      ? `{ echo "python3: version 'pinned' is not installed" >&2; exit 1; }`
+      : `exec '${pinned}' "$@"`;
+  writeFileSync(
+    join(shims, "python3"),
+    [
+      "#!/bin/sh",
+      'd="$PWD"',
+      'while [ -n "$d" ]; do',
+      `  [ -f "$d/.python-version" ] && ${runPinned}`,
+      '  d="${d%/*}"',
+      "done",
+      `exec '${global}' "$@"`,
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return shims;
 }
 
 /** A folder for PATH with nothing in it, so no real interpreter is found. */
@@ -120,6 +155,97 @@ describe.skipIf(WINDOWS)("finding the Python interpreter for an evaluation file"
     });
 
     expect(found.ok && found.runner.argv[0]).toBe(onPath);
+  });
+
+  it("runs the python3 a version manager picks for the file's folder, not the global one", async () => {
+    const pinned = stubPython(join(dir, "versions", "pinned", "bin", "python3"), "3.12.4", "0.5.1");
+    const global = stubPython(join(dir, "versions", "global", "bin", "python3"), "3.11.9", null);
+    const file = evalFile(join(dir, "project", "evals"));
+    writeFileSync(join(dir, "project", ".python-version"), "pinned\n");
+
+    // Run from outside the project, so only the file's folder has the version file above it.
+    const found = await findPythonRunner(file, {
+      cwd: dir,
+      env: { PATH: versionShim(pinned, global) },
+    });
+
+    expect(found).toEqual({
+      ok: true,
+      runner: {
+        language: "python",
+        sdkVersion: "0.5.1",
+        argv: [pinned, "-m", "traceroot.eval.runner", file],
+      },
+    });
+  });
+
+  it("says no interpreter was found when python3 fails in the file's folder, without trying another", async () => {
+    // The global one has traceroot, so running it would look like success.
+    const global = stubPython(join(dir, "versions", "global", "bin", "python3"), "3.11.9", "0.5.1");
+    const file = evalFile(join(dir, "project"));
+    writeFileSync(join(dir, "project", ".python-version"), "pinned\n");
+
+    const found = await findPythonRunner(file, {
+      cwd: dir,
+      env: { PATH: versionShim(null, global) },
+    });
+
+    expect(found.ok).toBe(false);
+    if (found.ok) return;
+    expect(found.failure.kind).toBe("no_interpreter");
+    expect(found.failure.message).toBe(
+      "python3 did not report its path: python3: version 'pinned' is not installed",
+    );
+  });
+
+  it("asks python3 on PATH which interpreter it is in a way a Windows batch shim can start", async () => {
+    const calls: RunProcessOptions[] = [];
+    const answer = JSON.stringify({
+      executable: "/opt/py/bin/python3",
+      python: "3.12.4",
+      traceroot: "0.5.1",
+    });
+    const recording: RunProcess = async (call) => {
+      calls.push(call);
+      return {
+        exitCode: 0,
+        output: `${answer}\n`,
+        durationMs: 1,
+        timedOut: false,
+        spawnFailed: false,
+      };
+    };
+    const file = evalFile(join(dir, "project"));
+
+    await findPythonRunner(file, { cwd: dir, env: { PATH: emptyPath() }, runProcess: recording });
+
+    const first = calls[0] as RunProcessOptions;
+    // A pyenv-win shim is a batch file, started through cmd.exe, which refuses
+    // an argument carrying quotes, parentheses or line breaks.
+    const target = resolveSpawnTarget("python", first.args, {
+      platform: "win32",
+      env: { PATH: "C:\\pyenv\\shims", PATHEXT: ".BAT" },
+      isFile: (path) => path === "C:\\pyenv\\shims\\python.BAT",
+    });
+    // Only the cmd.exe form is verbatim; a refusal is null.
+    expect(target?.windowsVerbatimArguments).toBe(true);
+    // Isolated, from the file's folder, where the shim picks its version.
+    expect(first.args[0]).toBe("-I");
+    expect(first.cwd).toBe(dirname(file));
+  });
+
+  it("runs a relative $VIRTUAL_ENV from the working directory it is relative to", async () => {
+    const active = join(dir, "active");
+    const activated = stubPython(join(active, "bin", "python"), "3.12.4", "0.5.1");
+    const file = evalFile(join(dir, "project"));
+
+    const found = await findPythonRunner(file, {
+      cwd: join(dir, "project"),
+      // Relative to this process's own working directory, as a shell would pass it.
+      env: { PATH: emptyPath(), VIRTUAL_ENV: relative(process.cwd(), active) },
+    });
+
+    expect(found.ok && found.runner.argv[0]).toBe(activated);
   });
 
   it("looks in the working directory when the file is in no repository", async () => {

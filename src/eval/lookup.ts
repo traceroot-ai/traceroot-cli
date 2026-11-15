@@ -9,10 +9,10 @@ import { findPythonRunner } from "./python.js";
  * user's SDK installed, the runner entry point inside that SDK, and a check
  * that the SDK is a release this supports.
  *
- * The lookup only finds. The one process it starts is the Python version
- * probe; it runs nothing it found and chooses no exit code. Every way it can
- * fail is a {@link LookupFailure} with a one-line fix, never a thrown error, so
- * the command decides what each one exits with.
+ * The lookup only finds. The only processes it starts are Python's, asked for
+ * its path and its versions; it runs nothing it found and chooses no exit
+ * code. Every way it can fail is a {@link LookupFailure} with a one-line fix,
+ * never a thrown error, so the command decides what each one exits with.
  */
 export interface EvalRunner {
   language: StackLanguage;
