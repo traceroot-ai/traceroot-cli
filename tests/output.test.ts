@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EVALS_RUN_EXIT_CODES } from "../src/eval/exit-codes.js";
 import {
   CliError,
   ExitCode,
@@ -159,6 +160,11 @@ describe("exitCodeToString", () => {
     expect(exitCodeToString(ExitCode.conflict)).toBe("conflict");
     expect(exitCodeToString(ExitCode.internal)).toBe("internal");
     expect(exitCodeToString(99)).toBe("internal");
+  });
+
+  it("names the codes evals run returns on its own", () => {
+    expect(exitCodeToString(EVALS_RUN_EXIT_CODES.harness)).toBe("harness");
+    expect(exitCodeToString(EVALS_RUN_EXIT_CODES.regressed)).toBe("regressed");
   });
 });
 

@@ -1,3 +1,5 @@
+import { EVALS_RUN_EXIT_CODES } from "./eval/exit-codes.js";
+
 /**
  * Writes a "not implemented" message for the given command to stderr and
  * exits the process with a non-zero status.
@@ -125,7 +127,9 @@ export const ExitCode = {
 
 /**
  * Maps a numeric exit code to its stable string code for the `--json` error
- * envelope. Unknown codes (including the default 1) map to `"internal"`.
+ * envelope: the shared classes above, and the names of `evals run`'s own codes
+ * ({@link EVALS_RUN_EXIT_CODES}). Unknown codes (including the default 1) map
+ * to `"internal"`.
  */
 export function exitCodeToString(exitCode: number): string {
   switch (exitCode) {
@@ -139,6 +143,10 @@ export function exitCodeToString(exitCode: number): string {
       return "network";
     case ExitCode.conflict:
       return "conflict";
+    case EVALS_RUN_EXIT_CODES.harness:
+      return "harness";
+    case EVALS_RUN_EXIT_CODES.regressed:
+      return "regressed";
     default:
       return "internal";
   }
