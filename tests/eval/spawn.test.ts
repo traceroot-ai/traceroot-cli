@@ -314,14 +314,14 @@ describe("runEvalRunner", () => {
     };
     const argv = stub(
       "ready();",
-      `setTimeout(() => fs.writeSync(2, ${JSON.stringify(chunk)}), 200);`,
+      "setTimeout(() => fs.writeSync(2, process.env.STUB_CHUNK), 200);",
       "setTimeout(() => fs.writeSync(2, ' after'), 400);",
     );
 
     await runEvalRunner({
       argv,
       output: sink,
-      env: BASE_ENV,
+      env: { ...BASE_ENV, STUB_CHUNK: chunk },
       upload: { host: "https://traceroot.example", apiKey: makeSecret(key) },
     });
     const output = Buffer.concat(bytes).toString("utf8");
