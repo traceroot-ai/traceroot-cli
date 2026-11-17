@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import type { SignalDetail } from "../../api/client.js";
-import { type Writers, logProgress, writeJson } from "../../output.js";
+import { type Writers, logInfo, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { type Wire, clean, orDash, orNone, plural, renderFields, when } from "./eval-reads.js";
@@ -23,6 +23,15 @@ function statusText(signal: Signal, timeZone?: string): string {
 /** A finding id as `findings get` takes it, or a dash when the server sent none. */
 function findingId(value: string | null | undefined): string {
   return typeof value === "string" ? clean(sanitizeFindingId(value)) : "—";
+}
+
+/**
+ * What to run next: the lead-in dimmed, then each command at full contrast on a
+ * line of its own, so it reads apart from the record and copies whole.
+ */
+function suggest(leadIn: string, commands: string[], writers: Writers): void {
+  logProgress(leadIn, writers);
+  for (const command of commands) logInfo(`  ${command}`, writers);
 }
 
 /**
@@ -54,8 +63,9 @@ export function renderSignal(signal: Signal, writers: Writers, timeZone?: string
   renderFields(fields, writers);
 
   if (typeof signal.merged_into_id === "string") {
-    logProgress(
-      `this signal was merged: read the one its findings moved to with 'traceroot signals get ${clean(signal.merged_into_id)}'`,
+    suggest(
+      "this signal was merged; read the one its findings moved to:",
+      [`traceroot signals get ${clean(signal.merged_into_id)}`],
       writers,
     );
   }
@@ -85,13 +95,18 @@ export function renderSignal(signal: Signal, writers: Writers, timeZone?: string
     ]),
     { headerStyle: styler.bold },
   );
-  writers.out.write(`\n${styler.bold("recent traces, latest trace start first")}\n${table}\n`);
+  // The traces listed, not `hits`, which counts every hit the signal ever had.
+  const heading = `${hits.length} recent ${plural(hits.length, "trace")}, latest trace start first`;
+  writers.out.write(`\n${styler.bold(heading)}\n${table}\n`);
 
   const newest = hits[0];
   if (typeof newest?.trace_id === "string" && typeof newest.finding_id === "string") {
-    logProgress(
-      `open the newest trace with 'traceroot traces get ${clean(newest.trace_id)}', ` +
-        `and its finding with 'traceroot findings get ${findingId(newest.finding_id)}'`,
+    suggest(
+      "open the newest trace and its finding:",
+      [
+        `traceroot traces get ${clean(newest.trace_id)}`,
+        `traceroot findings get ${findingId(newest.finding_id)}`,
+      ],
       writers,
     );
   }
