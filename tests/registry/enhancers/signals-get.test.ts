@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SignalDetail } from "../../../src/api/client.js";
 import { buildProgram } from "../../../src/cli.js";
 import { renderSignal } from "../../../src/registry/enhancers/signals-get.js";
@@ -60,17 +60,43 @@ describe("signals get rendering", () => {
         "last seen   2026-11-10 09:30:00 UTC",
         "analysis    completed",
         "",
-        "recent traces, latest trace start first",
+        "2 recent traces, latest trace start first",
         "TRACE ID  FINDING ID                        TRACE START",
         "tr_c41d   0b1e6a523f4d4c2a9d8e7a6b5c4d3e2f  2026-11-10 09:29:58 UTC",
         "tr_a907   5e2f0c9d8b7a46e1a3c2d1f0e9b8a7c6  2026-11-09 17:04:12 UTC",
         "",
       ].join("\n"),
     );
-    // The newest hit, with the finding id in the form `findings get` takes.
+    // The newest hit, with the finding id in the form `findings get` takes, one
+    // command to a line.
     expect(err.data).toBe(
-      "open the newest trace with 'traceroot traces get tr_c41d', and its finding with " +
-        "'traceroot findings get 0b1e6a523f4d4c2a9d8e7a6b5c4d3e2f'\n",
+      [
+        "open the newest trace and its finding:",
+        "  traceroot traces get tr_c41d",
+        "  traceroot findings get 0b1e6a523f4d4c2a9d8e7a6b5c4d3e2f",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("counts a single recent trace in the singular", () => {
+    const { w, out } = sinks();
+    renderSignal(signal({ recent_hits: signal().recent_hits?.slice(0, 1) }), w, "UTC");
+    expect(out.data).toContain("\n1 recent trace, latest trace start first\n");
+  });
+
+  it("on a terminal, dims the lead-in and leaves the commands at full contrast", () => {
+    vi.stubEnv("NO_COLOR", undefined);
+    const out = new StringSink(true);
+    const err = new StringSink(true);
+    renderSignal(signal(), { out, err }, "UTC");
+    expect(err.data).toBe(
+      [
+        "\u001b[2mopen the newest trace and its finding:\u001b[0m",
+        "  traceroot traces get tr_c41d",
+        "  traceroot findings get 0b1e6a523f4d4c2a9d8e7a6b5c4d3e2f",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -119,7 +145,7 @@ describe("signals get rendering", () => {
     const { w, out, err } = sinks();
     renderSignal(signal({ merged_into_id: "sig_0d2e", recent_hits: [] }), w, "UTC");
     expect(out.data).toContain("merged into  sig_0d2e\n");
-    expect(err.data).toContain("'traceroot signals get sig_0d2e'");
+    expect(err.data).toContain("\n  traceroot signals get sig_0d2e\n");
   });
 
   it("a merged signal with no recent traces gives the merged pointer as the only reason", () => {
@@ -127,8 +153,8 @@ describe("signals get rendering", () => {
     renderSignal(signal({ merged_into_id: "sig_0d2e", recent_hits: [] }), w, "UTC");
     expect(out.data).not.toContain("TRACE ID");
     expect(err.data).toBe(
-      "this signal was merged: read the one its findings moved to with " +
-        "'traceroot signals get sig_0d2e'\n",
+      "this signal was merged; read the one its findings moved to:\n" +
+        "  traceroot signals get sig_0d2e\n",
     );
   });
 
