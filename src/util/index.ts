@@ -91,6 +91,16 @@ export function elapsedMs(start: string, end: string | null): number | null {
 }
 
 /**
+ * Locale for every user-facing timestamp display AND for validating a copied
+ * STARTED abbreviation (see `src/time/range.ts`). These two must share one
+ * locale because Intl short zone names differ between locales for the same
+ * instant: en-CA renders "IST"/"AEST" where en-US renders "GMT+5:30"/"GMT+10",
+ * so a formatter/parser locale mismatch makes `--from`/`--to` reject the very
+ * timestamps the CLI's own STARTED column prints.
+ */
+export const TIMESTAMP_DISPLAY_LOCALE = "en-CA";
+
+/**
  * Renders a backend timestamp in a readable, unambiguous form: local time with
  * an explicit timezone label (e.g. `2026-06-04 16:43:13 PDT`), since the backend
  * sends zone-less UTC. `timeZone` overrides the local zone (used by tests for
@@ -101,7 +111,7 @@ export function formatTimestamp(raw: string, timeZone?: string): string {
   if (date === null) {
     return raw;
   }
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat(TIMESTAMP_DISPLAY_LOCALE, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
