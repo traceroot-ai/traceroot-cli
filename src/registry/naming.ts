@@ -132,5 +132,5 @@ export const GROUPS: Record<string, string> = {
   datasets: "Work with evaluation datasets",
   "datasets versions": "Work with a dataset's published versions",
   evals: "Work with evaluations",
-  "evals runs": "Read recorded evaluation runs",
+  "evals runs": "Read evaluation runs recorded on TraceRoot",
 };

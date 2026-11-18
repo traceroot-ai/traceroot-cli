@@ -4,23 +4,11 @@ import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { rejectExtras } from "../flags.js";
-import { type Wire, clean, orDash, plural } from "./eval-reads.js";
+import { type Wire, clean, formatMean, orDash, plural } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 type Run = Wire<EvaluationRun>;
 type Metric = NonNullable<Run["scores"]>[number];
-
-function num(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  // Also catches -0, which would otherwise print as "-0".
-  if (value === 0) return "0";
-  const magnitude = Math.abs(value);
-  // Below 1, keep significant digits rather than decimal places. A small mean,
-  // such as a per-case cost of $0.00004, must never round to a "0" that reads
-  // as a measured zero.
-  if (magnitude < 1) return value.toLocaleString("en-US", { maximumSignificantDigits: 3 });
-  return value.toLocaleString("en-US", { maximumFractionDigits: magnitude >= 1000 ? 0 : 2 });
-}
 
 /**
  * `<n> <noun>`, or `— <noun>` when the count is absent. Never `0` for "not
@@ -127,7 +115,7 @@ function renderMetrics(run: Run, writers: Writers): void {
  * printing `—` there would claim no case carried it, when every one did.
  */
 export function metricValue(m: Metric): string {
-  if (m.value !== null && m.value !== undefined) return num(m.value);
+  if (m.value !== null && m.value !== undefined) return formatMean(m.value);
   // Nothing observed comes first: on a run that has scored nothing yet, a scorer
   // declared categorical must read as absent, like every other score, rather than
   // as though a label had come back.

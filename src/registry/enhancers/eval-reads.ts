@@ -125,6 +125,22 @@ export function orDash(value: unknown): string {
   return value === null || value === undefined || value === "" ? "—" : clean(value);
 }
 
+/**
+ * A mean, or any other measured number, as the evaluation commands print one;
+ * `—` when it is absent.
+ */
+export function formatMean(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  // Also catches -0, which would otherwise print as "-0".
+  if (value === 0) return "0";
+  const magnitude = Math.abs(value);
+  // Below 1, keep significant digits rather than decimal places. A small mean,
+  // such as a per-case cost of $0.00004, must never round to a "0" that reads
+  // as a measured zero.
+  if (magnitude < 1) return value.toLocaleString("en-US", { maximumSignificantDigits: 3 });
+  return value.toLocaleString("en-US", { maximumFractionDigits: magnitude >= 1000 ? 0 : 2 });
+}
+
 /** `(none)` is for a thing that exists and has no value yet — distinct from unknown. */
 export function orNone(value: unknown): string {
   return value === null || value === undefined || value === "" ? "(none)" : clean(value);
