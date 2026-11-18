@@ -50,7 +50,10 @@ const LANGUAGES: ReadonlyMap<string, StackLanguage> = new Map([
 ]);
 
 export interface LookupOptions {
-  /** What a relative file is resolved against; outside a repository, also where a venv is looked for. */
+  /**
+   * The working directory the runner starts in. A relative file and a relative `PYTHONPATH` entry
+   * are read against it, and outside a repository a venv is looked for there.
+   */
   cwd?: string;
   /** The environment the runner will get. */
   env?: NodeJS.ProcessEnv;

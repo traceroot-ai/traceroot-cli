@@ -599,7 +599,7 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
 
   /**
    * Checks that the CLI ended before the outcome was read, and left neither the runner nor its event
-   * folder behind. The runner may take a moment to act on its SIGTERM once the CLI has gone.
+   * folder behind. The runner may take a moment to go once the CLI has.
    */
   async function expectNothingLeft(
     finished: Finished,
@@ -614,12 +614,16 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
     expect(isRunning(runner.pid), `runner ${runner.pid} outlived the CLI`).toBe(false);
   }
 
-  /** A runner that writes a line every 50 ms until it is stopped. */
+  /**
+   * A runner that writes a line every 50 ms until SIGKILL stops it. It ignores SIGTERM, as a task's
+   * own handler can make it, and a write nothing reads any more, so the CLI's exit doesn't end it.
+   */
   const chatty = stub(
     emit(hello),
     emit(started),
+    'process.on("SIGTERM", () => {});',
     "ready();",
-    'setInterval(() => say("still running"), 50);',
+    'setInterval(() => { try { say("still running"); } catch {} }, 50);',
   );
 
   it("kills the runner and removes the event folder when a closed stderr ends the CLI", async () => {
@@ -644,7 +648,7 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
   });
 
   it("kills the runner and removes the event folder when an uncaught exception ends the CLI, keeping its exit code", async () => {
-    const { child, runner, finished } = await startHarness(quiet, 60_000, 17);
+    const { child, runner, finished } = await startHarness(chatty, 60_000, 17);
 
     child.kill("SIGUSR2");
     const result = await finished;
@@ -655,7 +659,7 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
   });
 
   it("kills the runner and removes the event folder on SIGQUIT, which then ends the CLI", async () => {
-    const { child, runner, finished } = await startHarness(quiet, 60_000);
+    const { child, runner, finished } = await startHarness(chatty, 60_000);
 
     child.kill("SIGQUIT");
     const result = await finished;
