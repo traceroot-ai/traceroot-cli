@@ -3,7 +3,8 @@ import type { SignalDetail } from "../../api/client.js";
 import { type Writers, logInfo, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
-import { type Wire, clean, orDash, orNone, plural, renderFields, when } from "./eval-reads.js";
+import { plural } from "../../util/index.js";
+import { type Wire, clean, orDash, orNone, renderFields, when } from "./eval-reads.js";
 import { sanitizeFindingId } from "./finding-id.js";
 import type { Enhancer, RenderContext } from "./types.js";
 

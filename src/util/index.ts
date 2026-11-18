@@ -46,6 +46,11 @@ export function formatDuration(durationMs: number | null): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+/** `noun` as it reads after `count`: "1 case", "2 cases". */
+export function plural(count: number, noun: string): string {
+  return count === 1 ? noun : `${noun}s`;
+}
+
 /**
  * Formats a byte count for humans: thousands-separated, with a one-decimal KB
  * value in parentheses, e.g. `534922` → `"534,922 bytes (534.9 KB)"`. The raw

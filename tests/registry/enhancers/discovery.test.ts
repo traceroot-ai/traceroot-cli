@@ -38,7 +38,7 @@ describe("workspaces list rendering", () => {
   it("counts in the footer", () => {
     const { writers, err } = makeWriters();
     renderWorkspacesList(RES, { json: false, writers });
-    expect(err.data).toContain("1 workspace(s)");
+    expect(err.data).toBe("1 workspace\n");
   });
 
   it("emits one JSON document with a count", () => {
@@ -77,7 +77,7 @@ describe("projects list rendering", () => {
   it("counts in the footer", () => {
     const { writers, err } = makeWriters();
     renderProjectsList(RES, { json: false, writers });
-    expect(err.data).toContain("1 project(s)");
+    expect(err.data).toBe("1 project\n");
     // Success output stays tip-free (guidance lives in --help and the
     // missing-project_id 400 hint), so the footer is just the count.
     expect(err.data).not.toContain("--project");

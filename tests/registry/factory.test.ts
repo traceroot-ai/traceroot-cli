@@ -241,7 +241,7 @@ describe("generated commands (zero-code path, sessions re-placed as test fixture
     const h = harness(jsonResponse(payload));
     await h.run("sessions", "list");
     expect(h.out.data).toContain("SESSION ID");
-    expect(h.err.data).toBe("1 item(s) | limit 50\n");
+    expect(h.err.data).toBe("1 item | limit 50\n");
   });
 });
 

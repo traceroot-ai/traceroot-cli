@@ -6,6 +6,7 @@ import { CliError, ExitCode, type Writers, logProgress, logWarn } from "../../ou
 import { renderCsv } from "../../render/csv.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
+import { plural } from "../../util/index.js";
 import { onceOption } from "../flags.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
@@ -184,18 +185,24 @@ export function renderSqlResult(result: SqlResult, opts: RenderSqlOptions): void
       const message = err instanceof Error ? err.message : String(err);
       throw new CliError(`could not write ${opts.output}: ${message}`);
     }
-    logProgress(`wrote ${result.row_count} row(s) to ${opts.output}`, writers);
+    logProgress(
+      `wrote ${result.row_count} ${plural(result.row_count, "row")} to ${opts.output}`,
+      writers,
+    );
   } else {
     writers.out.write(text);
     if (!opts.json && !opts.csv) {
-      logProgress(`${result.row_count} row(s) in ${result.elapsed_ms} ms`, writers);
+      logProgress(
+        `${result.row_count} ${plural(result.row_count, "row")} in ${result.elapsed_ms} ms`,
+        writers,
+      );
     }
   }
 
   // JSON carries `truncated` itself; the other formats would silently lose it.
   if (!opts.json && result.truncated) {
     logWarn(
-      `result truncated to ${result.row_count} row(s); narrow the query or raise --max-rows`,
+      `result truncated to ${result.row_count} ${plural(result.row_count, "row")}; narrow the query or raise --max-rows`,
       writers,
     );
   }

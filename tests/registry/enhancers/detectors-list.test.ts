@@ -42,7 +42,7 @@ describe("renderDetectors", () => {
     expect(out.data).toContain("My Hallucination Detector");
     expect(out.data).toContain("hallucination");
     expect(out.data).toContain("no"); // enabled:false renders as "no"
-    expect(err.data).toContain("1 detector(s)");
+    expect(err.data).toContain("1 detector |");
   });
 
   it("shows the resolved range in the footer", () => {
@@ -73,7 +73,7 @@ describe("renderDetectors", () => {
       writers: w,
     });
     expect(out.data).toContain("DETECTOR ID");
-    expect(err.data).toContain("0 detector(s)");
+    expect(err.data).toContain("0 detectors |");
   });
 });
 

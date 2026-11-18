@@ -7,6 +7,7 @@ import {
   renderRangeSummary,
   resolveTimeRange,
 } from "../../time/range.js";
+import { plural } from "../../util/index.js";
 import { onceOption } from "../flags.js";
 import type { ResolveInput } from "./types.js";
 
@@ -157,9 +158,10 @@ export function writeListJson(
 }
 
 /**
- * The compact one-line footer: `<count> <noun>(s) | limit <N> | <range>`,
- * with "<count> of <total>" when the backend reports more than it returned
- * and the backend's default limit (50) as the last fallback.
+ * The compact one-line footer: `<count> <noun> | limit <N> | <range>`, with
+ * the noun pluralised to match the count, "<count> of <total>" (agreeing with
+ * the total) when the backend reports more than it returned, and the
+ * backend's default limit (50) as the last fallback.
  */
 export function logListFooter(
   res: ListEnvelope,
@@ -173,8 +175,8 @@ export function logListFooter(
   const total = res.meta?.total;
   const countText =
     typeof total === "number" && total > returned
-      ? `${returned} of ${total} ${noun}(s)`
-      : `${returned} ${noun}(s)`;
+      ? `${returned} of ${total} ${plural(total, noun)}`
+      : `${returned} ${plural(returned, noun)}`;
   const effectiveLimit = res.meta?.limit ?? state.limit ?? 50;
   const rangeText = renderRangeSummary(
     { startAfter: state.startAfter, endBefore: state.endBefore, sinceLabel: state.sinceLabel },

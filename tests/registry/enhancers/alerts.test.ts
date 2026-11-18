@@ -45,7 +45,7 @@ describe("alerts list rendering", () => {
   it("reports capacity in the footer", () => {
     const { writers, err } = makeWriters();
     renderAlertsList(RES, { json: false, writers, timeZone: "UTC" });
-    expect(err.data).toContain("1 alert(s)");
+    expect(err.data).toBe("1 alert | 1/20 used\n");
     expect(err.data).toContain("1/20");
   });
 
@@ -66,7 +66,7 @@ describe("alerts list rendering", () => {
   it("omits the capacity suffix when meta.capacity is absent", () => {
     const { writers, err } = makeWriters();
     renderAlertsList({ data: RES.data }, { json: false, writers, timeZone: "UTC" });
-    expect(err.data).toContain("1 alert(s)");
+    expect(err.data).toBe("1 alert\n");
     expect(err.data).not.toContain("/");
   });
 
@@ -77,7 +77,7 @@ describe("alerts list rendering", () => {
     const lines = out.data.trimEnd().split("\n");
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("ALERT ID");
-    expect(err.data).toContain("0 alert(s)");
+    expect(err.data).toBe("0 alerts\n");
   });
 });
 

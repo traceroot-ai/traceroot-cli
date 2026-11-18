@@ -324,7 +324,7 @@ describe("renderList (--json)", () => {
     const { writers: w, out, err } = writers();
     renderList(res, { json: true, writers: w });
     expect(out.data).not.toContain("Tip:");
-    expect(out.data).not.toContain("trace(s)");
+    expect(out.data).not.toContain("| limit");
     expect(err.data).toBe("");
   });
 });
@@ -436,16 +436,36 @@ describe("renderList compact footer (one-line stderr)", () => {
     meta: { page: 0, limit: 50, total: 2 },
   };
 
-  it("emits '<count> trace(s) | limit <N> | all traces' (0 traces)", () => {
+  it("emits '<count> traces | limit <N> | all traces' (0 traces)", () => {
     const { writers: w, err } = writers();
     renderList(res0, { json: false, writers: w });
-    expect(err.data).toContain("0 trace(s) | limit 50 | all traces");
+    expect(err.data).toContain("0 traces | limit 50 | all traces");
   });
 
-  it("emits '<count> trace(s) | limit <N> | all traces' (2 traces)", () => {
+  it("emits '<count> traces | limit <N> | all traces' (2 traces)", () => {
     const { writers: w, err } = writers();
     renderList(res2, { json: false, writers: w });
-    expect(err.data).toContain("2 trace(s) | limit 50 | all traces");
+    expect(err.data).toContain("2 traces | limit 50 | all traces");
+  });
+
+  it("emits '1 trace' in the singular", () => {
+    const res: TraceList = {
+      data: [listItem({ trace_id: "a-1" })],
+      meta: { page: 0, limit: 50, total: 1 },
+    };
+    const { writers: w, err } = writers();
+    renderList(res, { json: false, writers: w });
+    expect(err.data).toContain("1 trace | limit 50 | all traces");
+  });
+
+  it("agrees the noun with the total, not the page, when a total is shown", () => {
+    const res: TraceList = {
+      data: [listItem({ trace_id: "a-1" })],
+      meta: { page: 0, limit: 1, total: 137 },
+    };
+    const { writers: w, err } = writers();
+    renderList(res, { json: false, writers: w });
+    expect(err.data).toContain("1 of 137 traces | limit 1 | all traces");
   });
 
   it("shows '<returned> of <total>' and uses meta.limit when total exceeds the page", () => {
@@ -455,14 +475,14 @@ describe("renderList compact footer (one-line stderr)", () => {
     };
     const { writers: w, err } = writers();
     renderList(res, { json: false, writers: w });
-    expect(err.data).toContain("2 of 137 trace(s) | limit 50 | all traces");
+    expect(err.data).toContain("2 of 137 traces | limit 50 | all traces");
   });
 
   it("falls back to the explicit --limit when meta.limit is absent", () => {
     const res = { data: [], meta: { page: 0, total: 0 } } as unknown as TraceList;
     const { writers: w, err } = writers();
     renderList(res, { json: false, writers: w, limit: 7 });
-    expect(err.data).toContain("0 trace(s) | limit 7 | all traces");
+    expect(err.data).toContain("0 traces | limit 7 | all traces");
   });
 
   it("does NOT emit a separate 'Range:' predicate line (old format gone)", () => {
@@ -482,7 +502,7 @@ describe("renderList compact footer (one-line stderr)", () => {
       startAfter: "2026-06-23T20:28:00.000Z",
       sinceLabel: "2m",
     });
-    expect(err.data).toContain("0 trace(s) | limit 50 | since 2m");
+    expect(err.data).toContain("0 traces | limit 50 | since 2m");
   });
 
   it("emits a 24-hour 'from <local>' footer for startAfter-only (Denver TZ)", () => {
@@ -493,7 +513,7 @@ describe("renderList compact footer (one-line stderr)", () => {
       startAfter: "2026-06-23T20:29:54.000Z",
       timeZone: "America/Denver",
     });
-    expect(err.data).toContain("0 trace(s) | limit 50 | from 2026-06-23 14:29:54 MDT");
+    expect(err.data).toContain("0 traces | limit 50 | from 2026-06-23 14:29:54 MDT");
   });
 
   it("emits a 24-hour 'before <local>' footer for endBefore-only (Denver TZ)", () => {
@@ -504,7 +524,7 @@ describe("renderList compact footer (one-line stderr)", () => {
       endBefore: "2026-06-23T20:31:02.000Z",
       timeZone: "America/Denver",
     });
-    expect(err.data).toContain("0 trace(s) | limit 50 | before 2026-06-23 14:31:02 MDT");
+    expect(err.data).toContain("0 traces | limit 50 | before 2026-06-23 14:31:02 MDT");
   });
 
   it("emits a 24-hour 'from … to before …' footer for both bounds (Denver TZ)", () => {
@@ -517,7 +537,7 @@ describe("renderList compact footer (one-line stderr)", () => {
       timeZone: "America/Denver",
     });
     expect(err.data).toContain(
-      "0 trace(s) | limit 50 | from 2026-06-23 14:28:35 MDT to before 2026-06-23 14:31:02 MDT",
+      "0 traces | limit 50 | from 2026-06-23 14:28:35 MDT to before 2026-06-23 14:31:02 MDT",
     );
   });
 

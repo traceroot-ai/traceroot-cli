@@ -1,6 +1,7 @@
 import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
+import { plural } from "../../util/index.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
 interface WorkspaceListResponse {
@@ -30,7 +31,7 @@ export function renderWorkspacesList(
   const rows = res.data.map((item) => [item.name, item.role, item.id]);
   const styler = createStyler(writers.out);
   writers.out.write(`${renderTable(headers, rows, { headerStyle: styler.bold })}\n`);
-  logProgress(`${res.data.length} workspace(s)`, writers);
+  logProgress(`${res.data.length} ${plural(res.data.length, "workspace")}`, writers);
 }
 
 export const workspacesList: Enhancer = {
