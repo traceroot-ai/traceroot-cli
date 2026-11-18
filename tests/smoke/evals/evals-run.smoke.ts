@@ -11,6 +11,7 @@ import {
   type StubRequest,
   type TraceRootStub,
   startTraceRootStub,
+  stubRunUrl,
 } from "../../helpers/traceRootStub.js";
 
 /**
@@ -22,7 +23,8 @@ import {
  * - the regressed variant exits 18 against a run of the passing one;
  * - a file with no module-level evaluation exits 17;
  * - every run gets a fake project key and a stub TraceRoot host. Without `--upload` the stub
- *   receives nothing; with it, the runner's upload requests reach the stub carrying the key.
+ *   receives nothing; with it, the runner's upload requests reach the stub carrying the key, and
+ *   the link the stub gives the run is the one the `--json` document carries.
  *
  * It isn't part of `npm test`, because installing the SDKs needs the package registries. Run it
  * from the repository root, with python3 and npm on PATH:
@@ -212,9 +214,12 @@ function checkEvalsRun(fixture: Fixture): void {
     const run = await evalsRun(fixture.root(), first, "--upload", "--json");
 
     expect(run.status, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toMatchObject({
+    const document = JSON.parse(run.stdout) as UploadDocument;
+    const id = document.runs[0]?.uploaded_run_id ?? "";
+    expect(id).toMatch(/^evr_stub_\d+$/);
+    expect(document).toMatchObject({
       outcome: "ok",
-      runs: [{ uploaded_run_id: expect.stringMatching(/^evr_stub_\d+$/) }],
+      runs: [{ uploaded_run_id: id, uploaded_run_url: stubRunUrl(stub.url, id) }],
     });
     expect(new Set(run.requests.map(route))).toEqual(new Set(UPLOAD_ROUTES));
     expect(
@@ -226,6 +231,12 @@ function checkEvalsRun(fixture: Fixture): void {
 /** The parts of the `--json` document read here. */
 interface RunDocument {
   runs: { local_run_id: string }[];
+}
+
+/** The parts of an uploaded run's `--json` document read here. */
+interface UploadDocument {
+  outcome: string;
+  runs: { uploaded_run_id: string | null; uploaded_run_url: string | null }[];
 }
 
 interface Run {
