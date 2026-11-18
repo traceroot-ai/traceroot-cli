@@ -95,7 +95,7 @@ export function renderSignal(signal: Signal, writers: Writers, timeZone?: string
     ]),
     { headerStyle: styler.bold },
   );
-  // The traces listed, not `hits`, which counts every hit the signal ever had.
+  // The traces listed, not `hit_count`, which counts every hit the signal ever had.
   const heading = `${hits.length} recent ${plural(hits.length, "trace")}, latest trace start first`;
   writers.out.write(`\n${styler.bold(heading)}\n${table}\n`);
 
