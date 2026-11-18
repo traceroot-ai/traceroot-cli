@@ -76,6 +76,17 @@ describe("cancelling a run", () => {
     expect(result.exitCode).not.toBe(0);
   }, 10000);
 
+  it("hands the caller a function that signals the child at once, with no SIGTERM first", async () => {
+    // A child that ignores SIGTERM, so only the signal the caller sends can end it in time.
+    const result = await runProcess(
+      opts('process.on("SIGTERM", () => {}); setTimeout(() => {}, 10000);', {
+        onSpawn: (signal: (name: NodeJS.Signals) => void) => signal("SIGKILL"),
+      }),
+    );
+
+    expect(result.exitCode).toBe(128 + 9);
+  }, 10000);
+
   it("reports which signal killed the child, not Ctrl+C for everything", async () => {
     // 130 is specifically 128 + SIGINT. Reporting it for a timeout made a child
     // this module killed itself look like a user interrupt.
