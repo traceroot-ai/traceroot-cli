@@ -60,7 +60,7 @@ describe("publishing evals run's exit codes", () => {
     const published = stdout.slice(stdout.indexOf("Exit codes:"));
 
     expect(status).toBe(0);
-    for (const code of [0, 2, 4, ...own, INTERRUPTED_EXIT_CODES.SIGINT]) {
+    for (const code of [0, 2, 3, 4, 5, ...own, INTERRUPTED_EXIT_CODES.SIGINT]) {
       expect(published).toMatch(new RegExp(`^ {2}${code} `, "m"));
     }
   });

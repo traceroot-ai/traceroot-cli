@@ -1,11 +1,12 @@
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {
+  apiKeyFromCommand,
   contextFromCommand,
   requireApiClient,
   requireAuthedClient,
 } from "../../src/commands/shared.js";
-import type { ResolvedCredential } from "../../src/config/resolve.js";
+import type { ResolvedCredential, ResolvedField } from "../../src/config/resolve.js";
 import type { Context } from "../../src/context.js";
 import { CliError } from "../../src/output.js";
 
@@ -194,5 +195,46 @@ describe("contextFromCommand", () => {
       source: "credentials-file",
     });
     expect(withoutSession).toEqual({ kind: "api-key", value: "tr_config_key", source: "config" });
+  });
+});
+
+describe("apiKeyFromCommand", () => {
+  it("finds the API key that a stored session outranks in the command's Context", () => {
+    const sources = {
+      env: { TRACEROOT_API_KEY: "tr_env_key" },
+      readConfig: () => null,
+      loadAutoEnvFile: () => ({}),
+      readCredential: () => ({ session_token: "stored-session" }),
+    };
+    let context: Context | undefined;
+    let apiKey: ResolvedField | undefined;
+    const program = new Command();
+    program.option("--api-key <key>");
+    program.command("sub").action((_opts, command: Command) => {
+      context = contextFromCommand(command, sources);
+      apiKey = apiKeyFromCommand(command, sources);
+    });
+
+    program.parse(["sub"], { from: "user" });
+
+    expect(context?.auth.credential.kind).toBe("session");
+    expect(apiKey).toEqual({ value: "tr_env_key", source: "env" });
+  });
+
+  it("reads the --api-key flag", () => {
+    let apiKey: ResolvedField | undefined;
+    const program = new Command();
+    program.option("--api-key <key>");
+    program.command("sub").action((_opts, command: Command) => {
+      apiKey = apiKeyFromCommand(command, {
+        env: {},
+        readConfig: () => null,
+        loadAutoEnvFile: () => ({}),
+      });
+    });
+
+    program.parse(["--api-key", "tr_flag_key", "sub"], { from: "user" });
+
+    expect(apiKey).toEqual({ value: "tr_flag_key", source: "flag" });
   });
 });

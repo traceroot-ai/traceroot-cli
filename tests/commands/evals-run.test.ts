@@ -15,8 +15,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scoreMeans } from "../../src/commands/evals-run.js";
 import { type CaseLine, parseCaseLines } from "../../src/eval/protocol.js";
+import { meanDuration, scoreMeans } from "../../src/eval/report.js";
+import { getVersion } from "../../src/version.js";
+import {
+  STUB_API_KEY,
+  STUB_PROJECT_ID,
+  type TraceRootStub,
+  startTraceRootStub,
+} from "../helpers/traceRootStub.js";
 
 /**
  * `traceroot evals run`, end to end: the built CLI in a project of its own, with a stub runner
@@ -25,6 +32,7 @@ import { type CaseLine, parseCaseLines } from "../../src/eval/protocol.js";
  */
 
 const BIN = fileURLToPath(new URL("../../bin/traceroot.mjs", import.meta.url));
+const DIST_CLI = new URL("../../dist/cli.js", import.meta.url);
 const STUB = fileURLToPath(new URL("../helpers/evalRunnerStub.cjs", import.meta.url));
 const FIXTURES = fileURLToPath(new URL("../fixtures/eval/", import.meta.url));
 const PYTHON = "python-0.5.1";
@@ -233,7 +241,7 @@ function envelope(stderr: string): { code: string; message: string } {
 }
 
 describe("evals run without a baseline", () => {
-  it("runs the file, prints each evaluation with its run id and score means, and exits 0", () => {
+  it("runs the file, prints each evaluation with its run id, mean case duration and score means, and exits 0", () => {
     pythonProject();
     evalFile("x_eval.py", { replay: `${PYTHON}/one-fails`, run_id: "run_first" });
 
@@ -243,7 +251,7 @@ describe("evals run without a baseline", () => {
     expect(run.stdout).toBe(
       [
         "uppercase · run_first · completed",
-        "  3 cases · 0 errored",
+        "  3 cases · 0 errored · mean 1.5 ms per case",
         "  SCORE        MEAN   CASES",
         "  exact_match  0.667  3",
         "  not_empty    1      3",
@@ -280,6 +288,21 @@ describe("evals run without a baseline", () => {
     expect(seen("runner-env.json").event_file).not.toBeNull();
   });
 
+  it("leaves the duration out when the runner timed no case", () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      replace: [['"duration_ms": 1.5', '"duration_ms": null']],
+    });
+
+    const run = evalsRun("x_eval.py");
+    const document = json(evalsRun("x_eval.py", "--json").stdout);
+
+    expect(run.stdout).toContain("uppercase · run_first · completed\n  3 cases · 0 errored\n");
+    expect(document).toMatchObject({ runs: [{ duration_ms: { mean: null, count: 0 } }] });
+  });
+
   it("counts the errors of a run that has some", () => {
     pythonProject();
     evalFile("x_eval.py", { replay: `${PYTHON}/task-error`, run_id: "run_first" });
@@ -288,7 +311,9 @@ describe("evals run without a baseline", () => {
 
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("uppercase · run_first · completed with errors\n");
-    expect(run.stdout).toContain("  3 cases · 1 errored (1 task error, 0 scorer errors)\n");
+    expect(run.stdout).toContain(
+      "  3 cases · 1 errored (1 task error, 0 scorer errors) · mean 1.5 ms per case\n",
+    );
     expect(run.stdout).toContain("  exact_match  1     2\n");
   });
 
@@ -304,13 +329,17 @@ describe("evals run without a baseline", () => {
       outcome: "ok",
       file: join(project, "x_eval.py"),
       sdk: { language: "python", name: "traceroot", version: "0.5.1" },
+      project_id: null,
       runs: [
         {
           evaluation_name: "uppercase",
           local_run_id: "run_first",
+          uploaded_run_id: null,
+          uploaded_run_url: null,
           status: "completed",
           path: join(project, ".traceroot", "eval", "runs", "run_first.json"),
           counts: { cases: 3, errored: 0, task_errors: 0, scorer_errors: 0, not_scored: 3 },
+          duration_ms: { mean: 1.5, count: 3 },
           scores: [
             { name: "exact_match", mean: 2 / 3, count: 3 },
             { name: "not_empty", mean: 1, count: 3 },
@@ -890,7 +919,9 @@ describe("evals run interrupted", () => {
       const run = await interrupt(signal, "x_eval.py", "--baseline", "run_first");
 
       expect(run.status).toBe(status);
-      expect(run.stdout).toContain("uppercase · run_second · incomplete\n  1 case · 0 errored\n");
+      expect(run.stdout).toContain(
+        "uppercase · run_second · incomplete\n  1 case · 0 errored · mean 1.5 ms per case\n",
+      );
       expect(run.stdout).toContain(`Interrupted by ${signal}, so nothing was compared.\n`);
       const pid = runnerPid();
       expect(pid).not.toBeNull();
@@ -946,6 +977,587 @@ describe("evals run interrupted", () => {
       runs: [{ local_run_id: "run_second", status: "completed" }],
       verdict: null,
     });
+  });
+});
+
+describe("evals run --upload", () => {
+  let stub: TraceRootStub;
+
+  beforeEach(async () => {
+    stub = await startTraceRootStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  /** The CLI's environment with the stub as its host, and the stub's key unless `key` says. */
+  function uploadEnv(key: string | null = STUB_API_KEY): NodeJS.ProcessEnv {
+    const { TRACEROOT_API_KEY: _key, ...env } = cliEnv();
+    return {
+      ...env,
+      TRACEROOT_HOST_URL: stub.url,
+      ...(key === null ? {} : { TRACEROOT_API_KEY: key }),
+    };
+  }
+
+  /** Runs the CLI without blocking this process, so the stub can answer it. */
+  function evalsRunWith(env: NodeJS.ProcessEnv, ...args: string[]): Promise<Result> {
+    return evalsRunFrom(BIN, env, ...args);
+  }
+
+  /** {@link evalsRunWith}, with the CLI started from `script`. */
+  function evalsRunFrom(
+    script: string,
+    env: NodeJS.ProcessEnv,
+    ...args: string[]
+  ): Promise<Result> {
+    return cliFrom(script, env, "evals", "run", ...args);
+  }
+
+  /** Runs any command of the CLI started from `script`, without blocking this process. */
+  async function cliFrom(
+    script: string,
+    env: NodeJS.ProcessEnv,
+    ...args: string[]
+  ): Promise<Result> {
+    const child = spawn(process.execPath, [script, ...args], { cwd: project, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const status = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    return result(status, stdout, stderr);
+  }
+
+  /** A browser login stored for the stub's host, in the credentials file under HOME. */
+  function browserLogin(): void {
+    write(
+      join(project, ".config", "traceroot", "credentials.json"),
+      JSON.stringify({ version: 1, hosts: { [stub.url]: { session_token: "session-0000" } } }),
+    );
+  }
+
+  /**
+   * Makes a replayed run report the TraceRoot run id `id`, as a run the runner uploaded does, and
+   * save `url` as its link when one is given, as a run TraceRoot gave one does.
+   */
+  function uploadedAs(id: string, url?: string): [string, string][] {
+    return [
+      ['"run_id": null', `"run_id": "${id}"`],
+      ['"run_id":null', `"run_id":"${id}"`],
+      ...(url === undefined ? [] : [['"dashboard_url": null', `"dashboard_url": "${url}"`]]),
+    ] as [string, string][];
+  }
+
+  const RUN_URL = `https://app.example/projects/${STUB_PROJECT_ID}/evaluations/evr_stub_1`;
+
+  /** What the stub was asked, without what it was sent. */
+  function asked(): string[] {
+    return stub.requests.map(
+      (request) => `${request.method} ${request.path} ${request.authorization}`,
+    );
+  }
+
+  const WHOAMI = `GET /api/v1/public/whoami Bearer ${STUB_API_KEY}`;
+
+  /** The `fatal` event that ends a recorded run. */
+  function recordedFatal(scenario: string): { type: string; kind: string; message: string } {
+    const lines = readFileSync(join(FIXTURES, scenario, "events.jsonl"), "utf8")
+      .trim()
+      .split("\n");
+    return JSON.parse(lines.at(-1) ?? "") as { type: string; kind: string; message: string };
+  }
+
+  /** The line under "To open it:" in a summary: the command that opens an uploaded run. */
+  function openCommand(stdout: string): string {
+    const lines = stdout.split("\n");
+    return (lines[lines.findIndex((line) => line.endsWith("To open it:")) + 1] ?? "").trim();
+  }
+
+  it("makes no request to TraceRoot without --upload", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass` });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py");
+
+    expect(run.status).toBe(0);
+    expect(stub.requests).toEqual([]);
+    expect(seen("runner-env.json")).toMatchObject({
+      api_key: null,
+      enabled: "false",
+      options: "{}",
+    });
+  });
+
+  it("checks the key, hands the runner the key and host, and gives the run's link and the command that opens it", async () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      replace: uploadedAs("evr_stub_1", RUN_URL),
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(0);
+    expect(asked()).toEqual([WHOAMI]);
+    expect(seen("runner-env.json")).toEqual({
+      api_key: STUB_API_KEY,
+      host: stub.url,
+      enabled: "true",
+      options: '{"reporting":true}',
+      event_file: expect.any(String),
+    });
+    expect(seen(join(".venv", "probe-env.json")).api_key).toBeNull();
+    expect(run.stderr).toContain(`Uploading to project Stub project at ${stub.url}\n`);
+    expect(run.stdout).toContain(
+      [
+        "uppercase · run_first · completed",
+        "  3 cases · 0 errored · mean 1.5 ms per case",
+        "  SCORE        MEAN  CASES",
+        "  exact_match  1     3",
+        "  not_empty    1     3",
+        "",
+        'Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:',
+        `  ${RUN_URL}`,
+        `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
+        "",
+      ].join("\n"),
+    );
+    expect(`${run.raw.stdout}${run.raw.stderr}`).not.toContain(STUB_API_KEY);
+  });
+
+  it("adds each run's TraceRoot run id and link to the --json document", async () => {
+    nodeProject();
+    evalFile("x_eval.ts", {
+      replay: `${TYPESCRIPT}/all-pass`,
+      run_id: "run_first",
+      replace: uploadedAs("evr_stub_1", RUN_URL),
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.ts", "--upload", "--json");
+
+    expect(run.status).toBe(0);
+    expect(json(run.stdout)).toMatchObject({
+      outcome: "ok",
+      project_id: STUB_PROJECT_ID,
+      runs: [
+        { local_run_id: "run_first", uploaded_run_id: "evr_stub_1", uploaded_run_url: RUN_URL },
+      ],
+    });
+  });
+
+  it("prints only the command for a run TraceRoot gave no link, as an older host doesn't", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, replace: uploadedAs("evr_stub_1") });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--json");
+    const human = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(json(run.stdout)).toMatchObject({ runs: [{ uploaded_run_url: null }] });
+    expect(human.stdout).toContain("To open it:\n  traceroot evals runs get evr_stub_1 --project ");
+  });
+
+  it("escapes a control character in a run's link", async () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      replace: uploadedAs("evr_stub_1", `${RUN_URL}\\u001b[2J`),
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.raw.stdout).not.toContain("\u001b[2J");
+    expect(run.stdout).toContain(`  ${RUN_URL}\\u001b[2J\n`);
+  });
+
+  it("uses the API key when a browser login outranks it", async () => {
+    pythonProject();
+    browserLogin();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, replace: uploadedAs("evr_stub_1") });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(0);
+    expect(asked()).toEqual([WHOAMI]);
+    expect(seen("runner-env.json").api_key).toBe(STUB_API_KEY);
+    // A read under a browser login needs a project, so the command names one.
+    expect(run.stdout).toContain(
+      `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\n`,
+    );
+  });
+
+  it("takes the key from --api-key", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, replace: uploadedAs("evr_stub_1") });
+
+    const run = await evalsRunWith(
+      uploadEnv(null),
+      "x_eval.py",
+      "--upload",
+      "--api-key",
+      STUB_API_KEY,
+    );
+
+    expect(run.status).toBe(0);
+    expect(asked()).toEqual([WHOAMI]);
+  });
+
+  it("exits 3 with only a browser login, before the runner starts", async () => {
+    pythonProject();
+    browserLogin();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass` });
+
+    const human = await evalsRunWith(uploadEnv(null), "x_eval.py", "--upload");
+    const machine = await evalsRunWith(uploadEnv(null), "x_eval.py", "--upload", "--json");
+
+    const message =
+      "`--upload` needs a project API key; a browser login can't upload eval runs. Run `traceroot login --api-key <key>` or set `TRACEROOT_API_KEY`.";
+    expect(human.status).toBe(3);
+    expect(human.stderr).toBe(`error: ${message}\n`);
+    expect(machine.status).toBe(3);
+    expect(machine.stdout).toBe("");
+    expect(envelope(machine.stderr)).toEqual({ code: "auth", message });
+    expect(stub.requests).toEqual([]);
+    expect(runnerStarted()).toBe(false);
+  });
+
+  it("spells the commands it prints the way npx started the CLI", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, replace: uploadedAs("evr_stub_1") });
+    // Where npx starts the CLI from: its own cache, with npm marking the environment as an exec.
+    const npx = join(
+      project,
+      ".npm",
+      "_npx",
+      "0123456789abcdef",
+      "node_modules",
+      ".bin",
+      "traceroot",
+    );
+    write(npx, `import(${JSON.stringify(DIST_CLI.href)}).then((cli) => cli.run(process.argv));\n`);
+    const pinned = `npx -y traceroot-cli@${getVersion()}`;
+
+    const uploaded = await evalsRunFrom(
+      npx,
+      { ...uploadEnv(), npm_command: "exec" },
+      "x_eval.py",
+      "--upload",
+    );
+    const noKey = await evalsRunFrom(
+      npx,
+      { ...uploadEnv(null), npm_command: "exec" },
+      "x_eval.py",
+      "--upload",
+    );
+
+    expect(uploaded.status).toBe(0);
+    expect(uploaded.stdout).toContain(
+      `  ${pinned} evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\n`,
+    );
+    expect(noKey.status).toBe(3);
+    expect(noKey.stderr).toContain(
+      `Run \`${pinned} login --api-key <key>\` or set \`TRACEROOT_API_KEY\`.`,
+    );
+  });
+
+  it("exits 3 for a key TraceRoot rejects, before the runner starts", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass` });
+
+    const run = await evalsRunWith(uploadEnv("tr-fake-rejected-0000"), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(3);
+    expect(run.stderr).toContain(
+      `error: TraceRoot at ${stub.url} rejected the API key, so the evaluation didn't run: Invalid API key\n`,
+    );
+    expect(asked()).toEqual(["GET /api/v1/public/whoami Bearer tr-fake-rejected-0000"]);
+    expect(runnerStarted()).toBe(false);
+  });
+
+  it("exits 5 when TraceRoot can't be reached, before the runner starts", () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass` });
+
+    const human = evalsRun("x_eval.py", "--upload");
+    const machine = evalsRun("x_eval.py", "--upload", "--json");
+
+    expect(human.status).toBe(5);
+    expect(human.stderr).toContain(
+      "error: couldn't check the API key with TraceRoot at http://127.0.0.1:9, so the evaluation didn't run: request to http://127.0.0.1:9 failed",
+    );
+    expect(machine.status).toBe(5);
+    expect(machine.stdout).toBe("");
+    expect(envelope(machine.stderr).code).toBe("network");
+    expect(runnerStarted()).toBe(false);
+  });
+
+  it.each([
+    { ext: ".py", setUp: pythonProject, sdk: PYTHON, example: '`cases = Dataset("cases")`' },
+    {
+      ext: ".ts",
+      setUp: nodeProject,
+      sdk: TYPESCRIPT,
+      example: '`const cases = new Dataset("cases")`',
+    },
+  ])(
+    "exits 17 for a $ext file whose cases are a plain list, saying to define a Dataset",
+    async (scenario) => {
+      scenario.setUp();
+      const file = `x_eval${scenario.ext}`;
+      evalFile(file, { replay: `${scenario.sdk}/upload-plain-list` });
+
+      const human = await evalsRunWith(uploadEnv(), file, "--upload");
+      const machine = await evalsRunWith(uploadEnv(), file, "--upload", "--json");
+
+      expect(human.status).toBe(17);
+      expect(human.stdout).toBe("");
+      expect(human.stderr).toContain(
+        `error: ${file} gives an evaluation its cases as a plain list, which can't be uploaded: TraceRoot records an uploaded run against a Dataset, which the runner publishes before the run if TraceRoot doesn't have it yet. No case ran.\n\nDefine the cases as a Dataset, as in ${scenario.example}`,
+      );
+      expect(human.stderr).toContain(", or run without --upload.\n");
+      expect(machine.status).toBe(17);
+      expect(envelope(machine.stderr).code).toBe("harness");
+    },
+  );
+
+  it("exits 17 with the runner's message and the rerun hint when TraceRoot fails to complete the run", async () => {
+    pythonProject();
+    // What traceroot 0.5.1 reports once every case ran and completing the run failed.
+    const message = `EvalCompletionError: the evaluation ran but the run could not be finalized on the platform: RuntimeError: POST ${stub.url}/api/v1/public/evaluation-runs/evr_stub_1/complete -> HTTP 500: {"detail":"the stub fails every completion"}. The run stays 'running' until a retry completes it.`;
+    evalFile("x_eval.py", {
+      events: [
+        { type: "hello", eval_api_version: 1 },
+        { type: "evaluation_started" },
+        { type: "case_started" },
+        { type: "case_completed" },
+        { type: "fatal", kind: "harness_error", message },
+      ],
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(17);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain(
+      `error: the eval runner failed with harness_error: ${message}\n\nThe runner saved no run on this machine either. To check the evaluation without uploading it, rerun without --upload.\n`,
+    );
+  });
+
+  it("keeps the hint to a harness error, and prints an import error as it would without --upload", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/import-error` });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(17);
+    expect(run.stderr).toContain(
+      "error: the eval runner failed with import_error: ModuleNotFoundError: No module named 'helpers'\n",
+    );
+    expect(run.stderr).not.toContain("rerun without --upload");
+  });
+
+  it("names the evaluation that finished and uploaded when a later one's cases are a plain list", async () => {
+    pythonProject();
+    const fatal = recordedFatal(`${PYTHON}/upload-plain-list`);
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      replace: uploadedAs("evr_stub_1"),
+      unfinished: true,
+      events: [{ type: "evaluation_started", name: "second" }, fatal],
+    });
+
+    const human = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+    const machine = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--json");
+
+    expect(human.status).toBe(17);
+    expect(human.stdout).toContain("uppercase · run_first · completed\n");
+    expect(human.stdout).toContain(
+      `Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:\n  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\n`,
+    );
+    const error = `x_eval.py gives an evaluation its cases as a plain list, which can't be uploaded: TraceRoot records an uploaded run against a Dataset, which the runner publishes before the run if TraceRoot doesn't have it yet. None of that evaluation's cases ran. "uppercase" finished before it, and was saved on this machine as run_first and uploaded to TraceRoot as evr_stub_1.\n\nDefine the cases as a Dataset, as in \`cases = Dataset("cases")\`, then \`cases.add(input, expected=...)\` for each case, or run without --upload.`;
+    expect(human.stderr).toContain(`error: ${error}\n`);
+    expect(human.stderr).not.toContain("No case ran");
+    expect(machine.status).toBe(17);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "failed",
+      project_id: STUB_PROJECT_ID,
+      runs: [
+        { evaluation_name: "uppercase", local_run_id: "run_first", uploaded_run_id: "evr_stub_1" },
+      ],
+      failure: { kind: "harness_error", message: error },
+    });
+    expect(machine.stderr).not.toContain('"error"');
+  });
+
+  it("names the evaluation that finished and uploaded when TraceRoot fails to complete a later one", async () => {
+    pythonProject();
+    // What traceroot 0.5.1 reports once every case of the second evaluation ran and completing its
+    // run failed.
+    const message = `EvalCompletionError: the evaluation ran but the run could not be finalized on the platform: RuntimeError: POST ${stub.url}/api/v1/public/evaluation-runs/evr_stub_2/complete -> HTTP 500: {"detail":"the stub fails every completion"}. The run stays 'running' until a retry completes it.`;
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      replace: uploadedAs("evr_stub_1"),
+      unfinished: true,
+      events: [
+        { type: "evaluation_started", name: "second" },
+        { type: "case_started" },
+        { type: "case_completed" },
+        { type: "fatal", kind: "harness_error", message },
+      ],
+    });
+
+    const human = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+    const machine = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--json");
+
+    expect(human.status).toBe(17);
+    expect(human.stdout).toContain(
+      `Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:\n  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\n`,
+    );
+    const error = `the eval runner failed with harness_error: ${message}\n\nThe evaluation that failed saved no run on this machine either. "uppercase" finished before it, and was saved on this machine as run_first and uploaded to TraceRoot as evr_stub_1. To check the evaluation that failed without uploading it, rerun without --upload.`;
+    expect(human.stderr).toContain(`error: ${error}\n`);
+    expect(human.stderr).not.toContain("The runner saved no run");
+    expect(machine.status).toBe(17);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "failed",
+      runs: [{ local_run_id: "run_first", uploaded_run_id: "evr_stub_1" }],
+      failure: { kind: "harness_error", message: error },
+    });
+  });
+
+  it("names an evaluation that finished before a failure without a TraceRoot run id as not uploaded", async () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      unfinished: true,
+      events: [recordedFatal(`${PYTHON}/upload-plain-list`)],
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(17);
+    expect(run.stdout).toContain('Not uploaded: "uppercase" finished without a TraceRoot run id.');
+    expect(run.stderr).toContain(
+      'None of that evaluation\'s cases ran. "uppercase" finished before it, and was saved on this machine as run_first but not uploaded.\n',
+    );
+  });
+
+  it.each([
+    {
+      given: "--host",
+      access: () => ({
+        env: { ...uploadEnv(), TRACEROOT_HOST_URL: "http://127.0.0.1:9" },
+        args: ["--host", stub.url],
+        flags: `--host ${stub.url}`,
+      }),
+    },
+    {
+      given: "--env-file",
+      access: () => {
+        write(
+          join(project, "upload.env"),
+          `TRACEROOT_API_KEY=${STUB_API_KEY}\nTRACEROOT_HOST_URL=${stub.url}\n`,
+        );
+        return {
+          env: { ...uploadEnv(null), TRACEROOT_HOST_URL: "http://127.0.0.1:9" },
+          args: ["--env-file", "upload.env"],
+          flags: "--env-file upload.env",
+        };
+      },
+    },
+    {
+      given: "--api-key",
+      access: () => ({
+        env: uploadEnv(null),
+        args: ["--api-key", STUB_API_KEY],
+        flags: "--api-key <key>",
+      }),
+    },
+  ])(
+    "prints a command that opens the run when $given gave the key or the host",
+    async (scenario) => {
+      pythonProject();
+      evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, replace: uploadedAs("evr_stub_1") });
+      const { env, args, flags } = scenario.access();
+
+      const run = await evalsRunWith(env, "x_eval.py", "--upload", ...args);
+      const command = openCommand(run.stdout);
+      // Run as printed, in the same shell, with a key placeholder filled in the way a user would.
+      const [program, ...words] = command.replace("<key>", STUB_API_KEY).split(" ");
+      const opened = await cliFrom(BIN, env, ...words);
+
+      expect(run.status).toBe(0);
+      expect(command).toBe(
+        `traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID} ${flags}`,
+      );
+      expect(`${run.raw.stdout}${run.raw.stderr}`).not.toContain(STUB_API_KEY);
+      expect(program).toBe("traceroot");
+      expect(opened.status).toBe(0);
+      expect(asked().at(-1)).toBe(
+        `GET /api/v1/public/evaluation-runs/evr_stub_1 Bearer ${STUB_API_KEY}`,
+      );
+    },
+  );
+
+  it("exits 18 for a regression and still says where the run was uploaded", async () => {
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first");
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/one-fails`,
+      run_id: "run_second",
+      replace: uploadedAs("evr_stub_2"),
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--baseline", "run_first");
+
+    expect(run.status).toBe(18);
+    expect(run.stdout).toContain(
+      "Regressed against baseline run_first: 1 case and scorer pair newly fails.",
+    );
+    expect(run.stdout).toContain(
+      `Uploaded "uppercase" to TraceRoot as run evr_stub_2. To open it:\n  traceroot evals runs get evr_stub_2 --project ${STUB_PROJECT_ID}\n`,
+    );
+  });
+
+  it("exits 17 naming an evaluation that finished without a TraceRoot run id", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, run_id: "run_first" });
+
+    const human = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+    const machine = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--json");
+
+    expect(human.status).toBe(17);
+    expect(human.stdout).toContain("uppercase · run_first · completed\n");
+    expect(human.stdout).toContain(
+      'Not uploaded: "uppercase" finished without a TraceRoot run id. An evaluation defined with `local=True` or `report_to=` runs without uploading.\n',
+    );
+    expect(machine.status).toBe(17);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "not_uploaded",
+      runs: [{ local_run_id: "run_first", uploaded_run_id: null }],
+    });
+    expect(machine.stderr).not.toContain('"error"');
+  });
+
+  it("exits 18, not 17, when a case regressed in a run that wasn't uploaded", async () => {
+    nodeProject();
+    saveRun(`${TYPESCRIPT}/all-pass`, "run_first");
+    evalFile("x_eval.ts", { replay: `${TYPESCRIPT}/one-fails`, run_id: "run_second" });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.ts", "--upload", "--baseline", "run_first");
+
+    expect(run.status).toBe(18);
+    expect(run.stdout).toContain(
+      'Not uploaded: "uppercase" finished without a TraceRoot run id. An evaluation defined with `local: true` or `transport` runs without uploading.\n',
+    );
   });
 });
 
@@ -1038,6 +1650,7 @@ describe("scoreMeans", () => {
       expected: null,
       task_error: null,
       scorer_errors: [],
+      duration_ms: null,
       scores: scores.map(([scorer_name, value]) => ({
         scorer_name,
         scorer_version: null,
@@ -1064,5 +1677,27 @@ describe("scoreMeans", () => {
       { name: "passed", mean: 0.5, count: 2 },
       { name: "length", mean: 5, count: 2 },
     ]);
+  });
+});
+
+describe("meanDuration", () => {
+  const timed = (duration_ms: number | null): CaseLine => ({
+    case_id: "case-0",
+    status: "not_scored",
+    input: null,
+    expected: null,
+    task_error: null,
+    scorer_errors: [],
+    duration_ms,
+    scores: [],
+  });
+
+  it("averages the cases that were timed, and counts them", () => {
+    expect(meanDuration([timed(1), timed(null), timed(4)])).toEqual({ mean: 2.5, count: 2 });
+  });
+
+  it("has no mean when no case was timed", () => {
+    expect(meanDuration([timed(null)])).toEqual({ mean: null, count: 0 });
+    expect(meanDuration([])).toEqual({ mean: null, count: 0 });
   });
 });
