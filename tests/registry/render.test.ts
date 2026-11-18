@@ -56,7 +56,23 @@ describe("renderDefault", () => {
       { json: false, writers: w.writers, args: {} },
     );
     expect(w.out.data).toBe(
-      'Session id:   s-1\nTrace count:  2\nTraces:       [{"trace_id":"t-1"}]\n',
+      'Session ID:   s-1\nTrace count:  2\nTraces:       [{"trace_id":"t-1"}]\n',
+    );
+  });
+
+  it("names ids and times as the curated commands do, and shows a missing value as a dash", () => {
+    const w = writers();
+    renderDefault(
+      {
+        detector_id: "d-1",
+        run_ids: ["r-1"],
+        updated_at: "2026-11-17T00:00:00Z",
+        trigger_conditions: null,
+      },
+      { json: false, writers: w.writers, args: {} },
+    );
+    expect(w.out.data).toBe(
+      'Detector ID:         d-1\nRun IDs:             ["r-1"]\nUpdated:             2026-11-17T00:00:00Z\nTrigger conditions:  —\n',
     );
   });
 

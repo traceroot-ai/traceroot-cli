@@ -1,7 +1,6 @@
 import { REGISTRY } from "@traceroot-ai/tools";
 import type { Command } from "commander";
 import { CliError, ExitCode, type Writers, logProgress, logWarn } from "../../output.js";
-import { createStyler } from "../../render/style.js";
 import { parseLimit } from "../../time/range.js";
 import { formatTimestamp, plural } from "../../util/index.js";
 import { onceOption } from "../flags.js";
@@ -154,15 +153,6 @@ export function compact(value: unknown, width: number): string {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   const oneLine = sanitize(text.replace(/\s+/g, " "));
   return oneLine.length <= width ? oneLine : `${oneLine.slice(0, width - 1)}…`;
-}
-
-/** A block of bold, aligned `label  value` lines, for a record's identity. */
-export function renderFields(fields: [string, string][], writers: Writers): void {
-  const styler = createStyler(writers.out);
-  const width = Math.max(...fields.map(([label]) => label.length));
-  for (const [label, value] of fields) {
-    writers.out.write(`${styler.bold(label.padEnd(width))}  ${value}\n`);
-  }
 }
 
 /** `<n> thing` or `<n> things`, pluralised. */

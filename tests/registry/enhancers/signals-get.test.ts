@@ -51,14 +51,14 @@ describe("signals get rendering", () => {
     renderSignal(signal(), w, "UTC");
     expect(out.data).toBe(
       [
-        "title       Tool call returns an empty result",
-        "signal id   sig_7f3a",
-        "status      open",
-        "detector    empty-tool-result (det_91c2)",
-        "hits        42",
-        "first seen  2026-11-01 08:00:00 UTC",
-        "last seen   2026-11-10 09:30:00 UTC",
-        "analysis    completed",
+        "Title:       Tool call returns an empty result",
+        "Signal ID:   sig_7f3a",
+        "Status:      open",
+        "Detector:    empty-tool-result (det_91c2)",
+        "Hits:        42",
+        "First seen:  2026-11-01 08:00:00 UTC",
+        "Last seen:   2026-11-10 09:30:00 UTC",
+        "Analysis:    completed",
         "",
         "2 recent traces, latest trace start first",
         "TRACE ID  FINDING ID                        TRACE START",
@@ -107,20 +107,20 @@ describe("signals get rendering", () => {
       w,
       "UTC",
     );
-    expect(out.data).toContain("status      resolved 2026-11-09 10:00:00 UTC, reopened 2 times");
+    expect(out.data).toContain("Status:      resolved 2026-11-09 10:00:00 UTC, reopened 2 times");
   });
 
   it("counts a single reopen in the singular", () => {
     const { w, out } = sinks();
     renderSignal(signal({ reopen_count: 1 }), w, "UTC");
-    expect(out.data).toContain("status      open, reopened 1 time\n");
+    expect(out.data).toContain("Status:      open, reopened 1 time\n");
   });
 
   it("names the detector by id when it has no name, and says when no analysis ran", () => {
     const { w, out } = sinks();
     renderSignal(signal({ detector_name: null, rca_state: null }), w, "UTC");
-    expect(out.data).toContain("detector    det_91c2\n");
-    expect(out.data).toContain("analysis    (none)\n");
+    expect(out.data).toContain("Detector:    det_91c2\n");
+    expect(out.data).toContain("Analysis:    (none)\n");
   });
 
   it("an empty recent_hits says why no trace is listed, and suggests no trace", () => {
@@ -136,7 +136,7 @@ describe("signals get rendering", () => {
     const { recent_hits: _omitted, ...older } = signal();
     const { w, out, err } = sinks();
     renderSignal(older, w, "UTC");
-    expect(out.data).toContain("analysis    completed\n");
+    expect(out.data).toContain("Analysis:    completed\n");
     expect(out.data).not.toContain("recent traces");
     expect(err.data).toBe("");
   });
@@ -144,7 +144,7 @@ describe("signals get rendering", () => {
   it("a merged signal points at the signal its findings moved to", () => {
     const { w, out, err } = sinks();
     renderSignal(signal({ merged_into_id: "sig_0d2e", recent_hits: [] }), w, "UTC");
-    expect(out.data).toContain("merged into  sig_0d2e\n");
+    expect(out.data).toContain("Merged into:  sig_0d2e\n");
     expect(err.data).toContain("\n  traceroot signals get sig_0d2e\n");
   });
 

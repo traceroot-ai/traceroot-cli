@@ -359,7 +359,7 @@ describe("detectors get (zero-code path)", () => {
     const h = harness(jsonResponse(payload));
     await h.run("detectors", "get", "det-1");
     expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/detectors/det-1");
-    expect(h.out.data).toContain("Detector id:  det-1");
+    expect(h.out.data).toContain("Detector ID:  det-1");
     expect(h.out.data).toContain("Name:         latency");
   });
 });

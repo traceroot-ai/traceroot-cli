@@ -1,4 +1,5 @@
 import { type Writers, logProgress, writeJson } from "../output.js";
+import { fieldLines } from "../render/fields.js";
 import { createStyler } from "../render/style.js";
 import { renderTable } from "../render/table.js";
 import { plural } from "../util/index.js";
@@ -82,9 +83,24 @@ function renderListPayload(payload: ListShape, opts: DefaultRenderOptions): void
   );
 }
 
+const LABEL_WORDS = new Map([
+  ["id", "ID"],
+  ["ids", "IDs"],
+  ["url", "URL"],
+]);
+
+/**
+ * A response key as the curated commands label it: `detector_id` →
+ * `Detector ID`, `run_ids` → `Run IDs`, and a time drops its `_at`, so
+ * `updated_at` → `Updated`.
+ */
 function labelFor(key: string): string {
-  const words = key.replaceAll("_", " ");
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}:`;
+  const words = key
+    .replace(/_at$/, "")
+    .split("_")
+    .map((word) => LABEL_WORDS.get(word) ?? word)
+    .join(" ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
 function renderObjectPayload(payload: unknown, writers: Writers): void {
@@ -92,12 +108,13 @@ function renderObjectPayload(payload: unknown, writers: Writers): void {
     writers.out.write(`${cellText(payload)}\n`);
     return;
   }
-  const entries = Object.entries(payload as Record<string, unknown>);
-  const styler = createStyler(writers.out);
-  const width = Math.max(0, ...entries.map(([key]) => labelFor(key).length));
-  for (const [key, value] of entries) {
-    const label = labelFor(key);
-    const padding = " ".repeat(width - label.length + 2);
-    writers.out.write(`${styler.bold(label)}${padding}${cellText(value)}\n`);
+  const fields = Object.entries(payload as Record<string, unknown>).map(
+    ([key, value]): [string, string] => [
+      labelFor(key),
+      value === null || value === undefined ? "—" : cellText(value),
+    ],
+  );
+  for (const line of fieldLines(fields, createStyler(writers.out))) {
+    writers.out.write(`${line}\n`);
   }
 }

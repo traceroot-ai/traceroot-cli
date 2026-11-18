@@ -154,11 +154,37 @@ describe("datasets list", () => {
 });
 
 describe("datasets get", () => {
+  it("prints the dataset as aligned `Label:  value` lines", () => {
+    const { w, out } = sinks();
+    renderDataset(
+      {
+        dataset_id: "ds_1",
+        name: "a",
+        key: "k",
+        description: "d",
+        current_dataset_version_id: "dsv_1",
+        updated_at: "2026-09-01T23:30:00Z",
+      },
+      w,
+      "UTC",
+    );
+    expect(out.data).toBe(
+      [
+        "Dataset ID:       ds_1",
+        "Name:             a",
+        "Key:              k",
+        "Description:      d",
+        "Current version:  dsv_1",
+        "Updated:          2026-09-01 23:30:00 UTC",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("points at the next step when there is no published version", () => {
     const { w, out, err } = sinks();
     renderDataset({ dataset_id: "ds_9f04", name: "tool-selection" }, w);
-    expect(out.data).toContain("current version");
-    expect(out.data).toContain("(none)");
+    expect(out.data).toMatch(/Current version:\s+\(none\)\n/);
     expect(err.data).toContain("nothing to read yet");
   });
 
@@ -169,10 +195,10 @@ describe("datasets get", () => {
       w,
       "Asia/Tokyo",
     );
-    expect(out.data).toMatch(/updated\s+2026-09-02 08:30:00/);
+    expect(out.data).toMatch(/Updated:\s+2026-09-02 08:30:00/);
     const bare = sinks();
     renderDataset({ dataset_id: "ds_1", name: "a" }, bare.w);
-    expect(bare.out.data).toMatch(/updated\s+—/);
+    expect(bare.out.data).toMatch(/Updated:\s+—/);
   });
 
   it("says nothing extra once a version exists", () => {
@@ -268,7 +294,9 @@ describe("datasets versions get", () => {
       {},
       w,
     );
-    expect(out.data).toContain("v3 (golden)");
+    expect(out.data).toContain(
+      "Version ID:  dsv_1\nVersion:     v3 (golden)\nDataset ID:  ds_2a97\n",
+    );
     expect(out.data).toContain("CASE ID");
     expect(err.data).toContain("2 cases");
   });
@@ -308,6 +336,18 @@ describe("evals runs get", () => {
     task_error_count: 1,
     not_scored_count: 0,
   };
+
+  it("prints the run's fields as aligned `Label:  value` lines under its heading", () => {
+    const { w, out } = sinks();
+    renderRun(base, w);
+    expect(out.data.split("\n").slice(0, 5)).toEqual([
+      "support-triage · run #12 · completed",
+      "Candidate:    git:9f2a1c",
+      "Environment:  ci",
+      "Dataset:      ds_2a97 @ dsv_1",
+      `Results:      ${resultsLine(base)}`,
+    ]);
+  });
 
   it("labels derived metrics as per-case means", () => {
     const { w, out } = sinks();

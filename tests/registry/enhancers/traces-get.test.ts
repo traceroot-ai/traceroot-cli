@@ -297,6 +297,21 @@ describe("runGet (--json)", () => {
 });
 
 describe("runGet (finding indicator)", () => {
+  it("aligns the header and finding fields as `Label:  value` lines, naming the id Trace ID", async () => {
+    const { writers: w, out } = writers();
+    await runGet(detail({}), {
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      getFinding: fakeGetFinding(finding()),
+    });
+    const lines = out.data.split("\n");
+    expect(lines[0]).toBe("Trace:     my trace");
+    expect(lines[1]).toBe("Trace ID:  t-1");
+    expect(lines).toContain("Finding ID:  fnd-1  (flagged by hallucination, failure)");
+    expect(lines).toContain("             run 'traceroot findings get fnd-1' for the full finding");
+  });
+
   it("shows a Finding line and RCA preview when the trace is flagged", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();
