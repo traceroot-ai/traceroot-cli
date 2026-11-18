@@ -4,8 +4,9 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { MIN_SETUP_NODE, meetsNodeFloor, requireSetupNode } from "../src/commands/setup.js";
+import { MIN_SETUP_NODE, requireSetupNode } from "../src/commands/setup.js";
 import { ExitCode, isCliError } from "../src/output.js";
+import { meetsNodeFloor } from "../src/util/index.js";
 
 const SRC = fileURLToPath(new URL("../src", import.meta.url));
 
