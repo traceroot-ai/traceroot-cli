@@ -328,13 +328,15 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   is refused before the runner starts, so a wrong `--baseline` doesn't cost a run.
 - **`--baseline`** takes a run id, read from `.traceroot/eval/runs` under the
   current directory, or the path of a run file.
+- **The summary** gives each evaluation's run id, its case and error counts, the
+  mean time a case took (its task and its scorers), and each score's mean.
 
 `--upload` also sends the run and each case's trace to TraceRoot, where the rest
 of the team can see it. The run is still saved under `.traceroot/eval/runs`, and
 `--baseline` still compares the runs saved there:
 
 ```sh
-traceroot evals run evals/triage_eval.py --upload   # prints the command that opens the run
+traceroot evals run evals/triage_eval.py --upload   # prints the run's link and the command that opens it
 ```
 
 - **It takes a project API key:** from `--api-key`, `--env-file`,
@@ -363,7 +365,9 @@ traceroot evals run evals/triage_eval.py --upload   # prints the command that op
 - **An evaluation that finishes without a TraceRoot run id**, such as one defined
   with `local=True` (`local: true` in TypeScript), is named and exits `17`, unless
   a case regressed, which exits `18`.
-- **The summary ends with the command that opens each uploaded run**,
+- **The summary ends with each uploaded run's link and the command that opens
+  it.** The link is the one TraceRoot gave the run; a host that gives none gets
+  the command alone. The command is
   `traceroot evals runs get <id> --project <project id>`. It names the key's
   project, so it works under a browser login too. It repeats `--host` and
   `--env-file` when the host or the key came from them, and when the key came
@@ -375,8 +379,10 @@ The summary goes to stdout and the runner's own output to stderr. Under `--json`
 stdout holds one document whenever the evaluation ran: `schema_version`,
 `outcome` (`ok`, `regressed`, `not_comparable`, `not_uploaded`, `interrupted` or
 `failed`), the file, the SDK, `project_id` (the key's project under `--upload`,
-otherwise null), each run with its counts, score means and `uploaded_run_id`
-(null unless it was uploaded), the baseline, a `verdict` with `newly_failing`
+otherwise null), each run with its counts, `duration_ms` (the mean time a case
+took, and how many cases were timed), score means, `uploaded_run_id` and
+`uploaded_run_url` (null unless it was uploaded, and the link null too when
+TraceRoot gave none), the baseline, a `verdict` with `newly_failing`
 (each with its `reason`), `newly_errored`, `changed`, `not_comparable_reason` and
 `payloads`, and `failure`. `failure` is null unless the runner failed after some
 evaluations finished; then it holds the failure's `kind` (the runner's own, or

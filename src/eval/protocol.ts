@@ -129,9 +129,9 @@ export interface RunScorer {
 /**
  * A saved run (`<run id>.json`).
  *
- * The file also has an `upload` block, which these types leave out on purpose: a run that never
- * left the machine records `upload.status` as `uploaded` too, so it says nothing about whether
- * the run reached TraceRoot.
+ * Of the file's `upload` block, only the link is read, as `dashboard_url`. Its `status` is left out
+ * on purpose: a run that never left the machine records `uploaded` too, so it says nothing about
+ * whether the run reached TraceRoot.
  */
 export interface RunFile {
   evaluation_name: string;
@@ -149,6 +149,11 @@ export interface RunFile {
   dataset: { revision: string } | null;
   scorers: RunScorer[];
   artifact: { payloads: Payloads };
+  /**
+   * Where TraceRoot shows the run: the link TraceRoot gave the runner when it registered the run.
+   * null for a run that stayed on the machine, and for one uploaded to a host that gives no link.
+   */
+  dashboard_url: string | null;
 }
 
 export interface CaseScore {
@@ -192,6 +197,8 @@ export interface CaseLine {
   task_error: string | null;
   scorer_errors: ScorerError[];
   scores: CaseScore[];
+  /** How long the case took, its task and its scorers, in milliseconds. */
+  duration_ms: number | null;
 }
 
 /** Something a runner wrote that the CLI can't read. The message says what and where. */
@@ -238,6 +245,7 @@ export function parseRunFile(text: string): RunFile {
   const file = new Fields(parseObject(text, where), where);
   const dataset = file.nullableObject("dataset");
   const artifact = file.object("artifact");
+  const upload = file.nullableObject("upload");
   return {
     evaluation_name: file.string("evaluation_name"),
     status: file.oneOf("status", RUN_STATUSES),
@@ -249,6 +257,7 @@ export function parseRunFile(text: string): RunFile {
       version: scorer.scorerVersion("version"),
     })),
     artifact: { payloads: artifact.oneOf("payloads", PAYLOADS) },
+    dashboard_url: upload === null ? null : upload.nullableString("dashboard_url"),
   };
 }
 
@@ -282,6 +291,7 @@ export function parseCaseLines(text: string): CaseLine[] {
         value: score.value("value"),
         passed: score.nullableBoolean("passed"),
       })),
+      duration_ms: item.nullableNumber("duration_ms"),
     });
   }
   return cases;
@@ -468,6 +478,14 @@ class Fields {
       throw this.wrong(key, "a number");
     }
     return value;
+  }
+
+  nullableNumber(key: string): number | null {
+    const value = this.raw[key] ?? null;
+    if (value !== null && typeof value !== "number") {
+      throw this.wrong(key, "a number or null");
+    }
+    return value as number | null;
   }
 
   boolean(key: string): boolean {

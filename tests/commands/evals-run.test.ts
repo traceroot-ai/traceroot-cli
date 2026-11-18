@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type CaseLine, parseCaseLines } from "../../src/eval/protocol.js";
-import { scoreMeans } from "../../src/eval/report.js";
+import { meanDuration, scoreMeans } from "../../src/eval/report.js";
 import { getVersion } from "../../src/version.js";
 import {
   STUB_API_KEY,
@@ -241,7 +241,7 @@ function envelope(stderr: string): { code: string; message: string } {
 }
 
 describe("evals run without a baseline", () => {
-  it("runs the file, prints each evaluation with its run id and score means, and exits 0", () => {
+  it("runs the file, prints each evaluation with its run id, mean case duration and score means, and exits 0", () => {
     pythonProject();
     evalFile("x_eval.py", { replay: `${PYTHON}/one-fails`, run_id: "run_first" });
 
@@ -251,7 +251,7 @@ describe("evals run without a baseline", () => {
     expect(run.stdout).toBe(
       [
         "uppercase · run_first · completed",
-        "  3 cases · 0 errored",
+        "  3 cases · 0 errored · mean 1.5 ms per case",
         "  SCORE        MEAN   CASES",
         "  exact_match  0.667  3",
         "  not_empty    1      3",
@@ -288,6 +288,21 @@ describe("evals run without a baseline", () => {
     expect(seen("runner-env.json").event_file).not.toBeNull();
   });
 
+  it("leaves the duration out when the runner timed no case", () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      replace: [['"duration_ms": 1.5', '"duration_ms": null']],
+    });
+
+    const run = evalsRun("x_eval.py");
+    const document = json(evalsRun("x_eval.py", "--json").stdout);
+
+    expect(run.stdout).toContain("uppercase · run_first · completed\n  3 cases · 0 errored\n");
+    expect(document).toMatchObject({ runs: [{ duration_ms: { mean: null, count: 0 } }] });
+  });
+
   it("counts the errors of a run that has some", () => {
     pythonProject();
     evalFile("x_eval.py", { replay: `${PYTHON}/task-error`, run_id: "run_first" });
@@ -296,7 +311,9 @@ describe("evals run without a baseline", () => {
 
     expect(run.status).toBe(0);
     expect(run.stdout).toContain("uppercase · run_first · completed with errors\n");
-    expect(run.stdout).toContain("  3 cases · 1 errored (1 task error, 0 scorer errors)\n");
+    expect(run.stdout).toContain(
+      "  3 cases · 1 errored (1 task error, 0 scorer errors) · mean 1.5 ms per case\n",
+    );
     expect(run.stdout).toContain("  exact_match  1     2\n");
   });
 
@@ -318,9 +335,11 @@ describe("evals run without a baseline", () => {
           evaluation_name: "uppercase",
           local_run_id: "run_first",
           uploaded_run_id: null,
+          uploaded_run_url: null,
           status: "completed",
           path: join(project, ".traceroot", "eval", "runs", "run_first.json"),
           counts: { cases: 3, errored: 0, task_errors: 0, scorer_errors: 0, not_scored: 3 },
+          duration_ms: { mean: 1.5, count: 3 },
           scores: [
             { name: "exact_match", mean: 2 / 3, count: 3 },
             { name: "not_empty", mean: 1, count: 3 },
@@ -900,7 +919,9 @@ describe("evals run interrupted", () => {
       const run = await interrupt(signal, "x_eval.py", "--baseline", "run_first");
 
       expect(run.status).toBe(status);
-      expect(run.stdout).toContain("uppercase · run_second · incomplete\n  1 case · 0 errored\n");
+      expect(run.stdout).toContain(
+        "uppercase · run_second · incomplete\n  1 case · 0 errored · mean 1.5 ms per case\n",
+      );
       expect(run.stdout).toContain(`Interrupted by ${signal}, so nothing was compared.\n`);
       const pid = runnerPid();
       expect(pid).not.toBeNull();
@@ -1021,13 +1042,19 @@ describe("evals run --upload", () => {
     );
   }
 
-  /** Makes a replayed run report the TraceRoot run id `id`, as a run the runner uploaded does. */
-  function uploadedAs(id: string): [string, string][] {
+  /**
+   * Makes a replayed run report the TraceRoot run id `id`, as a run the runner uploaded does, and
+   * save `url` as its link when one is given, as a run TraceRoot gave one does.
+   */
+  function uploadedAs(id: string, url?: string): [string, string][] {
     return [
       ['"run_id": null', `"run_id": "${id}"`],
       ['"run_id":null', `"run_id":"${id}"`],
-    ];
+      ...(url === undefined ? [] : [['"dashboard_url": null', `"dashboard_url": "${url}"`]]),
+    ] as [string, string][];
   }
+
+  const RUN_URL = `https://app.example/projects/${STUB_PROJECT_ID}/evaluations/evr_stub_1`;
 
   /** What the stub was asked, without what it was sent. */
   function asked(): string[] {
@@ -1067,12 +1094,12 @@ describe("evals run --upload", () => {
     });
   });
 
-  it("checks the key, hands the runner the key and host, and says how to open the run", async () => {
+  it("checks the key, hands the runner the key and host, and gives the run's link and the command that opens it", async () => {
     pythonProject();
     evalFile("x_eval.py", {
       replay: `${PYTHON}/all-pass`,
       run_id: "run_first",
-      replace: uploadedAs("evr_stub_1"),
+      replace: uploadedAs("evr_stub_1", RUN_URL),
     });
 
     const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
@@ -1091,12 +1118,13 @@ describe("evals run --upload", () => {
     expect(run.stdout).toContain(
       [
         "uppercase · run_first · completed",
-        "  3 cases · 0 errored",
+        "  3 cases · 0 errored · mean 1.5 ms per case",
         "  SCORE        MEAN  CASES",
         "  exact_match  1     3",
         "  not_empty    1     3",
         "",
         'Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:',
+        `  ${RUN_URL}`,
         `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
         "",
       ].join("\n"),
@@ -1104,12 +1132,12 @@ describe("evals run --upload", () => {
     expect(`${run.raw.stdout}${run.raw.stderr}`).not.toContain(STUB_API_KEY);
   });
 
-  it("adds each run's TraceRoot run id to the --json document", async () => {
+  it("adds each run's TraceRoot run id and link to the --json document", async () => {
     nodeProject();
     evalFile("x_eval.ts", {
       replay: `${TYPESCRIPT}/all-pass`,
       run_id: "run_first",
-      replace: uploadedAs("evr_stub_1"),
+      replace: uploadedAs("evr_stub_1", RUN_URL),
     });
 
     const run = await evalsRunWith(uploadEnv(), "x_eval.ts", "--upload", "--json");
@@ -1118,8 +1146,34 @@ describe("evals run --upload", () => {
     expect(json(run.stdout)).toMatchObject({
       outcome: "ok",
       project_id: STUB_PROJECT_ID,
-      runs: [{ local_run_id: "run_first", uploaded_run_id: "evr_stub_1" }],
+      runs: [
+        { local_run_id: "run_first", uploaded_run_id: "evr_stub_1", uploaded_run_url: RUN_URL },
+      ],
     });
+  });
+
+  it("prints only the command for a run TraceRoot gave no link, as an older host doesn't", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, replace: uploadedAs("evr_stub_1") });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--json");
+    const human = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(json(run.stdout)).toMatchObject({ runs: [{ uploaded_run_url: null }] });
+    expect(human.stdout).toContain("To open it:\n  traceroot evals runs get evr_stub_1 --project ");
+  });
+
+  it("escapes a control character in a run's link", async () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      replace: uploadedAs("evr_stub_1", `${RUN_URL}\\u001b[2J`),
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.raw.stdout).not.toContain("\u001b[2J");
+    expect(run.stdout).toContain(`  ${RUN_URL}\\u001b[2J\n`);
   });
 
   it("uses the API key when a browser login outranks it", async () => {
@@ -1596,6 +1650,7 @@ describe("scoreMeans", () => {
       expected: null,
       task_error: null,
       scorer_errors: [],
+      duration_ms: null,
       scores: scores.map(([scorer_name, value]) => ({
         scorer_name,
         scorer_version: null,
@@ -1622,5 +1677,27 @@ describe("scoreMeans", () => {
       { name: "passed", mean: 0.5, count: 2 },
       { name: "length", mean: 5, count: 2 },
     ]);
+  });
+});
+
+describe("meanDuration", () => {
+  const timed = (duration_ms: number | null): CaseLine => ({
+    case_id: "case-0",
+    status: "not_scored",
+    input: null,
+    expected: null,
+    task_error: null,
+    scorer_errors: [],
+    duration_ms,
+    scores: [],
+  });
+
+  it("averages the cases that were timed, and counts them", () => {
+    expect(meanDuration([timed(1), timed(null), timed(4)])).toEqual({ mean: 2.5, count: 2 });
+  });
+
+  it("has no mean when no case was timed", () => {
+    expect(meanDuration([timed(null)])).toEqual({ mean: null, count: 0 });
+    expect(meanDuration([])).toEqual({ mean: null, count: 0 });
   });
 });

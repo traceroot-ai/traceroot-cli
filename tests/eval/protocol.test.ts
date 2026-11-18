@@ -165,11 +165,23 @@ describe("parseRunFile", () => {
         { name: "not_empty", version: "2" },
       ],
       artifact: { payloads: "complete" },
+      dashboard_url: null,
     });
   });
 
-  it("leaves out the upload block, which reads uploaded even for a local run", () => {
-    expect(parseRunFile(JSON.stringify(runFile))).not.toHaveProperty("upload");
+  it("reads only the link from the upload block, whose status reads uploaded even for a local run", () => {
+    const url = "https://app.example/projects/p/evaluations/evr_1";
+    const uploaded = { ...runFile, upload: { ...runFile.upload, dashboard_url: url } };
+
+    const run = parseRunFile(JSON.stringify(uploaded));
+
+    expect(run.dashboard_url).toBe(url);
+    expect(run).not.toHaveProperty("upload");
+    const { upload: _upload, ...withoutUpload } = runFile;
+    expect(parseRunFile(JSON.stringify(withoutUpload)).dashboard_url).toBeNull();
+    expect(() =>
+      parseRunFile(JSON.stringify({ ...runFile, upload: { dashboard_url: 7 } })),
+    ).toThrow('run file, upload: "dashboard_url" should be a string or null, found 7');
   });
 
   it("accepts a run without a dataset", () => {
@@ -247,16 +259,23 @@ describe("parseCaseLines", () => {
         { scorer_name: "exact_match", scorer_version: null, value: false, passed: false },
         { scorer_name: "output_length", scorer_version: null, value: 4, passed: null },
       ],
+      duration_ms: 1.5,
     });
   });
 
   it("reads a field that may be null as null when it is missing", () => {
-    const { expected: _expected, task_error: _taskError, ...rest } = caseLine;
+    const {
+      expected: _expected,
+      task_error: _taskError,
+      duration_ms: _durationMs,
+      ...rest
+    } = caseLine;
 
     const [item] = parseCaseLines(JSON.stringify(rest));
 
     expect(item?.expected).toBeNull();
     expect(item?.task_error).toBeNull();
+    expect(item?.duration_ms).toBeNull();
   });
 
   it("reads an empty file as no cases", () => {
@@ -294,6 +313,9 @@ describe("parseCaseLines", () => {
     ).toThrow('case line 2, scores[0]: "passed" should be true, false or null, found "yes"');
     expect(() => parseCaseLines(JSON.stringify({ ...caseLine, status: "passed" }))).toThrow(
       'case line 1: "status" should be one of errored, not_scored, found "passed"',
+    );
+    expect(() => parseCaseLines(JSON.stringify({ ...caseLine, duration_ms: "fast" }))).toThrow(
+      'case line 1: "duration_ms" should be a number or null, found "fast"',
     );
   });
 });
@@ -398,6 +420,11 @@ describe("the recorded runs", () => {
       expect(recording.run.file.evaluation_name).toBe(completed.name);
       expect(recording.run.file.status).toBe(completed.status);
       expect(recording.run.cases).toHaveLength(completed.counts.cases);
+      // Every release times each case, and gives a run TraceRoot never registered no link.
+      for (const item of recording.run.cases) {
+        expect(item.duration_ms).toEqual(expect.any(Number));
+      }
+      expect(recording.run.file.dashboard_url).toBeNull();
     }
   });
 
