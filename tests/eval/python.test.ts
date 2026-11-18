@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PYTHON_SDK_FLOOR, findPythonRunner } from "../../src/eval/python.js";
 import {
@@ -394,6 +394,32 @@ describe.runIf(PYTHON3 !== null)("checking traceroot with a real interpreter", (
 
     expect(found.ok && found.runner.sdkVersion).toBe("0.5.1");
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it("reads a relative PYTHONPATH entry against the working directory, as the runner does", async () => {
+    const project = join(dir, "project");
+    distInfo(join(project, "vendor"), "0.5.1");
+    const file = evalFile(project);
+
+    const found = await findPythonRunner(file, {
+      cwd: project,
+      env: { PATH: dirname(python3), PYTHONPATH: "vendor" },
+    });
+
+    expect(found.ok && found.runner.sdkVersion).toBe("0.5.1");
+  });
+
+  it("reads an empty PYTHONPATH entry as the working directory, as the runner does", async () => {
+    const project = join(dir, "project");
+    distInfo(project, "0.5.1");
+    const file = evalFile(project);
+
+    const found = await findPythonRunner(file, {
+      cwd: project,
+      env: { PATH: dirname(python3), PYTHONPATH: `${delimiter}${join(dir, "elsewhere")}` },
+    });
+
+    expect(found.ok && found.runner.sdkVersion).toBe("0.5.1");
   });
 
   it("finds traceroot installed with pip install --user", async () => {

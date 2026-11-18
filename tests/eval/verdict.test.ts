@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +108,43 @@ describe("loadRun", () => {
       message: `the saved run ${run} has no case lines: ${cases} is missing`,
     });
   });
+
+  it("reports either file as invalid, naming it, when a folder is in its place", () => {
+    const folder = join(dir, `${RUN_ID}.json`);
+    mkdirSync(folder);
+
+    expect(loadRun(folder)).toEqual({
+      ok: false,
+      reason: "invalid",
+      message: expect.stringContaining(`${folder}: EISDIR`),
+    });
+
+    rmSync(folder, { recursive: true });
+    const { run, cases } = copyRecorded("python-0.5.1", "all-pass");
+    rmSync(cases);
+    mkdirSync(cases);
+
+    expect(loadRun(run)).toEqual({
+      ok: false,
+      reason: "invalid",
+      message: expect.stringContaining(`${cases}: EISDIR`),
+    });
+  });
+
+  // Root reads a file whatever its mode, and Windows has no such mode.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a run file the CLI may not read as invalid, naming it",
+    () => {
+      const { run } = copyRecorded("python-0.5.1", "all-pass");
+      chmodSync(run, 0o000);
+
+      expect(loadRun(run)).toEqual({
+        ok: false,
+        reason: "invalid",
+        message: expect.stringContaining(`${run}: EACCES`),
+      });
+    },
+  );
 
   it("names the file and the field when either file can't be parsed", () => {
     const { run, cases } = copyRecorded("python-0.5.1", "all-pass");

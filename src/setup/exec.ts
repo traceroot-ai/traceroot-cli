@@ -119,6 +119,13 @@ export interface RunProcessOptions {
   onData?: (chunk: string) => void;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * Called once the child has started, with a function that signals it at once, and on POSIX its
+   * whole process group. For a caller that has to stop the child where nothing asynchronous can
+   * run, as in an `exit` listener: an abort leaves its SIGKILL to a timer, which never fires once
+   * the process is exiting.
+   */
+  onSpawn?: (signal: (name: NodeJS.Signals) => void) => void;
   /** Secrets scrubbed from captured output, as a defence in depth. */
   secrets?: readonly Secret[];
 }
@@ -548,6 +555,9 @@ export const runProcess: RunProcess = (options) =>
     const onAbort = (): void => {
       kill();
     };
+    if (hasProcess()) {
+      options.onSpawn?.(signalChild);
+    }
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted === true) {
       // Already aborted before this child existed, so the listener above will
