@@ -126,10 +126,11 @@ export interface RunEvalRunnerOptions {
  * The CLI can also end before this returns: through `process.exit`, as when a reader closes the
  * CLI's stdout or stderr early (EPIPE), through an uncaught exception, or through SIGQUIT (Ctrl+\).
  * The runner's process group is its own, so nothing else would stop it. While it runs, an `exit`
- * listener and a SIGQUIT listener send SIGTERM to that group and remove the event folder. SIGQUIT
- * then ends the CLI as it would have. An exit with code 0 ends with
- * {@link RunEvalRunnerOptions.earlyExitCode} instead, when one is given. The CLI is gone by then,
- * so no SIGKILL follows.
+ * listener and a SIGQUIT listener send SIGKILL to that group and remove the event folder. SIGKILL
+ * and not the abort's SIGTERM: the abort's SIGKILL waits on a timer, which never fires once the CLI
+ * is exiting, so a runner that ignores SIGTERM would outlive it. SIGQUIT then ends the CLI as it
+ * would have. An exit with code 0 ends with {@link RunEvalRunnerOptions.earlyExitCode} instead,
+ * when one is given.
  *
  * The listeners stay until the event file is removed, so no signal can end the CLI between the
  * runner's exit and the removal, and are gone when this returns.
@@ -144,8 +145,9 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
   const scrubbed = redactAcrossChunks((text) => output.write(text), secrets);
   const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS);
   let folder: string | undefined;
+  let signalRunner: ((name: NodeJS.Signals) => void) | undefined;
   const exits = listenForExit(() => {
-    interrupts.kill();
+    signalRunner?.("SIGKILL");
     if (folder !== undefined) {
       removeFolder(folder);
     }
@@ -161,6 +163,9 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
       stdio: "capture",
       onData: (chunk) => scrubbed.write(chunk),
       signal: interrupts.signal,
+      onSpawn: (signal) => {
+        signalRunner = signal;
+      },
       secrets,
     });
     scrubbed.flush();
@@ -184,8 +189,6 @@ interface InterruptListener {
   signal: AbortSignal;
   /** The first of the signals to arrive, if any has. */
   received(): InterruptSignal | null;
-  /** Kills the runner's process group now, as the end of the grace period does. */
-  kill(): void;
   /** Removes the listeners and clears the deadline. */
   stop(): void;
 }
@@ -217,7 +220,6 @@ function listenForInterrupts(graceMs: number): InterruptListener {
   return {
     signal: controller.signal,
     received: () => received,
-    kill: () => controller.abort(),
     stop: () => {
       clearTimeout(deadline);
       for (const [signal, handler] of handlers) {

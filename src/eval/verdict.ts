@@ -33,8 +33,9 @@ export interface SavedRun {
  * A saved run, or why it couldn't be read.
  *
  * `missing` means nothing is at the path. `invalid` means something is, but it isn't a run this
- * CLI can read: the path doesn't name a run file, the case lines beside it are gone, or either file
- * lacks a field the CLI reads. The message names the file and, for a parse error, the field.
+ * CLI can read: the path doesn't name a run file, the case lines beside it are gone, either file
+ * can't be read, as when it is a folder or the CLI may not read it, or either file lacks a field
+ * the CLI reads. The message names the file and, for a parse error, the field.
  */
 export type RunLoad =
   | { ok: true; run: SavedRun }
@@ -47,20 +48,30 @@ const CASES_FILE_SUFFIX = ".cases.jsonl";
  * Reads a saved run from the path of its run file, `<run id>.json`, and the case lines saved beside
  * it as `<run id>.cases.jsonl`.
  *
- * A missing or unreadable run is a {@link RunLoad} failure, never a thrown error, so the caller
- * decides what each means: a missing baseline and a broken new run call for different exit codes.
- * Any other file system error, such as a permission error, is thrown as it is.
+ * A missing, unreadable or unparsable run is a {@link RunLoad} failure, never a thrown error, so
+ * the caller decides what each means: a missing baseline and a broken new run call for different
+ * exit codes.
  */
 export function loadRun(path: string): RunLoad {
   if (!path.endsWith(RUN_FILE_SUFFIX)) {
     return invalid(`${path} is not a run file: a saved run is read from its <run id>.json file`);
   }
-  const runText = readIfPresent(path);
+  let runText: string | null;
+  try {
+    runText = readIfPresent(path);
+  } catch (error) {
+    return failure(path, error);
+  }
   if (runText === null) {
     return { ok: false, reason: "missing", message: `no saved run at ${path}` };
   }
   const casesPath = `${path.slice(0, -RUN_FILE_SUFFIX.length)}${CASES_FILE_SUFFIX}`;
-  const casesText = readIfPresent(casesPath);
+  let casesText: string | null;
+  try {
+    casesText = readIfPresent(casesPath);
+  } catch (error) {
+    return failure(casesPath, error);
+  }
   if (casesText === null) {
     return invalid(`the saved run ${path} has no case lines: ${casesPath} is missing`);
   }
@@ -69,13 +80,13 @@ export function loadRun(path: string): RunLoad {
   try {
     file = parseRunFile(runText);
   } catch (error) {
-    return parseFailure(path, error);
+    return failure(path, error);
   }
   let cases: CaseLine[];
   try {
     cases = parseCaseLines(casesText);
   } catch (error) {
-    return parseFailure(casesPath, error);
+    return failure(casesPath, error);
   }
   return { ok: true, run: { file, cases } };
 }
@@ -84,15 +95,23 @@ function invalid(message: string): RunLoad {
   return { ok: false, reason: "invalid", message };
 }
 
-/** A {@link ProtocolError} as an `invalid` load that names the file. Anything else is rethrown. */
-function parseFailure(path: string, error: unknown): RunLoad {
-  if (error instanceof ProtocolError) {
+/**
+ * A {@link ProtocolError}, or a file system error such as a folder at the path or a file the CLI
+ * may not read, as an `invalid` load that names the file. Anything else is rethrown.
+ */
+function failure(path: string, error: unknown): RunLoad {
+  if (error instanceof ProtocolError || isFileSystemError(error)) {
     return invalid(`${path}: ${error.message}`);
   }
   throw error;
 }
 
-/** The file's text, or null when there is no file at the path. */
+/** Whether the file system raised `error`, which then carries a code such as `EISDIR`. */
+function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string";
+}
+
+/** The file's text, or null when there is no file at the path. Any other error is thrown. */
 function readIfPresent(path: string): string | null {
   try {
     return readFileSync(path, "utf8");
