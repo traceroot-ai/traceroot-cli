@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { type RunProcess, type RunProcessResult, runProcess } from "../setup/exec.js";
 import { findGitRoot } from "../setup/git.js";
 import { detectPythonEnvironment } from "../setup/python.js";
@@ -56,7 +56,10 @@ interface Unanswered {
 type Probed = { ok: true; interpreter: string; answer: ProbeAnswer } | Unanswered;
 
 export interface PythonLookupOptions {
-  /** Where to look for a virtual environment when the file is in no repository. */
+  /**
+   * The working directory the runner starts in: where to look for a virtual environment when the
+   * file is in no repository, and what a relative `PYTHONPATH` entry is read against.
+   */
   cwd: string;
   /** The environment the runner gets, so the probe sees the packages it will. */
   env: NodeJS.ProcessEnv;
@@ -150,6 +153,9 @@ export async function findPythonRunner(
  * through `PYTHONPATH`. The empty folder keeps what `-I` would be for:
  * `python -c` puts the working directory first on `sys.path`, and nothing in
  * an empty folder can shadow the standard library or the installed metadata.
+ * Python reads a relative `PYTHONPATH` entry against the folder it starts in,
+ * so the probe gets each one made absolute against the runner's working
+ * directory first ({@link pythonPathFrom}), and finds what the runner will.
  */
 async function probe(
   venv: string | null,
@@ -172,7 +178,8 @@ async function probe(
 
     const empty = join(temp, "empty");
     await mkdir(empty);
-    const result = await ask(interpreter, ["-c", PROBE], empty, options);
+    const env = pythonPathFrom(options.cwd, options.env);
+    const result = await ask(interpreter, ["-c", PROBE], empty, { ...options, env });
     const answer = lastAnswer(result, "python");
     if (answer === null) {
       return {
@@ -193,6 +200,20 @@ async function probe(
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
+}
+
+/**
+ * `env` with each `PYTHONPATH` entry made absolute against `cwd`, as Python makes it when it starts
+ * there: an empty entry is `cwd` itself. A process started from another folder then reads the same
+ * folders as one started from `cwd`.
+ */
+function pythonPathFrom(cwd: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const value = env.PYTHONPATH;
+  if (value === undefined || value === "") {
+    return env;
+  }
+  const entries = value.split(delimiter).map((entry) => resolve(cwd, entry));
+  return { ...env, PYTHONPATH: entries.join(delimiter) };
 }
 
 /** Runs one question to an interpreter, in the environment the runner gets. */
