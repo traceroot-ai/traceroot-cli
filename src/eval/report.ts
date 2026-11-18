@@ -62,6 +62,14 @@ export interface ScoreMean {
   count: number;
 }
 
+/** How long a run's cases took on average, each case its task and its scorers. */
+export interface DurationMean {
+  /** In milliseconds. null when the runner timed no case. */
+  mean: number | null;
+  /** How many cases were timed. */
+  count: number;
+}
+
 /** An evaluation the runner ran, and the run it saved. */
 export interface SavedEvaluation {
   event: EvaluationCompletedEvent;
@@ -135,6 +143,18 @@ export function scoreMeans(cases: CaseLine[]): ScoreMean[] {
 }
 
 /**
+ * How long a run's cases took on average, over the cases the runner timed. A mean per case, as
+ * `evals runs get` labels the duration it reads back, never a total.
+ */
+export function meanDuration(cases: CaseLine[]): DurationMean {
+  const timed = cases.flatMap((item) => (item.duration_ms === null ? [] : [item.duration_ms]));
+  return {
+    mean: timed.length === 0 ? null : timed.reduce((sum, ms) => sum + ms, 0) / timed.length,
+    count: timed.length,
+  };
+}
+
+/**
  * The `--json` document. Text from the run is kept as the runner wrote it: JSON escapes control
  * characters itself.
  */
@@ -154,9 +174,11 @@ export function toDocument(report: Report): Record<string, unknown> {
       evaluation_name: event.name,
       local_run_id: event.local_run_id,
       uploaded_run_id: event.run_id,
+      uploaded_run_url: uploadedRunUrl(event, run),
       status: event.status,
       path,
       counts: event.counts,
+      duration_ms: run === null ? null : meanDuration(run.cases),
       scores: run === null ? null : scoreMeans(run.cases),
     })),
     baseline:
@@ -183,8 +205,8 @@ export function toDocument(report: Report): Record<string, unknown> {
 }
 
 /**
- * The summary on stdout: each evaluation with its run id and score means, the verdict, then where
- * an uploaded run went.
+ * The summary on stdout: each evaluation with its run id, the mean time a case took and the score
+ * means, the verdict, then where an uploaded run went.
  *
  * @param env the CLI's environment, which says how to spell the command that opens an uploaded
  * run.
@@ -211,9 +233,11 @@ function evaluationLines(
     counts.errored === 0
       ? ""
       : ` (${counts.task_errors} ${plural(counts.task_errors, "task error")}, ${counts.scorer_errors} ${plural(counts.scorer_errors, "scorer error")})`;
+  const duration = run === null ? null : meanDuration(run.cases).mean;
+  const timing = duration === null ? "" : ` · mean ${formatMean(duration)} ms per case`;
   const lines = [
     `${bold(clean(event.name))} · ${clean(event.local_run_id)} · ${event.status.replaceAll("_", " ")}`,
-    `  ${counts.cases} ${plural(counts.cases, "case")} · ${counts.errored} errored${errors}`,
+    `  ${counts.cases} ${plural(counts.cases, "case")} · ${counts.errored} errored${errors}${timing}`,
   ];
   if (run === null) {
     lines.push("  the saved run can't be read, so its scores are unknown");
@@ -296,26 +320,29 @@ function verdictLines(report: Report, bold: (text: string) => string): string[] 
 }
 
 /**
- * Each uploaded evaluation's TraceRoot run id, with the command that opens it, then the
- * evaluations that weren't uploaded. The command is spelled the way the CLI was started, and names
- * the project, which a read needs under a browser login; the key check said which project the run
- * went to. It repeats the flags that gave the key or the host, so it reads from the same host with
- * the same key.
+ * Each uploaded evaluation's TraceRoot run id, with its link and the command that opens it, then
+ * the evaluations that weren't uploaded. The link is the one the run file saved, as TraceRoot gave
+ * it to the runner; the CLI never builds one from an id and a host, so a run TraceRoot gave none
+ * gets the command alone. The command is spelled the way the CLI was started, and names the project, which a
+ * read needs under a browser login; the key check said which project the run went to. It repeats
+ * the flags that gave the key or the host, so it reads from the same host with the same key.
  */
 function uploadLines({ upload, runs, outcome, runner }: Report, env: NodeJS.ProcessEnv): string[] {
   if (upload === null) {
     return [];
   }
   const lines: string[] = [];
-  for (const { event } of runs) {
+  for (const { event, run } of runs) {
     if (event.run_id !== null) {
       const id = clean(event.run_id);
+      const url = uploadedRunUrl(event, run);
       const read = [
         `evals runs get ${id} --project ${clean(upload.projectId)}`,
         ...upload.readFlags.map(clean),
       ];
       lines.push(
         `Uploaded ${clean(JSON.stringify(event.name))} to TraceRoot as run ${id}. To open it:`,
+        ...(url === null ? [] : [`  ${clean(url)}`]),
         `  ${cliCommand(read.join(" "), env)}`,
       );
     }
@@ -334,6 +361,11 @@ function uploadLines({ upload, runs, outcome, runner }: Report, env: NodeJS.Proc
     );
   }
   return lines;
+}
+
+/** The link TraceRoot gave an uploaded run, or null for a run it never registered. */
+function uploadedRunUrl(event: EvaluationCompletedEvent, run: SavedRun | null): string | null {
+  return event.run_id === null ? null : (run?.file.dashboard_url ?? null);
 }
 
 function failingTable(pairs: NewlyFailingPair[], bold: (text: string) => string): string {
