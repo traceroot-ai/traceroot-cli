@@ -126,6 +126,47 @@ describe("runGet (human)", () => {
     expect(spanLine).toContain("1.5s");
   });
 
+  it("prints the same span tree at 80 and 200 columns, at 0 columns and when piped", async () => {
+    const trace = detail({
+      spans: [
+        span({ span_id: "root", name: "root-span" }),
+        span({
+          span_id: "child",
+          parent_span_id: "root",
+          name: "child-span",
+          status: "ERROR",
+          status_message: "downstream timeout after 30s",
+          span_start_time: "2024-01-01T00:00:00.100Z",
+          span_end_time: "2024-01-01T00:00:00.350Z",
+        }),
+      ],
+    });
+    const stdout = process.stdout as unknown as { columns?: number };
+    const original = stdout.columns;
+    const render = async (columns: number | undefined): Promise<string> => {
+      stdout.columns = columns;
+      const { writers: w, out } = writers();
+      await runGet(trace, {
+        json: false,
+        writers: w,
+        traceId: "t-1",
+        getFinding: fakeGetFinding(),
+      });
+      return out.data;
+    };
+    try {
+      const at80 = await render(80);
+      expect(at80).toContain("root-span [ok]          1.0s");
+      expect(at80).toContain("└─ child-span [error]  250ms");
+      expect(at80).toContain("   downstream timeout after 30s");
+      expect(await render(200)).toBe(at80);
+      expect(await render(0)).toBe(at80);
+      expect(await render(undefined)).toBe(at80);
+    } finally {
+      stdout.columns = original;
+    }
+  });
+
   it("shows the error status_message beneath a failing span", async () => {
     const trace = detail({
       spans: [

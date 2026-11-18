@@ -36,6 +36,20 @@ const ANSI_DIM = "\x1b[2m";
 /** Default terminal width assumed when {@link RenderTreeOptions.width} is omitted. */
 const DEFAULT_WIDTH = 80;
 
+/** Spaces between the longest span line and the duration column. */
+const DURATION_GAP = 2;
+
+/** A span's line, kept in parts until the duration column is known. */
+interface SpanLine {
+  /** Tree prefix and connector. */
+  head: string;
+  name: string;
+  /** Space and status marker. */
+  tail: string;
+  duration: string | null;
+  error: boolean;
+}
+
 function isError(status: string | undefined): boolean {
   return status !== undefined && ERROR_STATUSES.has(status);
 }
@@ -101,8 +115,8 @@ export interface RenderTreeOptions {
   /** When true, error span lines are colored red. Off for non-TTY / `NO_COLOR`. */
   color?: boolean;
   /**
-   * Terminal width: durations are right-aligned to this column and error
-   * messages are truncated to it. Defaults to 80.
+   * Terminal width: span lines with a duration and error messages are kept
+   * within it. Zero or absent means 80.
    */
   width?: number;
   /**
@@ -125,7 +139,8 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     return "";
   }
   const color = options.color === true;
-  const width = options.width ?? DEFAULT_WIDTH;
+  // A terminal that reports 0 columns gets the same layout as piped output.
+  const width = options.width !== undefined && options.width > 0 ? options.width : DEFAULT_WIDTH;
   const now = options.now;
 
   const indexOf = new Map<string, number>();
@@ -154,7 +169,11 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     return ai - bi;
   };
 
-  const lines: string[] = [];
+  // Span lines stay in parts until every span is walked, since the duration
+  // column depends on the longest of them.
+  const lines: (string | SpanLine)[] = [];
+  let longest = 0;
+  let durationWidth = 0;
   // Guards against re-visiting a span: prevents infinite recursion and silent
   // duplication if the external span data contains a parent cycle.
   const visited = new Set<string>();
@@ -165,22 +184,26 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     }
     visited.add(span.span_id);
     const connector = isRoot ? "" : isLast ? "└─ " : "├─ ";
-    const text = `${prefix}${connector}${span.name} ${marker(span.status)}`;
     const childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
 
-    // Duration, right-aligned to `width`: end time if the span has finished,
-    // otherwise elapsed-so-far against `now` (only when the caller supplied
-    // one — a still-running span with no `now` simply shows no duration
-    // rather than silently computing one from a fresh `Date.now()`).
+    // Duration: end time if the span has finished, otherwise elapsed-so-far
+    // against `now` (only when the caller supplied one — a still-running span
+    // with no `now` simply shows no duration rather than silently computing
+    // one from a fresh `Date.now()`).
     const end = span.span_end_time ?? now ?? null;
     const durationMs =
       span.span_start_time !== undefined ? elapsedMs(span.span_start_time, end) : null;
-    const durationText = durationMs !== null ? formatDuration(durationMs) : null;
-    const lineCore =
-      durationText === null
-        ? text
-        : `${text}${" ".repeat(Math.max(1, width - text.length - durationText.length))}${durationText}`;
-    lines.push(color && isError(span.status) ? `${ANSI_RED}${lineCore}${ANSI_RESET}` : lineCore);
+    const duration = durationMs !== null ? formatDuration(durationMs) : null;
+    const line: SpanLine = {
+      head: `${prefix}${connector}`,
+      name: span.name,
+      tail: ` ${marker(span.status)}`,
+      duration,
+      error: isError(span.status),
+    };
+    lines.push(line);
+    longest = Math.max(longest, line.head.length + line.name.length + line.tail.length);
+    durationWidth = Math.max(durationWidth, duration?.length ?? 0);
 
     // Error detail, directly beneath the span line, indented to align under
     // the name (the same indent children continue at) and truncated to width.
@@ -217,7 +240,22 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     }
   }
 
-  return lines.join("\n");
+  // Durations end in one column, a fixed gap after the longest span line, so
+  // the tree is the same at any terminal width. When that column would run
+  // past `width` it is pulled in, and a span line too long for it has its name
+  // cut so its duration still lands in the column.
+  const textWidth = Math.min(longest, width - DURATION_GAP - durationWidth);
+  const spanLine = (line: SpanLine): string => {
+    let text = `${line.head}${line.name}${line.tail}`;
+    if (line.duration !== null) {
+      const room = Math.max(1, textWidth - line.head.length - line.tail.length);
+      const name = line.name.length > room ? `${line.name.slice(0, room - 1)}…` : line.name;
+      const fitted = `${line.head}${name}${line.tail}`.padEnd(textWidth);
+      text = `${fitted}${" ".repeat(DURATION_GAP)}${line.duration.padStart(durationWidth)}`;
+    }
+    return color && line.error ? `${ANSI_RED}${text}${ANSI_RESET}` : text;
+  };
+  return lines.map((line) => (typeof line === "string" ? line : spanLine(line))).join("\n");
 }
 
 /** Hint appended to truncated text; budgeted into {@link truncate}'s `max`. */

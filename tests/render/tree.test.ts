@@ -120,7 +120,7 @@ describe("renderTree durations", () => {
     expect(out).toContain("1.5s");
   });
 
-  it("right-aligns the duration to the given width", () => {
+  it("puts the duration two spaces after the span line, not at the given width", () => {
     const out = renderTree(
       [
         span({
@@ -132,21 +132,21 @@ describe("renderTree durations", () => {
       ],
       { width: 40 },
     );
-    const line = out.split("\n")[0] as string;
-    expect(line.length).toBe(40);
-    expect(line.endsWith("1.0s")).toBe(true);
+    expect(out).toBe("r [ok]  1.0s");
   });
 
   it("defaults the width to 80 when not given", () => {
     const out = renderTree([
       span({
         span_id: "r",
-        name: "r",
+        name: "n".repeat(100),
         span_start_time: "2024-01-01T00:00:00Z",
         span_end_time: "2024-01-01T00:00:01Z",
       }),
     ]);
-    expect((out.split("\n")[0] as string).length).toBe(80);
+    const line = out.split("\n")[0] as string;
+    expect(line.length).toBe(80);
+    expect(line.endsWith("1.0s")).toBe(true);
   });
 
   it("shows elapsed-so-far against options.now for a span with no span_end_time", () => {
@@ -174,7 +174,15 @@ describe("renderTree durations", () => {
     expect(withNow).toContain("3.0s");
   });
 
-  it("never pads to less than one space between the name/marker and the duration", () => {
+  it("prints a span with no duration as just its text, with no trailing padding", () => {
+    const out = renderTree([
+      span({ span_id: "done", name: "done" }),
+      span({ span_id: "running", parent_span_id: "done", name: "running", span_end_time: null }),
+    ]);
+    expect(out.split("\n")[1]).toBe("└─ running [ok]");
+  });
+
+  it("keeps the two-space gap before the duration when the name is cut to fit", () => {
     const out = renderTree(
       [
         span({
@@ -186,9 +194,113 @@ describe("renderTree durations", () => {
       ],
       { width: 20 },
     );
-    const line = out.split("\n")[0] as string;
-    expect(line).toContain(" 1.0s");
-    expect(line).not.toContain("  1.0s");
+    expect(out).toBe("a-very-l… [ok]  1.0s");
+  });
+});
+
+describe("renderTree duration column", () => {
+  // A root agent span with an LLM call, a failed tool call with its own child
+  // and a final step; the longest span lines are 22 characters.
+  function agentTrace(summarizeName = "summarize"): SpanLike[] {
+    return [
+      span({
+        span_id: "root",
+        name: "support_agent.run",
+        status: "OK",
+        span_start_time: "2024-01-01T00:00:00Z",
+        span_end_time: "2024-01-01T00:00:01Z",
+      }),
+      span({
+        span_id: "llm",
+        parent_span_id: "root",
+        name: "openai.chat",
+        status: "OK",
+        span_start_time: "2024-01-01T00:00:00.010Z",
+        span_end_time: "2024-01-01T00:00:00.460Z",
+        model_name: "gpt-4o-mini",
+        total_tokens: 1200,
+        cost: 0.0012,
+      }),
+      span({
+        span_id: "search",
+        parent_span_id: "root",
+        name: "search_docs",
+        status: "ERROR",
+        status_message: "upstream request timed out",
+        span_start_time: "2024-01-01T00:00:00.470Z",
+        span_end_time: "2024-01-01T00:00:00.590Z",
+      }),
+      span({
+        span_id: "http",
+        parent_span_id: "search",
+        name: "http.get",
+        status: "OK",
+        span_start_time: "2024-01-01T00:00:00.475Z",
+        span_end_time: "2024-01-01T00:00:00.585Z",
+      }),
+      span({
+        span_id: "sum",
+        parent_span_id: "root",
+        name: summarizeName,
+        status: "OK",
+        span_start_time: "2024-01-01T00:00:00.600Z",
+        span_end_time: "2024-01-01T00:00:00.995Z",
+      }),
+    ];
+  }
+
+  const durationLines = (out: string): string[] =>
+    out.split("\n").filter((l) => /\d(ms|s)$/.test(l));
+
+  it("puts durations a fixed gap after the longest span line at 80, 120 and 200 columns", () => {
+    const expected = [
+      "support_agent.run [ok]   1.0s",
+      "├─ openai.chat [ok]     450ms",
+      "│  gpt-4o-mini · 1.2k tok · $0.0012",
+      "├─ search_docs [error]  120ms",
+      "│  upstream request timed out",
+      "│  └─ http.get [ok]     110ms",
+      "└─ summarize [ok]       395ms",
+    ].join("\n");
+    expect(renderTree(agentTrace(), { width: 80 })).toBe(expected);
+    expect(renderTree(agentTrace(), { width: 120 })).toBe(expected);
+    expect(renderTree(agentTrace(), { width: 200 })).toBe(expected);
+  });
+
+  it("ends every duration in the same column", () => {
+    const lines = durationLines(renderTree(agentTrace(), { width: 200 }));
+    expect(lines).toHaveLength(5);
+    for (const line of lines) {
+      expect(line.length).toBe(29);
+    }
+  });
+
+  it("cuts a span name too long for an 80-column terminal, keeping its duration in the shared column", () => {
+    const longName = `summarize_${"x".repeat(62)}`;
+    const out = renderTree(agentTrace(longName), { width: 80 });
+    for (const line of out.split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+    const lines = durationLines(out);
+    expect(lines).toHaveLength(5);
+    for (const line of lines) {
+      expect(line.length).toBe(80);
+    }
+    const longLine = lines.find((l) => l.startsWith("└─ summarize_")) as string;
+    expect(longLine).toBe(`└─ summarize_${"x".repeat(54)}… [ok]  395ms`);
+  });
+
+  it("treats a width of 0 as 80, keeping durations aligned and error messages whole", () => {
+    const longName = `summarize_${"x".repeat(62)}`;
+    expect(renderTree(agentTrace(longName), { width: 0 })).toBe(
+      renderTree(agentTrace(longName), { width: 80 }),
+    );
+
+    const out = renderTree(agentTrace(), { width: 0 });
+    expect(out).toBe(renderTree(agentTrace()));
+    const lines = durationLines(out);
+    expect(new Set(lines.map((l) => l.length)).size).toBe(1);
+    expect(out).toContain("│  upstream request timed out");
   });
 });
 
