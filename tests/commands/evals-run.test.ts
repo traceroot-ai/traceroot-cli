@@ -15,8 +15,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scoreMeans } from "../../src/commands/evals-run.js";
 import { type CaseLine, parseCaseLines } from "../../src/eval/protocol.js";
+import { scoreMeans } from "../../src/eval/report.js";
 import { getVersion } from "../../src/version.js";
 import {
   STUB_API_KEY,
