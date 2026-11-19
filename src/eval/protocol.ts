@@ -236,6 +236,20 @@ export function parseEvents(text: string): RunnerEvent[] {
 }
 
 /**
+ * One event line as a JSON object, read as {@link parseEvents} reads a line, or null when it isn't
+ * one. Nothing about the event is checked. It is for following the stream while the runner writes
+ * it, where a line that can't be read is skipped rather than failing the run.
+ */
+export function eventObject(line: string): Record<string, unknown> | null {
+  try {
+    const parsed = parseJson(line);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parses a run file (`<run id>.json`).
  *
  * @throws {ProtocolError} when the file isn't a JSON object or lacks a field the CLI reads.

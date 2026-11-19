@@ -1,6 +1,7 @@
 import { S_BAR } from "@clack/prompts";
 import { createColors } from "picocolors";
 import type { Sink } from "../output.js";
+import { CLEAR_LINE, ESC, FRAMES, defaultAnimate } from "./redraw.js";
 import { canRedraw } from "./tty.js";
 
 /**
@@ -25,14 +26,6 @@ import { canRedraw } from "./tty.js";
  *     ◑  Running Claude Code [34s]
  */
 
-/** Clack's spinner alphabet. */
-const FRAMES = ["◒", "◐", "◓", "◑"] as const;
-const FRAME_MS = 120;
-
-/** Written out rather than embedded, so no control character reaches source. */
-const ESC = String.fromCharCode(27);
-/** Erase this line, return to column 0. Never moves the cursor up. */
-const CLEAR_LINE = `${ESC}[2K\r`;
 /** Erase from the cursor to the bottom of the screen. */
 const CLEAR_BELOW = `${ESC}[0J`;
 
@@ -103,13 +96,6 @@ export interface LineSpinnerInput {
    * moving in the seconds between expiry and the poll that reports it.
    */
   deadline?: number;
-}
-
-/** Real timers, unref'd so a spinner can never be the reason a process lingers. */
-function defaultAnimate(tick: () => void): () => void {
-  const timer = setInterval(tick, FRAME_MS);
-  timer.unref?.();
-  return () => clearInterval(timer);
 }
 
 /** Starts spinning immediately. The caller must always `stop` it. */
