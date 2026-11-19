@@ -11,10 +11,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { RunOutcome } from "../../src/eval/events.js";
-import { type RunEvalRunnerOptions, runEvalRunner, runnerEnv } from "../../src/eval/spawn.js";
+import {
+  type RunEvalRunnerOptions,
+  type RunProgressOptions,
+  runEvalRunner,
+  runnerEnv,
+} from "../../src/eval/spawn.js";
 import { makeSecret } from "../../src/setup/secret.js";
+import { CLEAR_LINE, frames, screen } from "../helpers/screen.js";
 import { StringSink } from "../helpers/stringSink.js";
 
 const NODE = process.execPath;
@@ -86,12 +92,31 @@ function isRunning(pid: number): boolean {
   }
 }
 
+/** A terminal 80 columns wide that keeps everything written to it. */
+class TerminalSink extends StringSink {
+  readonly columns = 80;
+
+  constructor() {
+    super(true);
+  }
+}
+
+/** A progress line that reads the event file every 20 ms, so a short stub's events show. */
+const PROGRESS: RunProgressOptions = { exactCount: true, pollMs: 20 };
+
+/** The same line with its clock and its spinner held still, so each frame reads the same. */
+const STILL_PROGRESS: RunProgressOptions = {
+  ...PROGRESS,
+  now: () => 0,
+  animate: () => () => undefined,
+};
+
 /** Runs a stub in this process, and checks that its event file is gone afterwards. */
 async function run(
   argv: string[],
-  options: Pick<RunEvalRunnerOptions, "env" | "cwd" | "upload"> = {},
+  options: Pick<RunEvalRunnerOptions, "env" | "cwd" | "upload" | "progress"> = {},
 ): Promise<{ outcome: RunOutcome; output: string }> {
-  const sink = new StringSink();
+  const sink = options.progress === undefined ? new StringSink() : new TerminalSink();
   const outcome = await runEvalRunner({ argv, output: sink, env: BASE_ENV, ...options });
   const { pid, eventFile } = runnerLine(sink.data);
   runners.push(pid);
@@ -363,6 +388,166 @@ describe("runEvalRunner", () => {
     expect(listeners()).toEqual(before);
   });
 
+  describe("with a progress line", () => {
+    it("shows what the runner has done while it runs, before it finishes, then erases itself", async () => {
+      const folder = mkdtempSync(join(tmpdir(), "traceroot-eval-progress-"));
+      const shown = join(folder, "shown");
+      let output = "";
+      // Tells the runner once the progress line shows its first case done and its second running.
+      const sink = {
+        isTTY: true,
+        columns: 80,
+        write: (text: string): boolean => {
+          output += text;
+          if (frames(output).some((frame) => frame.includes("1/2 cases done · 1 running"))) {
+            writeFileSync(shown, "");
+          }
+          return true;
+        },
+      };
+      // The runner finishes one case and starts the next, then waits until the line shows that, or
+      // 5 seconds, before it finishes.
+      const argv = stub(
+        "ready();",
+        emit(hello),
+        emit({ ...started, dataset: { case_count: 2 } }),
+        emit(caseStarted),
+        emit(caseCompleted),
+        emit({ type: "case_started", case_id: "case-1" }),
+        "const since = Date.now();",
+        "const poll = setInterval(() => {",
+        `  if (fs.existsSync(${JSON.stringify(shown)})) {`,
+        '    say("the progress line showed the case running");',
+        "  } else if (Date.now() - since > 5000) {",
+        '    say("gave up waiting");',
+        "  } else {",
+        "    return;",
+        "  }",
+        "  clearInterval(poll);",
+        `  ${emit({ ...caseCompleted, case_id: "case-1" })}`,
+        `  ${emit({ ...evaluationCompleted("completed"), counts: { ...counts, cases: 2, not_scored: 2 } })}`,
+        `  ${emit({ type: "suite_completed", evaluations: 1, cancelled: false })}`,
+        "}, 20);",
+      );
+
+      let outcome: RunOutcome;
+      try {
+        outcome = await runEvalRunner({
+          argv,
+          output: sink,
+          env: BASE_ENV,
+          progress: STILL_PROGRESS,
+        });
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
+      }
+      runners.push(runnerLine(output).pid);
+
+      expect(output).toContain("the progress line showed the case running");
+      expect(output).not.toContain("gave up waiting");
+      expect(frames(output)).toContain("◒  uppercase · 1/2 cases done · 1 running · 0 errored");
+      expect(outcome).toMatchObject({ outcome: "completed" });
+      // The last row is the one the line was on, and it is empty.
+      expect(screen(output).at(-1)).toBe("");
+      expect(output.endsWith(CLEAR_LINE)).toBe(true);
+    });
+
+    it("writes the runner's lines above itself in order, holding a partial line until its newline", async () => {
+      const { output } = await run(
+        stub(
+          "ready();",
+          'say("first line");',
+          'fs.writeSync(2, "half of ");',
+          'setTimeout(() => fs.writeSync(2, "a line\\nsecond line\\nno newline"), 150);',
+          "setTimeout(() => {}, 300);",
+        ),
+        { progress: STILL_PROGRESS },
+      );
+
+      const { pid, eventFile } = runnerLine(output);
+      expect(screen(output)).toEqual([
+        `runner ${pid} ${eventFile}`,
+        "first line",
+        "half of a line",
+        "second line",
+        "no newline",
+      ]);
+      // The partial line was held: it went out whole, never split by a redraw of the line.
+      expect(output).toContain("half of a line\nsecond line\n");
+      expect(output.endsWith(`${CLEAR_LINE}no newline`)).toBe(true);
+    });
+
+    it("still scrubs a key split across two chunks of the runner's output", async () => {
+      const key = "tr-test-upload-07";
+      const { output } = await run(
+        stub(
+          "ready();",
+          "const key = process.env.TRACEROOT_API_KEY;",
+          "fs.writeSync(2, `before ${key.slice(0, 8)}`);",
+          "setTimeout(() => fs.writeSync(2, `${key.slice(8)} after\\n`), 200);",
+        ),
+        {
+          upload: { host: "https://traceroot.example", apiKey: makeSecret(key) },
+          progress: STILL_PROGRESS,
+        },
+      );
+
+      expect(output).not.toContain(key);
+      expect(screen(output)).toContain("before <redacted> after");
+    });
+
+    it("leaves no timer, listener or event file behind", async () => {
+      const setInterval = vi.spyOn(globalThis, "setInterval");
+      const clearInterval = vi.spyOn(globalThis, "clearInterval");
+      const listeners = () =>
+        ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "exit"].map((name) =>
+          process.listenerCount(name),
+        );
+      const before = listeners();
+      try {
+        // The default animation, with real timers.
+        await run(stub("ready();", emit(hello), "setTimeout(() => {}, 200);"), {
+          progress: { exactCount: true },
+        });
+
+        const timers = setInterval.mock.results.map((result) => result.value);
+        // The poll and the animation.
+        expect(timers).toHaveLength(2);
+        const cleared = new Set(clearInterval.mock.calls.map(([timer]) => timer));
+        for (const timer of timers) {
+          expect(cleared.has(timer)).toBe(true);
+        }
+        expect(listeners()).toEqual(before);
+      } finally {
+        setInterval.mockRestore();
+        clearInterval.mockRestore();
+      }
+    });
+
+    it("decides the outcome from the whole file afterwards, even from a line the live read skipped", async () => {
+      const argv = stub(
+        "ready();",
+        emit(hello),
+        emit(started),
+        'fs.appendFileSync(process.env.TRACEROOT_EVAL_EVENT_FILE, "not an event\\n");',
+        "setTimeout(() => {}, 100);",
+      );
+
+      const withLine = await run(argv, { progress: STILL_PROGRESS });
+      const without = await run(argv);
+
+      expect(withLine.outcome).toEqual(without.outcome);
+      expect(withLine.outcome).toMatchObject({ outcome: "fatal", kind: "protocol_error" });
+    });
+
+    it("writes nothing of its own without the progress option", async () => {
+      const { output } = await run(stub("ready();", emit(hello), emit(started), 'say("plain");'));
+
+      expect(output).not.toContain("\x1b");
+      expect(output).not.toContain("Waiting for the runner");
+    });
+  });
+
   describe("replaying the recorded runs", () => {
     /** Copies a recorded event stream into the event file, then exits with `process.argv[2]`. */
     const replay = (events: string, status: number): string[] => [
@@ -456,6 +641,21 @@ describe("runEvalRunner", () => {
       expect(scenario in expected, `no expected outcome for ${scenario}`).toBe(true);
       expect(outcome).toEqual(expected[scenario]);
     });
+
+    it.each(recordings)(
+      "$sdk/$scenario gives the same outcome with a progress line",
+      async ({ sdk, scenario }) => {
+        const dir = join(FIXTURES, sdk, scenario);
+        const status = Number(readFileSync(join(dir, "exit-status"), "utf8"));
+
+        const { outcome, output } = await run(replay(join(dir, "events.jsonl"), status), {
+          progress: STILL_PROGRESS,
+        });
+
+        expect(outcome).toEqual(expected[scenario]);
+        expect(screen(output).at(-1)).toBe("");
+      },
+    );
 
     it.each(["python-0.5.1", "typescript-0.8.1"])(
       "%s's interrupted run reads as interrupted even when the runner exits 0",
@@ -551,18 +751,37 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
     writeFileSync(
       harnessFile,
       [
+        // Every interval the run starts, so the result can say whether one was left running.
+        "const intervals = new Set();",
+        "const realSetInterval = globalThis.setInterval;",
+        "const realClearInterval = globalThis.clearInterval;",
+        "globalThis.setInterval = (...args) => {",
+        "  const timer = realSetInterval(...args);",
+        "  intervals.add(timer);",
+        "  return timer;",
+        "};",
+        "globalThis.clearInterval = (timer) => {",
+        "  intervals.delete(timer);",
+        "  return realClearInterval(timer);",
+        "};",
         `const { runEvalRunner } = await import(${JSON.stringify(spawnModule)});`,
         `const { handlePipeError } = await import(${JSON.stringify(outputModule)});`,
         'process.stderr.on("error", (error) => handlePipeError(error));',
         'process.on("SIGUSR2", () => { throw new Error("an exception nothing catches"); });',
-        "const [argv, interruptGraceMs, earlyExitCode] = JSON.parse(process.argv[2]);",
+        "const [argv, interruptGraceMs, earlyExitCode, progress] = JSON.parse(process.argv[2]);",
         'const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "exit"];',
         "const listeners = () => signals.map((name) => process.listenerCount(name));",
         "const before = listeners();",
         'const env = { PATH: process.env.PATH ?? "" };',
-        "const options = { argv, interruptGraceMs, env, earlyExitCode: earlyExitCode ?? undefined };",
+        "const options = {",
+        "  argv,",
+        "  interruptGraceMs,",
+        "  env,",
+        "  earlyExitCode: earlyExitCode ?? undefined,",
+        "  progress: progress ?? undefined,",
+        "};",
         "const outcome = await runEvalRunner(options);",
-        "const result = { outcome, listeners: { before, after: listeners() } };",
+        "const result = { outcome, listeners: { before, after: listeners() }, intervals: intervals.size };",
         "process.stdout.write(`${JSON.stringify(result)}\\n`);",
       ].join("\n"),
     );
@@ -588,8 +807,13 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
   }
 
   /** Starts the harness on a stub runner, and waits until the stub says it is ready. */
-  async function startHarness(argv: string[], interruptGraceMs: number, earlyExitCode?: number) {
-    const options = [argv, interruptGraceMs, earlyExitCode ?? null];
+  async function startHarness(
+    argv: string[],
+    interruptGraceMs: number,
+    earlyExitCode?: number,
+    progress?: RunProgressOptions,
+  ) {
+    const options = [argv, interruptGraceMs, earlyExitCode ?? null, progress ?? null];
     const child = spawn(NODE, [harnessFile, JSON.stringify(options)], {
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -657,9 +881,11 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
     const result = JSON.parse(lines[0] as string) as {
       outcome: RunOutcome;
       listeners: { before: number[]; after: number[] };
+      intervals: number;
     };
     expect(result.outcome).toEqual({ outcome: "interrupted", signal, evaluations });
     expect(result.listeners.after).toEqual(result.listeners.before);
+    expect(result.intervals).toBe(0);
     expect(isRunning(runner.pid)).toBe(false);
     expect(existsSync(runner.eventFile)).toBe(false);
     expect(existsSync(dirname(runner.eventFile))).toBe(false);
@@ -829,5 +1055,83 @@ describe.skipIf(WINDOWS)("the CLI's process while the runner is running", () => 
 
     expect(result.signal).toBe("SIGQUIT");
     await expectNothingLeft(result, runner);
+  });
+
+  // The harness gets its options as JSON, so its progress line has the real clock and spinner.
+  describe("with a progress line", () => {
+    it("says the run is stopping on a Ctrl+C, and erases itself once the runner has stopped", async () => {
+      const finishesItsCase = stub(
+        emit(hello),
+        emit(started),
+        emit(caseStarted),
+        'process.on("SIGINT", () => {',
+        `  ${emit(caseCompleted)}`,
+        `  ${emit(evaluationCompleted("incomplete"))}`,
+        `  ${emit({ type: "suite_completed", evaluations: 1, cancelled: true })}`,
+        "  setTimeout(() => process.exit(130), 200);",
+        "});",
+        "setInterval(() => {}, 1000);",
+        "ready();",
+      );
+      const { child, runner, finished, waitFor } = await startHarness(
+        finishesItsCase,
+        60_000,
+        undefined,
+        PROGRESS,
+      );
+
+      await waitFor(/1 running/);
+      child.kill("SIGINT");
+      const result = await finished;
+
+      expect(frames(result.stderr).some((frame) => frame.includes("· stopping"))).toBe(true);
+      expect(screen(result.stderr).at(-1)).toBe("");
+      expectInterrupted(result, runner, "SIGINT", [evaluationCompleted("incomplete")]);
+    });
+
+    it("erases itself when a second Ctrl+C kills the runner", async () => {
+      const { child, runner, finished, waitFor } = await startHarness(
+        stubborn,
+        60_000,
+        undefined,
+        PROGRESS,
+      );
+
+      child.kill("SIGINT");
+      await waitFor(/ignoring SIGINT/);
+      child.kill("SIGINT");
+      const result = await finished;
+
+      expect(result.stderr).toContain("ended by SIGTERM");
+      expect(screen(result.stderr).at(-1)).toBe("");
+      expectInterrupted(result, runner, "SIGINT");
+    });
+
+    it("erases itself on SIGQUIT, and leaves neither the runner nor its event folder", async () => {
+      const { child, runner, finished, waitFor } = await startHarness(
+        chatty,
+        60_000,
+        undefined,
+        PROGRESS,
+      );
+
+      await waitFor(/still running\n/);
+      child.kill("SIGQUIT");
+      const result = await finished;
+
+      expect(result.signal).toBe("SIGQUIT");
+      expect(result.stderr.endsWith(CLEAR_LINE)).toBe(true);
+      await expectNothingLeft(result, runner);
+    });
+
+    it("keeps the early exit code when a closed stderr ends the CLI", async () => {
+      const { child, runner, finished } = await startHarness(chatty, 60_000, 17, PROGRESS);
+
+      child.stderr?.destroy();
+      const result = await finished;
+
+      expect(result.code).toBe(17);
+      await expectNothingLeft(result, runner);
+    });
   });
 });
