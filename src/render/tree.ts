@@ -34,7 +34,7 @@ const ANSI_RED = "\x1b[91m";
 const ANSI_DIM = "\x1b[2m";
 
 /**
- * Width error messages are cut to when the terminal's width is unknown
+ * Width the tree is laid out for when the terminal's width is unknown
  * ({@link RenderTreeOptions.width} absent, zero or negative).
  */
 const DEFAULT_WIDTH = 80;
@@ -113,14 +113,29 @@ function llmDetail(span: SpanLike): string | null {
   return parts.join(" · ");
 }
 
+/**
+ * `name` cut to `room` characters, ending in `…`, so a span's duration still
+ * lands in the shared column. The cut is made only when it keeps part of the
+ * name: a span nested so deep that fewer than two columns are left for its
+ * name keeps its whole name. The cut never ends on the first half of a
+ * surrogate pair.
+ */
+function fitName(name: string, room: number): string {
+  if (name.length <= room || room < 2) {
+    return name;
+  }
+  return `${name.slice(0, room - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+}
+
 /** Optional behavior for {@link renderTree}. */
 export interface RenderTreeOptions {
   /** When true, error span lines are colored red. Off for non-TTY / `NO_COLOR`. */
   color?: boolean;
   /**
    * Terminal width: span lines with a duration and error messages are kept
-   * within it. Zero or absent means the width is unknown (piped output): span
-   * names are never cut, and error messages are cut at 80.
+   * within it. Zero or absent means the width is unknown (piped output): the
+   * tree is laid out for 80 columns, but span names are never cut, so a span
+   * line too long for 80 runs past it.
    */
   width?: number;
   /**
@@ -248,25 +263,15 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
 
   // Durations end in one column, a fixed gap after the longest span line, so
   // the tree is the same at any terminal width. When that column would run
-  // past the terminal's width it is pulled in, and a span line too long for it
-  // has its name cut so its duration still lands in the column. With no known
-  // width (piped output) nothing is cut.
-  const textWidth =
-    terminalWidth === undefined
-      ? longest
-      : Math.min(longest, terminalWidth - DURATION_GAP - durationWidth);
+  // past `width` it is pulled in. On a terminal, a span line too long for it
+  // has its name cut so its duration still lands in the column. Piped output,
+  // where nothing wraps, keeps the whole name and lets that line run past.
+  const textWidth = Math.min(longest, width - DURATION_GAP - durationWidth);
   const renderSpanLine = (line: SpanLine): string => {
     let text = `${line.head}${line.name}${line.tail}`;
     if (line.duration !== null) {
       const room = textWidth - line.head.length - line.tail.length;
-      let name = line.name;
-      // Cut only when the cut keeps part of the name: a span nested so deep
-      // that its prefix and marker fill the line keeps its whole name. The cut
-      // never ends on the first half of a surrogate pair, so an emoji is
-      // dropped whole rather than split.
-      if (name.length > room && room >= 2) {
-        name = `${name.slice(0, room - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
-      }
+      const name = terminalWidth === undefined ? line.name : fitName(line.name, room);
       const fitted = `${line.head}${name}${line.tail}`.padEnd(textWidth);
       text = `${fitted}${" ".repeat(DURATION_GAP)}${line.duration.padStart(durationWidth)}`;
     }

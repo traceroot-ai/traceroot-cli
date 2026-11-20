@@ -317,7 +317,7 @@ describe("renderTree duration column", () => {
     expect(longLine).toBe(`└─ summarize_${"x".repeat(54)}… [ok]  395ms`);
   });
 
-  it("treats a width of 0 like piped output, keeping names and error messages whole", () => {
+  it("treats a width of 0 like piped output: names kept whole, error messages not cut to 10 characters", () => {
     const longName = `summarize_${"x".repeat(62)}`;
     const long = renderTree(agentTrace(longName), { width: 0 });
     expect(long).toBe(renderTree(agentTrace(longName)));
@@ -328,6 +328,13 @@ describe("renderTree duration column", () => {
     const lines = durationLines(out);
     expect(new Set(lines.map((l) => l.length)).size).toBe(1);
     expect(out).toContain("│  upstream request timed out");
+  });
+
+  it("with no width, lays the tree out for 80 columns and lets only a too-long line run past", () => {
+    const longName = `summarize_${"x".repeat(62)}`;
+    const lines = durationLines(renderTree(agentTrace(longName)));
+    expect(lines.map((l) => l.length)).toEqual([80, 80, 80, 80, 87]);
+    expect(lines[4]).toBe(`└─ ${longName} [ok]  395ms`);
   });
 });
 

@@ -91,6 +91,20 @@ function fakeGetFinding(
   return () => Promise.resolve(finding);
 }
 
+/** `runGet`'s human output for `trace`, with stdout reporting `columns` (undefined when piped). */
+async function renderAtColumns(trace: TraceDetail, columns: number | undefined): Promise<string> {
+  const stdout = process.stdout as unknown as { columns?: number };
+  const original = stdout.columns;
+  stdout.columns = columns;
+  try {
+    const { writers: w, out } = writers();
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
+    return out.data;
+  } finally {
+    stdout.columns = original;
+  }
+}
+
 describe("runGet (human)", () => {
   it("renders the span tree and the verbatim trace_url", async () => {
     const trace = detail({});
@@ -141,30 +155,13 @@ describe("runGet (human)", () => {
         }),
       ],
     });
-    const stdout = process.stdout as unknown as { columns?: number };
-    const original = stdout.columns;
-    const render = async (columns: number | undefined): Promise<string> => {
-      stdout.columns = columns;
-      const { writers: w, out } = writers();
-      await runGet(trace, {
-        json: false,
-        writers: w,
-        traceId: "t-1",
-        getFinding: fakeGetFinding(),
-      });
-      return out.data;
-    };
-    try {
-      const at80 = await render(80);
-      expect(at80).toContain("root-span [ok]          1.0s");
-      expect(at80).toContain("└─ child-span [error]  250ms");
-      expect(at80).toContain("   downstream timeout after 30s");
-      expect(await render(200)).toBe(at80);
-      expect(await render(0)).toBe(at80);
-      expect(await render(undefined)).toBe(at80);
-    } finally {
-      stdout.columns = original;
-    }
+    const at80 = await renderAtColumns(trace, 80);
+    expect(at80).toContain("root-span [ok]          1.0s");
+    expect(at80).toContain("└─ child-span [error]  250ms");
+    expect(at80).toContain("   downstream timeout after 30s");
+    expect(await renderAtColumns(trace, 200)).toBe(at80);
+    expect(await renderAtColumns(trace, 0)).toBe(at80);
+    expect(await renderAtColumns(trace, undefined)).toBe(at80);
   });
 
   it("keeps a long span name whole when piped, and cuts it only on a terminal too narrow for it", async () => {
@@ -175,29 +172,17 @@ describe("runGet (human)", () => {
         span({ span_id: "child", parent_span_id: "root", name: longName }),
       ],
     });
-    const stdout = process.stdout as unknown as { columns?: number };
-    const original = stdout.columns;
-    const spanLines = async (columns: number | undefined): Promise<string[]> => {
-      stdout.columns = columns;
-      const { writers: w, out } = writers();
-      await runGet(trace, {
-        json: false,
-        writers: w,
-        traceId: "t-1",
-        getFinding: fakeGetFinding(),
-      });
-      return out.data.split("\n").filter((l) => l.includes(" [ok] "));
-    };
-    try {
-      const piped = await spanLines(undefined);
-      expect(piped).toContain(`└─ ${longName} [ok]  1.0s`);
-      expect(await spanLines(0)).toEqual(piped);
-      const at80 = await spanLines(80);
-      expect(at80.map((l) => l.length)).toEqual([80, 80]);
-      expect(at80[1]).toContain("… [ok]  1.0s");
-    } finally {
-      stdout.columns = original;
+    async function spanLines(columns: number | undefined): Promise<string[]> {
+      const out = await renderAtColumns(trace, columns);
+      return out.split("\n").filter((l) => l.includes(" [ok] "));
     }
+    const piped = await spanLines(undefined);
+    expect(piped[0]).toHaveLength(80);
+    expect(piped[1]).toBe(`└─ ${longName} [ok]  1.0s`);
+    expect(await spanLines(0)).toEqual(piped);
+    const at80 = await spanLines(80);
+    expect(at80.map((l) => l.length)).toEqual([80, 80]);
+    expect(at80[1]).toContain("… [ok]  1.0s");
   });
 
   it("shows the error status_message beneath a failing span", async () => {
