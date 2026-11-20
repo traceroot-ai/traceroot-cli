@@ -1126,7 +1126,7 @@ export interface paths {
         };
         /**
          * Export Trace
-         * @description Export the V1 bundle (trace + spans + git_context + manifest) for the caller's project.
+         * @description Export the trace bundle (trace + spans + git_context + manifest) for the caller's project.
          *
          *     Defaults to the `full` projection — an export is explicit intent to take the
          *     complete trace, so per-span input/output/metadata are included unless the
@@ -1146,7 +1146,7 @@ export interface paths {
          *             projection.
          *
          *     Returns:
-         *         PublicTraceExportResponse: The V1 export bundle (manifest, trace, spans,
+         *         PublicTraceExportResponse: The export bundle (manifest, trace, spans,
          *             git_context) at the requested projection.
          *
          *     Raises:
