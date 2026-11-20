@@ -39,7 +39,7 @@ describe("runInstrument (--print)", () => {
   it("prints the prompt to stdout and writes no file", async () => {
     const { writers, out } = makeWriters();
     await runInstrument({ ...base, cwd, print: true, writers, detection: tsDetection });
-    expect(out.data).toContain("Instrument this repository with TraceRoot");
+    expect(out.data).toContain("Instrument this repository with traceroot");
     expect(existsSync(join(cwd, ".traceroot"))).toBe(false);
   });
 

@@ -708,7 +708,7 @@ describe("authentication", () => {
     // A missing convenience, not an error.
     expect(result.ok).toBe(true);
     expect(ctx.credential?.origin).toBe("minted");
-    expect(err.data).toContain("could not save the TraceRoot sign-in for future runs");
+    expect(err.data).toContain("could not save the traceroot sign-in for future runs");
   });
 
   it("creates the first project when the account has none yet", async () => {
@@ -956,7 +956,7 @@ describe("authentication", () => {
     expect(followed.error).toBeNull();
     expect(created).toEqual([[basename(dir), "w_1"]]);
     expect(remedy).toBe(
-      "Run `traceroot setup` in an interactive terminal, which asks for a name and creates the project, or create one in the TraceRoot dashboard and rerun setup.",
+      "Run `traceroot setup` in an interactive terminal, which asks for a name and creates the project, or create one in the traceroot dashboard and rerun setup.",
     );
   });
 
@@ -1072,7 +1072,7 @@ describe("authentication", () => {
     // a round trip rediscovering that.
     expect(cleared).toEqual(["https://api.example.test"]);
     // The server answers a revoked session and an expired one alike.
-    expect(plain(err.data)).toContain("the saved TraceRoot sign-in has expired or was revoked");
+    expect(plain(err.data)).toContain("the saved traceroot sign-in has expired or was revoked");
   });
 
   it("keeps a rejected TRACEROOT_TOKEN from an --env-file off the saved sign-in", async () => {
@@ -1122,8 +1122,8 @@ describe("authentication", () => {
     // The token lives in the file it was passed in, not in the credentials
     // file, so there is nothing saved to forget.
     expect(cleared).toEqual([]);
-    expect(plain(err.data)).toContain("the configured TraceRoot token was rejected");
-    expect(plain(err.data)).not.toContain("the saved TraceRoot sign-in");
+    expect(plain(err.data)).toContain("the configured traceroot token was rejected");
+    expect(plain(err.data)).not.toContain("the saved traceroot sign-in");
   });
 
   describe("naming the account a reused credential belongs to", () => {
@@ -1240,8 +1240,8 @@ describe("authentication", () => {
 
     it("says where a configured key came from, and how to sign in as someone else", async () => {
       const cases: Array<[ResolvedAuth["credential"]["source"], string, string | undefined]> = [
-        ["config", "in your TraceRoot config file", NOT_YOU],
-        ["credentials-file", "in your TraceRoot credentials file", NOT_YOU],
+        ["config", "in your traceroot config file", NOT_YOU],
+        ["credentials-file", "in your traceroot credentials file", NOT_YOU],
         // `login` saves a key it finds in the `.env` rather than opening the
         // browser, so the key has to go first.
         [
@@ -1429,7 +1429,7 @@ describe("authentication", () => {
     const { ctx } = makeCtx({ canPrompt: true, flags: { browser: true } });
     const result = await runSetupMachine(ctx, deps);
     expect(result.error?.message).not.toContain("localhost");
-    // TraceRoot Cloud serves sign-in and the API from one origin.
+    // traceroot Cloud serves sign-in and the API from one origin.
     expect(result.error?.message).not.toContain("--auth-host");
   });
 
@@ -1608,7 +1608,7 @@ describe("authentication", () => {
       expect(result.error?.exitCode).toBe(ExitCode.auth);
       expect(result.error?.message).toBe(`${message}\n\nRun \`${setupCommand()}\` again.`);
       expect(result.error?.remedy).toBe(`Run \`${setupCommand()}\` again.`);
-      // `login` signs the terminal in and stops there, and TraceRoot sign-up
+      // `login` signs the terminal in and stops there, and traceroot sign-up
       // sends no email to verify.
       expect(plain(err.data)).not.toContain("traceroot login");
       expect(plain(err.data)).not.toMatch(/email/i);
@@ -1949,7 +1949,7 @@ describe("the handoff code from browser-first onboarding", () => {
 
     expect(result.ok).toBe(true);
     expect(said(run.err.data)).toContain(
-      "Signed in as bob@new.example; the sign-in code from the browser replaced the TraceRoot sign-in already saved on this machine.",
+      "Signed in as bob@new.example; the sign-in code from the browser replaced the traceroot sign-in already saved on this machine.",
     );
   });
 
@@ -1987,7 +1987,7 @@ describe("the handoff code from browser-first onboarding", () => {
     expect(run.written.map((e) => e.email)).toEqual(["bob@new.example"]);
     const text = said(run.err.data);
     expect(text).toContain(
-      "A TraceRoot API key is configured in this directory's .env; the sign-in code from the browser takes precedence.",
+      "A traceroot API key is configured in this directory's .env; the sign-in code from the browser takes precedence.",
     );
     expect(text).toContain("Signed in as bob@new.example.");
   });
@@ -2000,7 +2000,7 @@ describe("the handoff code from browser-first onboarding", () => {
     expect(run.keysUsed).not.toContain("tr-stale-ambient-key");
     expect(run.minted).toEqual(["handoff-session-token"]);
     expect(said(run.err.data)).toContain(
-      "A TraceRoot API key is configured in your TraceRoot config file; the sign-in code from the browser takes precedence.",
+      "A traceroot API key is configured in your traceroot config file; the sign-in code from the browser takes precedence.",
     );
   });
 
@@ -2014,7 +2014,7 @@ describe("the handoff code from browser-first onboarding", () => {
     expect(result.ok).toBe(true);
     expect(run.keysUsed).not.toContain("tr-stale-ambient-key");
     expect(said(run.err.data)).toContain(
-      "A TraceRoot API key is configured in your TraceRoot credentials file; the sign-in code from the browser takes precedence.",
+      "A traceroot API key is configured in your traceroot credentials file; the sign-in code from the browser takes precedence.",
     );
   });
 
@@ -2357,7 +2357,7 @@ describe("the project picker's rows", () => {
   });
 });
 
-describe("the TraceRoot demo workspace", () => {
+describe("the traceroot demo workspace", () => {
   // Every account joins the public demo as a viewer, and the server lists it
   // alongside the account's own workspaces. Its project is named to sort first,
   // so a picker that offered it would open on it.
@@ -2477,7 +2477,7 @@ describe("the TraceRoot demo workspace", () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("AMBIGUOUS");
     expect(result.error?.message).toContain(
-      "This account is only in the TraceRoot demo workspace, which is view-only.",
+      "This account is only in the traceroot demo workspace, which is view-only.",
     );
     expect(result.error?.remedy).toContain("Create a workspace and project");
     expect(projectQuestion(run.asked)).toBeUndefined();
@@ -2493,7 +2493,7 @@ describe("the TraceRoot demo workspace", () => {
     expect(result.ok).toBe(false);
     expect(result.error?.exitCode).toBe(SETUP_EXIT_CODES.AMBIGUOUS);
     expect(result.error?.message).toContain(
-      "This account is only in the TraceRoot demo workspace, which is view-only.",
+      "This account is only in the traceroot demo workspace, which is view-only.",
     );
     expect(run.calls).toEqual([]);
   });
@@ -3177,7 +3177,7 @@ describe("a repository that already reports to a project", () => {
 
     expect(result.error).toBeNull();
     expect(plain(each.err.data)).toContain(
-      "the existing TraceRoot credential was rejected; signing in again",
+      "the existing traceroot credential was rejected; signing in again",
     );
     // The saved sign-in took over from the dead key.
     expect(each.ctx.session?.via).toBe("user-credential");
@@ -3227,7 +3227,7 @@ describe("a repository that already reports to a project", () => {
     expect(result.error).toBeNull();
     expect(cleared).toEqual(["https://api.example.test"]);
     expect(plain(each.err.data)).toContain(
-      "the saved TraceRoot sign-in has expired or was revoked; signing in again",
+      "the saved traceroot sign-in has expired or was revoked; signing in again",
     );
     expect(each.ctx.session?.via).toBe("user-credential");
   });
@@ -3704,7 +3704,7 @@ describe("a repository that already reports to a project", () => {
     expect(said).toContain("Removed the CLI's config, which this run created.");
     // Not claimed as kept: the rollback after it takes the config back.
     expect(result.error?.message.split("\n")[0]).toBe(
-      `Setup cancelled — Claude Code was not run, so no code was changed. Setup kept the TraceRoot skill in ${SKILL}.`,
+      `Setup cancelled — Claude Code was not run, so no code was changed. Setup kept the traceroot skill in ${SKILL}.`,
     );
     expect(existsSync(join(dir, SKILL))).toBe(true);
   });
@@ -3818,7 +3818,7 @@ describe("a repository that already reports to a project", () => {
     expect(plain(each.err.data)).not.toContain("CLI's config");
     // The one config the rollback is certain to leave, so the one named as kept.
     expect(result.error?.message.split("\n")[0]).toBe(
-      `Setup cancelled — Claude Code was not run, so no code was changed. Setup kept the TraceRoot skill in ${SKILL} and the CLI's config.`,
+      `Setup cancelled — Claude Code was not run, so no code was changed. Setup kept the traceroot skill in ${SKILL} and the CLI's config.`,
     );
   });
 
@@ -4009,7 +4009,7 @@ describe("a repository that already reports to a project", () => {
 
     expect(each.configured).toEqual([]);
     expect(result.error?.message.split("\n")[0]).toBe(
-      `Setup cancelled — Claude Code was not run, so no code was changed. Setup kept the TraceRoot skill in ${SKILL}.`,
+      `Setup cancelled — Claude Code was not run, so no code was changed. Setup kept the traceroot skill in ${SKILL}.`,
     );
   });
 
@@ -4023,7 +4023,7 @@ describe("a repository that already reports to a project", () => {
 
     const result = await runSetupMachine(each.ctx, each.deps);
 
-    expect(plain(each.err.data)).toContain("could not install the TraceRoot skill");
+    expect(plain(each.err.data)).toContain("could not install the traceroot skill");
     expect(result.error?.message.split("\n")[0]).toBe(
       "Setup cancelled — Claude Code was not run, so no code was changed.",
     );
@@ -5407,7 +5407,7 @@ describe("proving the agent did something", () => {
     expect(result.checkpoint.completedStages).toContain("instrument");
   });
 
-  it("does not fail a service that already carried TraceRoot", async () => {
+  it("does not fail a service that already carried traceroot", async () => {
     // There the right amount of editing may genuinely be none: the task tells
     // the agent to extend what is present rather than duplicate it.
     writeFileSync(
@@ -5571,7 +5571,7 @@ describe("proving the agent did something", () => {
     writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
     const process = fakeRunProcess({
       // Prose, not a completion block: nothing `parseCompletion` can read.
-      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      results: { claude: { output: "Added traceroot to the service.\n" } },
       instrument: false,
     });
     const deps = makeDeps({
@@ -5600,7 +5600,7 @@ describe("proving the agent did something", () => {
     const run: SetupDeps["runProcess"] = async (o) => {
       const result = await base.run(o);
       return o.program === "codex"
-        ? { ...result, output: codexCapture(o.stdin ?? "", "Added TraceRoot to the service.") }
+        ? { ...result, output: codexCapture(o.stdin ?? "", "Added traceroot to the service.") }
         : result;
     };
     const deps = makeDeps({ auth: authWithKey(), traces: [traceRow()], runProcess: run });
@@ -5620,14 +5620,14 @@ describe("proving the agent did something", () => {
     // `initialize(integrations=[...])` after `from traceroot import initialize`
     // is how the Python SDK is started with an integration, and the bare-call
     // pattern only matches empty parentheses. With no report and no git, that
-    // read as no TraceRoot at all and failed a service that was instrumented.
+    // read as no traceroot at all and failed a service that was instrumented.
     pythonRepo();
     writeFileSync(
       join(dir, "main.py"),
       "from traceroot import Integration, initialize\n\ninitialize(integrations=[Integration.ANTHROPIC])\n",
     );
     const process = fakeRunProcess({
-      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      results: { claude: { output: "Added traceroot to the service.\n" } },
       instrument: false,
     });
     const deps = makeDeps({
@@ -5647,7 +5647,7 @@ describe("proving the agent did something", () => {
   it("does not fail a module deeper than the directory walk reaches", async () => {
     // With no report and no git, the service's own directory is read two
     // levels down. A module three levels down is never opened, which is not
-    // the same as finding no TraceRoot in it.
+    // the same as finding no traceroot in it.
     pythonRepo();
     mkdirSync(join(dir, "app", "core", "telemetry"), { recursive: true });
     writeFileSync(
@@ -5656,7 +5656,7 @@ describe("proving the agent did something", () => {
     );
     writeFileSync(join(dir, "main.py"), "from app.core.telemetry import tracing\n\nprint('hi')\n");
     const process = fakeRunProcess({
-      results: { claude: { output: "Added TraceRoot to the service.\n" } },
+      results: { claude: { output: "Added traceroot to the service.\n" } },
       instrument: false,
     });
     const deps = makeDeps({
@@ -6154,7 +6154,7 @@ describe("the agent's own account of a failed run", () => {
     expect(plain(result.error?.message ?? "")).toContain("still not instrumented");
     expect(transcript()).toContain("could not edit main.py");
     expect(plain(result.error?.remedy ?? "")).toContain(AGENT_OUTPUT_PATH);
-    // Only the TraceRoot key is scrubbed, so the line naming the file says so
+    // Only the traceroot key is scrubbed, so the line naming the file says so
     // to whoever is deciding whether to send it.
     expect(plain(result.error?.remedy ?? "")).toContain(
       "It can quote your repository's files, secrets included, so check it before you share it.",
@@ -7021,7 +7021,7 @@ describe("what a failed run takes back", () => {
 
   it("takes its own line out of the project's env file and nothing else", async () => {
     // The file is the project's own, and may be full of things that have
-    // nothing to do with TraceRoot. A rollback that rewrote it would be a
+    // nothing to do with traceroot. A rollback that rewrote it would be a
     // second, worse bug than the stale line it was clearing.
     pythonRepo();
     const existing = "# the project's own\nDATABASE_URL=postgres://localhost/app\nDEBUG=1\n";
@@ -7132,7 +7132,7 @@ describe("how to instrument", () => {
     await runSetupMachine(ctx, deps);
 
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
-    expect(err.data).toContain("Add TraceRoot to");
+    expect(err.data).toContain("Add traceroot to");
     expect(err.data).toContain("traceroot==");
     expect(err.data).toContain("traceroot setup --resume");
   });
@@ -7227,7 +7227,7 @@ describe("how to instrument", () => {
 
   it("settles the method and the agent in one question", async () => {
     // These were two prompts — "which coding agent?" and then "how should
-    // TraceRoot be added?" — for what is one decision. An installed agent is
+    // traceroot be added?" — for what is one decision. An installed agent is
     // now a way of answering the second, not a question of its own.
     pythonRepo();
     initGit();
@@ -7245,7 +7245,7 @@ describe("how to instrument", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.ok).toBe(true);
-    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    const how = asked.find((q) => q.message.includes("How should traceroot be added"));
     expect(how?.options).toEqual(["agent:claude", "task-file", "manual"]);
     // Nothing asks which agent afterwards; the answer already said.
     expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
@@ -7273,7 +7273,7 @@ describe("how to instrument", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.ok).toBe(true);
-    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    const how = asked.find((q) => q.message.includes("How should traceroot be added"));
     expect(how?.options).toEqual(["task-file", "manual"]);
   });
 
@@ -7298,7 +7298,7 @@ describe("how to instrument", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.ok).toBe(true);
-    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    const how = asked.find((q) => q.message.includes("How should traceroot be added"));
     // The registry's order, so it is the same on every machine rather than a
     // function of which binary happened to resolve first.
     expect(how?.options).toEqual(["agent:claude", "agent:codex", "task-file", "manual"]);
@@ -7319,7 +7319,7 @@ describe("how to instrument", () => {
     expect(launched?.args[0]).toBe("exec");
     expect(launched?.args).toContain("workspace-write");
     expect(launched?.args.at(-1)).toBe("-");
-    expect(launched?.stdin).toContain("Instrument this service with TraceRoot");
+    expect(launched?.stdin).toContain("Instrument this service with traceroot");
     expect(launched?.args.join(" ")).not.toContain("--permission-mode");
     // And Claude Code, which is equally installed here, was never started.
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
@@ -7344,7 +7344,7 @@ describe("how to instrument", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.ok).toBe(true);
-    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    const how = asked.find((q) => q.message.includes("How should traceroot be added"));
     expect(how?.options).toEqual(["agent:codex", "task-file", "manual"]);
     expect(asked.filter((q) => q.message.includes("Which coding agent"))).toEqual([]);
     expect(process.runs.filter((r) => r.program === "codex")).toHaveLength(1);
@@ -7366,7 +7366,7 @@ describe("how to instrument", () => {
     const result = await runSetupMachine(ctx, deps);
 
     expect(result.ok).toBe(true);
-    expect(asked.filter((q) => q.message.includes("How should TraceRoot be added"))).toEqual([]);
+    expect(asked.filter((q) => q.message.includes("How should traceroot be added"))).toEqual([]);
     expect(process.runs.filter((r) => r.program === "codex")).toHaveLength(1);
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(0);
     // The suite's fake agent instruments the entry point of whichever agent
@@ -7416,7 +7416,7 @@ describe("how to instrument", () => {
       restorePlatform();
     }
 
-    const how = asked.find((q) => q.message.includes("How should TraceRoot be added"));
+    const how = asked.find((q) => q.message.includes("How should traceroot be added"));
     expect(how?.options).toEqual(["task-file", "manual"]);
     expect(plain(err.data)).toContain(
       `warning: Claude Code is on PATH as a batch shim, ${shim}, which setup cannot launch on Windows. Put the native claude.exe ahead of it on PATH for setup to run it.`,
@@ -7439,7 +7439,7 @@ describe("how to instrument", () => {
     const { ctx } = makeCtx({ canPrompt: true, flags: { agent: "claude" } });
     await runSetupMachine(ctx, deps);
 
-    expect(asked.filter((q) => q.message.includes("How should TraceRoot be added"))).toEqual([]);
+    expect(asked.filter((q) => q.message.includes("How should traceroot be added"))).toEqual([]);
     expect(process.runs.filter((r) => r.program === "claude")).toHaveLength(1);
   });
 });
@@ -7730,7 +7730,7 @@ describe("watching the agent work", () => {
     expect(launch?.args).toContain("--output-format");
     expect(launch?.args).toContain("stream-json");
     // The task travels on stdin, which only the captured invocation does.
-    expect(launch?.stdin).toContain("TraceRoot");
+    expect(launch?.stdin).toContain("traceroot");
     expect(ctx.instrumentation?.mode).toBe("background");
   });
 
@@ -8040,10 +8040,10 @@ describe("--no-instrument", () => {
     const result = await runSetupMachine(ctx, deps);
 
     const taskPath = join(dir, ".traceroot", "prompts", "setup-instrument.md");
-    expect(readFileSync(taskPath, "utf8")).toContain("Instrument this service with TraceRoot");
+    expect(readFileSync(taskPath, "utf8")).toContain("Instrument this service with traceroot");
     expect(err.data).toContain("--resume");
     // It did not reach a trace, so it must not print the completion sentence.
-    expect(out.data).not.toContain("TraceRoot is connected");
+    expect(out.data).not.toContain("traceroot is connected");
     expect(result.ok).toBe(true);
     expect(result.trace).toBeNull();
   });
@@ -8160,8 +8160,8 @@ describe("the agent a hand-over targets", () => {
       // directory happens to sit.
       const line = plain(err.data)
         .split("\n")
-        .find((l) => l.includes("Installed the TraceRoot skill"));
-      expect(line).toContain("Installed the TraceRoot skill for Codex in ");
+        .find((l) => l.includes("Installed the traceroot skill"));
+      expect(line).toContain("Installed the traceroot skill for Codex in ");
       expect(line).toContain(
         `${join(basename(home), "skills", "traceroot-instrument-repo")}, outside this repository.`,
       );
@@ -8233,7 +8233,7 @@ describe("the agent a hand-over targets", () => {
     expect(ctx.agent?.id).toBe("claude");
     expect(skillInstalled(dir, ".claude", "skills")).toBe(true);
     const said = plain(err.data);
-    expect(said).not.toContain("Installed the TraceRoot skill");
+    expect(said).not.toContain("Installed the traceroot skill");
     expect(said).not.toContain("outside this repository");
   });
 
@@ -8363,7 +8363,7 @@ describe("the agent a hand-over targets", () => {
     await runSetupMachine(ctx, handoverDeps());
 
     const taskPath = join(dir, ".traceroot", "prompts", "setup-instrument.md");
-    expect(readFileSync(taskPath, "utf8")).toContain("Instrument this service with TraceRoot");
+    expect(readFileSync(taskPath, "utf8")).toContain("Instrument this service with traceroot");
     const said = plain(err.data);
     expect(said).toContain("No coding agent is set up here");
     expect(said).toContain("run it in whichever agent you use");
@@ -8415,7 +8415,7 @@ describe("why no trace arrived", () => {
   }
 
   it("ends an un-run hand-over as a pause, not as a program that never ran", async () => {
-    // The live failure. `main.py` held zero TraceRoot references and the SDK
+    // The live failure. `main.py` held zero traceroot references and the SDK
     // was not installed, and the run said "nothing has run your application —
     // Run your application once". Running an uninstrumented application again
     // produces the same nothing, so that advice is a loop with no exit; what
@@ -8570,7 +8570,7 @@ describe("why no trace arrived", () => {
     // `--resume` restores the instrument stage from the checkpoint rather
     // than running it again — and a restored hand-over that claimed an agent
     // had edited the code is what sent them back to run an application with no
-    // TraceRoot in it, which is the loop this whole route exists to break.
+    // traceroot in it, which is the loop this whole route exists to break.
     pythonRepoWithoutTests();
     const first = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
     await runSetupMachine(first.ctx, traceless());
@@ -8591,7 +8591,7 @@ describe("why no trace arrived", () => {
 
   it("waits for the trace on the resume after the task is applied, and finishes", async () => {
     // The pause records no trace, so the trace stage is unsatisfied on the
-    // resume and runs again — this time over code that has TraceRoot in it.
+    // resume and runs again — this time over code that has traceroot in it.
     pythonRepo();
     const first = makeCtx({ flags: { instrument: false, traceTimeoutSec: 120 } });
     const paused = await runSetupMachine(first.ctx, traceless());
@@ -8999,7 +8999,7 @@ describe("how long setup waits for the first trace", () => {
     },
   );
 
-  it("waits the full budget for a service that already carries TraceRoot", async () => {
+  it("waits the full budget for a service that already carries traceroot", async () => {
     // Whoever runs an instrumented application next sends a trace — the user,
     // on a resume after instrumenting by hand, or here a repository that was
     // wired up before setup arrived — so there is something to wait for even

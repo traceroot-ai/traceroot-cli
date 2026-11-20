@@ -240,7 +240,7 @@ export interface SetupDeps {
   /** Temp directory for the agent task; removed when the run ends. */
   makeTempDir: () => string;
   /**
-   * Probes a candidate host for a TraceRoot API. Used ONLY to turn a dead-end
+   * Probes a candidate host for a traceroot API. Used ONLY to turn a dead-end
    * error into an actionable one — never to pick a host on the user's behalf.
    */
   probeHost: (host: string) => Promise<boolean>;
@@ -609,7 +609,7 @@ function setupWrites(ctx: SetupContext, adapter: AgentAdapter): string[] {
  * the run a `--resume` picks up as well as for this one. Detection is no
  * substitute: it reads only the entry point, and an agent may put
  * `initialize()` where it cannot see. And the application itself, once it
- * carries TraceRoot — a repository that already did, or a resume after the
+ * carries traceroot — a repository that already did, or a resume after the
  * user instrumented it by hand — because whoever runs it next sends one.
  * Detection reads the entry point afresh on every run, so the second answer is
  * about the code as it stands now.
@@ -657,9 +657,9 @@ function keySource(source: ResolvedAuth["credential"]["source"]): string {
     case "auto-env-file":
       return "in this directory's .env";
     case "credentials-file":
-      return "in your TraceRoot credentials file";
+      return "in your traceroot credentials file";
     default:
-      return "in your TraceRoot config file";
+      return "in your traceroot config file";
   }
 }
 
@@ -677,7 +677,7 @@ function keySource(source: ResolvedAuth["credential"]["source"]): string {
  * file for it sends the reader to edit a file that has nothing in it.
  */
 function ambientKeySetAside(source: ResolvedAuth["credential"]["source"]): string {
-  return `A TraceRoot API key is configured ${keySource(source)}; the sign-in code from the browser takes precedence.`;
+  return `A traceroot API key is configured ${keySource(source)}; the sign-in code from the browser takes precedence.`;
 }
 
 /**
@@ -791,7 +791,7 @@ const authenticate: StageDefinition = {
           () => deps.now(),
         );
         // Every way into this stage now opens with its own sentence, because
-        // the generic "Sign in to TraceRoot" heading is gone. Without one this
+        // the generic "Sign in to traceroot" heading is gone. Without one this
         // path — the fastest of the four — would pass in silence, and a step
         // that prints nothing reads as a step that failed to print.
         wizardNote(
@@ -815,11 +815,11 @@ const authenticate: StageDefinition = {
           throw new SetupError({
             stage: "authenticate",
             code: "UNSAFE_OVERWRITE",
-            message: `Could not reach ${host} to verify the existing TraceRoot credential, so setup stopped rather than replacing it.`,
+            message: `Could not reach ${host} to verify the existing traceroot credential, so setup stopped rather than replacing it.`,
             remedy: `Check your connection and rerun \`${setupCommand()}\`.`,
           });
         }
-        wizardWarn(ctx, "the existing TraceRoot credential was rejected; signing in again");
+        wizardWarn(ctx, "the existing traceroot credential was rejected; signing in again");
       }
     }
 
@@ -870,7 +870,7 @@ const authenticate: StageDefinition = {
       throw new SetupError({
         stage: "authenticate",
         code: "NOT_AUTHENTICATED",
-        message: "No TraceRoot credential is configured and setup cannot prompt for one.",
+        message: "No traceroot credential is configured and setup cannot prompt for one.",
         remedy: [
           "Provide a key non-interactively:",
           `  ${setupCommand()} --api-key <key>`,
@@ -883,7 +883,7 @@ const authenticate: StageDefinition = {
     wizardNote(
       ctx.writers,
       [
-        wizardEmphasis("Sign in to continue the setup. Paste a TraceRoot API key below."),
+        wizardEmphasis("Sign in to continue the setup. Paste a traceroot API key below."),
         "",
         wizardAside("What you type is not echoed."),
       ],
@@ -896,7 +896,7 @@ const authenticate: StageDefinition = {
     // `Invalid API key` for a key that is perfectly valid. Before the empty
     // check, so pasting a bare `TRACEROOT_API_KEY=` is caught here rather than
     // sent.
-    const pasted = normalizeApiKey(await deps.promptHidden("TraceRoot API key: ", "authenticate"));
+    const pasted = normalizeApiKey(await deps.promptHidden("traceroot API key: ", "authenticate"));
     if (pasted === "") {
       throw new SetupError({
         stage: "authenticate",
@@ -928,7 +928,7 @@ const authenticate: StageDefinition = {
  * does not depend on where the key came from, and a second copy is a second
  * place a field can reach one route and not the other.
  *
- * The key already implies a project (TraceRoot keys are project-scoped today),
+ * The key already implies a project (traceroot keys are project-scoped today),
  * so it is recorded as the default selection. SELECT_CONTEXT may still override
  * it from `--project`.
  */
@@ -965,7 +965,7 @@ const LOCAL_HOST_CANDIDATES = ["http://localhost:8000", "http://localhost:3000"]
 /**
  * Builds the remedy for "this deployment cannot do browser sign-in".
  *
- * When the CLI fell back to the default host and a TraceRoot API is answering
+ * When the CLI fell back to the default host and a traceroot API is answering
  * on a local port, the overwhelmingly likely truth is that the developer meant
  * their own stack — so the message names it and gives the exact command. It
  * still never switches hosts on its own: silently retargeting where a
@@ -975,7 +975,7 @@ const LOCAL_HOST_CANDIDATES = ["http://localhost:8000", "http://localhost:3000"]
  * When nothing named the web app, the sign-in went to the API host. A
  * self-hosted deployment that serves the two on different origins answers
  * exactly like this, and `--auth-host` is the whole fix, so the remedy leads
- * with it. TraceRoot Cloud serves both from one origin, so it is not offered
+ * with it. traceroot Cloud serves both from one origin, so it is not offered
  * for the default host.
  */
 async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string> {
@@ -985,7 +985,7 @@ async function signInFallbackHint(host: string, deps: SetupDeps): Promise<string
     for (const candidate of LOCAL_HOST_CANDIDATES) {
       if (await deps.probeHost(candidate)) {
         lines.push(
-          `A TraceRoot API is responding at ${candidate} — if that is your deployment, use it:`,
+          `A traceroot API is responding at ${candidate} — if that is your deployment, use it:`,
           `  ${setupCommand()} --host ${candidate}`,
           "",
         );
@@ -1087,7 +1087,7 @@ function storeSessionCredential(
   try {
     deps.writeCredential(host, entry);
   } catch {
-    wizardWarn(ctx, "could not save the TraceRoot sign-in for future runs");
+    wizardWarn(ctx, "could not save the traceroot sign-in for future runs");
   }
   return entry;
 }
@@ -1142,7 +1142,7 @@ function accountSwitchLine(
     return undefined;
   }
   if (previous.email === undefined || email === undefined) {
-    return `${signedInAs(email)}; the sign-in code from the browser replaced the TraceRoot sign-in already saved on this machine.`;
+    return `${signedInAs(email)}; the sign-in code from the browser replaced the traceroot sign-in already saved on this machine.`;
   }
   if (previous.email === email) {
     return undefined;
@@ -1415,9 +1415,9 @@ async function userCredentialSignIn(
       // this case.
       if (options.source === "credentials-file") {
         deps.deleteCredential(host);
-        wizardWarn(ctx, "the saved TraceRoot sign-in has expired or was revoked; signing in again");
+        wizardWarn(ctx, "the saved traceroot sign-in has expired or was revoked; signing in again");
       } else {
-        wizardWarn(ctx, "the configured TraceRoot token was rejected; signing in again");
+        wizardWarn(ctx, "the configured traceroot token was rejected; signing in again");
       }
       return false;
     }
@@ -1787,7 +1787,7 @@ const selectContext: StageDefinition = {
  * the message says the account has no workspace they can create in, which is
  * the actual problem.
  *
- * So is the TraceRoot demo, whatever the role in it: it is a public workspace
+ * So is the traceroot demo, whatever the role in it: it is a public workspace
  * every account joins, never a place for a repository's traces. An account
  * that is in nothing else is told that, rather than to ask an admin for access.
  */
@@ -1809,7 +1809,7 @@ async function chooseWorkspace(
       stage,
       code: "AMBIGUOUS",
       message: "This account has no workspace you can create a project in.",
-      remedy: "Ask a workspace admin for access, or create a workspace in the TraceRoot dashboard.",
+      remedy: "Ask a workspace admin for access, or create a workspace in the traceroot dashboard.",
     });
   }
   if (workspaces.length === 1) {
@@ -1821,7 +1821,7 @@ async function chooseWorkspace(
       stage,
       code: "AMBIGUOUS",
       message: `You belong to ${workspaces.length} workspaces, so setup cannot pick one for you.`,
-      remedy: `Create the project in the TraceRoot dashboard and rerun with --project, for example:\n  ${setupCommand()} --project ${basename(ctx.root)}`,
+      remedy: `Create the project in the traceroot dashboard and rerun with --project, for example:\n  ${setupCommand()} --project ${basename(ctx.root)}`,
     });
   }
 
@@ -1833,7 +1833,7 @@ async function chooseWorkspace(
   return workspaces.find((w) => w.id === answer)?.id ?? only.id;
 }
 
-/** Whether the TraceRoot demo is the only workspace the account is in. */
+/** Whether the traceroot demo is the only workspace the account is in. */
 function onlyInDemo(workspaces: readonly WorkspaceSummary[]): boolean {
   return workspaces.length > 0 && workspaces.every((w) => w.is_demo === true);
 }
@@ -1843,8 +1843,8 @@ function demoOnly(stage: SetupStage): SetupError {
   return new SetupError({
     stage,
     code: "AMBIGUOUS",
-    message: "This account is only in the TraceRoot demo workspace, which is view-only.",
-    remedy: "Create a workspace and project in the TraceRoot dashboard, then rerun setup.",
+    message: "This account is only in the traceroot demo workspace, which is view-only.",
+    remedy: "Create a workspace and project in the traceroot dashboard, then rerun setup.",
   });
 }
 
@@ -1936,7 +1936,7 @@ export function projectOptions(projects: readonly ProjectSummary[]): SelectOptio
  * Whether a different answer may replace it is {@link confirmProjectSwitch}'s
  * call, not this function's.
  *
- * Projects in the TraceRoot demo are not among the choices. Every account joins
+ * Projects in the traceroot demo are not among the choices. Every account joins
  * the demo as a viewer, so counting its project as one of the account's own
  * turned a lone project into a question, and an account with only the demo
  * into a key mint the server refuses. Only `--project` with its exact id still
@@ -2002,7 +2002,7 @@ async function chooseProject(
         message: `No project named '${wanted}' was found in this workspace.`,
         remedy:
           projects.length === 0
-            ? "Create one in the TraceRoot dashboard, then rerun setup."
+            ? "Create one in the traceroot dashboard, then rerun setup."
             : `Available projects: ${projects.map((p) => p.project_name).join(", ")}`,
       });
     }
@@ -2028,7 +2028,7 @@ async function chooseProject(
         message: "This workspace has no projects yet.",
         // Not `--project <name>`: that flag only selects a project that exists.
         // Run without it, setup can ask, and asks for the new project's name.
-        remedy: `Run \`${setupCommand()}\` in an interactive terminal, which asks for a name and creates the project, or create one in the TraceRoot dashboard and rerun setup.`,
+        remedy: `Run \`${setupCommand()}\` in an interactive terminal, which asks for a name and creates the project, or create one in the traceroot dashboard and rerun setup.`,
       });
     }
     // Which workspace to create it in. The caller supplies one only when it
@@ -2172,7 +2172,7 @@ async function confirmProjectSwitch(
   throw new SetupError({
     stage,
     code: "UNSAFE_OVERWRITE",
-    message: `${existing.envEntry} already contains a working TraceRoot key for ${from}, but setup selected ${to}.`,
+    message: `${existing.envEntry} already contains a working traceroot key for ${from}, but setup selected ${to}.`,
     remedy: [...route.move, `or remove ${KEY_ENV} from ${existing.envEntry} if it is stale.`].join(
       "\n",
     ),
@@ -2249,7 +2249,7 @@ const acquireProjectKey: StageDefinition = {
     const project = requireProject(ctx);
 
     // The user's own key is already scoped to this project (the single-credential
-    // shape TraceRoot ships today). Minting a second key would be pure noise —
+    // shape traceroot ships today). Minting a second key would be pure noise —
     // unless the key would go over the env file's own, or is one that can
     // manage keys; see `settleSessionKey`.
     let settledEnvFile = false;
@@ -2629,7 +2629,7 @@ async function repositoryKey(
     throw new SetupError({
       stage,
       code: "UNSAFE_OVERWRITE",
-      message: `A TraceRoot key is already present in ${envEntry} but could not be verified (${host} was unreachable), so setup stopped rather than replacing it.`,
+      message: `A traceroot key is already present in ${envEntry} but could not be verified (${host} was unreachable), so setup stopped rather than replacing it.`,
       remedy: `Check your connection and rerun \`${setupCommand()}\`.`,
     });
   }
@@ -2658,7 +2658,7 @@ async function reuseExistingKey(
     throw new SetupError({
       stage: "acquire_project_key",
       code: "UNSAFE_OVERWRITE",
-      message: `${envEntry} already contains a working TraceRoot key for project '${who.project_name ?? who.project_id}', but setup selected '${ctx.project?.projectName}'.`,
+      message: `${envEntry} already contains a working traceroot key for project '${who.project_name ?? who.project_id}', but setup selected '${ctx.project?.projectName}'.`,
       remedy: [
         "Run setup for that project instead:",
         `  ${setupCommand()} --project ${who.project_id}`,
@@ -3132,7 +3132,7 @@ const detectStackStage: StageDefinition = {
     if (stack.existingInstrumentation.present) {
       wizardProgress(
         ctx,
-        `TraceRoot already partly present: ${stack.existingInstrumentation.evidence.join("; ")}`,
+        `traceroot already partly present: ${stack.existingInstrumentation.evidence.join("; ")}`,
       );
     }
     return "ok";
@@ -3159,7 +3159,7 @@ async function askForLanguage(
 ): Promise<SetupStageStatus> {
   const unsupported =
     stack.unsupportedLanguages.length > 0
-      ? ` Found ${stack.unsupportedLanguages.join(", ")}, which the TraceRoot SDK does not support yet.`
+      ? ` Found ${stack.unsupportedLanguages.join(", ")}, which the traceroot SDK does not support yet.`
       : "";
 
   // A repository we simply cannot instrument is not a question. Offering
@@ -3207,7 +3207,7 @@ async function askForLanguage(
 
     const answer = await deps.select({
       stage: "detect_stack",
-      message: "Which language should TraceRoot instrument?",
+      message: "Which language should traceroot instrument?",
       options: [
         { value: "python", label: "Python" },
         { value: "typescript", label: "TypeScript / JavaScript" },
@@ -3417,7 +3417,7 @@ export function runTaskSentence(ctx: SetupContext, task: string, named: boolean)
  * Decides how the SDK gets added, and — where that means running an agent —
  * which one, in a single question.
  *
- * "Which coding agent?" and "how should TraceRoot be added?" are one decision,
+ * "Which coding agent?" and "how should traceroot be added?" are one decision,
  * not two. Split, a user who has Claude Code installed and wants it to do the
  * work is asked to say so twice, and a user who wants the task file is made to
  * name an agent first as though it mattered. Worse, splitting them allows
@@ -3507,7 +3507,7 @@ async function chooseInstrumentation(
   }
   const answer = await deps.select({
     stage: "select_agent",
-    message: "How should TraceRoot be added to this service?",
+    message: "How should traceroot be added to this service?",
     options: [
       ...runnable.map((agent) => ({
         value: `agent:${agent.id}`,
@@ -3565,7 +3565,7 @@ const installAgentContext: StageDefinition = {
       if (!isInsideDirectory(ctx.root, targetDir)) {
         wizardProgress(
           ctx,
-          `Installed the TraceRoot skill for ${agent.displayName} in ${displaySkillPath(ctx.root, targetDir)}, outside this repository.`,
+          `Installed the traceroot skill for ${agent.displayName} in ${displaySkillPath(ctx.root, targetDir)}, outside this repository.`,
         );
       }
     } catch (err) {
@@ -3573,7 +3573,7 @@ const installAgentContext: StageDefinition = {
       // the run rather than ending it.
       wizardWarn(
         ctx,
-        `could not install the TraceRoot skill (${err instanceof Error ? err.message : String(err)}); continuing`,
+        `could not install the traceroot skill (${err instanceof Error ? err.message : String(err)}); continuing`,
       );
       status = "skipped";
     }
@@ -4201,7 +4201,7 @@ const instrument: StageDefinition = {
       // that it changed nothing is a claim (see `parseCompletion`), and the
       // worktree observation is empty outside a git repository and whenever
       // `git status` could not be read — so either alone would fail runs that
-      // worked. A service that already carried TraceRoot is excluded too: there
+      // worked. A service that already carried traceroot is excluded too: there
       // the right amount of editing may genuinely be none.
       const changedNothing =
         reported !== null &&
@@ -4255,7 +4255,7 @@ const instrument: StageDefinition = {
         });
       }
 
-      // Exit 0, and the service still has no TraceRoot in it.
+      // Exit 0, and the service still has no traceroot in it.
       //
       // The guard above cannot fire without the agent's own report, so an agent
       // that finishes without emitting one is not covered by it at all — which
@@ -4278,14 +4278,14 @@ const instrument: StageDefinition = {
       // have edited the entry point: whatever it reported changing and whatever
       // git saw change are read too, because a call wired into a module the
       // entry point imports is instrumentation. And a service that already
-      // carried TraceRoot is excluded, for the same reason it is excluded
+      // carried traceroot is excluded, for the same reason it is excluded
       // above — there the right amount of editing may genuinely be none.
       //
       // Only ever a positive finding of absence. An entry point that could not
       // be identified is not evidence of anything, so there the stage says
       // nothing and the run carries on. Nor is a reading that could not see
       // everything: a directory walk the budget cut short, or a file that
-      // imports TraceRoot and starts it in a form the patterns miss, such as
+      // imports traceroot and starts it in a form the patterns miss, such as
       // `initialize({ serviceName: "api" })`. Those answer `unknown`, and the
       // trace wait is what settles them.
       const entryPoint = serviceEntryPath(service);
@@ -4311,7 +4311,7 @@ const instrument: StageDefinition = {
             stage: "instrument",
             code: "AGENT_FAILED",
             message: [
-              `${adapter.displayName} finished, but the service is still not instrumented: there is no TraceRoot initialization in ${entryPoint}.`,
+              `${adapter.displayName} finished, but the service is still not instrumented: there is no traceroot initialization in ${entryPoint}.`,
               reported === null || reported.notes === null
                 ? null
                 : `It reported: ${oneLine(reported.notes)}`,
@@ -4451,7 +4451,7 @@ function keptOnCancel(ctx: SetupContext): string {
     SKILL_NAME,
   );
   if (existsSync(skill)) {
-    kept.push(`the TraceRoot skill in ${displaySkillPath(ctx.root, skill)}`);
+    kept.push(`the traceroot skill in ${displaySkillPath(ctx.root, skill)}`);
   }
   // The two routes that sign in on the user's behalf write it, and no other does.
   const wroteIt = ctx.session?.via === "user-credential" || ctx.session?.via === "pasted-key";
@@ -4561,7 +4561,7 @@ const verifyTrace: StageDefinition = {
     // On a resume that reading is no longer the whole story — the user may have
     // done the task, with `initialize()` in a module the entry point imports —
     // so the closing line in `commands/setup/run.ts` stops short of saying the
-    // service has no TraceRoot in it there.
+    // service has no traceroot in it there.
     const unrunHandover =
       ctx.instrumentation?.mode === "prompt-only" &&
       ctx.stack?.existingInstrumentation.present !== true
@@ -4696,7 +4696,7 @@ const verifyTrace: StageDefinition = {
       //
       // This route reported a missing trace as "nothing has run your
       // application", which sent the user off to run an application that has
-      // no TraceRoot in it — a loop that cannot terminate, since running it
+      // no traceroot in it — a loop that cannot terminate, since running it
       // again produces the same nothing. Then as a stopped run, which was no
       // better: a red `error:` block and exit 14 over the very hand-over the
       // user had just chosen, read as a crash. The instrumentation is simply
@@ -5016,7 +5016,7 @@ async function revokeMintedKeys(ctx: SetupContext, deps: SetupDeps): Promise<Rea
 
 /** Where a key this run could not take back is deleted by hand. */
 function keyListHost(ctx: SetupContext, deps: SetupDeps): string {
-  return deps.resolvedAuth.hostUrl.value ?? ctx.session?.host ?? "your TraceRoot deployment";
+  return deps.resolvedAuth.hostUrl.value ?? ctx.session?.host ?? "your traceroot deployment";
 }
 
 /** `name (hint)` for each, which is how the dashboard's key list reads. */
@@ -5038,7 +5038,7 @@ function describeKeys(keys: readonly MintedKey[]): string {
  * Only the keys this run wrote come out, so every other line in the file is
  * left exactly as it was; `configure_repository` writes into one of the
  * project's own files, which may be full of things that have nothing to do with
- * TraceRoot. A key the file already had is put back rather than taken out — see
+ * traceroot. A key the file already had is put back rather than taken out — see
  * {@link restoreReplacedValues}.
  *
  * A file this run *created* is removed outright once nothing but its own header

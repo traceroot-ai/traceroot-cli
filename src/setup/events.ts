@@ -48,7 +48,7 @@ export function jsonEmitter(writers: Writers): SetupEmitter {
  */
 export const STAGE_LABELS: Record<SetupStage, string> = {
   precheck: "Check the repository",
-  authenticate: "Sign in to TraceRoot",
+  authenticate: "Sign in to traceroot",
   select_context: "Choose the project",
   acquire_project_key: "Get an API key",
   configure_repository: "Write the credentials",
@@ -58,7 +58,7 @@ export const STAGE_LABELS: Record<SetupStage, string> = {
   // one question; "Choose a coding agent" described only the half of it that
   // most runs never see.
   select_agent: "Choose how to instrument",
-  install_agent_context: "Install the TraceRoot skill",
+  install_agent_context: "Install the traceroot skill",
   instrument: "Instrument the application",
   verify_trace: "Wait for the first trace",
   complete: "Finish",
@@ -70,7 +70,7 @@ export const STAGE_LABELS: Record<SetupStage, string> = {
  * `authenticate` has four ways in — a credential already configured, a saved
  * CLI token, the browser handoff, a pasted key — and each of them opens with a
  * sentence that says which one is happening and what the user has to do about
- * it. "Sign in to TraceRoot" above any of those is the restatement this
+ * it. "Sign in to traceroot" above any of those is the restatement this
  * renderer exists to remove, and above the browser block it was worse than
  * redundant: two headings, one directly under the other, for a single section.
  *
@@ -172,7 +172,7 @@ export function stageLineEmitter(writers: Writers): SetupEmitter {
     }
 
     // Nothing to report about a step that is not a section, whether it ran or
-    // was already done. "Install the TraceRoot skill — already done" is the
+    // was already done. "Install the traceroot skill — already done" is the
     // heading this set exists to remove, wearing a different hat.
     if (UNANNOUNCED.has(event.stage) && event.status !== "failed") {
       return;
