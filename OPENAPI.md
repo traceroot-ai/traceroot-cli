@@ -5,9 +5,9 @@ OpenAPI schema. `openapi.json` is the ONLY cross-repo artifact; nothing in the
 build graph imports the backend.
 
 - Backend source: `backend/rest/openapi/public.json`
-- Backend commit: `5791ebddf` (branch `main`)
-- sha256(openapi.json): `d885dbc7fbf28ade4862252f749e5c72db5705270e256c6039deb9dd513da7ca`
-- Vendored on: 2026-11-12
+- Backend commit: `adf4334ef` (branch `main`)
+- sha256(openapi.json): `e7b0c5ef7744565671db34d137483f26832e1a35f094713c5cc4833edeed06a7`
+- Vendored on: 2026-11-20
 
 A straight copy of backend `main` at the commit `@traceroot-ai/tools@0.6.0` is published from. The
 three signal paths — `/signals`, `/signals/{signal_id}` (with the signal's `recent_hits`) and
