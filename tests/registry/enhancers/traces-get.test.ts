@@ -91,6 +91,20 @@ function fakeGetFinding(
   return () => Promise.resolve(finding);
 }
 
+/** `runGet`'s human output for `trace`, with stdout reporting `columns` (undefined when piped). */
+async function renderAtColumns(trace: TraceDetail, columns: number | undefined): Promise<string> {
+  const stdout = process.stdout as unknown as { columns?: number };
+  const original = stdout.columns;
+  stdout.columns = columns;
+  try {
+    const { writers: w, out } = writers();
+    await runGet(trace, { json: false, writers: w, traceId: "t-1", getFinding: fakeGetFinding() });
+    return out.data;
+  } finally {
+    stdout.columns = original;
+  }
+}
+
 describe("runGet (human)", () => {
   it("renders the span tree and the verbatim trace_url", async () => {
     const trace = detail({});
@@ -124,6 +138,51 @@ describe("runGet (human)", () => {
     const spanLine = out.data.split("\n").find((l) => l.includes("root-span")) as string;
     expect(spanLine).toBeDefined();
     expect(spanLine).toContain("1.5s");
+  });
+
+  it("prints the same span tree at 80 and 200 columns, at 0 columns and when piped", async () => {
+    const trace = detail({
+      spans: [
+        span({ span_id: "root", name: "root-span" }),
+        span({
+          span_id: "child",
+          parent_span_id: "root",
+          name: "child-span",
+          status: "ERROR",
+          status_message: "downstream timeout after 30s",
+          span_start_time: "2024-01-01T00:00:00.100Z",
+          span_end_time: "2024-01-01T00:00:00.350Z",
+        }),
+      ],
+    });
+    const at80 = await renderAtColumns(trace, 80);
+    expect(at80).toContain("root-span [ok]          1.0s");
+    expect(at80).toContain("└─ child-span [error]  250ms");
+    expect(at80).toContain("   downstream timeout after 30s");
+    expect(await renderAtColumns(trace, 200)).toBe(at80);
+    expect(await renderAtColumns(trace, 0)).toBe(at80);
+    expect(await renderAtColumns(trace, undefined)).toBe(at80);
+  });
+
+  it("keeps a long span name whole when piped, and cuts it only on a terminal too narrow for it", async () => {
+    const longName = `GET /api/v1/projects/{project_id}/traces/{trace_id}/annotations/${"x".repeat(20)}`;
+    const trace = detail({
+      spans: [
+        span({ span_id: "root", name: "root-span" }),
+        span({ span_id: "child", parent_span_id: "root", name: longName }),
+      ],
+    });
+    async function spanLines(columns: number | undefined): Promise<string[]> {
+      const out = await renderAtColumns(trace, columns);
+      return out.split("\n").filter((l) => l.includes(" [ok] "));
+    }
+    const piped = await spanLines(undefined);
+    expect(piped[0]).toHaveLength(80);
+    expect(piped[1]).toBe(`└─ ${longName} [ok]  1.0s`);
+    expect(await spanLines(0)).toEqual(piped);
+    const at80 = await spanLines(80);
+    expect(at80.map((l) => l.length)).toEqual([80, 80]);
+    expect(at80[1]).toContain("… [ok]  1.0s");
   });
 
   it("shows the error status_message beneath a failing span", async () => {
