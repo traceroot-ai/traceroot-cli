@@ -167,6 +167,39 @@ describe("runGet (human)", () => {
     }
   });
 
+  it("keeps a long span name whole when piped, and cuts it only on a terminal too narrow for it", async () => {
+    const longName = `GET /api/v1/projects/{project_id}/traces/{trace_id}/annotations/${"x".repeat(20)}`;
+    const trace = detail({
+      spans: [
+        span({ span_id: "root", name: "root-span" }),
+        span({ span_id: "child", parent_span_id: "root", name: longName }),
+      ],
+    });
+    const stdout = process.stdout as unknown as { columns?: number };
+    const original = stdout.columns;
+    const spanLines = async (columns: number | undefined): Promise<string[]> => {
+      stdout.columns = columns;
+      const { writers: w, out } = writers();
+      await runGet(trace, {
+        json: false,
+        writers: w,
+        traceId: "t-1",
+        getFinding: fakeGetFinding(),
+      });
+      return out.data.split("\n").filter((l) => l.includes(" [ok] "));
+    };
+    try {
+      const piped = await spanLines(undefined);
+      expect(piped).toContain(`└─ ${longName} [ok]  1.0s`);
+      expect(await spanLines(0)).toEqual(piped);
+      const at80 = await spanLines(80);
+      expect(at80.map((l) => l.length)).toEqual([80, 80]);
+      expect(at80[1]).toContain("… [ok]  1.0s");
+    } finally {
+      stdout.columns = original;
+    }
+  });
+
   it("shows the error status_message beneath a failing span", async () => {
     const trace = detail({
       spans: [

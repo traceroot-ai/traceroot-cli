@@ -33,7 +33,10 @@ const ANSI_RED = "\x1b[91m";
 // supplementary rather than competing with the span line itself.
 const ANSI_DIM = "\x1b[2m";
 
-/** Default terminal width assumed when {@link RenderTreeOptions.width} is omitted. */
+/**
+ * Width error messages are cut to when the terminal's width is unknown
+ * ({@link RenderTreeOptions.width} absent, zero or negative).
+ */
 const DEFAULT_WIDTH = 80;
 
 /** Spaces between the longest span line and the duration column. */
@@ -116,7 +119,8 @@ export interface RenderTreeOptions {
   color?: boolean;
   /**
    * Terminal width: span lines with a duration and error messages are kept
-   * within it. Zero or absent means 80.
+   * within it. Zero or absent means the width is unknown (piped output): span
+   * names are never cut, and error messages are cut at 80.
    */
   width?: number;
   /**
@@ -140,7 +144,9 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
   }
   const color = options.color === true;
   // A terminal that reports 0 columns gets the same layout as piped output.
-  const width = options.width !== undefined && options.width > 0 ? options.width : DEFAULT_WIDTH;
+  const terminalWidth =
+    options.width !== undefined && options.width > 0 ? options.width : undefined;
+  const width = terminalWidth ?? DEFAULT_WIDTH;
   const now = options.now;
 
   const indexOf = new Map<string, number>();
@@ -242,20 +248,31 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
 
   // Durations end in one column, a fixed gap after the longest span line, so
   // the tree is the same at any terminal width. When that column would run
-  // past `width` it is pulled in, and a span line too long for it has its name
-  // cut so its duration still lands in the column.
-  const textWidth = Math.min(longest, width - DURATION_GAP - durationWidth);
-  const spanLine = (line: SpanLine): string => {
+  // past the terminal's width it is pulled in, and a span line too long for it
+  // has its name cut so its duration still lands in the column. With no known
+  // width (piped output) nothing is cut.
+  const textWidth =
+    terminalWidth === undefined
+      ? longest
+      : Math.min(longest, terminalWidth - DURATION_GAP - durationWidth);
+  const renderSpanLine = (line: SpanLine): string => {
     let text = `${line.head}${line.name}${line.tail}`;
     if (line.duration !== null) {
-      const room = Math.max(1, textWidth - line.head.length - line.tail.length);
-      const name = line.name.length > room ? `${line.name.slice(0, room - 1)}…` : line.name;
+      const room = textWidth - line.head.length - line.tail.length;
+      let name = line.name;
+      // Cut only when the cut keeps part of the name: a span nested so deep
+      // that its prefix and marker fill the line keeps its whole name. The cut
+      // never ends on the first half of a surrogate pair, so an emoji is
+      // dropped whole rather than split.
+      if (name.length > room && room >= 2) {
+        name = `${name.slice(0, room - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+      }
       const fitted = `${line.head}${name}${line.tail}`.padEnd(textWidth);
       text = `${fitted}${" ".repeat(DURATION_GAP)}${line.duration.padStart(durationWidth)}`;
     }
     return color && line.error ? `${ANSI_RED}${text}${ANSI_RESET}` : text;
   };
-  return lines.map((line) => (typeof line === "string" ? line : spanLine(line))).join("\n");
+  return lines.map((line) => (typeof line === "string" ? line : renderSpanLine(line))).join("\n");
 }
 
 /** Hint appended to truncated text; budgeted into {@link truncate}'s `max`. */

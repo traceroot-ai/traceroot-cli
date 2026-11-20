@@ -132,7 +132,7 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
   lines.push(
     renderTree(trace.spans, {
       color: colorEnabled(writers.out),
-      width: process.stdout.columns ?? 80,
+      width: process.stdout.columns,
       now: nowIso,
     }),
   );
