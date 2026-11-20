@@ -37,7 +37,6 @@ export function categoryLabel(template: string | null | undefined): string {
 /** Core, network-free rendering logic for `findings get`. Exported for tests. */
 export function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: string): string {
   const styler = createStyler(writers.out);
-  const label = (text: string): string => styler.bold(text);
   const lines: string[] = [];
 
   // Header fields. Id ordering mirrors the UI's detector-runs table: run id ->
@@ -82,7 +81,7 @@ export function renderFinding(finding: FindingDetail, writers: Writers, timeZone
   if (!finding.rca) {
     lines.push(...fieldLines([["RCA", "(none)"]], styler));
   } else if (finding.rca.result) {
-    lines.push(label("RCA:"));
+    lines.push(styler.bold("RCA:"));
     for (const resultLine of finding.rca.result.trim().split("\n")) {
       lines.push(resultLine);
     }

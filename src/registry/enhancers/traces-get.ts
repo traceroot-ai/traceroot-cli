@@ -114,11 +114,10 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
   // generating), and a yellow pointer to `findings get` for the full RCA /
   // per-detector data, indented to start where the values do.
   if (finding !== null) {
+    const findingId = sanitizeFindingId(finding.finding_id);
     const detectors =
       finding.detectors.length > 0 ? `  (flagged by ${finding.detectors.join(", ")})` : "";
-    const findingFields: [string, string][] = [
-      ["Finding ID", `${sanitizeFindingId(finding.finding_id)}${detectors}`],
-    ];
+    const findingFields: [string, string][] = [["Finding ID", `${findingId}${detectors}`]];
     if (finding.rca !== null) {
       // Show the RCA text directly; only fall back to the status (e.g. while it
       // is still being generated) when there is no result yet.
@@ -129,7 +128,7 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
     lines.push("", ...fieldLines(findingFields, styler));
     lines.push(
       styler.warn(
-        `${" ".repeat(valueColumn)}run 'traceroot findings get ${sanitizeFindingId(finding.finding_id)}' for the full finding`,
+        `${" ".repeat(valueColumn)}run 'traceroot findings get ${findingId}' for the full finding`,
       ),
     );
   }

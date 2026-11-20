@@ -355,12 +355,63 @@ describe("detectors get (zero-code path)", () => {
   it("fills the path param and renders the detail as key/value by default", async () => {
     // get_detector ships purely from the factory: one placement line in
     // naming.ts, no enhancer, no handler code.
-    const payload = { detector_id: "det-1", name: "latency", template: "logic" };
+    const payload = { detector_id: "det-1", name: "latency", template: "logic", enable_rca: true };
     const h = harness(jsonResponse(payload));
     await h.run("detectors", "get", "det-1");
     expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/detectors/det-1");
-    expect(h.out.data).toContain("Detector ID:  det-1");
-    expect(h.out.data).toContain("Name:         latency");
+    expect(h.out.data).toBe(
+      "Detector ID:  det-1\nName:         latency\nTemplate:     logic\nEnable RCA:   true\n",
+    );
+  });
+});
+
+describe("dashboards get and widgets get (zero-code path)", () => {
+  it("names the dashboard's own id and its times as the curated commands do", async () => {
+    const payload = {
+      id: "dsh-1",
+      name: "Latency",
+      description: "",
+      creator: null,
+      create_time: "2026-11-01T00:00:00Z",
+      update_time: "2026-11-02T00:00:00Z",
+      widgets: [],
+    };
+    const h = harness(jsonResponse(payload));
+    await h.run("dashboards", "get", "dsh-1");
+    expect(h.out.data).toBe(
+      [
+        "Dashboard ID:  dsh-1",
+        "Name:          Latency",
+        "Description:   —",
+        "Creator:       —",
+        "Created:       2026-11-01T00:00:00Z",
+        "Updated:       2026-11-02T00:00:00Z",
+        "Widgets:       (none)",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("tells the widget's own id apart from its dashboard's", async () => {
+    const payload = {
+      id: "wdg-1",
+      title: "p95 latency",
+      dashboard_id: "dsh-1",
+      create_time: "2026-11-01T00:00:00Z",
+      update_time: "2026-11-02T00:00:00Z",
+    };
+    const h = harness(jsonResponse(payload));
+    await h.run("widgets", "get", "wdg-1");
+    expect(h.out.data).toBe(
+      [
+        "Widget ID:     wdg-1",
+        "Title:         p95 latency",
+        "Dashboard ID:  dsh-1",
+        "Created:       2026-11-01T00:00:00Z",
+        "Updated:       2026-11-02T00:00:00Z",
+        "",
+      ].join("\n"),
+    );
   });
 });
 

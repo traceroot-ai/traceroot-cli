@@ -298,16 +298,28 @@ describe("runGet (--json)", () => {
 
 describe("runGet (finding indicator)", () => {
   it("aligns the header and finding fields as `Label:  value` lines, naming the id Trace ID", async () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = "UTC";
     const { writers: w, out } = writers();
-    await runGet(detail({}), {
-      json: false,
-      writers: w,
-      traceId: "t-1",
-      getFinding: fakeGetFinding(finding()),
-    });
+    try {
+      await runGet(detail({}), {
+        json: false,
+        writers: w,
+        traceId: "t-1",
+        getFinding: fakeGetFinding(finding()),
+      });
+    } finally {
+      process.env.TZ = originalTz;
+    }
     const lines = out.data.split("\n");
-    expect(lines[0]).toBe("Trace:     my trace");
-    expect(lines[1]).toBe("Trace ID:  t-1");
+    expect(lines.slice(0, 6)).toEqual([
+      "Trace:     my trace",
+      "Trace ID:  t-1",
+      "Started:   2024-01-01 00:00:00 UTC",
+      "Ended:     2024-01-01 00:00:01 UTC",
+      "Duration:  1.0s",
+      "",
+    ]);
     expect(lines).toContain("Finding ID:  fnd-1  (flagged by hallucination, failure)");
     expect(lines).toContain("             run 'traceroot findings get fnd-1' for the full finding");
   });

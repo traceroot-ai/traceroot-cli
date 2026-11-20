@@ -1,6 +1,5 @@
 import { type Writers, writeJson } from "../../output.js";
-import { fieldLines } from "../../render/fields.js";
-import { createStyler } from "../../render/style.js";
+import { renderFields } from "../../render/fields.js";
 import { formatTimestamp } from "../../util/index.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
@@ -84,7 +83,7 @@ export function renderAlertDetail(payload: AlertDetail, opts: RenderAlertDetailO
   if (payload.last_error !== null) {
     fields.push(["Last error", payload.last_error]);
   }
-  writers.out.write(`${fieldLines(fields, createStyler(writers.out)).join("\n")}\n`);
+  renderFields(fields, writers);
 }
 
 export const alertsGet: Enhancer = {

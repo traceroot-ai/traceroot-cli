@@ -76,6 +76,32 @@ describe("renderDefault", () => {
     );
   });
 
+  it("names a record's own id for its tool, and the API's create and update times as Created and Updated", () => {
+    const w = writers();
+    renderDefault(
+      { id: "d-1", create_time: "2026-11-01T00:00:00Z", update_time: "2026-11-02T00:00:00Z" },
+      { json: false, writers: w.writers, args: {}, tool: "get_dashboard" },
+    );
+    expect(w.out.data).toBe(
+      "Dashboard ID:  d-1\nCreated:       2026-11-01T00:00:00Z\nUpdated:       2026-11-02T00:00:00Z\n",
+    );
+  });
+
+  it("keeps a bare ID when the tool is not known", () => {
+    const w = writers();
+    renderDefault({ id: "d-1" }, { json: false, writers: w.writers, args: {} });
+    expect(w.out.data).toBe("ID:  d-1\n");
+  });
+
+  it("shows an empty string as a dash and an empty list as (none), and writes RCA in capitals", () => {
+    const w = writers();
+    renderDefault(
+      { description: "", widgets: [], enable_rca: false },
+      { json: false, writers: w.writers, args: {} },
+    );
+    expect(w.out.data).toBe("Description:  —\nWidgets:      (none)\nEnable RCA:   false\n");
+  });
+
   it("derives columns from the union of all rows, not just row 0", () => {
     const w = writers();
     renderDefault(
