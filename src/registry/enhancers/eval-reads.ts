@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { CliError, ExitCode, type Writers, logProgress, logWarn } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { parseLimit } from "../../time/range.js";
-import { formatTimestamp } from "../../util/index.js";
+import { formatTimestamp, plural } from "../../util/index.js";
 import { onceOption } from "../flags.js";
 import { sanitize } from "./sql.js";
 import type { ResolveInput } from "./types.js";
@@ -156,11 +156,6 @@ export function compact(value: unknown, width: number): string {
   return oneLine.length <= width ? oneLine : `${oneLine.slice(0, width - 1)}…`;
 }
 
-/** `noun` as it reads after `count`: "1 case", "2 cases". */
-export function plural(count: number, noun: string): string {
-  return count === 1 ? noun : `${noun}s`;
-}
-
 /** A block of bold, aligned `label  value` lines, for a record's identity. */
 export function renderFields(fields: [string, string][], writers: Writers): void {
   const styler = createStyler(writers.out);
@@ -170,7 +165,7 @@ export function renderFields(fields: [string, string][], writers: Writers): void
   }
 }
 
-/** `<n> thing(s)`, pluralised. */
+/** `<n> thing` or `<n> things`, pluralised. */
 export function countLine(count: number, noun: string, writers: Writers): void {
   logProgress(`${count} ${plural(count, noun)}`, writers);
 }

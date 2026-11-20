@@ -6,6 +6,7 @@ import {
   formatTimestamp,
   parseBackendTime,
   parseDuration,
+  plural,
 } from "../src/util/index.js";
 
 describe("parseDuration", () => {
@@ -30,6 +31,14 @@ describe("parseDuration", () => {
 
   it("throws CliError on a non-positive amount", () => {
     expect(() => parseDuration("0h")).toThrow(CliError);
+  });
+});
+
+describe("plural", () => {
+  it("uses the singular for exactly one and the plural otherwise", () => {
+    expect(plural(1, "trace")).toBe("trace");
+    expect(plural(0, "trace")).toBe("traces");
+    expect(plural(2, "row")).toBe("rows");
   });
 });
 

@@ -3,8 +3,9 @@ import type { EvaluationRun } from "../../api/client.js";
 import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
+import { plural } from "../../util/index.js";
 import { rejectExtras } from "../flags.js";
-import { type Wire, clean, orDash, plural } from "./eval-reads.js";
+import { type Wire, clean, orDash } from "./eval-reads.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
 type Run = Wire<EvaluationRun>;

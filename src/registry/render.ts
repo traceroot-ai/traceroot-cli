@@ -1,6 +1,7 @@
 import { type Writers, logProgress, writeJson } from "../output.js";
 import { createStyler } from "../render/style.js";
 import { renderTable } from "../render/table.js";
+import { plural } from "../util/index.js";
 
 export interface DefaultRenderOptions {
   json: boolean;
@@ -71,8 +72,8 @@ function renderListPayload(payload: ListShape, opts: DefaultRenderOptions): void
   const total = payload.meta?.total;
   const countText =
     typeof total === "number" && total > returned
-      ? `${returned} of ${total} item(s)`
-      : `${returned} item(s)`;
+      ? `${returned} of ${total} ${plural(total, "item")}`
+      : `${returned} ${plural(returned, "item")}`;
   const limitArg = typeof opts.args.limit === "number" ? opts.args.limit : undefined;
   const effectiveLimit = payload.meta?.limit ?? limitArg;
   logProgress(
