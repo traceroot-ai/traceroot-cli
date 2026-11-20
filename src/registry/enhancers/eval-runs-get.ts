@@ -72,7 +72,8 @@ export function renderRun(run: Run, writers: Writers): void {
     [
       ["Candidate", orDash(run.candidate_version)],
       ["Environment", orDash(run.environment)],
-      ["Dataset", `${orDash(run.dataset_id)} @ ${orDash(run.dataset_version_id)}`],
+      ["Dataset ID", orDash(run.dataset_id)],
+      ["Version ID", orDash(run.dataset_version_id)],
       ["Results", resultsLine(run)],
     ],
     writers,

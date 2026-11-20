@@ -355,12 +355,27 @@ describe("detectors get (zero-code path)", () => {
   it("fills the path param and renders the detail as key/value by default", async () => {
     // get_detector ships purely from the factory: one placement line in
     // naming.ts, no enhancer, no handler code.
-    const payload = { detector_id: "det-1", name: "latency", template: "logic", enable_rca: true };
+    const payload = {
+      detector_id: "det-1",
+      name: "latency",
+      template: "logic",
+      enable_rca: true,
+      trigger_conditions: null,
+      updated_at: "2026-11-02T00:00:00Z",
+    };
     const h = harness(jsonResponse(payload));
     await h.run("detectors", "get", "det-1");
     expect(h.fake.calls[0]?.url).toBe("https://api.test/api/v1/public/detectors/det-1");
     expect(h.out.data).toBe(
-      "Detector ID:  det-1\nName:         latency\nTemplate:     logic\nEnable RCA:   true\n",
+      [
+        "Detector ID:         det-1",
+        "Name:                latency",
+        "Template:            logic",
+        "Enable RCA:          true",
+        "Trigger conditions:  —",
+        "Updated:             2026-11-02T00:00:00Z",
+        "",
+      ].join("\n"),
     );
   });
 });

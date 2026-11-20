@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FindingDetail, TraceDetail } from "../../../src/api/client.js";
 import { CliError, type Writers } from "../../../src/output.js";
 import { runGet, tracesGet } from "../../../src/registry/enhancers/traces-get.js";
@@ -298,8 +298,7 @@ describe("runGet (--json)", () => {
 
 describe("runGet (finding indicator)", () => {
   it("aligns the header and finding fields as `Label:  value` lines, naming the id Trace ID", async () => {
-    const originalTz = process.env.TZ;
-    process.env.TZ = "UTC";
+    vi.stubEnv("TZ", "UTC");
     const { writers: w, out } = writers();
     try {
       await runGet(detail({}), {
@@ -309,7 +308,7 @@ describe("runGet (finding indicator)", () => {
         getFinding: fakeGetFinding(finding()),
       });
     } finally {
-      process.env.TZ = originalTz;
+      vi.unstubAllEnvs();
     }
     const lines = out.data.split("\n");
     expect(lines.slice(0, 6)).toEqual([

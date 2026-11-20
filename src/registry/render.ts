@@ -113,10 +113,14 @@ function labelFor(key: string): string {
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
-/** A missing value prints `—` and an empty list `(none)`, as in the curated commands. */
+/**
+ * A missing value prints `—`, and an empty list or object `(none)`, as in the
+ * curated commands.
+ */
 function valueText(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (Array.isArray(value) && value.length === 0) return "(none)";
+  if (isPlainObject(value) && Object.keys(value).length === 0) return "(none)";
   return cellText(value);
 }
 

@@ -41,11 +41,6 @@ function suggest(leadIn: string, commands: string[], writers: Writers): void {
  * and why no trace is listed, go to stderr.
  */
 export function renderSignal(signal: Signal, writers: Writers, timeZone?: string): void {
-  // A deleted detector leaves no name, and its id still finds its findings.
-  const detector =
-    typeof signal.detector_name === "string" && signal.detector_name !== ""
-      ? `${clean(signal.detector_name)} (${orDash(signal.detector_id)})`
-      : orDash(signal.detector_id);
   const fields: [string, string][] = [
     ["Title", orDash(signal.title)],
     ["Signal ID", orDash(signal.signal_id)],
@@ -55,7 +50,9 @@ export function renderSignal(signal: Signal, writers: Writers, timeZone?: string
     fields.push(["Merged into", clean(signal.merged_into_id)]);
   }
   fields.push(
-    ["Detector", detector],
+    // A deleted detector leaves no name, and its id still finds its findings.
+    ["Detector", orDash(signal.detector_name)],
+    ["Detector ID", orDash(signal.detector_id)],
     ["Hits", orDash(signal.hit_count)],
     ["First seen", when(signal.first_seen_at, timeZone)],
     ["Last seen", when(signal.last_seen_at, timeZone)],

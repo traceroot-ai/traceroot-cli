@@ -301,6 +301,12 @@ describe("datasets versions get", () => {
     expect(err.data).toContain("2 cases");
   });
 
+  it("prints a missing version name or dataset id as a dash", () => {
+    const { w, out } = sinks();
+    renderVersion({ dataset_version_id: "dsv_1", items: [], next_cursor: null }, {}, w);
+    expect(out.data).toContain("Version ID:  dsv_1\nVersion:     —\nDataset ID:  —\n");
+  });
+
   it("says when a page is not the whole version, and names the --cursor for the next", () => {
     const { w, err } = sinks();
     renderVersion(
@@ -340,12 +346,33 @@ describe("evals runs get", () => {
   it("prints the run's fields as aligned `Label:  value` lines under its heading", () => {
     const { w, out } = sinks();
     renderRun(base, w);
-    expect(out.data.split("\n").slice(0, 5)).toEqual([
+    expect(out.data.split("\n").slice(0, 6)).toEqual([
       "support-triage · run #12 · completed",
       "Candidate:    git:9f2a1c",
       "Environment:  ci",
-      "Dataset:      ds_2a97 @ dsv_1",
+      "Dataset ID:   ds_2a97",
+      "Version ID:   dsv_1",
       `Results:      ${resultsLine(base)}`,
+    ]);
+  });
+
+  it("prints a missing candidate, environment or dataset as a dash", () => {
+    const { w, out } = sinks();
+    renderRun(
+      {
+        ...base,
+        candidate_version: null,
+        environment: null,
+        dataset_id: null,
+        dataset_version_id: null,
+      },
+      w,
+    );
+    expect(out.data.split("\n").slice(1, 5)).toEqual([
+      "Candidate:    —",
+      "Environment:  —",
+      "Dataset ID:   —",
+      "Version ID:   —",
     ]);
   });
 

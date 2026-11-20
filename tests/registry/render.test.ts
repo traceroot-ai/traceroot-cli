@@ -102,13 +102,15 @@ describe("renderDefault", () => {
     expect(w.out.data).toBe("ID:  d-1\n");
   });
 
-  it("shows an empty string as a dash and an empty list as (none), and writes RCA in capitals", () => {
+  it("shows an empty string as a dash and an empty list or object as (none), and writes RCA in capitals", () => {
     const w = writers();
     renderDefault(
-      { description: "", widgets: [], enable_rca: false },
+      { description: "", widgets: [], meta: {}, enable_rca: false },
       { json: false, writers: w.writers, args: {} },
     );
-    expect(w.out.data).toBe("Description:  —\nWidgets:      (none)\nEnable RCA:   false\n");
+    expect(w.out.data).toBe(
+      "Description:  —\nWidgets:      (none)\nMeta:         (none)\nEnable RCA:   false\n",
+    );
   });
 
   it("derives columns from the union of all rows, not just row 0", () => {
