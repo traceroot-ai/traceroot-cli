@@ -1,10 +1,11 @@
 import type { Command } from "commander";
 import type { SignalDetail } from "../../api/client.js";
 import { type Writers, logInfo, logProgress, writeJson } from "../../output.js";
+import { renderFields } from "../../render/fields.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { plural } from "../../util/index.js";
-import { type Wire, clean, orDash, orNone, renderFields, when } from "./eval-reads.js";
+import { type Wire, clean, orDash, orNone, when } from "./eval-reads.js";
 import { sanitizeFindingId } from "./finding-id.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
@@ -40,26 +41,23 @@ function suggest(leadIn: string, commands: string[], writers: Writers): void {
  * and why no trace is listed, go to stderr.
  */
 export function renderSignal(signal: Signal, writers: Writers, timeZone?: string): void {
-  // A deleted detector leaves no name, and its id still finds its findings.
-  const detector =
-    typeof signal.detector_name === "string" && signal.detector_name !== ""
-      ? `${clean(signal.detector_name)} (${orDash(signal.detector_id)})`
-      : orDash(signal.detector_id);
   const fields: [string, string][] = [
-    ["title", orDash(signal.title)],
-    ["signal id", orDash(signal.signal_id)],
-    ["status", statusText(signal, timeZone)],
+    ["Title", orDash(signal.title)],
+    ["Signal ID", orDash(signal.signal_id)],
+    ["Status", statusText(signal, timeZone)],
   ];
   if (typeof signal.merged_into_id === "string") {
-    fields.push(["merged into", clean(signal.merged_into_id)]);
+    fields.push(["Merged into", clean(signal.merged_into_id)]);
   }
   fields.push(
-    ["detector", detector],
-    ["hits", orDash(signal.hit_count)],
-    ["first seen", when(signal.first_seen_at, timeZone)],
-    ["last seen", when(signal.last_seen_at, timeZone)],
+    // A deleted detector leaves no name, and its id still finds its findings.
+    ["Detector", orDash(signal.detector_name)],
+    ["Detector ID", orDash(signal.detector_id)],
+    ["Hits", orDash(signal.hit_count)],
+    ["First seen", when(signal.first_seen_at, timeZone)],
+    ["Last seen", when(signal.last_seen_at, timeZone)],
     // The analysis of the current opening: none when no analysis ran for it.
-    ["analysis", orNone(signal.rca_state)],
+    ["Analysis", orNone(signal.rca_state)],
   );
   renderFields(fields, writers);
 

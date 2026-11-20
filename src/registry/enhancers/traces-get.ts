@@ -2,6 +2,7 @@ import { sanitizeFindingId } from "./finding-id.js";
 import type { Command } from "commander";
 import type { FindingDetail, TraceDetail } from "../../api/client.js";
 import { type Writers, colorEnabled, writeJson } from "../../output.js";
+import { fieldLines } from "../../render/fields.js";
 import { createStyler } from "../../render/style.js";
 import { renderTree } from "../../render/tree.js";
 import { elapsedMs, formatDuration, formatTimestamp } from "../../util/index.js";
@@ -94,36 +95,40 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
     ? elapsedMs(trace.trace_start_time, nowIso)
     : elapsedMs(trace.trace_start_time, end);
 
-  const lines: string[] = [];
-  lines.push(`${label("Trace:")}    ${trace.name}`);
-  lines.push(`${label("ID:")}       ${trace.trace_id}`);
-  lines.push(`${label("Started:")}  ${formatTimestamp(trace.trace_start_time)}`);
+  const header: [string, string][] = [
+    ["Trace", trace.name],
+    ["Trace ID", trace.trace_id],
+    ["Started", formatTimestamp(trace.trace_start_time)],
+  ];
   if (live) {
-    lines.push(`${label("Status:")}   ${styler.bold("LIVE")}`);
+    header.push(["Status", styler.bold("LIVE")]);
   } else if (end !== null) {
-    lines.push(`${label("Ended:")}    ${formatTimestamp(end)}`);
+    header.push(["Ended", formatTimestamp(end)]);
   }
   if (duration !== null) {
-    lines.push(`${label("Duration:")} ${formatDuration(duration)}${live ? " (so far)" : ""}`);
+    header.push(["Duration", `${formatDuration(duration)}${live ? " (so far)" : ""}`]);
   }
+  const lines: string[] = fieldLines(header, styler);
   // Detector finding indicator (only when the trace was flagged). Kept compact:
   // finding id + which detectors fired, the RCA text (or its status while still
   // generating), and a yellow pointer to `findings get` for the full RCA /
-  // per-detector data. Labels align on the value column, like `findings get`.
+  // per-detector data, indented to start where the values do.
   if (finding !== null) {
-    lines.push("");
+    const findingId = sanitizeFindingId(finding.finding_id);
     const detectors =
       finding.detectors.length > 0 ? `  (flagged by ${finding.detectors.join(", ")})` : "";
-    lines.push(`${label("Finding ID:")} ${sanitizeFindingId(finding.finding_id)}${detectors}`);
+    const findingFields: [string, string][] = [["Finding ID", `${findingId}${detectors}`]];
     if (finding.rca !== null) {
       // Show the RCA text directly; only fall back to the status (e.g. while it
       // is still being generated) when there is no result yet.
       const preview = rcaPreview(finding.rca.result ?? "");
-      lines.push(`${label("RCA:")}        ${preview || finding.rca.status}`);
+      findingFields.push(["RCA", preview || finding.rca.status]);
     }
+    const valueColumn = Math.max(...findingFields.map(([name]) => name.length)) + 3;
+    lines.push("", ...fieldLines(findingFields, styler));
     lines.push(
       styler.warn(
-        `            run 'traceroot findings get ${sanitizeFindingId(finding.finding_id)}' for the full finding`,
+        `${" ".repeat(valueColumn)}run 'traceroot findings get ${findingId}' for the full finding`,
       ),
     );
   }

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { EvaluationRun } from "../../api/client.js";
 import { type Writers, logProgress, writeJson } from "../../output.js";
+import { renderFields } from "../../render/fields.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { plural } from "../../util/index.js";
@@ -67,11 +68,16 @@ export function renderRun(run: Run, writers: Writers): void {
   w(
     `${styler.bold(orDash(run.evaluation_name))} · run #${orDash(run.run_number)} · ${orDash(run.status)}`,
   );
-  w(`candidate: ${orDash(run.candidate_version)}        environment: ${orDash(run.environment)}`);
-  w(`dataset:   ${orDash(run.dataset_id)}  @ ${orDash(run.dataset_version_id)}`);
-  w("");
-
-  w(`results    ${resultsLine(run)}`);
+  renderFields(
+    [
+      ["Candidate", orDash(run.candidate_version)],
+      ["Environment", orDash(run.environment)],
+      ["Dataset ID", orDash(run.dataset_id)],
+      ["Version ID", orDash(run.dataset_version_id)],
+      ["Results", resultsLine(run)],
+    ],
+    writers,
+  );
   w("");
 
   renderMetrics(run, writers);

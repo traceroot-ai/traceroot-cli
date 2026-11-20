@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { DatasetVersion } from "../../api/client.js";
 import { type Writers, writeJson } from "../../output.js";
+import { renderFields } from "../../render/fields.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { rejectExtras } from "../flags.js";
@@ -12,7 +13,6 @@ import {
   countLine,
   orDash,
   renderEmptyPage,
-  renderFields,
   resolvePageArgs,
   warnIfCapped,
 } from "./eval-reads.js";
@@ -42,9 +42,9 @@ export function renderVersion(res: VersionResponse, state: PagedState, writers: 
   const name = versionLabel(res.version_number, res.label);
   renderFields(
     [
-      ["version id", orDash(res.dataset_version_id)],
-      ["version", orDash(name)],
-      ["dataset id", orDash(res.dataset_id)],
+      ["Version ID", orDash(res.dataset_version_id)],
+      ["Version", orDash(name)],
+      ["Dataset ID", orDash(res.dataset_id)],
     ],
     writers,
   );

@@ -65,7 +65,51 @@ describe("renderDefault", () => {
       { json: false, writers: w.writers, args: {} },
     );
     expect(w.out.data).toBe(
-      'Session id:   s-1\nTrace count:  2\nTraces:       [{"trace_id":"t-1"}]\n',
+      'Session ID:   s-1\nTrace count:  2\nTraces:       [{"trace_id":"t-1"}]\n',
+    );
+  });
+
+  it("names ids and times as the curated commands do, and shows a missing value as a dash", () => {
+    const w = writers();
+    renderDefault(
+      {
+        detector_id: "d-1",
+        run_ids: ["r-1"],
+        updated_at: "2026-11-17T00:00:00Z",
+        trigger_conditions: null,
+      },
+      { json: false, writers: w.writers, args: {} },
+    );
+    expect(w.out.data).toBe(
+      'Detector ID:         d-1\nRun IDs:             ["r-1"]\nUpdated:             2026-11-17T00:00:00Z\nTrigger conditions:  —\n',
+    );
+  });
+
+  it("names a record's own id for its tool, and the API's create and update times as Created and Updated", () => {
+    const w = writers();
+    renderDefault(
+      { id: "d-1", create_time: "2026-11-01T00:00:00Z", update_time: "2026-11-02T00:00:00Z" },
+      { json: false, writers: w.writers, args: {}, tool: "get_dashboard" },
+    );
+    expect(w.out.data).toBe(
+      "Dashboard ID:  d-1\nCreated:       2026-11-01T00:00:00Z\nUpdated:       2026-11-02T00:00:00Z\n",
+    );
+  });
+
+  it("keeps a bare ID when the tool is not known", () => {
+    const w = writers();
+    renderDefault({ id: "d-1" }, { json: false, writers: w.writers, args: {} });
+    expect(w.out.data).toBe("ID:  d-1\n");
+  });
+
+  it("shows an empty string as a dash and an empty list or object as (none), and writes RCA in capitals", () => {
+    const w = writers();
+    renderDefault(
+      { description: "", widgets: [], meta: {}, enable_rca: false },
+      { json: false, writers: w.writers, args: {} },
+    );
+    expect(w.out.data).toBe(
+      "Description:  —\nWidgets:      (none)\nMeta:         (none)\nEnable RCA:   false\n",
     );
   });
 
