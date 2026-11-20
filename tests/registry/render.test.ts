@@ -39,6 +39,15 @@ describe("renderDefault", () => {
     expect(w.err.data).toBe("2 of 7 items | limit 50\n");
   });
 
+  it("agrees the footer's noun with the total, not the page, when a total is shown", () => {
+    const w = writers();
+    renderDefault(
+      { data: [{ id: "a" }], meta: { page: 1, limit: 1, total: 7 } },
+      { json: false, writers: w.writers, args: {} },
+    );
+    expect(w.err.data).toBe("1 of 7 items | limit 1\n");
+  });
+
   it("renders an empty list as just the footer", () => {
     const w = writers();
     renderDefault(
