@@ -350,7 +350,7 @@ export interface MakeDepsOptions {
   /** The CLI's config as an earlier run left it; none by default, as on a first run. */
   config?: { api_key?: string; host_url?: string; project_id?: string } | null;
   tempDir?: string;
-  /** Whether a local TraceRoot API answers, for the missing-endpoint hint. */
+  /** Whether a local traceroot API answers, for the missing-endpoint hint. */
   localHostResponds?: boolean;
   /** A user credential already on disk for the host under test. */
   storedCredential?: CredentialEntry | null;

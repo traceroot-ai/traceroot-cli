@@ -115,7 +115,7 @@ describe("every surface that says where to initialize", () => {
   }
 
   for (const [name, text] of surfaces) {
-    it(`${name} — runs the tests with TraceRoot switched off`, () => {
+    it(`${name} — runs the tests with traceroot switched off`, () => {
       // The placement keeps `initialize()` off the import path, and that is all
       // it does. `observe` starts the SDK whenever `TRACEROOT_API_KEY` is in the
       // environment, so a surface that promised the guard alone kept the tests
