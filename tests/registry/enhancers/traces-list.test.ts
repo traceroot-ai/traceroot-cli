@@ -468,6 +468,13 @@ describe("renderList compact footer (one-line stderr)", () => {
     expect(err.data).toContain("1 of 137 traces | limit 1 | all traces");
   });
 
+  it("uses the singular noun for a total of 1 when the page is empty", () => {
+    const res: TraceList = { data: [], meta: { page: 0, limit: 50, total: 1 } };
+    const { writers: w, err } = writers();
+    renderList(res, { json: false, writers: w });
+    expect(err.data).toContain("0 of 1 trace | limit 50 | all traces");
+  });
+
   it("shows '<returned> of <total>' and uses meta.limit when total exceeds the page", () => {
     const res: TraceList = {
       data: [listItem({ trace_id: "a-1" }), listItem({ trace_id: "a-2" })],

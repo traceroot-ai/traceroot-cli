@@ -178,6 +178,7 @@ export function renderSqlResult(result: SqlResult, opts: RenderSqlOptions): void
     text = `${renderTable(names.map(sanitize), rows, { headerStyle })}\n`;
   }
 
+  const countText = `${result.row_count} ${plural(result.row_count, "row")}`;
   if (opts.output !== undefined) {
     try {
       writeFileSync(opts.output, text, "utf8");
@@ -185,26 +186,17 @@ export function renderSqlResult(result: SqlResult, opts: RenderSqlOptions): void
       const message = err instanceof Error ? err.message : String(err);
       throw new CliError(`could not write ${opts.output}: ${message}`);
     }
-    logProgress(
-      `wrote ${result.row_count} ${plural(result.row_count, "row")} to ${opts.output}`,
-      writers,
-    );
+    logProgress(`wrote ${countText} to ${opts.output}`, writers);
   } else {
     writers.out.write(text);
     if (!opts.json && !opts.csv) {
-      logProgress(
-        `${result.row_count} ${plural(result.row_count, "row")} in ${result.elapsed_ms} ms`,
-        writers,
-      );
+      logProgress(`${countText} in ${result.elapsed_ms} ms`, writers);
     }
   }
 
   // JSON carries `truncated` itself; the other formats would silently lose it.
   if (!opts.json && result.truncated) {
-    logWarn(
-      `result truncated to ${result.row_count} ${plural(result.row_count, "row")}; narrow the query or raise --max-rows`,
-      writers,
-    );
+    logWarn(`result truncated to ${countText}; narrow the query or raise --max-rows`, writers);
   }
 }
 
