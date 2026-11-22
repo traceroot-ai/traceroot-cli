@@ -49,6 +49,28 @@ describe("renderTable", () => {
     expect((lines[2] as string).indexOf("tail")).toBe(headerYIdx);
   });
 
+  it("removes terminal controls from headers and cells before measuring columns", () => {
+    const out = renderTable(
+      ["NA\n\tME", "ID"],
+      [["alpha\r\nbeta", "1\x1b[2J"], ["東京", "2\x1b]0;injected title\x07"]],
+    );
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting that controls are absent.
+    expect(out).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+    expect(out).not.toContain("injected title");
+    expect(out).toContain("NA ME");
+    expect(out).toContain("alpha beta");
+    expect(out).toContain("東京");
+  });
+
+  it("preserves the CLI's intentional styling after sanitization", () => {
+    const out = renderTable(["A\x1b[31m"], [["value\n"]], {
+      headerStyle: (line) => `\x1b[1m${line}\x1b[0m`,
+    });
+    expect(out).toContain("\x1b[1m");
+    expect(out).toContain("\x1b[0m");
+    expect(out).not.toContain("31m");
+  });
+
   it("does not emit ANSI color codes", () => {
     const out = renderTable(["A"], [["1"]]);
     // biome-ignore lint/suspicious/noControlCharactersInRegex: testing for ESC

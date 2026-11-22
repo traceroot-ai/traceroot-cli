@@ -1,4 +1,5 @@
 import { elapsedMs, formatDuration } from "../util/index.js";
+import { sanitizeTerminalText } from "./sanitize.js";
 
 /**
  * Minimal structural shape a span needs to be rendered as a tree. A superset of
@@ -85,7 +86,7 @@ function llmDetail(span: SpanLike): string | null {
   if (span.model_name === undefined || span.model_name === null || span.model_name === "") {
     return null;
   }
-  const parts = [span.model_name];
+  const parts = [sanitizeTerminalText(span.model_name)];
   const tokens = tokenCount(span);
   if (tokens !== null) {
     parts.push(formatTokens(tokens));
@@ -165,7 +166,7 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     }
     visited.add(span.span_id);
     const connector = isRoot ? "" : isLast ? "└─ " : "├─ ";
-    const text = `${prefix}${connector}${span.name} ${marker(span.status)}`;
+    const text = `${prefix}${connector}${sanitizeTerminalText(span.name)} ${marker(span.status)}`;
     const childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
 
     // Duration, right-aligned to `width`: end time if the span has finished,
@@ -185,7 +186,7 @@ export function renderTree(spans: SpanLike[], options: RenderTreeOptions = {}): 
     // Error detail, directly beneath the span line, indented to align under
     // the name (the same indent children continue at) and truncated to width.
     if (isError(span.status) && span.status_message !== undefined && span.status_message !== null) {
-      const trimmed = span.status_message.trim();
+      const trimmed = sanitizeTerminalText(span.status_message).trim();
       if (trimmed.length > 0) {
         const msgText = `${childPrefix}${truncate(trimmed, Math.max(10, width - childPrefix.length))}`;
         lines.push(color ? `${ANSI_RED}${msgText}${ANSI_RESET}` : msgText);
