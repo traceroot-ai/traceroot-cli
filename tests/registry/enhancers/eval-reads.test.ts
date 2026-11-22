@@ -330,14 +330,14 @@ describe("evals runs get", () => {
 
   it("prints an absent count as an em dash, never 0", () => {
     expect(resultsLine({ evaluation_name: "e", status: "running" })).toBe(
-      "— reported · — scored · — task errors · — scorer errors · — errored · — not scored",
+      "— reported · — scored · — task errors · — scorer errors · — errored",
     );
   });
 
   it("counts the cases that errored, separately from the SDK's own error tallies", () => {
     // errored_count is derived from the stored results' statuses, while the task
     // and scorer tallies are what the SDK reported; a run can carry both, and the
-    // errored cases must not vanish into "not scored".
+    // errored cases must not vanish from the line.
     const line = resultsLine({
       evaluation_name: "e",
       status: "completed",
@@ -349,7 +349,20 @@ describe("evals runs get", () => {
       not_scored_count: 0,
     });
     expect(line).toContain("3 errored");
-    expect(line).toContain("0 not scored");
+  });
+
+  it("leaves out the not_scored count, which the SDKs give every case that didn't error, scores and all", () => {
+    const line = resultsLine({
+      evaluation_name: "e",
+      status: "completed",
+      result_count: 6,
+      scored_count: 6,
+      task_error_count: 0,
+      scorer_error_count: 0,
+      errored_count: 0,
+      not_scored_count: 6,
+    });
+    expect(line).toBe("6 reported · 6 scored · 0 task errors · 0 scorer errors · 0 errored");
   });
 
   it("shows passed and failed when results carry them, and leaves them out otherwise", () => {
@@ -398,7 +411,7 @@ describe("evals runs get", () => {
     expect(out.data).not.toMatch(/coverage|NOT FINAL/);
   });
 
-  it("counts every way a case can fail to score", () => {
+  it("counts every way a case can error", () => {
     const { w, out } = sinks();
     renderRun(
       {
@@ -412,7 +425,7 @@ describe("evals runs get", () => {
     );
     expect(out.data).toContain("2 task errors");
     expect(out.data).toContain("1 scorer error");
-    expect(out.data).toContain("3 not scored");
+    expect(out.data).not.toContain("not scored");
   });
 
   it("tells a categorical score apart from one nothing reported", () => {
