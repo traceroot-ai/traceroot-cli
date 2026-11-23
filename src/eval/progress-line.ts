@@ -90,7 +90,7 @@ export function startProgressLine(options: ProgressLineOptions): ProgressLine {
       return;
     }
     const glyph = FRAMES[frame % FRAMES.length] ?? FRAMES[0];
-    const text = fitLine(describeProgress(progress), elapsed(now() - started), columnsOf(sink));
+    const text = fitLine(describeProgress(progress), elapsed(now() - started), liveColumns(sink));
     sink.write(`${CLEAR_LINE}${color.magenta(glyph)}  ${text}`);
   };
 
@@ -168,8 +168,29 @@ export function fitLine(text: ProgressText, elapsedLabel: string, columns: numbe
 }
 
 /**
- * How wide the terminal is. A terminal that reports no size, as a pseudo-terminal opened without
- * one does, reports 0 columns; it is taken to be 80 wide, like a sink that says nothing.
+ * How wide the terminal is now. A terminal stream's `columns` changes only once Node has handled
+ * the signal a resize sends, and a frame can be drawn before that. A frame fitted to the old width
+ * wraps on the narrower terminal, and its first rows stay behind, since the line erases only the
+ * row the cursor is on. So the stream's handle is asked for the size directly when it can be
+ * (Node's `tty` handles answer `getWindowSize` with no side effects), and `columns` is the fallback.
+ */
+function liveColumns(sink: Sink): number {
+  const handle = (sink as { _handle?: { getWindowSize?: (size: number[]) => number } })._handle;
+  const size = [0, 0];
+  try {
+    if (handle?.getWindowSize?.(size) === 0 && (size[0] ?? 0) > 0) {
+      return size[0] as number;
+    }
+  } catch {
+    // A handle that can't say leaves the width the stream last heard.
+  }
+  return columnsOf(sink);
+}
+
+/**
+ * How wide the terminal last said it was. A terminal that reports no size, as a pseudo-terminal
+ * opened without one does, reports 0 columns; it is taken to be 80 wide, like a sink that says
+ * nothing.
  */
 function columnsOf(sink: Sink): number {
   const { columns } = sink as { columns?: number };
