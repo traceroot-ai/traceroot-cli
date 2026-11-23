@@ -24,7 +24,7 @@ const caseErrored = event({ type: "case_completed", case_id: "c", task_error: "V
 
 /** A progress line on a fake terminal, with a clock and an animation the test moves by hand. */
 function start(options: Partial<ProgressLineOptions> & { columns?: number } = {}) {
-  const sink = new TerminalSink(options.columns);
+  const sink = (options.sink as TerminalSink | undefined) ?? new TerminalSink(options.columns);
   let time = 1_000_000;
   let tick: (() => void) | null = null;
   let animating = false;
@@ -148,6 +148,39 @@ describe("startProgressLine", () => {
     const columns = [...shown].reduce((sum, char) => sum + (char.charCodeAt(0) < 0x80 ? 1 : 2), 0);
     expect(columns).toBeLessThan(60);
     expect(shown).toBe("◒  評価評価… · 0/5 cases done · 1 running · 0 errored");
+  });
+
+  it("fits a frame to the terminal's width now, before the stream has heard of a resize", () => {
+    // The stream still says 100 columns; its handle, asked directly, says the terminal is now 40.
+    const sink = Object.assign(new TerminalSink(100), {
+      _handle: {
+        getWindowSize: (size: number[]): number => {
+          size[0] = 40;
+          size[1] = 24;
+          return 0;
+        },
+      },
+    });
+    const run = start({ sink });
+
+    run.line.events([evaluationStarted(`evaluation-${"long-".repeat(20)}name`, 10), caseStarted]);
+
+    expect(run.last()).toBe("◒  evaluation-long-long-long-long-lo…");
+    // A frame that fits never wraps, so erasing its one row leaves nothing behind.
+    for (const frame of frames(run.sink.data)) {
+      expect(frame.length).toBeLessThan(40);
+    }
+  });
+
+  it("falls back to the width the stream says when its handle can't say", () => {
+    const sink = Object.assign(new TerminalSink(60), {
+      _handle: { getWindowSize: (): number => -22 },
+    });
+    const run = start({ sink });
+
+    run.line.events([evaluationStarted("uppercase", 3)]);
+
+    expect(run.last()).toBe("◒  uppercase · 0/3 cases done · 0 running · 0 errored");
   });
 
   it("takes a terminal that reports no width as 80 columns wide", () => {
