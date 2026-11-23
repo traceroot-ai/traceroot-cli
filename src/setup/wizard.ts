@@ -8,6 +8,7 @@ import {
 } from "@clack/prompts";
 import { createColors } from "picocolors";
 import { type Sink, type Writers, logInfo, logProgress, logWarn } from "../output.js";
+import { displayWidth, wrapWords } from "../render/wrap.js";
 import { canRedraw } from "./tty.js";
 
 /** A picocolors instance: the role functions a line gets painted with. */
@@ -143,12 +144,8 @@ const SGR_PATTERN = `${ESC}\\[[0-9;]*m`;
 // of this file, for the reason given on `paintedLink`.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent.
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
-const OSC8_PATTERN = `${ESC}\\]8;;[^${BEL}]*${BEL}`;
 /** One whole line wrapped in a single SGR pair, and nothing else. */
 const WHOLE_LINE_SGR = new RegExp(`^(${SGR_PATTERN})([^${ESC}]*)(${SGR_PATTERN})$`);
-/** Every SGR and every OSC 8 escape in a string, for measuring what is left. */
-const ALL_SGR = new RegExp(SGR_PATTERN, "gu");
-const ALL_OSC8 = new RegExp(OSC8_PATTERN, "gu");
 
 /**
  * Terminals known to render OSC 8, by their own self-identification.
@@ -385,7 +382,7 @@ export function wizardValue(text: string, sink: Sink = process.stderr): string {
  * splitting mid-escape is worse than a line that runs long.
  */
 export function wrapForRail(line: string, width: number): string[] {
-  if (width <= 0 || visibleLength(line) <= width) {
+  if (width <= 0 || displayWidth(line) <= width) {
     return [line];
   }
 
@@ -404,31 +401,6 @@ export function wrapForRail(line: string, width: number): string[] {
   // span that straddled a space could lose its colour after a break; that is a
   // fair trade against a sentence walking through the rail.
   return wrapWords(line, width);
-}
-
-/** Visible columns, ignoring SGR and OSC 8, which occupy no cells. */
-function visibleLength(text: string): number {
-  return text.replace(ALL_SGR, "").replace(ALL_OSC8, "").length;
-}
-
-/** Greedy word wrap on visible width. A word longer than `width` overflows. */
-function wrapWords(text: string, width: number): string[] {
-  const pieces: string[] = [];
-  let current = "";
-  for (const word of text.split(" ")) {
-    if (current === "") {
-      current = word;
-    } else if (visibleLength(`${current} ${word}`) <= width) {
-      current = `${current} ${word}`;
-    } else {
-      pieces.push(current);
-      current = word;
-    }
-  }
-  if (current !== "") {
-    pieces.push(current);
-  }
-  return pieces;
 }
 
 /** Columns available beside the rail, which costs a glyph and two spaces. */

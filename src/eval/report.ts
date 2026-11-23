@@ -8,7 +8,8 @@ import { isAbsolute, relative } from "node:path";
 import type { Writers } from "../output.js";
 import { clean, compact, formatMean, plural } from "../registry/enhancers/eval-reads.js";
 import { createStyler } from "../render/style.js";
-import { renderTable } from "../render/table.js";
+import { fitTable } from "../render/table.js";
+import { displayWidth, terminalColumns, wrapItems, wrapLine, wrapLines } from "../render/wrap.js";
 import { cliCommand, shellWord } from "../setup/invocation.js";
 import type { StackLanguage } from "../setup/types.js";
 import type { InterruptSignal } from "./events.js";
@@ -205,6 +206,11 @@ export function toDocument(report: Report): Record<string, unknown> {
       name: SDK_NAMES[runner.language],
       version: runner.sdkVersion,
     },
+    runtime: {
+      name: runner.runtime.name,
+      version: runner.runtime.version,
+      executable: runner.runtime.executable,
+    },
     project_id: report.upload?.projectId ?? null,
     runs: report.runs.map(({ event, path, run }) => ({
       evaluation_name: event.name,
@@ -249,17 +255,40 @@ export interface SummaryContext {
   cwd: string;
 }
 
+/** What the summary is fitted to. */
+interface View extends SummaryContext {
+  /** The terminal's columns, or undefined for a pipe or a file, which get every line whole. */
+  width: number | undefined;
+  bold: (text: string) => string;
+}
+
+/** How wide the label column of the saved files is: `Case file` and two spaces. */
+const LABEL_WIDTH = 11;
+
 /**
- * The summary on stdout: each evaluation with its run id, the mean time a case took, each score's
- * mean and what it is a mean of, the cases that raised, and where the run was saved. Then the
- * verdict, or that no baseline was given, then where an uploaded run went.
+ * The summary on stdout, results first:
+ * 1. each evaluation: its run id and status, its cases and their mean time, each score's mean and
+ *    what it is a mean of, and the cases that raised;
+ * 2. the regression check: the verdict, or that no baseline was given;
+ * 3. what was saved: each run's run file and case file, and where an uploaded run went;
+ * 4. what to do next: the command that compares the next run with this one, and the command that
+ *    reads an uploaded run.
+ *
+ * On a terminal it is fitted to the width: prose wraps at word boundaries with a hanging indent, a
+ * table that doesn't fit is stacked, and a command, a link or a path is never broken, so each copies
+ * whole (see render/wrap.ts).
  */
 export function renderSummary(report: Report, writers: Writers, context: SummaryContext): void {
-  const styler = createStyler(writers.out);
+  const view: View = {
+    ...context,
+    width: terminalColumns(writers.out),
+    bold: createStyler(writers.out).bold,
+  };
   const blocks = [
-    ...report.runs.map((saved) => evaluationLines(saved, report, context, styler.bold)),
-    verdictLines(report, context, styler.bold),
-    uploadLines(report, context.env),
+    ...report.runs.map((saved) => evaluationLines(saved, report, view)),
+    verdictLines(report, view),
+    savedLines(report, view),
+    nextLines(report, view),
   ].filter((block) => block.length > 0);
   if (blocks.length === 0) {
     return;
@@ -267,36 +296,37 @@ export function renderSummary(report: Report, writers: Writers, context: Summary
   writers.out.write(`${blocks.map((block) => block.join("\n")).join("\n\n")}\n`);
 }
 
-function evaluationLines(
-  saved: SavedEvaluation,
-  report: Report,
-  context: SummaryContext,
-  bold: (text: string) => string,
-): string[] {
-  const { event, path, run } = saved;
+function evaluationLines(saved: SavedEvaluation, report: Report, view: View): string[] {
+  const { event, run } = saved;
   const { counts } = event;
   const errors =
     counts.errored === 0
       ? ""
       : ` (${counts.task_errors} ${plural(counts.task_errors, "task error")}, ${counts.scorer_errors} ${plural(counts.scorer_errors, "scorer error")})`;
   const duration = run === null ? null : meanDuration(run.cases).mean;
-  const timing = duration === null ? "" : ` · mean ${formatMean(duration)} ms per case`;
   const lines = [
-    `${bold(clean(event.name))} · ${clean(event.local_run_id)} · ${event.status.replaceAll("_", " ")}`,
-    `  ${counts.cases} ${plural(counts.cases, "case")} · ${counts.errored} errored${errors}${timing}`,
+    ...wrapItems(
+      [view.bold(clean(event.name)), clean(event.local_run_id), event.status.replaceAll("_", " ")],
+      view.width,
+    ),
+    ...wrapItems(
+      [
+        `${counts.cases} ${plural(counts.cases, "case")}`,
+        `${counts.errored} errored${errors}`,
+        ...(duration === null ? [] : [`mean ${formatMean(duration)} ms per case`]),
+      ],
+      view.width,
+      { indent: "  " },
+    ),
   ];
   if (run === null) {
-    lines.push("  the saved run can't be read, so its scores are unknown");
+    lines.push(...wrapLine("  the saved run can't be read, so its scores are unknown", view.width));
   } else {
     lines.push(
-      ...scoreLines(run.cases, counts.cases, bold),
-      ...errorLines(run.cases, shownAsNewlyErrored(saved, report), bold),
+      ...scoreLines(run.cases, counts.cases, view),
+      ...errorLines(run.cases, shownAsNewlyErrored(saved, report), view),
     );
   }
-  lines.push(
-    `  Run file   ${clean(displayPath(path, context.cwd))}`,
-    `  Case file  ${clean(displayPath(casesPathOf(path), context.cwd))}`,
-  );
   return lines;
 }
 
@@ -308,16 +338,12 @@ function evaluationLines(
  * the scorer's own units, not a share of cases that passed. A note under the table names a score
  * whose values the mean leaves out, or that is missing from a case without an error saying why.
  */
-function scoreLines(
-  cases: CaseLine[],
-  caseCount: number,
-  bold: (text: string) => string,
-): string[] {
+function scoreLines(cases: CaseLine[], caseCount: number, view: View): string[] {
   const means = scoreMeans(cases);
   if (means.length === 0) {
     return ["  no scores"];
   }
-  const table = renderTable(
+  const table = fitTable(
     ["SCORE", "MEAN", "SCORED", "PASSED", "FAILED"],
     means.map((score) => {
       const judged = score.passed + score.failed > 0;
@@ -329,9 +355,15 @@ function scoreLines(
         judged ? String(score.failed) : "—",
       ];
     }),
-    { headerStyle: bold },
+    { width: view.width, indent: "  ", headerStyle: view.bold },
   );
-  return [...indent(table), ...means.flatMap((score) => scoreNotes(score, cases))];
+  return [
+    ...table,
+    ...wrapLines(
+      means.flatMap((score) => scoreNotes(score, cases)),
+      view.width,
+    ),
+  ];
 }
 
 function scoreNotes(score: ScoreMean, cases: CaseLine[]): string[] {
@@ -371,11 +403,7 @@ function scoreNotes(score: ScoreMean, cases: CaseLine[]): string[] {
  * without a baseline. A case that the verdict lists as newly errored is left to that list, and
  * after {@link LISTED_ERRORS} cases the rest are counted and left to the case file.
  */
-function errorLines(
-  cases: CaseLine[],
-  newlyErrored: ReadonlySet<string>,
-  bold: (text: string) => string,
-): string[] {
+function errorLines(cases: CaseLine[], newlyErrored: ReadonlySet<string>, view: View): string[] {
   const errored = cases.filter(
     (item) =>
       (item.task_error !== null || item.scorer_errors.length > 0) &&
@@ -387,11 +415,14 @@ function errorLines(
   const listed = errored.slice(0, LISTED_ERRORS);
   const more = errored.length - listed.length;
   return [
-    `  ${bold("Errors")}`,
-    ...indent(indent(erroredTable(listed, bold)).join("\n")),
+    `  ${view.bold("Errors")}`,
+    ...erroredTable(listed, view, "    "),
     ...(more === 0
       ? []
-      : [`    and ${more} more ${plural(more, "case")}; the case file has each one's error.`]),
+      : wrapLine(
+          `    and ${more} more ${plural(more, "case")}; the case file has each one's error.`,
+          view.width,
+        )),
   ];
 }
 
@@ -408,38 +439,44 @@ function shownAsNewlyErrored(saved: SavedEvaluation, report: Report): ReadonlySe
   return new Set(verdict.newly_errored.map((item) => item.case_id));
 }
 
-/** A path as the summary prints it: relative to where the CLI ran, when it is under there. */
-function displayPath(path: string, cwd: string): string {
+/** A path as the CLI prints it: relative to where the CLI ran, when it is under there. */
+export function displayPath(path: string, cwd: string): string {
   const under = relative(cwd, path);
   return under !== "" && !under.startsWith("..") && !isAbsolute(under) ? under : path;
 }
 
-function verdictLines(
-  report: Report,
-  context: SummaryContext,
-  bold: (text: string) => string,
-): string[] {
+/**
+ * The regression check, under its own label so it reads apart from the results: what comparing the
+ * run with its baseline found, or why nothing was compared.
+ */
+function verdictLines(report: Report, view: View): string[] {
   const { baseline, verdict } = report;
+  const prose = (text: string): string[] => wrapLine(text, view.width);
+  const check = view.bold("Regression check:");
   if (report.outcome === "interrupted") {
     const what =
       report.signal === null ? "The runner was interrupted" : `Interrupted by ${report.signal}`;
     const saved = report.runs.length === 0 ? "; the runner saved no run" : "";
     const compared = baseline === null ? "" : ", so nothing was compared";
-    return [`${what}${saved}${compared}.`];
+    return prose(`${what}${saved}${compared}.`);
   }
   if (baseline === null) {
-    return noBaselineLines(report, context);
+    return prose(`${check} skipped, because no baseline was given.`);
   }
   if (verdict === null) {
     return [];
   }
   const against = `baseline ${clean(baseline.id)}`;
   if (verdict.outcome === "not_comparable") {
-    return [`Not compared with ${against}: ${clean(verdict.not_comparable_reason ?? "")}.`];
+    return prose(
+      `${check} not run, because the run can't be compared with ${against}: ${clean(verdict.not_comparable_reason ?? "")}.`,
+    );
   }
   const lines: string[] = [];
   if (verdict.outcome === "ok") {
-    lines.push(`No regression against ${against}: nothing newly fails or newly errors.`);
+    lines.push(
+      ...prose(`${check} passed against ${against}. Nothing newly fails or newly errors.`),
+    );
   } else {
     const failing = verdict.newly_failing.length;
     const errored = verdict.newly_errored.length;
@@ -449,107 +486,91 @@ function verdictLines(
       what.push(
         `${failing} ${plural(failing, "case and scorer pair")} newly ${failing === 1 ? "fails" : "fail"}`,
       );
-      tables.push("", bold("Newly failing"), ...indent(failingTable(verdict.newly_failing, bold)));
+      tables.push("", view.bold("Newly failing"), ...failingTable(verdict.newly_failing, view));
     }
     if (errored > 0) {
       what.push(
         `${errored} ${plural(errored, "case")} newly ${errored === 1 ? "errors" : "error"}`,
       );
-      tables.push("", bold("Newly errored"), ...indent(erroredTable(verdict.newly_errored, bold)));
+      tables.push("", view.bold("Newly errored"), ...erroredTable(verdict.newly_errored, view));
     }
-    lines.push(`Regressed against ${against}: ${what.join(", and ")}.`, ...tables);
+    const found = what.join(", and ");
+    lines.push(
+      ...prose(
+        `${check} failed against ${against}. ${found.charAt(0).toUpperCase()}${found.slice(1)}.`,
+      ),
+      ...tables,
+    );
   }
   const rescored = failingUnderNewVersion(verdict.changed);
   if (rescored.length > 0) {
     const count = rescored.length;
     lines.push(
       "",
-      `${count} ${plural(count, "case and scorer pair")} that passed there ${count === 1 ? "doesn't" : "don't"} pass under a new scorer version, which isn't a regression:`,
-      ...indent(failingTable(rescored, bold)),
+      ...prose(
+        `${count} ${plural(count, "case and scorer pair")} that passed there ${count === 1 ? "doesn't" : "don't"} pass under a new scorer version, which isn't a regression:`,
+      ),
+      ...failingTable(rescored, view),
     );
   }
   const changed = verdict.changed.length;
   if (changed > 0) {
     lines.push(
       "",
-      `${changed} ${plural(changed, "score")} changed without regressing; --json lists ${changed === 1 ? "it" : "them"}.`,
+      ...prose(
+        `${changed} ${plural(changed, "score")} changed without regressing; --json lists ${changed === 1 ? "it" : "them"}.`,
+      ),
     );
   }
   if (verdict.payloads === "truncated") {
     lines.push(
       "",
-      "A run stores truncated payloads, so each case's input and expected were matched as stored.",
+      ...prose(
+        "A run stores truncated payloads, so each case's input and expected were matched as stored.",
+      ),
     );
   }
   return lines;
 }
 
 /**
- * That no baseline was given, so the exit status says nothing about regressions, and the command
- * that compares the next run with this one. A run that can't be a baseline, such as a sampled one,
- * gets no command. A file of several evaluations gets the command with a placeholder, because a
- * baseline is one evaluation's run: the next run's evaluation of the same name is compared with it.
+ * Where each run was saved, its run file and case file relative to where the CLI ran, and for an
+ * uploaded run, its TraceRoot run id and the link TraceRoot gave it. The link is the one the run
+ * file saved, as TraceRoot gave it to the runner; the CLI never builds one from an id and a host.
+ * Then the evaluations an upload left behind. A file of several evaluations names each one.
  */
-function noBaselineLines(report: Report, { env, cwd }: SummaryContext): string[] {
-  const lines = ["No baseline given, so regressions weren't checked."];
-  const usable = report.runs.filter(
-    ({ run }) => run !== null && partialRunReason(run.file, "baseline") === null,
-  );
-  const [only] = usable;
-  if (only === undefined) {
-    return lines;
-  }
-  const file = clean(shellWord(displayPath(report.file, cwd)));
-  if (report.runs.length === 1) {
-    const id = clean(shellWord(only.event.local_run_id));
-    lines.push(
-      "To compare the next run with this one:",
-      `  ${cliCommand(`evals run ${file} --baseline ${id}`, env)}`,
-    );
-  } else {
-    lines.push(
-      "To compare the next run with one of these, give its run id:",
-      `  ${cliCommand(`evals run ${file} --baseline <run id>`, env)}`,
-    );
-  }
-  return lines;
-}
-
-/**
- * Each uploaded evaluation's TraceRoot run id, with its link and the command that opens it, then
- * the evaluations that weren't uploaded. The link is the one the run file saved, as TraceRoot gave
- * it to the runner; the CLI never builds one from an id and a host, so a run TraceRoot gave none
- * gets the command alone. The command is spelled the way the CLI was started, and names the project, which a
- * read needs under a browser login; the key check said which project the run went to. It repeats
- * the flags that gave the key or the host, so it reads from the same host with the same key.
- */
-function uploadLines({ upload, runs, outcome, runner }: Report, env: NodeJS.ProcessEnv): string[] {
-  if (upload === null) {
-    return [];
-  }
+function savedLines(report: Report, view: View): string[] {
+  const { upload, runs, outcome, runner } = report;
+  const many = runs.length > 1;
+  const indent = many ? "  " : "";
   const lines: string[] = [];
-  for (const { event, run } of runs) {
-    if (event.run_id !== null) {
-      const id = clean(event.run_id);
+  for (const { event, path, run } of runs) {
+    if (many) {
+      lines.push(view.bold(clean(event.name)));
+    }
+    lines.push(
+      ...labelled("Run file", [clean(displayPath(path, view.cwd))], indent, view.width),
+      ...labelled(
+        "Case file",
+        [clean(displayPath(casesPathOf(path), view.cwd))],
+        indent,
+        view.width,
+      ),
+    );
+    if (upload !== null && event.run_id !== null) {
       const url = uploadedRunUrl(event, run);
-      const read = [
-        `evals runs get ${id} --project ${clean(upload.projectId)}`,
-        ...upload.readFlags.map(clean),
-      ];
       lines.push(
-        `Uploaded ${clean(JSON.stringify(event.name))} to TraceRoot as run ${id}. To open it:`,
-        ...(url === null ? [] : [`  ${clean(url)}`]),
-        `  ${cliCommand(read.join(" "), env)}`,
+        ...labelled(
+          "Uploaded",
+          [`run ${clean(event.run_id)}`, ...(url === null ? [] : [clean(url)])],
+          indent,
+          view.width,
+        ),
       );
     }
   }
-  // Cost and token use come from the traces, which TraceRoot processes after the runner ends, so
-  // the summary can't print them and says where they go instead of printing nothing.
-  if (lines.length > 0) {
-    lines.push("TraceRoot adds cost and token use once it has processed the traces.");
-  }
   // An interrupted run's evaluations stopped short, which says why they have no TraceRoot run id.
-  const missing = outcome === "interrupted" ? [] : notUploaded(runs);
+  const missing = upload === null || outcome === "interrupted" ? [] : notUploaded(runs);
   if (missing.length > 0) {
     const names = missing.map(({ event }) => clean(JSON.stringify(event.name))).join(", ");
     const local =
@@ -557,8 +578,90 @@ function uploadLines({ upload, runs, outcome, runner }: Report, env: NodeJS.Proc
         ? "`local=True` or `report_to=`"
         : "`local: true` or `transport`";
     lines.push(
-      ...(lines.length > 0 ? [""] : []),
-      `Not uploaded: ${names} finished without a TraceRoot run id. An evaluation defined with ${local} runs without uploading.`,
+      ...wrapLine(
+        `Not uploaded: ${names} finished without a TraceRoot run id. An evaluation defined with ${local} runs without uploading.`,
+        view.width,
+      ),
+    );
+  }
+  return lines;
+}
+
+/**
+ * A label and its values, each value whole on its own line: beside the label when the first fits
+ * there, with the rest under it, and otherwise each on a line under the label.
+ */
+function labelled(
+  label: string,
+  values: readonly string[],
+  indent: string,
+  width: number | undefined,
+): string[] {
+  const beside = `${indent}${label.padEnd(LABEL_WIDTH)}`;
+  const fits = values.every(
+    (value) => width === undefined || beside.length + displayWidth(value) <= width,
+  );
+  if (fits) {
+    return values.map((value, i) => `${i === 0 ? beside : " ".repeat(beside.length)}${value}`);
+  }
+  return [`${indent}${label}`, ...values.map((value) => `${indent}  ${value}`)];
+}
+
+/**
+ * What to run next, each command on a line of its own and spelled the way the CLI was started:
+ * - without a baseline, the command that compares the next run with this one. A run that can't be
+ *   a baseline, such as a sampled one, gets none. A file of several evaluations gets the command
+ *   with a placeholder, because a baseline is one evaluation's run: the next run's evaluation of
+ *   the same name is compared with it;
+ * - for an uploaded run, the command that reads it. It names the project, which a read needs under
+ *   a browser login; the key check said which project the run went to. It repeats the flags that
+ *   gave the key or the host, so it reads from the same host with the same key.
+ */
+function nextLines(report: Report, view: View): string[] {
+  const { env, cwd } = view;
+  const prose = (text: string): string[] => wrapLine(text, view.width);
+  const lines: string[] = [];
+  const usable =
+    report.baseline === null && report.outcome !== "interrupted"
+      ? report.runs.filter(
+          ({ run }) => run !== null && partialRunReason(run.file, "baseline") === null,
+        )
+      : [];
+  const [only] = usable;
+  if (only !== undefined) {
+    const file = clean(shellWord(displayPath(report.file, cwd)));
+    if (report.runs.length === 1) {
+      const id = clean(shellWord(only.event.local_run_id));
+      lines.push(
+        ...prose("To compare the next run with this one:"),
+        `  ${cliCommand(`evals run ${file} --baseline ${id}`, env)}`,
+      );
+    } else {
+      lines.push(
+        ...prose("To compare the next run with one of these, give its run id:"),
+        `  ${cliCommand(`evals run ${file} --baseline <run id>`, env)}`,
+      );
+    }
+  }
+  const { upload } = report;
+  const uploaded = upload === null ? [] : report.runs.filter(({ event }) => event.run_id !== null);
+  if (upload !== null && uploaded.length > 0) {
+    lines.push(
+      ...prose(
+        uploaded.length === 1
+          ? "To read the uploaded run from the terminal:"
+          : "To read the uploaded runs from the terminal:",
+      ),
+      ...uploaded.map(({ event }) => {
+        const read = [
+          `evals runs get ${clean(event.run_id ?? "")} --project ${clean(upload.projectId)}`,
+          ...upload.readFlags.map(clean),
+        ];
+        return `  ${cliCommand(read.join(" "), env)}`;
+      }),
+      // Cost and token use come from the traces, which TraceRoot processes after the runner ends,
+      // so the summary can't print them and says where they go instead of printing nothing.
+      ...prose("TraceRoot adds cost and token use once it has processed the traces."),
     );
   }
   return lines;
@@ -569,11 +672,17 @@ function uploadedRunUrl(event: EvaluationCompletedEvent, run: SavedRun | null): 
   return event.run_id === null ? null : (run?.file.dashboard_url ?? null);
 }
 
-function failingTable(pairs: NewlyFailingPair[], bold: (text: string) => string): string {
-  return renderTable(
+function failingTable(pairs: NewlyFailingPair[], view: View): string[] {
+  return fitTable(
     ["CASE", "SCORER", "RESULT"],
     pairs.map((pair) => [clean(pair.case_id), clean(pair.scorer_name), failingResult(pair)]),
-    { headerStyle: bold },
+    {
+      width: view.width,
+      indent: "  ",
+      headerStyle: view.bold,
+      wrapLast: true,
+      labels: [false, true, false],
+    },
   );
 }
 
@@ -621,8 +730,8 @@ function failingResult(pair: NewlyFailingPair): string {
 /** A case that raised: what its task raised, and what each of its scorers did. */
 type ErroredCase = Pick<CaseLine, "case_id" | "task_error" | "scorer_errors">;
 
-function erroredTable(cases: ErroredCase[], bold: (text: string) => string): string {
-  return renderTable(
+function erroredTable(cases: ErroredCase[], view: View, indent = "  "): string[] {
+  return fitTable(
     ["CASE", "ERROR"],
     cases.map((item) => {
       const errors = [
@@ -633,10 +742,6 @@ function erroredTable(cases: ErroredCase[], bold: (text: string) => string): str
       ];
       return [clean(item.case_id), errors.join("; ")];
     }),
-    { headerStyle: bold },
+    { width: view.width, indent, headerStyle: view.bold, wrapLast: true, labels: [false, false] },
   );
-}
-
-function indent(block: string): string[] {
-  return block.split("\n").map((line) => `  ${line}`);
 }

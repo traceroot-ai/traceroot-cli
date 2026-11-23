@@ -88,6 +88,7 @@ describe("finding the runner for a TypeScript or JavaScript evaluation file", ()
           join(sdk, "dist", "eval", "runner.js"),
           file,
         ],
+        runtime: { name: "Node.js", version: "22.12.0", executable: NODE },
       },
     });
   });

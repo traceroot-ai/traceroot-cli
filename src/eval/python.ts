@@ -128,6 +128,7 @@ export async function findPythonRunner(
       language: "python",
       sdkVersion: answer.traceroot,
       argv: [interpreter, "-m", "traceroot.eval.runner", file],
+      runtime: { name: "Python", version: answer.python, executable: interpreter },
     },
   };
 }

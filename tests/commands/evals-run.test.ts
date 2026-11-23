@@ -37,6 +37,10 @@ import {
 const BIN = fileURLToPath(new URL("../../bin/traceroot.mjs", import.meta.url));
 const DIST_CLI = new URL("../../dist/cli.js", import.meta.url);
 const STUB = fileURLToPath(new URL("../helpers/evalRunnerStub.cjs", import.meta.url));
+
+/** The Git notice traceroot 0.5.1 prints when it finds no Git repository or commit. */
+const GIT_NOTICE =
+  "TraceRoot: git context incomplete (repo=unset, ref=unset). The AI agent needs both to correlate traces to source. Set TRACEROOT_GIT_REPO / TRACEROOT_GIT_REF — see https://docs.traceroot.ai/tracing/git-context";
 const FIXTURES = fileURLToPath(new URL("../fixtures/eval/", import.meta.url));
 const PYTHON = "python-0.5.1";
 const TYPESCRIPT = "typescript-0.8.1";
@@ -116,6 +120,7 @@ interface RunSpec {
   exit?: number;
   wait?: boolean;
   chatty?: boolean;
+  stderr?: string;
 }
 
 /** An evaluation file that tells the stub what to do. `replay` names a recorded scenario. */
@@ -258,10 +263,12 @@ describe("evals run without a baseline", () => {
         "  SCORE        MEAN   SCORED  PASSED  FAILED",
         "  exact_match  0.667  3 of 3  2       1",
         "  not_empty    1      3 of 3  3       0",
-        "  Run file   .traceroot/eval/runs/run_first.json",
-        "  Case file  .traceroot/eval/runs/run_first.cases.jsonl",
         "",
-        "No baseline given, so regressions weren't checked.",
+        "Regression check: skipped, because no baseline was given.",
+        "",
+        "Run file   .traceroot/eval/runs/run_first.json",
+        "Case file  .traceroot/eval/runs/run_first.cases.jsonl",
+        "",
         "To compare the next run with this one:",
         "  traceroot evals run x_eval.py --baseline run_first",
         "",
@@ -279,9 +286,22 @@ describe("evals run without a baseline", () => {
     expect(run.stderr).toContain("runner stdout\n");
     expect(run.stderr).toContain("runner stderr\n");
     expect(run.stderr).toContain(
-      `Running x_eval.py with traceroot 0.5.1 (${join(project, ".venv", "bin", "python")})`,
+      `Running x_eval.py with traceroot 0.5.1 on Python 3.12.4 (${join(".venv", "bin", "python")})`,
     );
     expect(run.stdout).not.toContain("runner");
+  });
+
+  it("leaves the SDK's Git notice out of a local run, and passes an application's line that mentions it as written", () => {
+    pythonProject();
+    const logged = `WARNING:traceroot.client:${GIT_NOTICE}`;
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, stderr: `${GIT_NOTICE}\n${logged}\n` });
+
+    const run = evalsRun("x_eval.py");
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).toContain(`runner stderr\n${logged}\n`);
+    expect(run.stderr).not.toContain(`\n${GIT_NOTICE}`);
+    expect(run.stderr).not.toContain("warning: no Git");
   });
 
   it("gives neither the runner nor the Python probe the API key, and turns tracing off", () => {
@@ -329,8 +349,10 @@ describe("evals run without a baseline", () => {
         "  Errors",
         "    CASE                     ERROR",
         `    ${BETA}  task: ValueError: cannot convert 'beta'`,
-        "  Run file   .traceroot/eval/runs/run_first.json",
         "",
+        "Regression check: skipped, because no baseline was given.",
+        "",
+        "Run file   .traceroot/eval/runs/run_first.json",
       ].join("\n"),
     );
   });
@@ -372,7 +394,7 @@ describe("evals run without a baseline", () => {
     const run = evalsRun("x_eval.py");
 
     expect(run.status).toBe(0);
-    expect(run.stdout).toContain("No baseline given, so regressions weren't checked.\n");
+    expect(run.stdout).toContain("Regression check: skipped, because no baseline was given.\n");
     expect(run.stdout).not.toContain("--baseline");
   });
 
@@ -388,6 +410,11 @@ describe("evals run without a baseline", () => {
       outcome: "ok",
       file: join(project, "x_eval.py"),
       sdk: { language: "python", name: "traceroot", version: "0.5.1" },
+      runtime: {
+        name: "Python",
+        version: "3.12.4",
+        executable: join(project, ".venv", "bin", "python"),
+      },
       project_id: null,
       runs: [
         {
@@ -448,7 +475,7 @@ describe("evals run with a baseline", () => {
     expect(run.status).toBe(18);
     expect(run.stdout).toContain(
       [
-        "Regressed against baseline run_first: 1 case and scorer pair newly fails.",
+        "Regression check: failed against baseline run_first. 1 case and scorer pair newly fails.",
         "",
         "Newly failing",
         "  CASE                     SCORER       RESULT",
@@ -503,7 +530,7 @@ describe("evals run with a baseline", () => {
 
     expect(run.status).toBe(18);
     expect(run.stdout).toContain(
-      "Regressed against baseline run_first: 2 case and scorer pairs newly fail, and 1 case newly errors.",
+      "Regression check: failed against baseline run_first. 2 case and scorer pairs newly fail, and 1 case newly errors.",
     );
     expect(run.stdout).toContain(
       `  ${BETA}  exact_match  task raised: ValueError: cannot convert 'beta'`,
@@ -517,7 +544,7 @@ describe("evals run with a baseline", () => {
     );
     // Listed once, as newly errored, and not again among the run's errors.
     expect(run.stdout).not.toContain("  Errors\n");
-    expect(run.stdout).not.toContain("No baseline given");
+    expect(run.stdout).not.toContain("no baseline was given");
   });
 
   it("still names an errored case that errored in the baseline too, which isn't new", () => {
@@ -531,7 +558,7 @@ describe("evals run with a baseline", () => {
     expect(run.stdout).toContain(
       `  Errors\n    CASE                     ERROR\n    ${BETA}  task: ValueError: cannot convert 'beta'\n`,
     );
-    expect(run.stdout).toContain("No regression against baseline run_first");
+    expect(run.stdout).toContain("Regression check: passed against baseline run_first");
   });
 
   it("exits 0 when nothing newly fails, and counts what changed", () => {
@@ -543,7 +570,7 @@ describe("evals run with a baseline", () => {
 
     expect(run.status).toBe(0);
     expect(run.stdout).toContain(
-      "No regression against baseline run_first: nothing newly fails or newly errors.\n\n1 score changed without regressing; --json lists it.\n",
+      "Regression check: passed against baseline run_first. Nothing newly fails or newly errors.\n\n1 score changed without regressing; --json lists it.\n",
     );
   });
 
@@ -566,7 +593,7 @@ describe("evals run with a baseline", () => {
     expect(run.status).toBe(0);
     expect(run.stdout).toContain(
       [
-        "No regression against baseline run_first: nothing newly fails or newly errors.",
+        "Regression check: passed against baseline run_first. Nothing newly fails or newly errors.",
         "",
         "1 case and scorer pair that passed there doesn't pass under a new scorer version, which isn't a regression:",
         "  CASE                     SCORER       RESULT",
@@ -599,7 +626,7 @@ describe("evals run with a baseline", () => {
     expect(human.status).toBe(2);
     expect(human.stdout).toContain("uppercase · run_second · completed");
     expect(human.stdout).toContain(
-      'Not compared with baseline run_first: the runs used different datasets: revision "rev_854c88d1e7648742" in the baseline run and "rev_c975c5d18e3e9e4b" in the new run.',
+      `Regression check: not run, because the run can't be compared with baseline run_first: the runs used different datasets: revision "rev_854c88d1e7648742" in the baseline run and "rev_c975c5d18e3e9e4b" in the new run.`,
     );
     expect(machine.status).toBe(2);
     expect(json(machine.stdout)).toMatchObject({
@@ -622,7 +649,7 @@ describe("evals run with a baseline", () => {
 
     expect(run.status).toBe(2);
     expect(run.stdout).toContain(
-      'Not compared with baseline run_first: the file ran no evaluation named "titlecase", which the baseline run is of; it ran "uppercase".',
+      `Regression check: not run, because the run can't be compared with baseline run_first: the file ran no evaluation named "titlecase", which the baseline run is of; it ran "uppercase".`,
     );
   });
 });
@@ -877,7 +904,7 @@ describe("evals run when the runner fails after an evaluation finished", () => {
     expect(human.stdout).toContain("uppercase · run_second · completed\n");
     expect(human.stdout).toContain(
       [
-        "Regressed against baseline run_first: 1 case and scorer pair newly fails.",
+        "Regression check: failed against baseline run_first. 1 case and scorer pair newly fails.",
         "",
         "Newly failing",
         "  CASE                     SCORER       RESULT",
@@ -913,7 +940,7 @@ describe("evals run when the runner fails after an evaluation finished", () => {
     expect(human.status).toBe(17);
     expect(human.stdout).toContain("uppercase · run_second · completed\n");
     expect(human.stdout).toContain(
-      "No regression against baseline run_first: nothing newly fails or newly errors.\n",
+      "Regression check: passed against baseline run_first. Nothing newly fails or newly errors.\n",
     );
     expect(human.stderr).toContain(`error: ${FATAL_ERROR}\n`);
     expect(machine.status).toBe(17);
@@ -942,7 +969,9 @@ describe("evals run when the runner fails after an evaluation finished", () => {
     const reason =
       'no evaluation named "titlecase", which the baseline run is of, finished before the eval runner stopped; it finished "uppercase"';
     expect(human.status).toBe(17);
-    expect(human.stdout).toContain(`Not compared with baseline run_first: ${reason}.\n`);
+    expect(human.stdout).toContain(
+      `Regression check: not run, because the run can't be compared with baseline run_first: ${reason}.\n`,
+    );
     expect(human.stderr).toContain(`error: ${FATAL_ERROR}\n`);
     expect(machine.status).toBe(17);
     expect(json(machine.stdout)).toMatchObject({
@@ -1032,9 +1061,8 @@ describe("evals run's progress line", () => {
 
   /** What stderr holds without the line: the runner it started, then the runner's output. */
   function plainStderr(): string[] {
-    const python = join(project, ".venv", "bin", "python");
     return [
-      `Running x_eval.py with traceroot 0.5.1 (${python})`,
+      `Running x_eval.py with traceroot 0.5.1 on Python 3.12.4 (${join(".venv", "bin", "python")})`,
       "runner stdout",
       "runner stderr",
       "",
@@ -1268,11 +1296,32 @@ describe("evals run --upload", () => {
     return JSON.parse(lines.at(-1) ?? "") as { type: string; kind: string; message: string };
   }
 
-  /** The line under "To open it:" in a summary: the command that opens an uploaded run. */
+  /** The line under "To read the uploaded run…:" in a summary: the command that reads it. */
   function openCommand(stdout: string): string {
     const lines = stdout.split("\n");
-    return (lines[lines.findIndex((line) => line.endsWith("To open it:")) + 1] ?? "").trim();
+    return (lines[lines.findIndex((line) => line.endsWith("from the terminal:")) + 1] ?? "").trim();
   }
+
+  it("puts the SDK's Git notice in a few words for an uploaded run", async () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      replace: uploadedAs("evr_stub_1"),
+      stderr: `${GIT_NOTICE}\n`,
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).toContain(
+      [
+        "runner stderr",
+        "warning: no Git repository or commit was found, so the uploaded traces won't link to source code.",
+        "  Set TRACEROOT_GIT_REPO and TRACEROOT_GIT_REF: https://docs.traceroot.ai/tracing/git-context",
+        "",
+      ].join("\n"),
+    );
+  });
 
   it("makes no request to TraceRoot without --upload", async () => {
     pythonProject();
@@ -1317,15 +1366,17 @@ describe("evals run --upload", () => {
         "  SCORE        MEAN  SCORED  PASSED  FAILED",
         "  exact_match  1     3 of 3  3       0",
         "  not_empty    1     3 of 3  3       0",
-        "  Run file   .traceroot/eval/runs/run_first.json",
-        "  Case file  .traceroot/eval/runs/run_first.cases.jsonl",
         "",
-        "No baseline given, so regressions weren't checked.",
+        "Regression check: skipped, because no baseline was given.",
+        "",
+        "Run file   .traceroot/eval/runs/run_first.json",
+        "Case file  .traceroot/eval/runs/run_first.cases.jsonl",
+        "Uploaded   run evr_stub_1",
+        `           ${RUN_URL}`,
+        "",
         "To compare the next run with this one:",
         "  traceroot evals run x_eval.py --baseline run_first",
-        "",
-        'Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:',
-        `  ${RUN_URL}`,
+        "To read the uploaded run from the terminal:",
         `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
         "TraceRoot adds cost and token use once it has processed the traces.",
         "",
@@ -1362,7 +1413,10 @@ describe("evals run --upload", () => {
     const human = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
 
     expect(json(run.stdout)).toMatchObject({ runs: [{ uploaded_run_url: null }] });
-    expect(human.stdout).toContain("To open it:\n  traceroot evals runs get evr_stub_1 --project ");
+    expect(human.stdout).toContain("\nUploaded   run evr_stub_1\n\n");
+    expect(human.stdout).toContain(
+      "To read the uploaded run from the terminal:\n  traceroot evals runs get evr_stub_1 --project ",
+    );
   });
 
   it("escapes a control character in a run's link", async () => {
@@ -1580,8 +1634,9 @@ describe("evals run --upload", () => {
 
     expect(human.status).toBe(17);
     expect(human.stdout).toContain("uppercase · run_first · completed\n");
-    expect(human.stdout).toContain(
-      `Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:\n  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\n`,
+    expect(human.stdout).toContain("Uploaded   run evr_stub_1\n");
+    expect(openCommand(human.stdout)).toBe(
+      `traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
     );
     const error = `x_eval.py gives an evaluation its cases as a plain list, which can't be uploaded: TraceRoot records an uploaded run against a Dataset, which the runner publishes before the run if TraceRoot doesn't have it yet. None of that evaluation's cases ran. "uppercase" finished before it, and was saved on this machine as run_first and uploaded to TraceRoot as evr_stub_1.\n\nDefine the cases as a Dataset, as in \`cases = Dataset("cases")\`, then \`cases.add(input, expected=...)\` for each case, or run without --upload.`;
     expect(human.stderr).toContain(`error: ${error}\n`);
@@ -1620,8 +1675,9 @@ describe("evals run --upload", () => {
     const machine = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--json");
 
     expect(human.status).toBe(17);
-    expect(human.stdout).toContain(
-      `Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:\n  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\n`,
+    expect(human.stdout).toContain("Uploaded   run evr_stub_1\n");
+    expect(openCommand(human.stdout)).toBe(
+      `traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
     );
     const error = `the eval runner failed with harness_error: ${message}\n\nThe evaluation that failed saved no run on this machine either. "uppercase" finished before it, and was saved on this machine as run_first and uploaded to TraceRoot as evr_stub_1. To check the evaluation that failed without uploading it, rerun without --upload.`;
     expect(human.stderr).toContain(`error: ${error}\n`);
@@ -1722,10 +1778,11 @@ describe("evals run --upload", () => {
 
     expect(run.status).toBe(18);
     expect(run.stdout).toContain(
-      "Regressed against baseline run_first: 1 case and scorer pair newly fails.",
+      "Regression check: failed against baseline run_first. 1 case and scorer pair newly fails.",
     );
-    expect(run.stdout).toContain(
-      `Uploaded "uppercase" to TraceRoot as run evr_stub_2. To open it:\n  traceroot evals runs get evr_stub_2 --project ${STUB_PROJECT_ID}\n`,
+    expect(run.stdout).toContain("Uploaded   run evr_stub_2\n");
+    expect(openCommand(run.stdout)).toBe(
+      `traceroot evals runs get evr_stub_2 --project ${STUB_PROJECT_ID}`,
     );
   });
 

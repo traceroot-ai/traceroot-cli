@@ -114,18 +114,20 @@ export function findNodeRunner(
     };
   }
 
+  const executable = options.execPath ?? process.execPath;
   return {
     ok: true,
     runner: {
       language,
       sdkVersion: sdk.version,
       argv: [
-        options.execPath ?? process.execPath,
+        executable,
         "--import",
         pathToFileURL(tsx.entry).href,
         join(sdk.root, "dist", "eval", "runner.js"),
         file,
       ],
+      runtime: { name: "Node.js", version: nodeVersion, executable },
     },
   };
 }

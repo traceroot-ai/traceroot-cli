@@ -19,7 +19,12 @@
  * sequence in an evaluation name, a case id or a runner's message can't act on the terminal.
  *
  * While the runner runs, a terminal gets a progress line at the bottom of stderr (see
- * {@link showsProgress}). Everything else gets exactly the runner's output, as it always has.
+ * {@link showsProgress}). Everything else gets the runner's output as it always has, but for the
+ * SDK's own Git notice, which is reworded and fitted to the terminal (see eval/notices.ts).
+ *
+ * Human output is fitted to the terminal it prints to: prose wraps at word boundaries, a table
+ * that doesn't fit is stacked, and a command, a link or a path is never broken (see
+ * render/wrap.ts). A pipe or a file gets every line whole.
  */
 
 import { existsSync, statSync } from "node:fs";
@@ -38,6 +43,7 @@ import {
   type Report,
   SDK_NAMES,
   type SavedEvaluation,
+  displayPath,
   type Upload,
   notUploaded,
   renderSummary,
@@ -62,6 +68,7 @@ import {
 } from "../output.js";
 import { clean } from "../registry/enhancers/eval-reads.js";
 import { onceOption } from "../registry/flags.js";
+import { terminalColumns, wrapLine } from "../render/wrap.js";
 import { cliCommand, shellWord } from "../setup/invocation.js";
 import { makeSecret } from "../setup/secret.js";
 import { canRedraw } from "../setup/tty.js";
@@ -239,12 +246,7 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
   const upload = options.upload === null ? null : await checkUpload(options.upload, env, writers);
 
   const runner = await findRunner(options.file, cwd, env);
-  // Which interpreter a Python file runs under is the one thing a venv mix-up hides.
-  const under = runner.language === "python" ? ` (${clean(runner.argv[0])})` : "";
-  logProgress(
-    `Running ${clean(options.file)} with ${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)}${under}`,
-    writers,
-  );
+  logWrapped(runningLine(options.file, runner, cwd), writers);
   const outcome = await runEvalRunner({
     argv: runner.argv,
     cwd,
@@ -320,6 +322,25 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
       return ExitCode.usage;
     default:
       return 0;
+  }
+}
+
+/**
+ * What runs: the file, the SDK and the interpreter's version. A Python file's interpreter is named
+ * too, relative to the working directory when it is under it, since which venv a file runs under
+ * is the one thing a venv mix-up hides; `--json` has its full path (`runtime.executable`).
+ */
+export function runningLine(file: string, runner: EvalRunner, cwd: string): string {
+  const { runtime } = runner;
+  const under =
+    runner.language === "python" ? ` (${clean(displayPath(runtime.executable, cwd))})` : "";
+  return `Running ${clean(file)} with ${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)} on ${runtime.name} ${clean(runtime.version)}${under}`;
+}
+
+/** A progress message on stderr, wrapped to the terminal at word boundaries. */
+function logWrapped(text: string, writers: Writers): void {
+  for (const piece of wrapLine(text, terminalColumns(writers.err))) {
+    logProgress(piece, writers);
   }
 }
 
@@ -419,7 +440,7 @@ async function checkUpload(
   } catch (error) {
     throw keyCheckFailure(error, access.host);
   }
-  logProgress(
+  logWrapped(
     `Uploading to project ${clean(who.project_name ?? who.project_id)} at ${clean(access.host)}`,
     writers,
   );

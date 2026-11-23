@@ -107,6 +107,7 @@ describe("finding the runner by the file's extension", () => {
         language: "python",
         sdkVersion: "0.5.1",
         argv: ["/usr/bin/python3", "-m", "traceroot.eval.runner", join(dir, "evals", "x_eval.py")],
+        runtime: { name: "Python", version: "3.12.4", executable: "/usr/bin/python3" },
       },
     });
   });

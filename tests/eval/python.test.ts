@@ -110,6 +110,7 @@ describe.skipIf(WINDOWS)("finding the Python interpreter for an evaluation file"
         language: "python",
         sdkVersion: "0.5.1",
         argv: [own, "-m", "traceroot.eval.runner", file],
+        runtime: { name: "Python", version: "3.12.4", executable: own },
       },
     });
   });
@@ -175,6 +176,7 @@ describe.skipIf(WINDOWS)("finding the Python interpreter for an evaluation file"
         language: "python",
         sdkVersion: "0.5.1",
         argv: [pinned, "-m", "traceroot.eval.runner", file],
+        runtime: { name: "Python", version: "3.12.4", executable: pinned },
       },
     });
   });
