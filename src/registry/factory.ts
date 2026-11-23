@@ -226,7 +226,7 @@ function registerOne(
     if (enhancer?.render !== undefined) {
       await enhancer.render(payload, renderCtx);
     } else {
-      renderDefault(payload, { json: ctx.json, writers, args });
+      renderDefault(payload, { json: ctx.json, writers, args, tool: target.name });
     }
   });
 }

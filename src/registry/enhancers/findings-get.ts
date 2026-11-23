@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { FindingDetail } from "../../api/client.js";
 import { CliError, ExitCode, type Writers, writeJson } from "../../output.js";
+import { fieldLines } from "../../render/fields.js";
 import { createStyler } from "../../render/style.js";
 import { formatTimestamp } from "../../util/index.js";
 import { onceOption } from "../flags.js";
@@ -36,49 +37,57 @@ export function categoryLabel(template: string | null | undefined): string {
 /** Core, network-free rendering logic for `findings get`. Exported for tests. */
 export function renderFinding(finding: FindingDetail, writers: Writers, timeZone?: string): string {
   const styler = createStyler(writers.out);
-  const label = (text: string): string => styler.bold(text);
   const lines: string[] = [];
 
-  // Aligned header fields (values line up under column 13).
-  // Id ordering mirrors the UI's detector-runs table: run id -> trace id ->
-  // finding id. "none" when no run row references the finding.
+  // Header fields. Id ordering mirrors the UI's detector-runs table: run id ->
+  // trace id -> finding id. "(none)" when no run row references the finding.
+  // An empty string is an absent value, so it prints as "—", as in every get.
+  const runIds = finding.run_ids ?? [];
   lines.push(
-    `${label("Run IDs:")}    ${(finding.run_ids ?? []).length > 0 ? finding.run_ids.join(", ") : "none"}`,
+    ...fieldLines(
+      [
+        ["Run IDs", runIds.length > 0 ? runIds.join(", ") : "(none)"],
+        ["Trace ID", finding.trace_id],
+        ["Finding ID", sanitizeFindingId(finding.finding_id)],
+        ["Time", formatTimestamp(finding.timestamp, timeZone)],
+        ["Summary", finding.summary || "—"],
+      ],
+      styler,
+    ),
   );
-  lines.push(`${label("Trace ID:")}   ${finding.trace_id}`);
-  lines.push(`${label("Finding ID:")} ${sanitizeFindingId(finding.finding_id)}`);
-  lines.push(`${label("Time:")}       ${formatTimestamp(finding.timestamp, timeZone)}`);
-  lines.push(`${label("Summary:")}    ${finding.summary}`);
 
-  // Per-detector, flush-left: `Detector: <name> (<template>)`, then the unique id
-  // (disambiguates same-named detectors) and the human-readable category.
-  // Multiple detectors are separated by a blank line; per-detector summary/data
-  // stay in `--json` only.
-  lines.push("");
-  finding.results.forEach((result, i) => {
-    if (i > 0) {
-      lines.push("");
-    }
+  // Per detector: its name and template, its unique id (disambiguates
+  // same-named detectors) and the human-readable category. Multiple detectors
+  // are separated by a blank line; per-detector summary/data stay in `--json`.
+  for (const result of finding.results) {
     const template = result.template ? ` (${result.template})` : "";
-    lines.push(`${label("Detector:")} ${result.detector_name}${template}`);
-    lines.push(`${label("ID:")}       ${result.detector_id}`);
-    lines.push(`${label("Category:")} ${categoryLabel(result.template)}`);
-  });
+    lines.push(
+      "",
+      ...fieldLines(
+        [
+          ["Detector", `${result.detector_name || "—"}${template}`],
+          ["Detector ID", result.detector_id || "—"],
+          ["Category", categoryLabel(result.template)],
+        ],
+        styler,
+      ),
+    );
+  }
 
-  // RCA, flush-left. With a result: a bare `RCA:` header, then the result verbatim
-  // (it already carries its own formatting — usually a markdown list — so no added
-  // bullets, or the markers double up). No RCA → `RCA: none`; an in-progress RCA
-  // with no result yet keeps its status (e.g. `RCA: processing`).
+  // RCA. With a result: a bare `RCA:` header, then the result verbatim (it
+  // already carries its own formatting — usually a markdown list — so no added
+  // bullets, or the markers double up). No RCA → `RCA:  (none)`; an in-progress
+  // RCA with no result yet keeps its status (e.g. `RCA:  processing`).
   lines.push("");
   if (!finding.rca) {
-    lines.push(`${label("RCA:")} none`);
+    lines.push(...fieldLines([["RCA", "(none)"]], styler));
   } else if (finding.rca.result) {
-    lines.push(label("RCA:"));
+    lines.push(styler.bold("RCA:"));
     for (const resultLine of finding.rca.result.trim().split("\n")) {
       lines.push(resultLine);
     }
   } else {
-    lines.push(`${label("RCA:")} ${finding.rca.status}`);
+    lines.push(...fieldLines([["RCA", finding.rca.status]], styler));
   }
 
   return lines.join("\n");

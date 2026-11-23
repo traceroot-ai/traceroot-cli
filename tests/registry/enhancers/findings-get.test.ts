@@ -78,10 +78,42 @@ describe("renderFinding", () => {
     expect(out).not.toContain("Identified");
   });
 
-  it("shows 'RCA: none' and no Root cause line when rca is null", () => {
+  it("prints the header, detector and RCA blocks as aligned `Label:  value` lines", () => {
+    const { writers: w } = writers();
+    expect(renderFinding(detail(), w, "UTC")).toBe(
+      [
+        "Run IDs:     run-9",
+        "Trace ID:    tr-1",
+        "Finding ID:  fnd-1",
+        "Time:        2024-01-01 00:00:00 UTC",
+        "Summary:     a finding summary",
+        "",
+        "Detector:     hallucination (hallucination)",
+        "Detector ID:  d1",
+        "Category:     Hallucination",
+        "",
+        "RCA:",
+        "the root cause",
+      ].join("\n"),
+    );
+  });
+
+  it("prints an empty summary, detector name and detector id as —", () => {
+    const { writers: w } = writers();
+    const lines = renderFinding(
+      detail({ summary: "", results: [resultItem({ detector_name: "", detector_id: "" })] }),
+      w,
+      "UTC",
+    ).split("\n");
+    expect(lines).toContain("Summary:     —");
+    expect(lines).toContain("Detector:     — (hallucination)");
+    expect(lines).toContain("Detector ID:  —");
+  });
+
+  it("shows 'RCA:  (none)' and no Root cause line when rca is null", () => {
     const { writers: w } = writers();
     const out = renderFinding(detail({ rca: null }), w);
-    expect(out).toContain("RCA: none");
+    expect(out).toContain("RCA:  (none)");
     expect(out).not.toContain("Root cause");
   });
 
@@ -91,7 +123,7 @@ describe("renderFinding", () => {
       detail({ rca: { inherited: false, status: "processing", result: null } }),
       w,
     );
-    expect(out).toContain("RCA: processing");
+    expect(out).toContain("RCA:  processing");
   });
 
   it("prints an RCA result that is already a list without doubling the bullets", () => {
@@ -129,10 +161,10 @@ describe("findingsGet.render (--json)", () => {
   });
 });
 
-it("renders Run IDs: none when no run references the finding", () => {
+it("renders Run IDs: (none) when no run references the finding", () => {
   const { writers: w } = writers();
   const out = renderFinding(detail({ run_ids: [] }), w);
-  expect(out).toContain("Run IDs:    none");
+  expect(out).toContain("Run IDs:     (none)");
 });
 
 it("renders a legacy hyphenated finding id stripped of hyphens", () => {

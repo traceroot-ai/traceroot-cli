@@ -1,5 +1,5 @@
 import { type Writers, writeJson } from "../../output.js";
-import { createStyler } from "../../render/style.js";
+import { renderFields } from "../../render/fields.js";
 import { formatTimestamp } from "../../util/index.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
@@ -54,27 +54,36 @@ export function renderAlertDetail(payload: AlertDetail, opts: RenderAlertDetailO
     writeJson(payload, writers);
     return;
   }
-  const styler = createStyler(writers.out);
-  const label = (text: string): string => styler.bold(text);
   const filters =
-    payload.filters.length === 0 ? "none" : payload.filters.map(filterText).join(", ");
-  const lines = [
-    `${label("Alert:")}       ${payload.name}`,
-    `${label("Alert ID:")}    ${payload.id}`,
-    `${label("Status:")}      ${payload.status} (severity ${payload.severity})`,
-    `${label("Rule:")}        ${payload.aggregation} ${payload.measure} ${payload.threshold_operator} ${payload.threshold} / ${payload.window}`,
-    `${label("View:")}        ${payload.view}`,
-    `${label("Filters:")}     ${filters}`,
-    `${label("Renotify:")}    ${renotifyText(payload.renotify)}`,
-    `${label("No data:")}     ${payload.no_data_mode}`,
-    `${label("Last eval:")}   ${payload.last_evaluated_at === null ? "never" : formatTimestamp(payload.last_evaluated_at, timeZone)}`,
-    `${label("Created:")}     ${formatTimestamp(payload.create_time, timeZone)}${payload.creator === null ? "" : ` by ${payload.creator}`}`,
-    `${label("Updated:")}     ${formatTimestamp(payload.update_time, timeZone)}`,
+    payload.filters.length === 0 ? "(none)" : payload.filters.map(filterText).join(", ");
+  const fields: [string, string][] = [
+    ["Alert", payload.name],
+    ["Alert ID", payload.id],
+    ["Status", `${payload.status} (severity ${payload.severity})`],
+    [
+      "Rule",
+      `${payload.aggregation} ${payload.measure} ${payload.threshold_operator} ${payload.threshold} / ${payload.window}`,
+    ],
+    ["View", payload.view],
+    ["Filters", filters],
+    ["Renotify", renotifyText(payload.renotify)],
+    ["No data", payload.no_data_mode],
+    [
+      "Last eval",
+      payload.last_evaluated_at === null
+        ? "never"
+        : formatTimestamp(payload.last_evaluated_at, timeZone),
+    ],
+    [
+      "Created",
+      `${formatTimestamp(payload.create_time, timeZone)}${payload.creator === null ? "" : ` by ${payload.creator}`}`,
+    ],
+    ["Updated", formatTimestamp(payload.update_time, timeZone)],
   ];
   if (payload.last_error !== null) {
-    lines.push(`${label("Last error:")}  ${payload.last_error}`);
+    fields.push(["Last error", payload.last_error]);
   }
-  writers.out.write(`${lines.join("\n")}\n`);
+  renderFields(fields, writers);
 }
 
 export const alertsGet: Enhancer = {

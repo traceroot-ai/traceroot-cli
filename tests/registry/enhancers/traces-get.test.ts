@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FindingDetail, TraceDetail } from "../../../src/api/client.js";
 import { CliError, type Writers } from "../../../src/output.js";
 import { runGet, tracesGet } from "../../../src/registry/enhancers/traces-get.js";
@@ -297,6 +297,45 @@ describe("runGet (--json)", () => {
 });
 
 describe("runGet (finding indicator)", () => {
+  it("aligns the header and finding fields as `Label:  value` lines, naming the id Trace ID", async () => {
+    vi.stubEnv("TZ", "UTC");
+    const { writers: w, out } = writers();
+    try {
+      await runGet(detail({}), {
+        json: false,
+        writers: w,
+        traceId: "t-1",
+        getFinding: fakeGetFinding(finding()),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const lines = out.data.split("\n");
+    expect(lines.slice(0, 6)).toEqual([
+      "Trace:     my trace",
+      "Trace ID:  t-1",
+      "Started:   2024-01-01 00:00:00 UTC",
+      "Ended:     2024-01-01 00:00:01 UTC",
+      "Duration:  1.0s",
+      "",
+    ]);
+    expect(lines).toContain("Finding ID:  fnd-1  (flagged by hallucination, failure)");
+    expect(lines).toContain("             run 'traceroot findings get fnd-1' for the full finding");
+  });
+
+  it("prints an empty trace name and an empty detector name as —", async () => {
+    const { writers: w, out } = writers();
+    await runGet(detail({ name: "" }), {
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      getFinding: fakeGetFinding(finding({ detectors: ["", "failure"] })),
+    });
+    const lines = out.data.split("\n");
+    expect(lines[0]).toBe("Trace:     —");
+    expect(lines).toContain("Finding ID:  fnd-1  (flagged by —, failure)");
+  });
+
   it("shows a Finding line and RCA preview when the trace is flagged", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();

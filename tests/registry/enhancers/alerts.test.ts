@@ -169,11 +169,20 @@ describe("alerts get rendering", () => {
     expect(out.data).toContain("alr-1");
   });
 
-  it("says none when there are no filters", () => {
+  it("says (none) when there are no filters", () => {
     const { writers, out } = makeWriters();
     renderAlertDetail({ ...DETAIL, filters: [] }, { json: false, writers, timeZone: "UTC" });
-    expect(out.data).toContain("Filters:");
-    expect(out.data).toContain("none");
+    expect(out.data).toMatch(/Filters:\s+\(none\)\n/);
+  });
+
+  it("starts every value two spaces after the longest label", () => {
+    const { writers, out } = makeWriters();
+    renderAlertDetail(DETAIL, { json: false, writers, timeZone: "UTC" });
+    const valueColumn = "Last eval:".length + 2;
+    for (const line of out.data.trimEnd().split("\n")) {
+      expect(line).toMatch(/^[A-Z][A-Za-z ]*:\s+\S/);
+      expect(line.length - line.slice(line.indexOf(":") + 1).trimStart().length).toBe(valueColumn);
+    }
   });
 
   it("omits the creator when it is null", () => {

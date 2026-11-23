@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import type { Dataset } from "../../api/client.js";
 import { type Writers, logProgress, writeJson } from "../../output.js";
-import { type Wire, orDash, orNone, renderFields, when } from "./eval-reads.js";
+import { renderFields } from "../../render/fields.js";
+import { type Wire, orDash, orNone, when } from "./eval-reads.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
 type DatasetDetail = Wire<Dataset>;
@@ -10,12 +11,12 @@ type DatasetDetail = Wire<Dataset>;
 export function renderDataset(ds: DatasetDetail, writers: Writers, timeZone?: string): void {
   renderFields(
     [
-      ["dataset id", orDash(ds.dataset_id)],
-      ["name", orDash(ds.name)],
-      ["key", orDash(ds.key)],
-      ["description", orDash(ds.description)],
-      ["current version", orNone(ds.current_dataset_version_id)],
-      ["updated", when(ds.updated_at, timeZone)],
+      ["Dataset ID", orDash(ds.dataset_id)],
+      ["Name", orDash(ds.name)],
+      ["Key", orDash(ds.key)],
+      ["Description", orDash(ds.description)],
+      ["Current version", orNone(ds.current_dataset_version_id)],
+      ["Updated", when(ds.updated_at, timeZone)],
     ],
     writers,
   );
