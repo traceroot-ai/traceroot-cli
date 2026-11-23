@@ -16,7 +16,15 @@ import type { InterruptSignal } from "./events.js";
 import type { EvalRunner } from "./lookup.js";
 import type { CaseLine, EvaluationCompletedEvent } from "./protocol.js";
 import type { UploadTarget } from "./spawn.js";
-import { type RunUsage, type TokenField, type UsageBucket, runUsage } from "./usage.js";
+import {
+  type RunUsage,
+  type SumField,
+  TOKEN_FIELDS,
+  type TokenField,
+  type UsageBucket,
+  coverageOf,
+  runUsage,
+} from "./usage.js";
 import {
   type ChangedPair,
   type NewlyFailingPair,
@@ -843,30 +851,22 @@ function evaluationUsage(usage: RunUsage, runner: EvalRunner, view: View): strin
   }
   const rows: string[][] = [["calls", ...roles.map(([, bucket]) => String(bucket.llm_calls))]];
   for (const [field, label] of USAGE_ROWS) {
-    const optional =
-      field !== "input_tokens" && field !== "output_tokens" && field !== "total_tokens";
+    const optional = !CORE_TOKEN_FIELDS.includes(field);
     if (optional && roles.every(([, bucket]) => bucket[field] === null)) {
       continue;
     }
-    rows.push([label, ...roles.map(([, bucket]) => tokens(bucket[field]))]);
+    rows.push([label, ...roles.map(([, bucket]) => partial(bucket, field, tokens(bucket[field])))]);
   }
-  rows.push(["cost", ...roles.map(([, bucket]) => cost(bucket))]);
+  rows.push(["cost", ...roles.map(([, bucket]) => partial(bucket, "cost", cost(bucket)))]);
   const notes: string[] = [];
+  if (roles.some(([, bucket]) => SUM_FIELDS.some((field) => isPartial(bucket, field)))) {
+    notes.push(
+      "  A figure followed by (n of m calls) counts only the calls that reported it, so it's a lower bound.",
+    );
+  }
   for (const [role, bucket] of roles) {
-    const name = role === "TASK" ? "task" : "scorer";
-    const missing = bucket.llm_calls - bucket.llm_calls_with_usage;
-    if (missing > 0 && bucket.llm_calls_with_usage > 0) {
-      notes.push(
-        `  ${missing} of ${bucket.llm_calls} ${name} calls reported no token counts, so the ${name} figures are lower bounds.`,
-      );
-    } else if (missing > 0) {
-      notes.push(`  No ${name} call reported token counts.`);
-    }
-    const unpriced = bucket.llm_calls - bucket.llm_calls_with_cost;
-    if (bucket.cost !== null && unpriced > 0) {
-      notes.push(
-        `  The ${name} cost covers ${bucket.llm_calls_with_cost} of ${bucket.llm_calls} calls; the rest reported none.`,
-      );
+    if (bucket.llm_calls > 0 && CORE_TOKEN_FIELDS.every((field) => bucket[field] === null)) {
+      notes.push(`  No ${role === "TASK" ? "task" : "scorer"} call reported token counts.`);
     }
   }
   if (roles.some(([, bucket]) => bucket.cost === null)) {
@@ -886,6 +886,12 @@ function evaluationUsage(usage: RunUsage, runner: EvalRunner, view: View): strin
   ];
 }
 
+/** The token rows that always print, as `—` when no call reported them. */
+const CORE_TOKEN_FIELDS: readonly TokenField[] = ["input_tokens", "output_tokens", "total_tokens"];
+
+/** Every sum a bucket carries, each with the count of calls it covers. */
+const SUM_FIELDS: readonly SumField[] = [...TOKEN_FIELDS, "cost"];
+
 /** The token rows, in order; the cache and reasoning rows print only when a call reported them. */
 const USAGE_ROWS: ReadonlyArray<readonly [TokenField, string]> = [
   ["input_tokens", "input tokens"],
@@ -895,6 +901,22 @@ const USAGE_ROWS: ReadonlyArray<readonly [TokenField, string]> = [
   ["cache_write_tokens", "cached input written"],
   ["reasoning_tokens", "reasoning tokens"],
 ];
+
+/**
+ * A sum's figure, followed by how many of the calls it covers when that's some but not all of
+ * them: `1,200 (10 of 11 calls)`.
+ */
+function partial(bucket: UsageBucket, field: SumField, figure: string): string {
+  return isPartial(bucket, field)
+    ? `${figure} (${bucket[coverageOf(field)]} of ${bucket.llm_calls} calls)`
+    : figure;
+}
+
+/** Whether a sum covers some of the bucket's calls, but not all of them. */
+function isPartial(bucket: UsageBucket, field: SumField): boolean {
+  const calls = bucket[coverageOf(field)];
+  return calls > 0 && calls < bucket.llm_calls;
+}
 
 /** A token sum, or `—` when no call reported it. */
 function tokens(value: number | null): string {

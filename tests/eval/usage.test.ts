@@ -17,34 +17,42 @@ describe("readCaseUsage", () => {
     expect(readCaseUsage({ case_id: "a", usage: null })).toBeNull();
   });
 
-  it("reads a case's task and scorer calls", () => {
+  it("reads a case's task and scorer calls, each sum with the calls it covers", () => {
     const usage = readCaseUsage({
       usage: {
         task: {
           llm_calls: 3,
-          llm_calls_with_usage: 3,
           input_tokens: 1200,
+          llm_calls_with_input_tokens: 3,
           output_tokens: 80,
+          llm_calls_with_output_tokens: 2,
           total_tokens: 1280,
+          llm_calls_with_total_tokens: 2,
           cache_read_tokens: 0,
+          llm_calls_with_cache_read_tokens: 3,
           cache_write_tokens: null,
+          llm_calls_with_cache_write_tokens: 0,
           reasoning_tokens: null,
+          llm_calls_with_reasoning_tokens: 0,
           cost: null,
           llm_calls_with_cost: 0,
           currency: null,
         },
-        scorers: { llm_calls: 0, llm_calls_with_usage: 0 },
+        scorers: { llm_calls: 0 },
       },
     });
 
     expect(usage?.task).toEqual(
       bucket({
         llm_calls: 3,
-        llm_calls_with_usage: 3,
         input_tokens: 1200,
+        llm_calls_with_input_tokens: 3,
         output_tokens: 80,
+        llm_calls_with_output_tokens: 2,
         total_tokens: 1280,
+        llm_calls_with_total_tokens: 2,
         cache_read_tokens: 0,
+        llm_calls_with_cache_read_tokens: 3,
       }),
     );
     expect(usage?.scorers).toEqual(emptyBucket());
@@ -55,10 +63,39 @@ describe("readCaseUsage", () => {
       usage: {
         task: {
           llm_calls: 2,
-          llm_calls_with_usage: 5,
           input_tokens: -1,
+          llm_calls_with_input_tokens: 2,
           output_tokens: "80",
+          llm_calls_with_output_tokens: 2,
           total_tokens: Number.NaN,
+          llm_calls_with_total_tokens: 2,
+          cost: 0.5,
+          llm_calls_with_cost: 2,
+          currency: "USD",
+        },
+        scorers: { llm_calls: 0 },
+      },
+    });
+
+    expect(usage?.task).toEqual(
+      bucket({ llm_calls: 2, cost: 0.5, llm_calls_with_cost: 2, currency: "USD" }),
+    );
+    expect(readCaseUsage({ usage: { task: { llm_calls: "3" }, scorers: {} } })).toBeNull();
+    expect(readCaseUsage({ usage: [] })).toBeNull();
+  });
+
+  it("reads a sum whose count of calls is missing or out of range as not reported", () => {
+    const usage = readCaseUsage({
+      usage: {
+        task: {
+          llm_calls: 2,
+          input_tokens: 120,
+          output_tokens: 8,
+          llm_calls_with_output_tokens: 0,
+          total_tokens: 28,
+          llm_calls_with_total_tokens: 3,
+          reasoning_tokens: 4,
+          llm_calls_with_reasoning_tokens: 1,
           cost: 0.5,
           llm_calls_with_cost: 9,
           currency: "USD",
@@ -67,45 +104,44 @@ describe("readCaseUsage", () => {
       },
     });
 
-    expect(usage?.task).toMatchObject({
-      llm_calls: 2,
-      llm_calls_with_usage: 2,
-      input_tokens: null,
-      output_tokens: null,
-      total_tokens: null,
-      cost: 0.5,
-      llm_calls_with_cost: 2,
-      currency: "USD",
-    });
-    expect(readCaseUsage({ usage: { task: { llm_calls: "3" }, scorers: {} } })).toBeNull();
-    expect(readCaseUsage({ usage: [] })).toBeNull();
+    expect(usage?.task).toEqual(
+      bucket({ llm_calls: 2, reasoning_tokens: 4, llm_calls_with_reasoning_tokens: 1 }),
+    );
   });
 });
 
 describe("addBuckets", () => {
-  it("sums counts, and keeps a token or cost sum null only when no side reported it", () => {
+  it("sums each figure with the calls it covers, null only when no side reported it", () => {
     const sum = addBuckets(
       bucket({
         llm_calls: 2,
-        llm_calls_with_usage: 1,
         input_tokens: 10,
+        llm_calls_with_input_tokens: 1,
         cost: 0.25,
         llm_calls_with_cost: 1,
         currency: "USD",
       }),
-      bucket({ llm_calls: 1, llm_calls_with_usage: 1, input_tokens: 5, output_tokens: 7 }),
+      bucket({
+        llm_calls: 1,
+        input_tokens: 5,
+        llm_calls_with_input_tokens: 1,
+        output_tokens: 7,
+        llm_calls_with_output_tokens: 1,
+      }),
     );
 
-    expect(sum).toMatchObject({
-      llm_calls: 3,
-      llm_calls_with_usage: 2,
-      input_tokens: 15,
-      output_tokens: 7,
-      total_tokens: null,
-      cost: 0.25,
-      llm_calls_with_cost: 1,
-      currency: "USD",
-    });
+    expect(sum).toEqual(
+      bucket({
+        llm_calls: 3,
+        input_tokens: 15,
+        llm_calls_with_input_tokens: 2,
+        output_tokens: 7,
+        llm_calls_with_output_tokens: 1,
+        cost: 0.25,
+        llm_calls_with_cost: 1,
+        currency: "USD",
+      }),
+    );
   });
 
   it("has no single cost for two currencies", () => {
@@ -115,13 +151,14 @@ describe("addBuckets", () => {
     );
 
     expect(sum.cost).toBeNull();
+    expect(sum.llm_calls_with_cost).toBe(0);
     expect(sum.currency).toBeNull();
   });
 });
 
 describe("runUsage", () => {
   const usage = {
-    task: bucket({ llm_calls: 2, llm_calls_with_usage: 2, input_tokens: 10 }),
+    task: bucket({ llm_calls: 2, input_tokens: 10, llm_calls_with_input_tokens: 2 }),
     scorers: emptyBucket(),
   };
 

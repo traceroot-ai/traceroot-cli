@@ -346,18 +346,23 @@ describe("renderSummary's LLM use", () => {
   }
   const task = used({
     llm_calls: 10,
-    llm_calls_with_usage: 10,
     input_tokens: 3400,
+    llm_calls_with_input_tokens: 10,
     output_tokens: 246,
+    llm_calls_with_output_tokens: 10,
     total_tokens: 3646,
+    llm_calls_with_total_tokens: 10,
     cache_read_tokens: 1024,
+    llm_calls_with_cache_read_tokens: 10,
   });
   const judge = used({
     llm_calls: 3,
-    llm_calls_with_usage: 3,
     input_tokens: 1020,
+    llm_calls_with_input_tokens: 3,
     output_tokens: 90,
+    llm_calls_with_output_tokens: 3,
     total_tokens: 1110,
+    llm_calls_with_total_tokens: 3,
     cost: 0.000351,
     llm_calls_with_cost: 3,
     currency: "USD",
@@ -386,7 +391,12 @@ describe("renderSummary's LLM use", () => {
   });
 
   it("says when a figure covers only some calls or some cases, and why a cost is unknown", () => {
-    const partial = used({ ...task, llm_calls_with_usage: 8 });
+    const partial = used({
+      ...task,
+      llm_calls_with_input_tokens: 8,
+      llm_calls_with_output_tokens: 8,
+      llm_calls_with_total_tokens: 8,
+    });
     const run = evaluation("agent", "run_a", [
       item("a", { usage: { task: partial, scorers: emptyBucket() } }),
       item("b", { usage: null }),
@@ -395,12 +405,66 @@ describe("renderSummary's LLM use", () => {
     const text = summary(report([run]));
 
     expect(text).toContain(
-      "  2 of 10 task calls reported no token counts, so the task figures are lower bounds.\n",
+      [
+        "LLM USE            TASK",
+        "calls              10",
+        "input tokens       3,400 (8 of 10 calls)",
+        "output tokens      246 (8 of 10 calls)",
+        "total tokens       3,646 (8 of 10 calls)",
+        "cached input read  1,024",
+        "cost               unknown",
+        "  A figure followed by (n of m calls) counts only the calls that reported it, so it's a lower bound.",
+        "  A cost is unknown when no call reported one; TraceRoot prices an uploaded run's calls from its traces.",
+        "  These cover 1 of the run's 2 cases.",
+      ].join("\n"),
     );
+  });
+
+  it("marks each partial figure on its own, so a total below the input reads as partial", () => {
+    // One call reported only its input; the other reported input, output and total.
+    const fields = used({
+      llm_calls: 2,
+      input_tokens: 120,
+      llm_calls_with_input_tokens: 2,
+      output_tokens: 8,
+      llm_calls_with_output_tokens: 1,
+      total_tokens: 28,
+      llm_calls_with_total_tokens: 1,
+    });
+    const priced = used({
+      ...judge,
+      cost: 0.000234,
+      llm_calls_with_cost: 2,
+    });
+    const run = evaluation("agent", "run_a", [
+      item("a", { usage: { task: fields, scorers: priced } }),
+    ]);
+
+    const text = summary(report([run]));
+
     expect(text).toContain(
-      "  A cost is unknown when no call reported one; TraceRoot prices an uploaded run's calls from its traces.\n",
+      [
+        "LLM USE        TASK               SCORERS",
+        "calls          2                  3",
+        "input tokens   120                1,020",
+        "output tokens  8 (1 of 2 calls)   90",
+        "total tokens   28 (1 of 2 calls)  1,110",
+        "cost           unknown            $0.000234 (2 of 3 calls)",
+        "  A figure followed by (n of m calls) counts only the calls that reported it, so it's a lower bound.",
+      ].join("\n"),
     );
-    expect(text).toContain("  These cover 1 of the run's 2 cases.\n");
+  });
+
+  it("says when no call of a role reported token counts", () => {
+    const run = evaluation("agent", "run_a", [
+      item("a", { usage: { task: used({ llm_calls: 2 }), scorers: emptyBucket() } }),
+    ]);
+
+    const text = summary(report([run]));
+
+    expect(text).toContain("input tokens   —\n");
+    expect(text).toContain("  No task call reported token counts.\n");
+    expect(text).not.toContain("(n of m calls)");
   });
 
   it("says why there is no usage, never printing it as 0", () => {

@@ -341,8 +341,10 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   tokens, cached input and reasoning tokens when a call reported them, and the
   cost when the calls reported one. The task's calls are counted apart from the
   scorers', so an LLM judge's tokens are never read as the agent's. A figure no
-  call reported prints `—`, never 0; a cost no call reported is `unknown`; and a
-  note says when a figure covers only some of the calls or cases. An SDK release
+  call reported prints `—`, never 0; a cost no call reported is `unknown`; a
+  figure only some calls reported is followed by how many, as in
+  `8 (1 of 2 calls)`, since it's a lower bound; and a note says when the figures
+  cover only some of the cases. An SDK release
   that doesn't record usage, or an evaluation that instrumented no LLM client,
   says so instead. Nothing is uploaded to count it.
 - **On a terminal, the summary fits its width.** Prose wraps at word boundaries
@@ -437,8 +439,9 @@ cases were timed), its `scores` (each with its `mean`, how many cases produced
 it as `count`, how many values the mean is over as `mean_count`, and how many
 `passed`, `failed` and neither as `unjudged`), its `usage` (`status`:
 `reported`, `not_captured` or `not_recorded`; the `task` and `scorers` sums, each
-with `llm_calls`, `llm_calls_with_usage`, the token counts, `cost`,
-`llm_calls_with_cost` and `currency`; and how many of the run's `cases` it
+with `llm_calls`, then each token count and `cost` followed by how many calls
+it covers, as `llm_calls_with_input_tokens` and so on through
+`llm_calls_with_cost`, and `currency`; and how many of the run's `cases` it
 covers as `cases_with_usage`), `uploaded_run_id` and
 `uploaded_run_url` (null unless it was uploaded, and the link null too when
 TraceRoot gave none), the baseline, a `verdict` with `newly_failing`

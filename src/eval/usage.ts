@@ -12,21 +12,31 @@
  * fine.
  */
 
-/** The LLM calls of one role, the task or the scorers, in one case or summed over a run. */
+/**
+ * The LLM calls of one role, the task or the scorers, in one case or summed over a run.
+ *
+ * Every sum carries the number of calls it covers, right after it: `llm_calls_with_<field>`. A sum
+ * covers only the calls that reported that field, so below `llm_calls` it is a lower bound. A
+ * count is 0 exactly when its sum is null.
+ */
 export interface UsageBucket {
   /** The LLM calls counted. */
   llm_calls: number;
-  /** How many of them reported a token count; below `llm_calls`, the token sums are lower bounds. */
-  llm_calls_with_usage: number;
   input_tokens: number | null;
+  llm_calls_with_input_tokens: number;
   output_tokens: number | null;
+  llm_calls_with_output_tokens: number;
+  /** A call's reported total, or its input and output added when it reports both and no total. */
   total_tokens: number | null;
+  llm_calls_with_total_tokens: number;
   cache_read_tokens: number | null;
+  llm_calls_with_cache_read_tokens: number;
   cache_write_tokens: number | null;
+  llm_calls_with_cache_write_tokens: number;
   reasoning_tokens: number | null;
+  llm_calls_with_reasoning_tokens: number;
   /** The sum of the costs the calls reported; null when none did. */
   cost: number | null;
-  /** How many of the calls reported a cost. */
   llm_calls_with_cost: number;
   /** The cost's currency, `USD` from both SDKs; null without a cost. */
   currency: string | null;
@@ -49,6 +59,14 @@ export const TOKEN_FIELDS = [
 ] as const;
 
 export type TokenField = (typeof TOKEN_FIELDS)[number];
+
+/** The sums of a bucket: its token fields and its cost. */
+export type SumField = TokenField | "cost";
+
+/** The name of the count of calls a sum covers. */
+export function coverageOf<F extends SumField>(field: F): `llm_calls_with_${F}` {
+  return `llm_calls_with_${field}`;
+}
 
 /**
  * A case line's `usage`: undefined when the line has no `usage` key, which an SDK that doesn't
@@ -76,21 +94,30 @@ function readBucket(raw: unknown): UsageBucket | null {
   if (llmCalls === null) {
     return null;
   }
-  const cost = amount(raw.cost);
-  return {
-    llm_calls: llmCalls,
-    llm_calls_with_usage: Math.min(llmCalls, count(raw.llm_calls_with_usage) ?? 0),
-    input_tokens: count(raw.input_tokens),
-    output_tokens: count(raw.output_tokens),
-    total_tokens: count(raw.total_tokens),
-    cache_read_tokens: count(raw.cache_read_tokens),
-    cache_write_tokens: count(raw.cache_write_tokens),
-    reasoning_tokens: count(raw.reasoning_tokens),
-    cost,
-    llm_calls_with_cost:
-      cost === null ? 0 : Math.min(llmCalls, count(raw.llm_calls_with_cost) ?? 0),
-    currency: cost === null || typeof raw.currency !== "string" ? null : raw.currency,
-  };
+  const bucket = emptyBucket();
+  bucket.llm_calls = llmCalls;
+  for (const field of TOKEN_FIELDS) {
+    const [sum, calls] = covered(count(raw[field]), raw[coverageOf(field)], llmCalls);
+    bucket[field] = sum;
+    bucket[coverageOf(field)] = calls;
+  }
+  const [cost, priced] = covered(amount(raw.cost), raw.llm_calls_with_cost, llmCalls);
+  bucket.cost = cost;
+  bucket.llm_calls_with_cost = priced;
+  bucket.currency = cost === null || typeof raw.currency !== "string" ? null : raw.currency;
+  return bucket;
+}
+
+/**
+ * A sum with the number of calls it covers. A sum whose count isn't a number of calls between 1
+ * and `llm_calls` can't be read as complete or as partial, so it reads as not reported.
+ */
+function covered(sum: number | null, rawCalls: unknown, llmCalls: number): [number | null, number] {
+  const calls = count(rawCalls);
+  if (sum === null || calls === null || calls < 1 || calls > llmCalls) {
+    return [null, 0];
+  }
+  return [sum, calls];
 }
 
 /** A whole, non-negative count, or null for anything else. */
@@ -113,37 +140,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function emptyBucket(): UsageBucket {
   return {
     llm_calls: 0,
-    llm_calls_with_usage: 0,
     input_tokens: null,
+    llm_calls_with_input_tokens: 0,
     output_tokens: null,
+    llm_calls_with_output_tokens: 0,
     total_tokens: null,
+    llm_calls_with_total_tokens: 0,
     cache_read_tokens: null,
+    llm_calls_with_cache_read_tokens: 0,
     cache_write_tokens: null,
+    llm_calls_with_cache_write_tokens: 0,
     reasoning_tokens: null,
+    llm_calls_with_reasoning_tokens: 0,
     cost: null,
     llm_calls_with_cost: 0,
     currency: null,
   };
 }
 
-/** Two buckets added: counts summed, and each token or cost sum null only when null in both. */
+/** Two buckets added: counts summed, and each sum null only when null in both. */
 export function addBuckets(a: UsageBucket, b: UsageBucket): UsageBucket {
   const sum = (x: number | null, y: number | null): number | null =>
     x === null ? y : y === null ? x : x + y;
-  const tokens = Object.fromEntries(
-    TOKEN_FIELDS.map((field) => [field, sum(a[field], b[field])]),
-  ) as Record<TokenField, number | null>;
-  const cost = sum(a.cost, b.cost);
+  const bucket = emptyBucket();
+  bucket.llm_calls = a.llm_calls + b.llm_calls;
+  for (const field of TOKEN_FIELDS) {
+    bucket[field] = sum(a[field], b[field]);
+    bucket[coverageOf(field)] = a[coverageOf(field)] + b[coverageOf(field)];
+  }
   // Both SDKs report USD; a mix of currencies has no single sum, so it reads as unknown.
   const currencies = new Set([a.currency, b.currency].filter((c): c is string => c !== null));
-  return {
-    llm_calls: a.llm_calls + b.llm_calls,
-    llm_calls_with_usage: a.llm_calls_with_usage + b.llm_calls_with_usage,
-    ...tokens,
-    cost: currencies.size > 1 ? null : cost,
-    llm_calls_with_cost: a.llm_calls_with_cost + b.llm_calls_with_cost,
-    currency: currencies.size === 1 ? ([...currencies][0] ?? null) : null,
-  };
+  if (currencies.size <= 1) {
+    bucket.cost = sum(a.cost, b.cost);
+    bucket.llm_calls_with_cost = a.llm_calls_with_cost + b.llm_calls_with_cost;
+    bucket.currency = [...currencies][0] ?? null;
+  }
+  return bucket;
 }
 
 /**
