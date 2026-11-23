@@ -330,11 +330,21 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   current directory, or the path of a run file.
 - **The summary** puts the results first: each evaluation's run id, its case and
   error counts, the mean time a case took (its task and its scorers), and each
-  score's mean. Then the regression check, then the run file and case file each
-  evaluation saved, then the commands to run next. Without `--baseline` the
+  score's mean. Then the regression check, then what the run took, then the run
+  file and case file each evaluation saved, then the commands to run next. Without `--baseline` the
   regression check says it was skipped, so an exit `0` there isn't a claim that
   every case passed, and the summary ends with the command that compares the next
   run with this one.
+- **What the run took** is how long it ran in all, apart from the mean time a
+  case took, and each evaluation's LLM use as the SDK's runner counted it from
+  the LLM calls its instrumentation saw: the calls, the input, output and total
+  tokens, cached input and reasoning tokens when a call reported them, and the
+  cost when the calls reported one. The task's calls are counted apart from the
+  scorers', so an LLM judge's tokens are never read as the agent's. A figure no
+  call reported prints `—`, never 0; a cost no call reported is `unknown`; and a
+  note says when a figure covers only some of the calls or cases. An SDK release
+  that doesn't record usage, or an evaluation that instrumented no LLM client,
+  says so instead. Nothing is uploaded to count it.
 - **On a terminal, the summary fits its width.** Prose wraps at word boundaries
   with a hanging indent, and a table too wide for the terminal is stacked, each
   row's values under its first cell. A command, a link, a path or an id is never
@@ -413,9 +423,8 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   `--env-file` when the host or the key came from them, and when the key came
   from `--api-key` it adds `--api-key <key>`, never the key itself. Like the hint
   for a missing key, it's spelled the way the CLI was started: under npx, as
-  `npx -y traceroot-cli@<version> …`. Cost and token use come from the run's
-  traces, which TraceRoot processes after the upload, so they show there rather
-  than in the summary.
+  `npx -y traceroot-cli@<version> …`. The cost TraceRoot derives from the run's
+  traces shows there once it has processed them, after the upload.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,
@@ -426,7 +435,11 @@ otherwise null), each run with its `path` and `cases_path` (its run file and
 case file), its counts, `duration_ms` (the mean time a case took, and how many
 cases were timed), its `scores` (each with its `mean`, how many cases produced
 it as `count`, how many values the mean is over as `mean_count`, and how many
-`passed`, `failed` and neither as `unjudged`), `uploaded_run_id` and
+`passed`, `failed` and neither as `unjudged`), its `usage` (`status`:
+`reported`, `not_captured` or `not_recorded`; the `task` and `scorers` sums, each
+with `llm_calls`, `llm_calls_with_usage`, the token counts, `cost`,
+`llm_calls_with_cost` and `currency`; and how many of the run's `cases` it
+covers as `cases_with_usage`), `uploaded_run_id` and
 `uploaded_run_url` (null unless it was uploaded, and the link null too when
 TraceRoot gave none), the baseline, a `verdict` with `newly_failing`
 (each with its `reason`), `newly_errored`, `changed`, `not_comparable_reason` and
@@ -434,7 +447,7 @@ TraceRoot gave none), the baseline, a `verdict` with `newly_failing`
 evaluations finished; then it holds the failure's `kind` (the runner's own, or
 `crashed`) and `message`, the text of the `error:` line human mode prints, and
 `outcome` is `failed`, or `regressed` when one of the evaluations that finished
-regressed. Case ids, scorer names and the runner's messages print with control
+regressed. `elapsed_ms` is how long the runner ran, start to finish. Case ids, scorer names and the runner's messages print with control
 characters escaped, as the evaluation reads' text does.
 
 ### Exit codes

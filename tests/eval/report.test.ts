@@ -2,7 +2,14 @@ import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { Sink } from "../../src/output.js";
 import type { CaseLine, CaseScore, EvaluationCompletedEvent } from "../../src/eval/protocol.js";
-import { type Report, type SavedEvaluation, renderSummary } from "../../src/eval/report.js";
+import {
+  type Report,
+  type SavedEvaluation,
+  formatDuration,
+  renderSummary,
+  toDocument,
+} from "../../src/eval/report.js";
+import { type UsageBucket, emptyBucket } from "../../src/eval/usage.js";
 import { displayWidth } from "../../src/render/wrap.js";
 
 /**
@@ -94,6 +101,7 @@ function report(runs: SavedEvaluation[], file = `${CWD}/evals/x_eval.py`): Repor
     verdict: null,
     signal: null,
     failure: null,
+    elapsedMs: null,
   };
 }
 
@@ -206,6 +214,8 @@ describe("renderSummary", () => {
         "",
         "Regression check: skipped, because no baseline was given.",
         "",
+        "LLM use: not recorded; traceroot 0.5.1 doesn't count a run's LLM calls.",
+        "",
         "first",
         "  Run file   .traceroot/eval/runs/run_a.json",
         "  Case file  .traceroot/eval/runs/run_a.cases.jsonl",
@@ -260,6 +270,9 @@ describe("renderSummary on a narrow terminal", () => {
         "",
         "Regression check: skipped, because no",
         "  baseline was given.",
+        "",
+        "LLM use: not recorded; traceroot 0.5.1",
+        "  doesn't count a run's LLM calls.",
         "",
         "Run file",
         `  .traceroot/eval/runs/${id}.json`,
@@ -324,5 +337,120 @@ describe("renderSummary on a narrow terminal", () => {
     expect(text).toContain(
       ["  SCORE   MEAN  SCORED  PASSED  FAILED", "  正确性  1     1 of 1  1       0"].join("\n"),
     );
+  });
+});
+
+describe("renderSummary's LLM use", () => {
+  function used(changes: Partial<UsageBucket>): UsageBucket {
+    return { ...emptyBucket(), ...changes };
+  }
+  const task = used({
+    llm_calls: 10,
+    llm_calls_with_usage: 10,
+    input_tokens: 3400,
+    output_tokens: 246,
+    total_tokens: 3646,
+    cache_read_tokens: 1024,
+  });
+  const judge = used({
+    llm_calls: 3,
+    llm_calls_with_usage: 3,
+    input_tokens: 1020,
+    output_tokens: 90,
+    total_tokens: 1110,
+    cost: 0.000351,
+    llm_calls_with_cost: 3,
+    currency: "USD",
+  });
+
+  it("puts the run's elapsed time and the task's calls apart from the scorers'", () => {
+    const run = evaluation("agent", "run_a", [
+      item("a", { usage: { task, scorers: judge } }),
+      item("b", { usage: { task, scorers: emptyBucket() } }),
+    ]);
+
+    const text = summary({ ...report([run]), elapsedMs: 14_230 });
+
+    expect(text).toContain(
+      [
+        "The run took 14.2 s in all.",
+        "LLM USE            TASK     SCORERS",
+        "calls              20       3",
+        "input tokens       6,800    1,020",
+        "output tokens      492      90",
+        "total tokens       7,292    1,110",
+        "cached input read  2,048    —",
+        "cost               unknown  $0.000351",
+      ].join("\n"),
+    );
+  });
+
+  it("says when a figure covers only some calls or some cases, and why a cost is unknown", () => {
+    const partial = used({ ...task, llm_calls_with_usage: 8 });
+    const run = evaluation("agent", "run_a", [
+      item("a", { usage: { task: partial, scorers: emptyBucket() } }),
+      item("b", { usage: null }),
+    ]);
+
+    const text = summary(report([run]));
+
+    expect(text).toContain(
+      "  2 of 10 task calls reported no token counts, so the task figures are lower bounds.\n",
+    );
+    expect(text).toContain(
+      "  A cost is unknown when no call reported one; TraceRoot prices an uploaded run's calls from its traces.\n",
+    );
+    expect(text).toContain("  These cover 1 of the run's 2 cases.\n");
+  });
+
+  it("says why there is no usage, never printing it as 0", () => {
+    const none = summary(report([evaluation("agent", "run_a", [item("a", { usage: null })])]));
+    const idle = summary(
+      report([
+        evaluation("agent", "run_a", [
+          item("a", { usage: { task: emptyBucket(), scorers: emptyBucket() } }),
+        ]),
+      ]),
+    );
+
+    expect(none).toContain(
+      "LLM use: not captured, because the evaluation instrumented no LLM client. Call traceroot.initialize(integrations=[...]) with the evaluation's LLM clients to count their calls.\n",
+    );
+    expect(idle).toContain("LLM use: no call through an instrumented LLM client.\n");
+    expect(idle).not.toContain("LLM USE");
+  });
+
+  it("puts each evaluation's usage under its name, and the sums in the --json document", () => {
+    const of = report([
+      evaluation("first", "run_a", [item("a", { usage: { task, scorers: emptyBucket() } })]),
+      evaluation("second", "run_b", [
+        item("b", { usage: { task: judge, scorers: emptyBucket() } }),
+      ]),
+    ]);
+
+    const text = summary(of);
+    const document = toDocument(of) as { runs: { usage: unknown }[] };
+
+    expect(text).toContain("first\n  LLM USE            TASK\n  calls              10\n");
+    expect(text).toContain("second\n  LLM USE        TASK\n  calls          3\n");
+    expect(document.runs[1]?.usage).toEqual({
+      status: "reported",
+      task: judge,
+      scorers: emptyBucket(),
+      cases: 1,
+      cases_with_usage: 1,
+    });
+  });
+});
+
+describe("formatDuration", () => {
+  it("reads in milliseconds, seconds, then minutes", () => {
+    expect(formatDuration(1.5)).toBe("1.5 ms");
+    expect(formatDuration(403.22)).toBe("403.22 ms");
+    expect(formatDuration(2746)).toBe("2.75 s");
+    expect(formatDuration(14_230)).toBe("14.2 s");
+    expect(formatDuration(59_990)).toBe("1m 0s");
+    expect(formatDuration(184_000)).toBe("3m 4s");
+    expect(formatDuration(7_500_000)).toBe("2h 5m");
   });
 });

@@ -156,7 +156,7 @@ function cliEnv(): NodeJS.ProcessEnv {
 
 interface Result {
   status: number | null;
-  /** stdout and stderr with any color removed. */
+  /** stdout and stderr with any color removed, and the run's elapsed time as `<elapsed>`. */
   stdout: string;
   stderr: string;
   /** stdout and stderr as written. */
@@ -166,7 +166,10 @@ interface Result {
 function result(status: number | null, stdout: string, stderr: string): Result {
   return {
     status,
-    stdout: stripVTControlCharacters(stdout),
+    stdout: stripVTControlCharacters(stdout).replace(
+      /^The run took .+ in all\.$/m,
+      "The run took <elapsed> in all.",
+    ),
     stderr: stripVTControlCharacters(stderr),
     raw: { stdout, stderr },
   };
@@ -266,6 +269,9 @@ describe("evals run without a baseline", () => {
         "",
         "Regression check: skipped, because no baseline was given.",
         "",
+        "The run took <elapsed> in all.",
+        "LLM use: not recorded; traceroot 0.5.1 doesn't count a run's LLM calls.",
+        "",
         "Run file   .traceroot/eval/runs/run_first.json",
         "Case file  .traceroot/eval/runs/run_first.cases.jsonl",
         "",
@@ -351,6 +357,9 @@ describe("evals run without a baseline", () => {
         `    ${BETA}  task: ValueError: cannot convert 'beta'`,
         "",
         "Regression check: skipped, because no baseline was given.",
+        "",
+        "The run took <elapsed> in all.",
+        "LLM use: not recorded; traceroot 0.5.1 doesn't count a run's LLM calls.",
         "",
         "Run file   .traceroot/eval/runs/run_first.json",
       ].join("\n"),
@@ -447,11 +456,19 @@ describe("evals run without a baseline", () => {
               unjudged: 0,
             },
           ],
+          usage: {
+            status: "not_recorded",
+            task: null,
+            scorers: null,
+            cases: 3,
+            cases_with_usage: 0,
+          },
         },
       ],
       baseline: null,
       verdict: null,
       failure: null,
+      elapsed_ms: expect.any(Number),
     });
     expect(run.stderr).not.toContain('"error"');
   });
@@ -1055,6 +1072,7 @@ describe("evals run's progress line", () => {
       cwd: project,
       env: { ...cliEnv(), ...options.env },
       writers: { out, err },
+      now: () => 0,
     });
     return { code, out: out.data, err: err.data };
   }
@@ -1369,6 +1387,9 @@ describe("evals run --upload", () => {
         "",
         "Regression check: skipped, because no baseline was given.",
         "",
+        "The run took <elapsed> in all.",
+        "LLM use: not recorded; traceroot 0.5.1 doesn't count a run's LLM calls.",
+        "",
         "Run file   .traceroot/eval/runs/run_first.json",
         "Case file  .traceroot/eval/runs/run_first.cases.jsonl",
         "Uploaded   run evr_stub_1",
@@ -1378,7 +1399,7 @@ describe("evals run --upload", () => {
         "  traceroot evals run x_eval.py --baseline run_first",
         "To read the uploaded run from the terminal:",
         `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
-        "TraceRoot adds cost and token use once it has processed the traces.",
+        "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them.",
         "",
       ].join("\n"),
     );

@@ -16,6 +16,7 @@ import type { InterruptSignal } from "./events.js";
 import type { EvalRunner } from "./lookup.js";
 import type { CaseLine, EvaluationCompletedEvent } from "./protocol.js";
 import type { UploadTarget } from "./spawn.js";
+import { type RunUsage, type TokenField, type UsageBucket, runUsage } from "./usage.js";
 import {
   type ChangedPair,
   type NewlyFailingPair,
@@ -130,6 +131,11 @@ export interface Report {
   signal: InterruptSignal | null;
   /** What stopped a runner that failed after some evaluations finished, otherwise null. */
   failure: Failure | null;
+  /**
+   * How long the runner ran, start to finish, in milliseconds: the whole run, as against the mean
+   * time a case took. null when it wasn't timed.
+   */
+  elapsedMs: number | null;
 }
 
 /** The evaluations that finished without a TraceRoot run id. */
@@ -223,6 +229,7 @@ export function toDocument(report: Report): Record<string, unknown> {
       counts: event.counts,
       duration_ms: run === null ? null : meanDuration(run.cases),
       scores: run === null ? null : scoreMeans(run.cases),
+      usage: run === null ? null : runUsage(run.cases.map((item) => item.usage)),
     })),
     baseline:
       baseline === null
@@ -243,6 +250,7 @@ export function toDocument(report: Report): Record<string, unknown> {
             payloads: verdict.payloads,
           },
     failure: report.failure,
+    elapsed_ms: report.elapsedMs,
     ...(report.outcome === "interrupted" ? { signal: report.signal } : {}),
   };
 }
@@ -270,8 +278,9 @@ const LABEL_WIDTH = 11;
  * 1. each evaluation: its run id and status, its cases and their mean time, each score's mean and
  *    what it is a mean of, and the cases that raised;
  * 2. the regression check: the verdict, or that no baseline was given;
- * 3. what was saved: each run's run file and case file, and where an uploaded run went;
- * 4. what to do next: the command that compares the next run with this one, and the command that
+ * 3. what the run took: how long it ran, and each evaluation's LLM use (see {@link usageLines});
+ * 4. what was saved: each run's run file and case file, and where an uploaded run went;
+ * 5. what to do next: the command that compares the next run with this one, and the command that
  *    reads an uploaded run.
  *
  * On a terminal it is fitted to the width: prose wraps at word boundaries with a hanging indent, a
@@ -287,6 +296,7 @@ export function renderSummary(report: Report, writers: Writers, context: Summary
   const blocks = [
     ...report.runs.map((saved) => evaluationLines(saved, report, view)),
     verdictLines(report, view),
+    usageLines(report, view),
     savedLines(report, view),
     nextLines(report, view),
   ].filter((block) => block.length > 0);
@@ -313,7 +323,7 @@ function evaluationLines(saved: SavedEvaluation, report: Report, view: View): st
       [
         `${counts.cases} ${plural(counts.cases, "case")}`,
         `${counts.errored} errored${errors}`,
-        ...(duration === null ? [] : [`mean ${formatMean(duration)} ms per case`]),
+        ...(duration === null ? [] : [`mean ${formatDuration(duration)} per case`]),
       ],
       view.width,
       { indent: "  " },
@@ -659,9 +669,13 @@ function nextLines(report: Report, view: View): string[] {
         ];
         return `  ${cliCommand(read.join(" "), env)}`;
       }),
-      // Cost and token use come from the traces, which TraceRoot processes after the runner ends,
-      // so the summary can't print them and says where they go instead of printing nothing.
-      ...prose("TraceRoot adds cost and token use once it has processed the traces."),
+      // TraceRoot prices the run's LLM calls from its traces, which it processes after the runner
+      // ends, so the summary says where the cost goes rather than printing a partial one.
+      ...prose(
+        uploaded.length === 1
+          ? "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them."
+          : "Once TraceRoot has processed the runs' traces, those commands show the cost it derives from them.",
+      ),
     );
   }
   return lines;
@@ -744,4 +758,156 @@ function erroredTable(cases: ErroredCase[], view: View, indent = "  "): string[]
     }),
     { width: view.width, indent, headerStyle: view.bold, wrapLast: true, labels: [false, false] },
   );
+}
+
+/**
+ * A duration as a person reads it: milliseconds under a second, seconds to three significant
+ * digits under a minute, then minutes and seconds.
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${formatMean(ms)} ms`;
+  }
+  if (ms < 59_950) {
+    return `${(ms / 1000).toLocaleString("en-US", { maximumSignificantDigits: 3 })} s`;
+  }
+  const seconds = Math.round(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/**
+ * What the run took: how long it ran in all, apart from the mean time a case took, then each
+ * evaluation's LLM use. The task's calls and the scorers' are counted apart, so an LLM judge's
+ * tokens are never read as the agent's. Each figure is only what the calls reported: a token count
+ * no call reported prints `—`, a cost no call reported is unknown, and a note says when a figure
+ * covers only some of the calls or cases. A run whose SDK records no usage says so.
+ */
+function usageLines(report: Report, view: View): string[] {
+  const prose = (text: string): string[] => wrapLine(text, view.width);
+  const lines: string[] = [];
+  if (report.elapsedMs !== null) {
+    lines.push(...prose(`The run took ${formatDuration(report.elapsedMs)} in all.`));
+  }
+  const usages = report.runs.flatMap(({ event, run }) =>
+    run === null
+      ? []
+      : [{ name: event.name, usage: runUsage(run.cases.map((item) => item.usage)) }],
+  );
+  // Every evaluation of a file runs under the same SDK, so a run that records no usage, or
+  // captured none, says so once rather than once per evaluation.
+  const [first] = usages;
+  if (first !== undefined && first.usage.status !== "reported") {
+    if (usages.every(({ usage }) => usage.status === first.usage.status)) {
+      return [...lines, ...evaluationUsage(first.usage, report.runner, view)];
+    }
+  }
+  const many = usages.length > 1;
+  for (const { name, usage } of usages) {
+    const block = evaluationUsage(usage, report.runner, view);
+    if (many) {
+      lines.push(view.bold(clean(name)), ...block.map((line) => `  ${line}`));
+    } else {
+      lines.push(...block);
+    }
+  }
+  return lines;
+}
+
+/** One evaluation's LLM use, as {@link usageLines} prints it. */
+function evaluationUsage(usage: RunUsage, runner: EvalRunner, view: View): string[] {
+  const prose = (text: string): string[] => wrapLine(text, view.width);
+  const sdk = `${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)}`;
+  if (usage.status === "not_recorded") {
+    return prose(`LLM use: not recorded; ${sdk} doesn't count a run's LLM calls.`);
+  }
+  if (usage.status === "not_captured" || usage.task === null || usage.scorers === null) {
+    const setup =
+      runner.language === "python"
+        ? "traceroot.initialize(integrations=[...])"
+        : "initialize({ instrumentModules })";
+    return prose(
+      `LLM use: not captured, because the evaluation instrumented no LLM client. Call ${setup} with the evaluation's LLM clients to count their calls.`,
+    );
+  }
+  const { task, scorers } = usage;
+  if (task.llm_calls + scorers.llm_calls === 0) {
+    return prose("LLM use: no call through an instrumented LLM client.");
+  }
+  const roles: [string, UsageBucket][] = [["TASK", task]];
+  if (scorers.llm_calls > 0) {
+    roles.push(["SCORERS", scorers]);
+  }
+  const rows: string[][] = [["calls", ...roles.map(([, bucket]) => String(bucket.llm_calls))]];
+  for (const [field, label] of USAGE_ROWS) {
+    const optional =
+      field !== "input_tokens" && field !== "output_tokens" && field !== "total_tokens";
+    if (optional && roles.every(([, bucket]) => bucket[field] === null)) {
+      continue;
+    }
+    rows.push([label, ...roles.map(([, bucket]) => tokens(bucket[field]))]);
+  }
+  rows.push(["cost", ...roles.map(([, bucket]) => cost(bucket))]);
+  const notes: string[] = [];
+  for (const [role, bucket] of roles) {
+    const name = role === "TASK" ? "task" : "scorer";
+    const missing = bucket.llm_calls - bucket.llm_calls_with_usage;
+    if (missing > 0 && bucket.llm_calls_with_usage > 0) {
+      notes.push(
+        `  ${missing} of ${bucket.llm_calls} ${name} calls reported no token counts, so the ${name} figures are lower bounds.`,
+      );
+    } else if (missing > 0) {
+      notes.push(`  No ${name} call reported token counts.`);
+    }
+    const unpriced = bucket.llm_calls - bucket.llm_calls_with_cost;
+    if (bucket.cost !== null && unpriced > 0) {
+      notes.push(
+        `  The ${name} cost covers ${bucket.llm_calls_with_cost} of ${bucket.llm_calls} calls; the rest reported none.`,
+      );
+    }
+  }
+  if (roles.some(([, bucket]) => bucket.cost === null)) {
+    notes.push(
+      "  A cost is unknown when no call reported one; TraceRoot prices an uploaded run's calls from its traces.",
+    );
+  }
+  if (usage.cases_with_usage < usage.cases) {
+    notes.push(`  These cover ${usage.cases_with_usage} of the run's ${usage.cases} cases.`);
+  }
+  return [
+    ...fitTable(["LLM USE", ...roles.map(([role]) => role)], rows, {
+      width: view.width,
+      headerStyle: view.bold,
+    }),
+    ...wrapLines(notes, view.width),
+  ];
+}
+
+/** The token rows, in order; the cache and reasoning rows print only when a call reported them. */
+const USAGE_ROWS: ReadonlyArray<readonly [TokenField, string]> = [
+  ["input_tokens", "input tokens"],
+  ["output_tokens", "output tokens"],
+  ["total_tokens", "total tokens"],
+  ["cache_read_tokens", "cached input read"],
+  ["cache_write_tokens", "cached input written"],
+  ["reasoning_tokens", "reasoning tokens"],
+];
+
+/** A token sum, or `—` when no call reported it. */
+function tokens(value: number | null): string {
+  return value === null ? "—" : formatMean(value);
+}
+
+/** A bucket's cost in its currency, or `unknown` when no call reported one. */
+function cost(bucket: UsageBucket): string {
+  if (bucket.cost === null) {
+    return bucket.llm_calls === 0 ? "—" : "unknown";
+  }
+  const value = formatMean(bucket.cost);
+  return bucket.currency === "USD"
+    ? `$${value}`
+    : `${value} ${clean(bucket.currency ?? "")}`.trim();
 }

@@ -101,6 +101,8 @@ export interface EvalsRunOptions {
   /** The CLI's environment, which the runner's is built from. */
   env: NodeJS.ProcessEnv;
   writers: Writers;
+  /** The clock the run is timed with, in milliseconds; injected so tests are deterministic. */
+  now?: () => number;
 }
 
 /** What `--upload` resolved, before TraceRoot has seen the key. */
@@ -247,6 +249,8 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
 
   const runner = await findRunner(options.file, cwd, env);
   logWrapped(runningLine(options.file, runner, cwd), writers);
+  const now = options.now ?? (() => performance.now());
+  const started = now();
   const outcome = await runEvalRunner({
     argv: runner.argv,
     cwd,
@@ -270,6 +274,7 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
     verdict: null,
     signal: null,
     failure: null,
+    elapsedMs: now() - started,
   };
   let failed: CliError | null = null;
   switch (outcome.outcome) {
