@@ -77,7 +77,7 @@ describe("renderFindings", () => {
     expect(out.data).not.toContain("SUMMARY");
     expect(out.data).toContain("fnd-1");
     expect(out.data).toContain("failure,logic");
-    expect(err.data).toContain("1 finding(s)");
+    expect(err.data).toContain("1 finding |");
     expect(err.data).toContain("limit 50");
     // no-filter footer uses the findings-specific label, not traces' "all traces"
     expect(err.data).toContain("all findings");
@@ -115,7 +115,7 @@ describe("renderFindings", () => {
     });
     expect(out.data).toContain("FINDING ID");
     expect(out.data).not.toContain("fnd-1");
-    expect(err.data).toContain("0 finding(s)");
+    expect(err.data).toContain("0 findings |");
   });
 });
 

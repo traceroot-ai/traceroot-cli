@@ -36,7 +36,16 @@ describe("renderDefault", () => {
     expect(header).toBe("SESSION ID  TRACE COUNT  DURATION MS");
     expect(row1).toBe("s-1         3");
     expect(row2).toBe("s-2         1            40");
-    expect(w.err.data).toBe("2 of 7 item(s) | limit 50\n");
+    expect(w.err.data).toBe("2 of 7 items | limit 50\n");
+  });
+
+  it("agrees the footer's noun with the total, not the page, when a total is shown", () => {
+    const w = writers();
+    renderDefault(
+      { data: [{ id: "a" }], meta: { page: 1, limit: 1, total: 7 } },
+      { json: false, writers: w.writers, args: {} },
+    );
+    expect(w.err.data).toBe("1 of 7 items | limit 1\n");
   });
 
   it("renders an empty list as just the footer", () => {
@@ -46,7 +55,7 @@ describe("renderDefault", () => {
       { json: false, writers: w.writers, args: {} },
     );
     expect(w.out.data).toBe("");
-    expect(w.err.data).toBe("0 item(s) | limit 50\n");
+    expect(w.err.data).toBe("0 items | limit 50\n");
   });
 
   it("renders object payloads as an aligned key/value block", () => {

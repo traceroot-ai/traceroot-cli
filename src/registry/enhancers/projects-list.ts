@@ -1,6 +1,7 @@
 import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
+import { plural } from "../../util/index.js";
 import type { Enhancer, RenderContext } from "./types.js";
 
 interface ProjectListResponse {
@@ -30,7 +31,7 @@ export function renderProjectsList(
   const rows = res.data.map((item) => [item.name, item.workspace_name, item.id]);
   const styler = createStyler(writers.out);
   writers.out.write(`${renderTable(headers, rows, { headerStyle: styler.bold })}\n`);
-  logProgress(`${res.data.length} project(s)`, writers);
+  logProgress(`${res.data.length} ${plural(res.data.length, "project")}`, writers);
 }
 
 export const projectsList: Enhancer = {

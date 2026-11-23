@@ -3,7 +3,7 @@ import { CliError, ExitCode, type Writers, logProgress, writeJson } from "../../
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
 import { parseLimit } from "../../time/range.js";
-import { formatTimestamp } from "../../util/index.js";
+import { formatTimestamp, plural } from "../../util/index.js";
 import { onceOption, rejectExtras } from "../flags.js";
 import type { Enhancer, RenderContext, ResolveInput, Resolved } from "./types.js";
 
@@ -67,7 +67,7 @@ export function renderAlertsList(res: AlertListResponse, opts: RenderAlertsListO
     typeof capacity?.used === "number" && typeof capacity?.max === "number"
       ? ` | ${capacity.used}/${capacity.max} used`
       : "";
-  logProgress(`${res.data.length} alert(s)${suffix}`, writers);
+  logProgress(`${res.data.length} ${plural(res.data.length, "alert")}${suffix}`, writers);
 }
 
 /**

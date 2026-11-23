@@ -56,7 +56,7 @@ describe("signals list rendering", () => {
     expect(row).toContain("2026-11-10 09:30:00 UTC");
     expect(row).toContain("empty-tool-result");
     expect(row).toContain("Tool call returns an empty result");
-    expect(err.data).toBe("1 signal(s) | limit 50 | all signals\n");
+    expect(err.data).toBe("1 signal | limit 50 | all signals\n");
   });
 
   it("names the detector by id when the detector has no name", () => {
@@ -68,14 +68,14 @@ describe("signals list rendering", () => {
   it("says when the page is not every signal", () => {
     const { w, err } = sinks();
     renderSignalsList(list([signal()], { total: 120 }), {}, w, "UTC");
-    expect(err.data).toContain("1 of 120 signal(s)");
+    expect(err.data).toContain("1 of 120 signals |");
   });
 
   it("an empty page still says what it was drawn from", () => {
     const { w, out, err } = sinks();
     renderSignalsList(list([]), { status: "open" }, w, "UTC");
     expect(out.data).toContain("SIGNAL ID");
-    expect(err.data).toBe("0 signal(s) | limit 50 | open signals\n");
+    expect(err.data).toBe("0 signals | limit 50 | open signals\n");
   });
 
   it("escapes control characters in server text instead of sending them to the terminal", () => {

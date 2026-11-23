@@ -227,7 +227,7 @@ describe("renderSqlResult", () => {
     expect(lines[0]).toMatch(/^model_name\s+spans$/);
     expect(lines[1]).toMatch(/^gpt-4o\s+12$/);
     expect(lines[2]).toMatch(/^NULL\s+3$/);
-    expect(err).toContain("2 row(s) in 7 ms");
+    expect(err).toContain("2 rows in 7 ms");
   });
 
   it("escapes control characters in table cells so data cannot drive the terminal", () => {
@@ -275,8 +275,17 @@ describe("renderSqlResult", () => {
 
   it("warns on truncation in table and CSV output, where the flag would otherwise be lost", () => {
     const result = makeResult({ truncated: true });
-    expect(render(result, {}).err).toContain("warning: result truncated to 2 row(s)");
-    expect(render(result, { csv: true }).err).toContain("warning: result truncated to 2 row(s)");
+    expect(render(result, {}).err).toContain("warning: result truncated to 2 rows;");
+    expect(render(result, { csv: true }).err).toContain("warning: result truncated to 2 rows;");
+  });
+
+  it("counts a single row in the singular", () => {
+    const one = makeResult({ rows: [["gpt-4o", 12]], row_count: 1, truncated: true });
+    const { err } = render(one, {});
+    expect(err).toContain("1 row in 7 ms");
+    expect(err).toContain("warning: result truncated to 1 row;");
+    const file = join(dir, "one.csv");
+    expect(render(one, { csv: true, output: file }).err).toContain(`wrote 1 row to ${file}`);
   });
 
   it("says nothing about truncation when the result is complete", () => {
@@ -288,7 +297,7 @@ describe("renderSqlResult", () => {
     const { out, err } = render(makeResult(), { csv: true, output: file });
     expect(out).toBe("");
     expect(readFileSync(file, "utf8")).toBe("model_name,spans\ngpt-4o,12\n,3\n");
-    expect(err).toContain(`wrote 2 row(s) to ${file}`);
+    expect(err).toContain(`wrote 2 rows to ${file}`);
   });
 
   it("reports a failed --output write as a CLI error", () => {
