@@ -323,6 +323,19 @@ describe("runGet (finding indicator)", () => {
     expect(lines).toContain("             run 'traceroot findings get fnd-1' for the full finding");
   });
 
+  it("prints an empty trace name and an empty detector name as —", async () => {
+    const { writers: w, out } = writers();
+    await runGet(detail({ name: "" }), {
+      json: false,
+      writers: w,
+      traceId: "t-1",
+      getFinding: fakeGetFinding(finding({ detectors: ["", "failure"] })),
+    });
+    const lines = out.data.split("\n");
+    expect(lines[0]).toBe("Trace:     —");
+    expect(lines).toContain("Finding ID:  fnd-1  (flagged by —, failure)");
+  });
+
   it("shows a Finding line and RCA preview when the trace is flagged", async () => {
     const trace = detail({});
     const { writers: w, out } = writers();

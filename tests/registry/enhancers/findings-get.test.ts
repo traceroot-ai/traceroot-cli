@@ -98,6 +98,18 @@ describe("renderFinding", () => {
     );
   });
 
+  it("prints an empty summary, detector name and detector id as —", () => {
+    const { writers: w } = writers();
+    const lines = renderFinding(
+      detail({ summary: "", results: [resultItem({ detector_name: "", detector_id: "" })] }),
+      w,
+      "UTC",
+    ).split("\n");
+    expect(lines).toContain("Summary:     —");
+    expect(lines).toContain("Detector:     — (hallucination)");
+    expect(lines).toContain("Detector ID:  —");
+  });
+
   it("shows 'RCA:  (none)' and no Root cause line when rca is null", () => {
     const { writers: w } = writers();
     const out = renderFinding(detail({ rca: null }), w);

@@ -96,7 +96,7 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
     : elapsedMs(trace.trace_start_time, end);
 
   const header: [string, string][] = [
-    ["Trace", trace.name],
+    ["Trace", trace.name || "—"],
     ["Trace ID", trace.trace_id],
     ["Started", formatTimestamp(trace.trace_start_time)],
   ];
@@ -116,7 +116,9 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
   if (finding !== null) {
     const findingId = sanitizeFindingId(finding.finding_id);
     const detectors =
-      finding.detectors.length > 0 ? `  (flagged by ${finding.detectors.join(", ")})` : "";
+      finding.detectors.length > 0
+        ? `  (flagged by ${finding.detectors.map((name) => name || "—").join(", ")})`
+        : "";
     const findingFields: [string, string][] = [["Finding ID", `${findingId}${detectors}`]];
     if (finding.rca !== null) {
       // Show the RCA text directly; only fall back to the status (e.g. while it

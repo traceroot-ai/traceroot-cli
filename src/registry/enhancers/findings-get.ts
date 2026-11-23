@@ -41,6 +41,7 @@ export function renderFinding(finding: FindingDetail, writers: Writers, timeZone
 
   // Header fields. Id ordering mirrors the UI's detector-runs table: run id ->
   // trace id -> finding id. "(none)" when no run row references the finding.
+  // An empty string is an absent value, so it prints as "—", as in every get.
   const runIds = finding.run_ids ?? [];
   lines.push(
     ...fieldLines(
@@ -49,7 +50,7 @@ export function renderFinding(finding: FindingDetail, writers: Writers, timeZone
         ["Trace ID", finding.trace_id],
         ["Finding ID", sanitizeFindingId(finding.finding_id)],
         ["Time", formatTimestamp(finding.timestamp, timeZone)],
-        ["Summary", finding.summary],
+        ["Summary", finding.summary || "—"],
       ],
       styler,
     ),
@@ -64,8 +65,8 @@ export function renderFinding(finding: FindingDetail, writers: Writers, timeZone
       "",
       ...fieldLines(
         [
-          ["Detector", `${result.detector_name}${template}`],
-          ["Detector ID", result.detector_id],
+          ["Detector", `${result.detector_name || "—"}${template}`],
+          ["Detector ID", result.detector_id || "—"],
           ["Category", categoryLabel(result.template)],
         ],
         styler,
