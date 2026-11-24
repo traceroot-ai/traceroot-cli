@@ -463,6 +463,7 @@ describe("evals run without a baseline", () => {
             cases: 3,
             cases_with_usage: 0,
           },
+          upload_results: null,
         },
       ],
       baseline: null,

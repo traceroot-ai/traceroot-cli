@@ -238,6 +238,10 @@ export function toDocument(report: Report): Record<string, unknown> {
       duration_ms: run === null ? null : meanDuration(run.cases),
       scores: run === null ? null : scoreMeans(run.cases),
       usage: run === null ? null : runUsage(run.cases.map((item) => item.usage)),
+      upload_results:
+        report.upload === null || event.run_id === null || run === null
+          ? null
+          : run.file.upload_results,
     })),
     baseline:
       baseline === null
@@ -584,6 +588,10 @@ function savedLines(report: Report, view: View): string[] {
           indent,
           view.width,
         ),
+        ...wrapLines(
+          missingResults(run).map((note) => `${indent}${note}`),
+          view.width,
+        ),
       );
     }
   }
@@ -884,6 +892,27 @@ function evaluationUsage(usage: RunUsage, runner: EvalRunner, view: View): strin
     }),
     ...wrapLines(notes, view.width),
   ];
+}
+
+/**
+ * What an uploaded run's saved file says about results TraceRoot may not have: ones whose upload
+ * failed, and ones a cancelled run kept before TraceRoot had acknowledged them. Either way the
+ * uploaded run can show fewer cases than this one.
+ */
+function missingResults(run: SavedRun | null): string[] {
+  const { failed, unconfirmed } = run?.file.upload_results ?? { failed: 0, unconfirmed: 0 };
+  const notes: string[] = [];
+  if (failed > 0) {
+    notes.push(
+      `  ${failed} ${plural(failed, "result")} didn't reach TraceRoot, so the uploaded run is missing ${failed === 1 ? "that case" : "those cases"}.`,
+    );
+  }
+  if (unconfirmed > 0) {
+    notes.push(
+      `  TraceRoot hadn't confirmed ${unconfirmed} ${plural(unconfirmed, "result")} when the run stopped, so the uploaded run may be missing ${unconfirmed === 1 ? "that case" : "those cases"}.`,
+    );
+  }
+  return notes;
 }
 
 /** The token rows that always print, as `—` when no call reported them. */

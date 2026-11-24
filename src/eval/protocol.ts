@@ -131,9 +131,10 @@ export interface RunScorer {
 /**
  * A saved run (`<run id>.json`).
  *
- * Of the file's `upload` block, only the link is read, as `dashboard_url`. Its `status` is left out
- * on purpose: a run that never left the machine records `uploaded` too, so it says nothing about
- * whether the run reached TraceRoot.
+ * Of the file's `upload` block, the link is read as `dashboard_url`, and the counts of results that
+ * didn't reach TraceRoot as `upload_results`. Its `status` is left out on purpose: a run that never
+ * left the machine records `uploaded` too, so it says nothing about whether the run reached
+ * TraceRoot.
  */
 export interface RunFile {
   evaluation_name: string;
@@ -156,6 +157,15 @@ export interface RunFile {
    * null for a run that stayed on the machine, and for one uploaded to a host that gives no link.
    */
   dashboard_url: string | null;
+  /**
+   * The run's results that may be missing from TraceRoot, for an uploaded run:
+   * - `failed`: results whose upload failed, so TraceRoot doesn't have them;
+   * - `unconfirmed`: results a cancelled run kept although TraceRoot hadn't acknowledged their
+   *   upload when the run was saved, so TraceRoot may or may not have them.
+   *
+   * Each is 0 when the SDK doesn't record it, or records something other than a count.
+   */
+  upload_results: { failed: number; unconfirmed: number };
 }
 
 export interface CaseScore {
@@ -279,7 +289,16 @@ export function parseRunFile(text: string): RunFile {
     })),
     artifact: { payloads: artifact.oneOf("payloads", PAYLOADS) },
     dashboard_url: upload === null ? null : upload.nullableString("dashboard_url"),
+    upload_results: {
+      failed: resultCount(upload?.value("failed_result_count")),
+      unconfirmed: resultCount(upload?.value("unconfirmed_result_count")),
+    },
   };
+}
+
+/** A count of results, or 0 for anything else: an SDK that doesn't record it writes no key. */
+function resultCount(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : 0;
 }
 
 /**
