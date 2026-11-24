@@ -172,6 +172,16 @@ describe("dashboards get rendering", () => {
     expect(err.data).toBe("");
   });
 
+  it("a widgets value that is not a list prints the fields alone, like a missing one", () => {
+    const malformed = { ...emptyDashboard(), widgets: {} } as unknown as Parameters<
+      typeof renderDashboard
+    >[0];
+    const { w, out, err } = sinks();
+    renderDashboard(malformed, w, "UTC");
+    expect(out.data).toBe(EMPTY_FIELDS);
+    expect(err.data).toBe("");
+  });
+
   it("shows a dash for a missing description or default flag, and no creator when none is sent", () => {
     const { is_default: _omitted, ...rest } = dashboard({
       description: null,

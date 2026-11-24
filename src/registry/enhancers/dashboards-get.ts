@@ -97,9 +97,10 @@ export function renderDashboard(dashboard: Dashboard, writers: Writers, timeZone
     writers,
   );
 
-  // A server without the field has said nothing about the widgets.
+  // A server without the field, or with a value that is not a list, has said
+  // nothing about the widgets.
   const widgets = dashboard.widgets;
-  if (widgets === undefined || widgets === null) return;
+  if (!Array.isArray(widgets)) return;
   if (widgets.length === 0) {
     logProgress("this dashboard has no widgets", writers);
     return;
