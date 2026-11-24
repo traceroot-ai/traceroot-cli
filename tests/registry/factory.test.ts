@@ -380,33 +380,7 @@ describe("detectors get (zero-code path)", () => {
   });
 });
 
-describe("dashboards get and widgets get (zero-code path)", () => {
-  it("names the dashboard's own id and its times as the curated commands do", async () => {
-    const payload = {
-      id: "dsh-1",
-      name: "Latency",
-      description: "",
-      creator: null,
-      create_time: "2026-11-01T00:00:00Z",
-      update_time: "2026-11-02T00:00:00Z",
-      widgets: [],
-    };
-    const h = harness(jsonResponse(payload));
-    await h.run("dashboards", "get", "dsh-1");
-    expect(h.out.data).toBe(
-      [
-        "Dashboard ID:  dsh-1",
-        "Name:          Latency",
-        "Description:   —",
-        "Creator:       —",
-        "Created:       2026-11-01T00:00:00Z",
-        "Updated:       2026-11-02T00:00:00Z",
-        "Widgets:       (none)",
-        "",
-      ].join("\n"),
-    );
-  });
-
+describe("widgets get (zero-code path)", () => {
   it("tells the widget's own id apart from its dashboard's", async () => {
     const payload = {
       id: "wdg-1",

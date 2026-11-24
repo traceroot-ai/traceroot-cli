@@ -89,10 +89,10 @@ describe("renderDefault", () => {
     const w = writers();
     renderDefault(
       { id: "d-1", create_time: "2026-11-01T00:00:00Z", update_time: "2026-11-02T00:00:00Z" },
-      { json: false, writers: w.writers, args: {}, tool: "get_dashboard" },
+      { json: false, writers: w.writers, args: {}, tool: "get_widget" },
     );
     expect(w.out.data).toBe(
-      "Dashboard ID:  d-1\nCreated:       2026-11-01T00:00:00Z\nUpdated:       2026-11-02T00:00:00Z\n",
+      "Widget ID:  d-1\nCreated:    2026-11-01T00:00:00Z\nUpdated:    2026-11-02T00:00:00Z\n",
     );
   });
 
