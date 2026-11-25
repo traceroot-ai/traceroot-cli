@@ -77,18 +77,19 @@ export interface NoticeFilter {
  * Passes `chunk`s on to `write` unchanged, except a whole line that is the SDK's notice, which is
  * replaced by {@link rewriteNotice}'s lines, or left out for a run that uploads nothing. Only the
  * start of a line that could still be the notice is held back, until its end shows whether it is;
- * every other line, and the unfinished last line of a chunk, passes on at once.
+ * every other line, and the unfinished last line of a chunk, passes on at once. `width` is asked
+ * when the notice prints, so it fits a terminal resized since the run started.
  */
 export function filterNotices(
   write: (text: string) => void,
-  width: number | undefined,
+  width: () => number | undefined,
   uploads: boolean,
 ): NoticeFilter {
   let atLineStart = true;
   let held = "";
   /** The line as it prints, each of its lines ending in a newline: nothing for a dropped notice. */
   const replaced = (line: string): string =>
-    (rewriteNotice(line, width, uploads) ?? [line]).map((piece) => `${piece}\n`).join("");
+    (rewriteNotice(line, width(), uploads) ?? [line]).map((piece) => `${piece}\n`).join("");
   return {
     write: (chunk) => {
       let text = held + chunk;
@@ -122,7 +123,7 @@ export function filterNotices(
     flush: () => {
       if (held !== "") {
         // The runner ended mid-line, so the held text gets no newline it didn't write.
-        const text = rewriteNotice(held, width, uploads)?.join("\n") ?? held;
+        const text = rewriteNotice(held, width(), uploads)?.join("\n") ?? held;
         if (text !== "") {
           write(text);
         }

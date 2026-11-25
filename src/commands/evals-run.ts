@@ -248,7 +248,8 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
   const upload = options.upload === null ? null : await checkUpload(options.upload, env, writers);
 
   const runner = await findRunner(options.file, cwd, env);
-  logWrapped(runningLine(options.file, runner, cwd), writers);
+  const running = runningLine(options.file, runner, cwd);
+  logWrapped(running.text, writers, running.paths);
   const now = options.now ?? (() => performance.now());
   const started = now();
   const outcome = await runEvalRunner({
@@ -333,18 +334,33 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
 /**
  * What runs: the file, the SDK and the interpreter's version. A Python file's interpreter is named
  * too, relative to the working directory when it is under it, since which venv a file runs under
- * is the one thing a venv mix-up hides; `--json` has its full path (`runtime.executable`).
+ * is the one thing a venv mix-up hides; `--json` has its full path (`runtime.executable`). With the
+ * line come the paths in it, which it never wraps inside, so one with a space in it copies whole.
  */
-export function runningLine(file: string, runner: EvalRunner, cwd: string): string {
+export function runningLine(
+  file: string,
+  runner: EvalRunner,
+  cwd: string,
+): { text: string; paths: string[] } {
   const { runtime } = runner;
-  const under =
-    runner.language === "python" ? ` (${clean(displayPath(runtime.executable, cwd))})` : "";
-  return `Running ${clean(file)} with ${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)} on ${runtime.name} ${clean(runtime.version)}${under}`;
+  const paths = [clean(file)];
+  if (runner.language === "python") {
+    paths.push(clean(displayPath(runtime.executable, cwd)));
+  }
+  const [shown, interpreter] = paths;
+  const under = interpreter === undefined ? "" : ` (${interpreter})`;
+  return {
+    text: `Running ${shown} with ${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)} on ${runtime.name} ${clean(runtime.version)}${under}`,
+    paths,
+  };
 }
 
-/** A progress message on stderr, wrapped to the terminal at word boundaries. */
-function logWrapped(text: string, writers: Writers): void {
-  for (const piece of wrapLine(text, terminalColumns(writers.err))) {
+/**
+ * A progress message on stderr, wrapped to the terminal at word boundaries and never inside one of
+ * `whole`.
+ */
+function logWrapped(text: string, writers: Writers, whole: readonly string[] = []): void {
+  for (const piece of wrapLine(text, terminalColumns(writers.err), whole)) {
     logProgress(piece, writers);
   }
 }

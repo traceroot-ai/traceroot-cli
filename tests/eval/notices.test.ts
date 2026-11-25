@@ -68,7 +68,14 @@ describe("filterNotices", () => {
     uploads = true,
   ): { filter: ReturnType<typeof filterNotices>; writes: string[] } {
     const writes: string[] = [];
-    return { filter: filterNotices((text) => writes.push(text), width, uploads), writes };
+    return {
+      filter: filterNotices(
+        (text) => writes.push(text),
+        () => width,
+        uploads,
+      ),
+      writes,
+    };
   }
 
   it("rewrites the notice however the runner's writes split it", () => {
@@ -85,6 +92,24 @@ describe("filterNotices", () => {
     filter.flush();
 
     expect(writes.join("")).toBe(`before\n${REWORDED.join("\n")}\nafter\n`);
+  });
+
+  it("wraps the notice to the terminal's width when it prints, after a resize too", () => {
+    let width = 80;
+    const writes: string[] = [];
+    const filter = filterNotices(
+      (text) => writes.push(text),
+      () => width,
+      true,
+    );
+
+    width = 40;
+    filter.write(`${PYTHON}\n`);
+    filter.write(PYTHON);
+    filter.flush();
+
+    const narrow = rewriteNotice(PYTHON, 40, true)?.join("\n");
+    expect(writes.join("")).toBe(`${narrow}\n${narrow}`);
   });
 
   it("passes any other output on at once, an unfinished line included", () => {

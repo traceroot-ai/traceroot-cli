@@ -131,12 +131,15 @@ export function fitTable(headers: string[], rows: string[][], options: FitTableO
   }
   const labels = options.labels ?? headers.map(() => true);
   return rows.flatMap((row, i) => {
-    const items = row
-      .slice(1)
-      .map((cell, col) =>
+    // An empty value is left out, label and all.
+    const items = row.slice(1).flatMap((cell, col) => {
+      if (cell.trim() === "") {
+        return [];
+      }
+      return [
         labels[col + 1] === false ? cell : `${(headers[col + 1] ?? "").toLowerCase()} ${cell}`,
-      )
-      .filter((item) => item.trim() !== "");
+      ];
+    });
     return [
       `${indent}${rowStyle(row[0] ?? "", i)}`,
       ...wrapItems(items, width, { indent: `${indent}  ` }),

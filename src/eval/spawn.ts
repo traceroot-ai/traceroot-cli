@@ -181,7 +181,7 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
         line.write(text);
       }
     },
-    terminalColumns(output),
+    () => terminalColumns(output),
     options.upload !== undefined,
   );
   const scrubbed = redactAcrossChunks((text) => notices.write(text), secrets);
