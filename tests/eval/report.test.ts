@@ -455,6 +455,17 @@ describe("renderSummary's LLM use", () => {
     );
   });
 
+  it("says a cost is unknown only when a role that made calls has none", () => {
+    const run = evaluation("agent", "run_a", [
+      item("a", { usage: { task: emptyBucket(), scorers: judge } }),
+    ]);
+
+    const text = summary(report([run]));
+
+    expect(text).toContain("cost           —     $0.000351\n");
+    expect(text).not.toContain("A cost is unknown");
+  });
+
   it("says when no call of a role reported token counts", () => {
     const run = evaluation("agent", "run_a", [
       item("a", { usage: { task: used({ llm_calls: 2 }), scorers: emptyBucket() } }),
@@ -482,6 +493,17 @@ describe("renderSummary's LLM use", () => {
     );
     expect(idle).toContain("LLM use: no call through an instrumented LLM client.\n");
     expect(idle).not.toContain("LLM USE");
+  });
+
+  it("says when the case file's usage can't be read, rather than that none was captured", () => {
+    const text = summary(
+      report([evaluation("agent", "run_a", [item("a", { usage: "unreadable" })])]),
+    );
+
+    expect(text).toContain(
+      "LLM use: unknown, because the case file records it in a form this CLI can't read.\n",
+    );
+    expect(text).not.toContain("not captured");
   });
 
   it("puts each evaluation's usage under its name, and the sums in the --json document", () => {

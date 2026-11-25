@@ -8,8 +8,7 @@
  * reading as a run that made no calls.
  *
  * The case line is read leniently: an SDK that predates usage writes no `usage` key, and a
- * malformed value reads as not reported rather than failing the read of a run whose scores are
- * fine.
+ * malformed value reads as unreadable rather than failing the read of a run whose scores are fine.
  */
 
 /**
@@ -68,22 +67,30 @@ export function coverageOf<F extends SumField>(field: F): `llm_calls_with_${F}` 
   return `llm_calls_with_${field}`;
 }
 
+/** A case line's `usage` that can't be read, a value no released SDK writes. */
+export type Unreadable = "unreadable";
+
 /**
  * A case line's `usage`: undefined when the line has no `usage` key, which an SDK that doesn't
- * record usage writes; null when the SDK captured none for the run (it instrumented no LLM client)
- * or the value can't be read; otherwise the case's usage.
+ * record usage writes; null when the SDK captured none for the run (it instrumented no LLM client);
+ * `unreadable` when the value can't be read; otherwise the case's usage.
  */
-export function readCaseUsage(line: Record<string, unknown>): CaseUsage | null | undefined {
+export function readCaseUsage(
+  line: Record<string, unknown>,
+): CaseUsage | Unreadable | null | undefined {
   if (!("usage" in line)) {
     return undefined;
   }
   const usage = line.usage;
-  if (!isRecord(usage)) {
+  if (usage === null) {
     return null;
+  }
+  if (!isRecord(usage)) {
+    return "unreadable";
   }
   const task = readBucket(usage.task);
   const scorers = readBucket(usage.scorers);
-  return task === null || scorers === null ? null : { task, scorers };
+  return task === null || scorers === null ? "unreadable" : { task, scorers };
 }
 
 function readBucket(raw: unknown): UsageBucket | null {
@@ -122,9 +129,7 @@ function covered(sum: number | null, rawCalls: unknown, llmCalls: number): [numb
 
 /** A whole, non-negative count, or null for anything else. */
 function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.round(value)
-    : null;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 /** A finite, non-negative amount, or null for anything else. */
@@ -158,24 +163,31 @@ export function emptyBucket(): UsageBucket {
   };
 }
 
-/** Two buckets added: counts summed, and each sum null only when null in both. */
-export function addBuckets(a: UsageBucket, b: UsageBucket): UsageBucket {
+/** Buckets added: counts summed, and each sum null only when null in every bucket. */
+export function sumBuckets(buckets: readonly UsageBucket[]): UsageBucket {
   const sum = (x: number | null, y: number | null): number | null =>
     x === null ? y : y === null ? x : x + y;
-  const bucket = emptyBucket();
-  bucket.llm_calls = a.llm_calls + b.llm_calls;
-  for (const field of TOKEN_FIELDS) {
-    bucket[field] = sum(a[field], b[field]);
-    bucket[coverageOf(field)] = a[coverageOf(field)] + b[coverageOf(field)];
+  const total = emptyBucket();
+  for (const bucket of buckets) {
+    total.llm_calls += bucket.llm_calls;
+    for (const field of TOKEN_FIELDS) {
+      total[field] = sum(total[field], bucket[field]);
+      total[coverageOf(field)] += bucket[coverageOf(field)];
+    }
   }
-  // Both SDKs report USD; a mix of currencies has no single sum, so it reads as unknown.
-  const currencies = new Set([a.currency, b.currency].filter((c): c is string => c !== null));
+  // Both SDKs report USD. Buckets in more than one currency have no single sum, so the cost reads
+  // as unknown, whatever order they come in.
+  const currencies = new Set(
+    buckets.flatMap(({ currency }) => (currency === null ? [] : [currency])),
+  );
   if (currencies.size <= 1) {
-    bucket.cost = sum(a.cost, b.cost);
-    bucket.llm_calls_with_cost = a.llm_calls_with_cost + b.llm_calls_with_cost;
-    bucket.currency = [...currencies][0] ?? null;
+    for (const bucket of buckets) {
+      total.cost = sum(total.cost, bucket.cost);
+      total.llm_calls_with_cost += bucket.llm_calls_with_cost;
+    }
+    total.currency = [...currencies][0] ?? null;
   }
-  return bucket;
+  return total;
 }
 
 /**
@@ -183,9 +195,11 @@ export function addBuckets(a: UsageBucket, b: UsageBucket): UsageBucket {
  * - `reported`: at least one case recorded usage;
  * - `not_captured`: the SDK records usage, but captured none, because the evaluation instrumented
  *   no LLM client;
- * - `not_recorded`: the SDK that ran it doesn't record usage.
+ * - `not_recorded`: the SDK that ran it doesn't record usage;
+ * - `unreadable`: no case recorded usage the CLI can read, and at least one recorded a value it
+ *   can't.
  */
-export type UsageStatus = "reported" | "not_captured" | "not_recorded";
+export type UsageStatus = "reported" | "not_captured" | "not_recorded" | "unreadable";
 
 /** A run's LLM use: its cases' usage summed per role, and how many cases it covers. */
 export interface RunUsage {
@@ -200,14 +214,20 @@ export interface RunUsage {
 }
 
 /** A run's LLM use, from its case lines' `usage`. */
-export function runUsage(usages: ReadonlyArray<CaseUsage | null | undefined>): RunUsage {
+export function runUsage(
+  usages: ReadonlyArray<CaseUsage | Unreadable | null | undefined>,
+): RunUsage {
   const recorded = usages.filter(
-    (usage): usage is CaseUsage => usage !== null && usage !== undefined,
+    (usage): usage is CaseUsage => typeof usage === "object" && usage !== null,
   );
   if (recorded.length === 0) {
-    const knows = usages.some((usage) => usage !== undefined);
+    const status = usages.includes("unreadable")
+      ? "unreadable"
+      : usages.some((usage) => usage !== undefined)
+        ? "not_captured"
+        : "not_recorded";
     return {
-      status: knows ? "not_captured" : "not_recorded",
+      status,
       task: null,
       scorers: null,
       cases: usages.length,
@@ -216,8 +236,8 @@ export function runUsage(usages: ReadonlyArray<CaseUsage | null | undefined>): R
   }
   return {
     status: "reported",
-    task: recorded.map((usage) => usage.task).reduce(addBuckets, emptyBucket()),
-    scorers: recorded.map((usage) => usage.scorers).reduce(addBuckets, emptyBucket()),
+    task: sumBuckets(recorded.map((usage) => usage.task)),
+    scorers: sumBuckets(recorded.map((usage) => usage.scorers)),
     cases: usages.length,
     cases_with_usage: recorded.length,
   };

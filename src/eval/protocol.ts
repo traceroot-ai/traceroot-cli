@@ -16,7 +16,7 @@
  * string as null.
  */
 
-import { type CaseUsage, readCaseUsage } from "./usage.js";
+import { type CaseUsage, type Unreadable, readCaseUsage } from "./usage.js";
 
 /** The protocol version the CLI reads. A runner announces its own in its `hello` event. */
 export const EVAL_API_VERSION = 1;
@@ -203,9 +203,10 @@ export interface CaseLine {
   duration_ms: number | null;
   /**
    * The case's LLM use, read leniently (see usage.ts): undefined from an SDK that doesn't record
-   * it, null when the SDK captured none, as when the evaluation instrumented no LLM client.
+   * it, null when the SDK captured none, as when the evaluation instrumented no LLM client, and
+   * `unreadable` for a value that can't be read.
    */
-  usage?: CaseUsage | null;
+  usage?: CaseUsage | Unreadable | null;
 }
 
 /** Something a runner wrote that the CLI can't read. The message says what and where. */

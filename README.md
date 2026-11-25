@@ -346,8 +346,9 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   figure only some calls reported is followed by how many, as in
   `8 (1 of 2 calls)`, since it's a lower bound; and a note says when the figures
   cover only some of the cases. An SDK release
-  that doesn't record usage, or an evaluation that instrumented no LLM client,
-  says so instead. Nothing is uploaded to count it.
+  that doesn't record usage, an evaluation that instrumented no LLM client, or a
+  case file whose usage the CLI can't read says so instead. Nothing is uploaded
+  to count it.
 - **On a terminal, the summary fits its width.** Prose wraps at word boundaries
   with a hanging indent. A table too wide for the terminal wraps its last column
   within the cell when that column is prose, such as an error, and there's room
@@ -441,7 +442,7 @@ case file), its counts, `duration_ms` (the mean time a case took, and how many
 cases were timed), its `scores` (each with its `mean`, how many cases produced
 it as `count`, how many values the mean is over as `mean_count`, and how many
 `passed`, `failed` and neither as `unjudged`), its `usage` (`status`:
-`reported`, `not_captured` or `not_recorded`; the `task` and `scorers` sums, each
+`reported`, `not_captured`, `not_recorded` or `unreadable`; the `task` and `scorers` sums, each
 with `llm_calls`, then each token count and `cost` followed by how many calls
 it covers, as `llm_calls_with_input_tokens` and so on through
 `llm_calls_with_cost`, and `currency`; and how many of the run's `cases` it

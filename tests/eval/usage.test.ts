@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   type UsageBucket,
-  addBuckets,
   emptyBucket,
   readCaseUsage,
   runUsage,
+  sumBuckets,
 } from "../../src/eval/usage.js";
 
 function bucket(changes: Partial<UsageBucket>): UsageBucket {
@@ -42,8 +42,8 @@ describe("readCaseUsage", () => {
       },
     });
 
-    expect(usage?.task).toEqual(
-      bucket({
+    expect(usage).toEqual({
+      task: bucket({
         llm_calls: 3,
         input_tokens: 1200,
         llm_calls_with_input_tokens: 3,
@@ -54,11 +54,11 @@ describe("readCaseUsage", () => {
         cache_read_tokens: 0,
         llm_calls_with_cache_read_tokens: 3,
       }),
-    );
-    expect(usage?.scorers).toEqual(emptyBucket());
+      scorers: emptyBucket(),
+    });
   });
 
-  it("reads a value it can't trust as not reported, never as 0, and a malformed usage as none", () => {
+  it("reads a value it can't trust as not reported, never as 0, and a malformed usage as unreadable", () => {
     const usage = readCaseUsage({
       usage: {
         task: {
@@ -77,11 +77,32 @@ describe("readCaseUsage", () => {
       },
     });
 
-    expect(usage?.task).toEqual(
-      bucket({ llm_calls: 2, cost: 0.5, llm_calls_with_cost: 2, currency: "USD" }),
+    expect(usage).toEqual({
+      task: bucket({ llm_calls: 2, cost: 0.5, llm_calls_with_cost: 2, currency: "USD" }),
+      scorers: emptyBucket(),
+    });
+    expect(readCaseUsage({ usage: { task: { llm_calls: "3" }, scorers: {} } })).toBe("unreadable");
+    expect(readCaseUsage({ usage: [] })).toBe("unreadable");
+  });
+
+  it("reads a count that isn't a whole number as not reported, never rounding it", () => {
+    const usage = readCaseUsage({
+      usage: {
+        task: {
+          llm_calls: 2,
+          input_tokens: 0.6,
+          llm_calls_with_input_tokens: 2,
+          output_tokens: 8,
+          llm_calls_with_output_tokens: 1.5,
+        },
+        scorers: { llm_calls: 0 },
+      },
+    });
+
+    expect(usage).toEqual({ task: bucket({ llm_calls: 2 }), scorers: emptyBucket() });
+    expect(readCaseUsage({ usage: { task: { llm_calls: 0.6 }, scorers: { llm_calls: 0 } } })).toBe(
+      "unreadable",
     );
-    expect(readCaseUsage({ usage: { task: { llm_calls: "3" }, scorers: {} } })).toBeNull();
-    expect(readCaseUsage({ usage: [] })).toBeNull();
   });
 
   it("reads a sum whose count of calls is missing or out of range as not reported", () => {
@@ -104,15 +125,16 @@ describe("readCaseUsage", () => {
       },
     });
 
-    expect(usage?.task).toEqual(
-      bucket({ llm_calls: 2, reasoning_tokens: 4, llm_calls_with_reasoning_tokens: 1 }),
-    );
+    expect(usage).toEqual({
+      task: bucket({ llm_calls: 2, reasoning_tokens: 4, llm_calls_with_reasoning_tokens: 1 }),
+      scorers: emptyBucket(),
+    });
   });
 });
 
-describe("addBuckets", () => {
+describe("sumBuckets", () => {
   it("sums each figure with the calls it covers, null only when no side reported it", () => {
-    const sum = addBuckets(
+    const sum = sumBuckets([
       bucket({
         llm_calls: 2,
         input_tokens: 10,
@@ -128,7 +150,7 @@ describe("addBuckets", () => {
         output_tokens: 7,
         llm_calls_with_output_tokens: 1,
       }),
-    );
+    ]);
 
     expect(sum).toEqual(
       bucket({
@@ -145,10 +167,10 @@ describe("addBuckets", () => {
   });
 
   it("has no single cost for two currencies", () => {
-    const sum = addBuckets(
+    const sum = sumBuckets([
       bucket({ llm_calls: 1, cost: 1, llm_calls_with_cost: 1, currency: "USD" }),
       bucket({ llm_calls: 1, cost: 1, llm_calls_with_cost: 1, currency: "EUR" }),
-    );
+    ]);
 
     expect(sum.cost).toBeNull();
     expect(sum.llm_calls_with_cost).toBe(0);
@@ -176,5 +198,39 @@ describe("runUsage", () => {
     expect(runUsage([null, null]).status).toBe("not_captured");
     expect(runUsage([undefined, undefined]).status).toBe("not_recorded");
     expect(runUsage([]).status).toBe("not_recorded");
+  });
+
+  it("says usage it can't read is unreadable, not that the SDK captured none", () => {
+    expect(runUsage(["unreadable", null])).toMatchObject({
+      status: "unreadable",
+      task: null,
+      scorers: null,
+      cases: 2,
+      cases_with_usage: 0,
+    });
+    expect(runUsage([usage, "unreadable"])).toMatchObject({
+      status: "reported",
+      cases: 2,
+      cases_with_usage: 1,
+    });
+  });
+
+  it("has no single cost for a run of two currencies, whatever order its cases come in", () => {
+    const priced = (currency: string) => ({
+      task: bucket({ llm_calls: 1, cost: 1, llm_calls_with_cost: 1, currency }),
+      scorers: emptyBucket(),
+    });
+    for (const order of [
+      ["USD", "USD", "EUR"],
+      ["USD", "EUR", "USD"],
+      ["EUR", "USD", "USD"],
+    ]) {
+      expect(runUsage(order.map(priced)).task).toMatchObject({
+        llm_calls: 3,
+        cost: null,
+        llm_calls_with_cost: 0,
+        currency: null,
+      });
+    }
   });
 });
