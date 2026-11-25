@@ -42,9 +42,10 @@ export function widgetDisplay(widget: Widget): string {
 
 /**
  * What a widget charts, in the words `alerts get` writes a metric in:
- * `sum cost of spans by model_name, 1 filter`, or `latest 10 traces` for a
- * trace feed. Filters are counted rather than written out, because the two
- * widget types spell their operators differently; `widgets get` shows them.
+ * `sum cost of spans by model_name, 1 filter`, `distribution of duration_ms of
+ * traces` for a histogram, or `latest 10 traces` for a trace feed. Filters are
+ * counted rather than written out, because the two widget types spell their
+ * operators differently; `widgets get` shows them.
  */
 export function widgetQuery(widget: Widget): string {
   const spec = record(widget.spec);
@@ -56,7 +57,12 @@ export function widgetQuery(widget: Widget): string {
     const agg = text(metric?.agg);
     const measure = text(metric?.measure);
     if (view === undefined || agg === undefined || measure === undefined) return "—";
-    query = measure === "count" ? `count of ${view}` : `${agg} ${measure} of ${view}`;
+    // A histogram bins the measure's raw values, so the saved aggregation plays no part.
+    if (widgetDisplay(widget) === "histogram") {
+      query = `distribution of ${measure} of ${view}`;
+    } else {
+      query = measure === "count" ? `count of ${view}` : `${agg} ${measure} of ${view}`;
+    }
     const breakdown = text(spec.breakdown);
     if (breakdown !== undefined) query += ` by ${breakdown}`;
   } else if (widget.type === "trace_feed") {

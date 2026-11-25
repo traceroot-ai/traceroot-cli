@@ -243,6 +243,19 @@ describe("what a widget charts", () => {
     ).toBe("uniq model_name of spans");
   });
 
+  it("names a histogram's measure without its aggregation, which a histogram does not use", () => {
+    expect(
+      widgetQuery({ type: "query", spec: query("traces", "p95", "duration_ms", "histogram") }),
+    ).toBe("distribution of duration_ms of traces");
+    const filter = { op: "=", field: "span_kind", value: "LLM" };
+    expect(
+      widgetQuery({
+        type: "query",
+        spec: query("spans", "sum", "cost", "histogram", { filters: [filter] }),
+      }),
+    ).toBe("distribution of cost of spans, 1 filter");
+  });
+
   it("names a breakdown only when there is one", () => {
     const spec = (breakdown: unknown) => query("spans", "sum", "cost", "line", { breakdown });
     expect(widgetQuery({ type: "query", spec: spec("model_name") })).toBe(
