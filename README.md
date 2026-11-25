@@ -333,13 +333,15 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   score's mean. Then the regression check, then the run file and case file each
   evaluation saved, then the commands to run next. Without `--baseline` the
   regression check says it was skipped, so an exit `0` there isn't a claim that
-  every case passed, and the summary ends with the command that compares the next
-  run with this one.
+  every case passed, and the commands to run next start with the one that
+  compares the next run with this one, unless the run can't be a baseline, as a
+  sampled or interrupted run can't.
 - **On a terminal, the summary fits its width.** Prose wraps at word boundaries
-  with a hanging indent, and a table too wide for the terminal is stacked, each
-  row's values under its first cell. A command, a link, a path or an id is never
-  broken or shortened, so each copies whole. Piped or redirected output keeps
-  every line whole.
+  with a hanging indent. A table too wide for the terminal wraps its last column
+  within the cell when that column is prose, such as an error, and there's room
+  for it; otherwise it's stacked, each row's values under its first cell. A
+  command, a link, a path or an id is never broken or shortened, so each copies
+  whole. Piped or redirected output keeps every line whole.
 - **Each score's mean says what it is a mean of.** `SCORED` counts the cases that
   gave the score a number or true/false, out of the run's cases: a case whose task
   or scorer raised has none, and any other value is left out of the mean rather
@@ -362,10 +364,11 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   `TERM=dumb` or `CI`, or when stderr isn't a terminal: stderr then carries the
   runner's output as it's written.
 - **The runner's output prints as the evaluation writes it**, logs and
-  tracebacks included. The one exception is the SDK's own notice that it found no
-  Git repository or commit to link traces to: an uploaded run prints it as a
-  short warning naming what to set, and a local run, which sends no traces,
-  leaves it out.
+  tracebacks included, with two exceptions. An uploaded run's API key prints as
+  `<redacted>` wherever it appears. And the SDK's own notice that it found no
+  Git repository or commit to link traces to prints as a short warning naming
+  what to set on an uploaded run, and is left out of a local run, which sends no
+  traces.
 - **The line saying what runs** names the file, the SDK and the interpreter's
   version, and for a `.py` file the interpreter it runs under, relative to the
   current directory. `--json` has the interpreter's full path as

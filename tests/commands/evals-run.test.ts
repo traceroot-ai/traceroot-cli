@@ -291,6 +291,29 @@ describe("evals run without a baseline", () => {
     expect(run.stdout).not.toContain("runner");
   });
 
+  it("wraps the line saying what runs on a narrow terminal, never inside the file's path", async () => {
+    pythonProject();
+    const file = evalFile("support triage agent eval.py", { replay: `${PYTHON}/all-pass` });
+    // A terminal 30 columns wide; CI keeps the progress line out of what it holds.
+    const err = Object.assign(new StringSink(true), { columns: 30 });
+
+    await runEvalsRun({
+      file,
+      json: false,
+      upload: null,
+      cwd: project,
+      env: { ...cliEnv(), CI: "true" },
+      writers: { out: new StringSink(false), err },
+    });
+
+    expect(stripVTControlCharacters(err.data).split("\n").slice(0, 4)).toEqual([
+      "Running",
+      "  support triage agent eval.py",
+      "  with traceroot 0.5.1 on",
+      "  Python 3.12.4",
+    ]);
+  });
+
   it("leaves the SDK's Git notice out of a local run, and passes an application's line that mentions it as written", () => {
     pythonProject();
     const logged = `WARNING:traceroot.client:${GIT_NOTICE}`;
