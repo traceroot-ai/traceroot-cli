@@ -58,6 +58,15 @@ describe("wrapLine", () => {
     expect(wrapLine("short", 30)).toEqual(["short"]);
     expect(wrapLine("x ".repeat(100).trim(), undefined)).toEqual(["x ".repeat(100).trim()]);
   });
+
+  it("never breaks at a space inside a span it is told to keep whole, such as a path", () => {
+    const path = "/Users/me/My Projects/.venv/bin/python";
+    expect(wrapLine(`Running x_eval.py on Python 3.12.4 (${path})`, 30, [path])).toEqual([
+      "Running x_eval.py on Python",
+      "  3.12.4",
+      `  (${path})`,
+    ]);
+  });
 });
 
 describe("wrapItems", () => {

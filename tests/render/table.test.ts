@@ -63,7 +63,7 @@ describe("fitTable", () => {
     ["正确性", "1", "4 of 4"],
   ];
 
-  it("prints as renderTable does when it fits, lined up on display width", () => {
+  it("prints whole, lined up on display width, when it fits", () => {
     expect(fitTable(headers, rows, { width: 80, indent: "  " })).toEqual([
       "  SCORE        MEAN   SCORED",
       "  exact_match  0.667  3 of 4",
@@ -102,5 +102,14 @@ describe("fitTable", () => {
         labels: [false, false],
       }),
     ).toEqual(["tc_d2682fce6e8c00532e62", "  KeyError: 'rubric'"]);
+  });
+
+  it("leaves an empty value out of a stacked row, labelled or not", () => {
+    expect(
+      fitTable(["CASE", "SCORER", "RESULT"], [["tc_d2682fce6e8c00532e62", "", "0 (was 1)"]], {
+        width: 20,
+        labels: [false, true, false],
+      }),
+    ).toEqual(["tc_d2682fce6e8c00532e62", "  0 (was 1)"]);
   });
 });

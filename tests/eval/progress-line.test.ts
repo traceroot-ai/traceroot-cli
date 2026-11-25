@@ -178,9 +178,10 @@ describe("startProgressLine", () => {
     });
     const run = start({ sink });
 
-    run.line.events([evaluationStarted("uppercase", 3)]);
+    run.line.events([evaluationStarted("x".repeat(70), 3)]);
 
-    expect(run.last()).toBe("◒  uppercase · 0/3 cases done · 0 running · 0 errored");
+    // Cut to the stream's 60 columns; the 80 taken for a terminal that says nothing shows more.
+    expect(run.last()).toBe(`◒  ${"x".repeat(9)}… · 0/3 cases done · 0 running · 0 errored`);
   });
 
   it("takes a terminal that reports no width as 80 columns wide", () => {

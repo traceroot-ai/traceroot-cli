@@ -840,6 +840,11 @@ function evaluationUsage(usage: RunUsage, runner: EvalRunner, view: View): strin
   if (usage.status === "not_recorded") {
     return prose(`LLM use: not recorded; ${sdk} doesn't count a run's LLM calls.`);
   }
+  if (usage.status === "unreadable") {
+    return prose(
+      "LLM use: unknown, because the case file records it in a form this CLI can't read.",
+    );
+  }
   if (usage.status === "not_captured" || usage.task === null || usage.scorers === null) {
     const setup =
       runner.language === "python"
@@ -877,7 +882,7 @@ function evaluationUsage(usage: RunUsage, runner: EvalRunner, view: View): strin
       notes.push(`  No ${role === "TASK" ? "task" : "scorer"} call reported token counts.`);
     }
   }
-  if (roles.some(([, bucket]) => bucket.cost === null)) {
+  if (roles.some(([, bucket]) => bucket.llm_calls > 0 && bucket.cost === null)) {
     notes.push(
       "  A cost is unknown when no call reported one; TraceRoot prices an uploaded run's calls from its traces.",
     );

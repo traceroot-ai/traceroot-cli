@@ -333,8 +333,9 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   score's mean. Then the regression check, then what the run took, then the run
   file and case file each evaluation saved, then the commands to run next. Without `--baseline` the
   regression check says it was skipped, so an exit `0` there isn't a claim that
-  every case passed, and the summary ends with the command that compares the next
-  run with this one.
+  every case passed, and the commands to run next start with the one that
+  compares the next run with this one, unless the run can't be a baseline, as a
+  sampled or interrupted run can't.
 - **What the run took** is how long it ran in all, apart from the mean time a
   case took, and each evaluation's LLM use as the SDK's runner counted it from
   the LLM calls its instrumentation saw: the calls, the input, output and total
@@ -345,13 +346,15 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   figure only some calls reported is followed by how many, as in
   `8 (1 of 2 calls)`, since it's a lower bound; and a note says when the figures
   cover only some of the cases. An SDK release
-  that doesn't record usage, or an evaluation that instrumented no LLM client,
-  says so instead. Nothing is uploaded to count it.
+  that doesn't record usage, an evaluation that instrumented no LLM client, or a
+  case file whose usage the CLI can't read says so instead. Nothing is uploaded
+  to count it.
 - **On a terminal, the summary fits its width.** Prose wraps at word boundaries
-  with a hanging indent, and a table too wide for the terminal is stacked, each
-  row's values under its first cell. A command, a link, a path or an id is never
-  broken or shortened, so each copies whole. Piped or redirected output keeps
-  every line whole.
+  with a hanging indent. A table too wide for the terminal wraps its last column
+  within the cell when that column is prose, such as an error, and there's room
+  for it; otherwise it's stacked, each row's values under its first cell. A
+  command, a link, a path or an id is never broken or shortened, so each copies
+  whole. Piped or redirected output keeps every line whole.
 - **Each score's mean says what it is a mean of.** `SCORED` counts the cases that
   gave the score a number or true/false, out of the run's cases: a case whose task
   or scorer raised has none, and any other value is left out of the mean rather
@@ -374,10 +377,11 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   `TERM=dumb` or `CI`, or when stderr isn't a terminal: stderr then carries the
   runner's output as it's written.
 - **The runner's output prints as the evaluation writes it**, logs and
-  tracebacks included. The one exception is the SDK's own notice that it found no
-  Git repository or commit to link traces to: an uploaded run prints it as a
-  short warning naming what to set, and a local run, which sends no traces,
-  leaves it out.
+  tracebacks included, with two exceptions. An uploaded run's API key prints as
+  `<redacted>` wherever it appears. And the SDK's own notice that it found no
+  Git repository or commit to link traces to prints as a short warning naming
+  what to set on an uploaded run, and is left out of a local run, which sends no
+  traces.
 - **The line saying what runs** names the file, the SDK and the interpreter's
   version, and for a `.py` file the interpreter it runs under, relative to the
   current directory. `--json` has the interpreter's full path as
@@ -442,7 +446,7 @@ case file), its counts, `duration_ms` (the mean time a case took, and how many
 cases were timed), its `scores` (each with its `mean`, how many cases produced
 it as `count`, how many values the mean is over as `mean_count`, and how many
 `passed`, `failed` and neither as `unjudged`), its `usage` (`status`:
-`reported`, `not_captured` or `not_recorded`; the `task` and `scorers` sums, each
+`reported`, `not_captured`, `not_recorded` or `unreadable`; the `task` and `scorers` sums, each
 with `llm_calls`, then each token count and `cost` followed by how many calls
 it covers, as `llm_calls_with_input_tokens` and so on through
 `llm_calls_with_cost`, and `currency`; and how many of the run's `cases` it
