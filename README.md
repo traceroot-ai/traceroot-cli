@@ -345,10 +345,10 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   call reported prints `—`, never 0; a cost no call reported is `unknown`; a
   figure only some calls reported is followed by how many, as in
   `8 (1 of 2 calls)`, since it's a lower bound; and a note says when the figures
-  cover only some of the cases. An SDK release
-  that doesn't record usage, an evaluation that instrumented no LLM client, or a
-  case file whose usage the CLI can't read says so instead. Nothing is uploaded
-  to count it.
+  cover only some of the cases, as when some cases' usage can't be read. An SDK
+  release that doesn't record usage, an evaluation that instrumented no LLM
+  client, or a case file in which no case's usage can be read says so instead.
+  Nothing is uploaded to count it.
 - **On a terminal, the summary fits its width.** Prose wraps at word boundaries
   with a hanging indent. A table too wide for the terminal wraps its last column
   within the cell when that column is prose, such as an error, and there's room
