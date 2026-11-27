@@ -114,15 +114,15 @@ describe("dashboards get rendering", () => {
         "Updated:       2026-11-17 02:44:22 UTC",
         "",
         "8 widgets",
-        "TITLE                      DISPLAY     QUERY                                              WIDGET ID",
-        "Trace count                number      count of traces                                    seed-0-p-1",
-        "Total cost                 number      sum cost of traces                                 seed-1-p-1",
-        "Tokens                     number      sum total_tokens of traces                         seed-2-p-1",
-        "p95 latency                number      p95 duration_ms of traces                          seed-3-p-1",
-        "Cost over time · by model  line        sum cost of spans by model_name, 1 filter          seed-4-p-1",
-        "Tokens by model            bar         sum total_tokens of spans by model_name, 1 filter  seed-5-p-1",
-        "Recent traces              trace_feed  latest 10 traces                                   seed-6-p-1",
-        "Recent failures            trace_feed  latest 10 traces, 1 filter                         seed-7-p-1",
+        "WIDGET ID   TITLE                      DISPLAY     QUERY",
+        "seed-0-p-1  Trace count                number      count of traces",
+        "seed-1-p-1  Total cost                 number      sum cost of traces",
+        "seed-2-p-1  Tokens                     number      sum total_tokens of traces",
+        "seed-3-p-1  p95 latency                number      p95 duration_ms of traces",
+        "seed-4-p-1  Cost over time · by model  line        sum cost of spans by model_name, 1 filter",
+        "seed-5-p-1  Tokens by model            bar         sum total_tokens of spans by model_name, 1 filter",
+        "seed-6-p-1  Recent traces              trace_feed  latest 10 traces",
+        "seed-7-p-1  Recent failures            trace_feed  latest 10 traces, 1 filter",
         "",
       ].join("\n"),
     );
@@ -154,7 +154,20 @@ describe("dashboards get rendering", () => {
   it("counts a single widget in the singular", () => {
     const { w, out } = sinks();
     renderDashboard(dashboard({ widgets: dashboard().widgets.slice(0, 1) }), w, "UTC");
-    expect(out.data).toContain("\n\n1 widget\nTITLE ");
+    expect(out.data).toContain("\n\n1 widget\nWIDGET ID ");
+  });
+
+  it("puts each full widget id first, so a row is only as wide as its own query", () => {
+    // The server names a default dashboard's widgets seed-<n>-<project id>, so
+    // with a UUID project id every id is 43 characters long.
+    const project = "af4512c1-3c44-4743-91e4-d6117754c0e0";
+    const widgets = dashboard().widgets.map((w, i) => ({ ...w, id: `seed-${i}-${project}` }));
+    const { w, out } = sinks();
+    renderDashboard(dashboard({ widgets }), w, "UTC");
+    const rows = out.data.split("\n").filter((line) => line.startsWith("seed-"));
+    expect(rows.map((row) => row.slice(0, row.indexOf("  ")))).toEqual(widgets.map((w) => w.id));
+    // id 43 + title 25 + display 10 + "count of traces" 15, with three 2-space gaps.
+    expect(rows[0]).toHaveLength(99);
   });
 
   it("an empty dashboard says so on stderr, with no table and no hints", () => {

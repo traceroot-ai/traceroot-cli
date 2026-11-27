@@ -113,13 +113,16 @@ export function renderDashboard(dashboard: Dashboard, writers: Writers, timeZone
   }
 
   const styler = createStyler(writers.out);
+  // The id comes first and the query last. The last column is not padded, so a
+  // row is only as wide as its own query: on a narrow terminal a long query
+  // wraps, and an id is never split.
   const table = renderTable(
-    ["TITLE", "DISPLAY", "QUERY", "WIDGET ID"],
+    ["WIDGET ID", "TITLE", "DISPLAY", "QUERY"],
     widgets.map((widget) => [
+      orDash(widget.id),
       orDash(widget.title),
       widgetDisplay(widget),
       widgetQuery(widget),
-      orDash(widget.id),
     ]),
     { headerStyle: styler.bold },
   );

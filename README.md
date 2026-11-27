@@ -135,7 +135,7 @@ project-scoped and need none of this.
 | `alerts status <id>` | Pause or resume an alert without touching its rule. `--status <ACTIVE\|PAUSED>` |
 | `alerts delete <id>` | Permanently delete an alert. `--reason <text>` (3–500 characters, recorded on the audit row) |
 | `dashboards list` | List the project's dashboards. |
-| `dashboards get <id>` | Show one dashboard and its widgets: each one's title, display, query and widget id. |
+| `dashboards get <id>` | Show one dashboard and its widgets: each one's widget id, title, display and query. |
 | `dashboards create` | Create a dashboard. `--from-file <path>`, `--name`, `--description` |
 | `dashboards update <id>` | Rename a dashboard or change its description. `--from-file <path>`, `--name`, `--description` |
 | `dashboards delete <id>` | Permanently delete a dashboard and its widgets. `--reason <text>` |
