@@ -24,7 +24,7 @@ function text(value: unknown): string | undefined {
 }
 
 /** `yes`, `no`, or a dash when the server sent no boolean. */
-function yesNo(value: unknown): string {
+export function yesNo(value: unknown): string {
   if (value === true) return "yes";
   if (value === false) return "no";
   return "—";
