@@ -31,7 +31,7 @@ function findingId(value: string | null | undefined): string {
  * What to run next: the lead-in dimmed, then each command at full contrast on a
  * line of its own, so it reads apart from the record and copies whole.
  */
-function suggest(leadIn: string, commands: string[], writers: Writers): void {
+export function suggest(leadIn: string, commands: string[], writers: Writers): void {
   logProgress(leadIn, writers);
   for (const command of commands) logInfo(`  ${command}`, writers);
 }

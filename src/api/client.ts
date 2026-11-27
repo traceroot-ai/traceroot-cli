@@ -29,6 +29,7 @@ export type FindingList = Ok200<paths["/api/v1/public/detectors/findings"]["get"
 export type FindingDetail = Ok200<paths["/api/v1/public/detectors/findings/{finding_id}"]["get"]>;
 export type SignalList = Ok200<paths["/api/v1/public/signals"]["get"]>;
 export type SignalDetail = Ok200<paths["/api/v1/public/signals/{signal_id}"]["get"]>;
+export type DashboardDetail = Ok200<paths["/api/v1/public/dashboards/{dashboard_id}"]["get"]>;
 export type DetectorList = Ok200<paths["/api/v1/public/detectors"]["get"]>;
 export type WorkspaceList = Ok200<paths["/api/v1/public/workspaces"]["get"]>;
 export type SqlResult = Ok200<paths["/api/v1/public/sql"]["post"]>;
