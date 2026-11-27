@@ -134,7 +134,7 @@ project-scoped and need none of this.
 | `alerts update <id>` | Edit an alert's rule. Fields left out are untouched; editing an evaluated field resets the alert's evaluation state. `--from-file <path>`, plus a flag per rule field |
 | `alerts status <id>` | Pause or resume an alert without touching its rule. `--status <ACTIVE\|PAUSED>` |
 | `alerts delete <id>` | Permanently delete an alert. `--reason <text>` (3–500 characters, recorded on the audit row) |
-| `dashboards list` | List the project's dashboards. |
+| `dashboards list` | List the project's dashboards, default first: each one's dashboard id, name, whether it is the default, widget count and last update. The `DASHBOARD ID` column is what `dashboards get` takes. |
 | `dashboards get <id>` | Show one dashboard and its widgets: each one's widget id, title, display and query. |
 | `dashboards create` | Create a dashboard. `--from-file <path>`, `--name`, `--description` |
 | `dashboards update <id>` | Rename a dashboard or change its description. `--from-file <path>`, `--name`, `--description` |

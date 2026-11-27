@@ -1,6 +1,7 @@
 import { alertsGet } from "./alerts-get.js";
 import { alertsList } from "./alerts-list.js";
 import { dashboardsGet } from "./dashboards-get.js";
+import { dashboardsList } from "./dashboards-list.js";
 import { datasetVersionsGet } from "./dataset-versions-get.js";
 import { datasetVersionsList } from "./dataset-versions-list.js";
 import { datasetsGet } from "./datasets-get.js";
@@ -35,6 +36,7 @@ export const ENHANCERS: Partial<Record<string, Enhancer>> = {
   get_signal: signalsGet,
   list_alerts: alertsList,
   get_alert: alertsGet,
+  list_dashboards: dashboardsList,
   get_dashboard: dashboardsGet,
   list_workspaces: workspacesList,
   list_projects: projectsList,
