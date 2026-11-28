@@ -39,11 +39,13 @@ const INTERRUPT_SIGNALS: readonly InterruptSignal[] = ["SIGINT", "SIGTERM", "SIG
  * What a local run sets in the runner's environment, whatever the CLI's own holds. `undefined`
  * removes a variable.
  *
- * No API key, tracing off and reporting off, so neither the runner nor the evaluation's own code
- * has a credential to reach TraceRoot with.
+ * No API key, no session token, tracing off and reporting off, so neither the runner nor the
+ * evaluation's own code has a credential to reach TraceRoot with. `TRACEROOT_TOKEN` is the CLI's
+ * own sign-in, which can mint access tokens.
  */
 const LOCAL_RUN: Readonly<Record<string, string | undefined>> = {
   TRACEROOT_API_KEY: undefined,
+  TRACEROOT_TOKEN: undefined,
   TRACEROOT_ENABLED: "false",
   TRACEROOT_EVAL_OPTIONS: "{}",
 };
@@ -57,11 +59,13 @@ export interface UploadTarget {
 
 /**
  * What an uploaded run sets instead: the project API key and its host, reporting on, and tracing
- * on, so a TRACEROOT_ENABLED=false left in the environment can't drop the cases' traces.
+ * on, so a TRACEROOT_ENABLED=false left in the environment can't drop the cases' traces. The
+ * project API key is the one credential it gets: the CLI's session token is still removed.
  */
-function uploadedRun(target: UploadTarget): Record<string, string> {
+function uploadedRun(target: UploadTarget): Record<string, string | undefined> {
   return {
     TRACEROOT_API_KEY: target.apiKey.reveal(),
+    TRACEROOT_TOKEN: undefined,
     TRACEROOT_HOST_URL: target.host,
     TRACEROOT_ENABLED: "true",
     TRACEROOT_EVAL_OPTIONS: JSON.stringify({ reporting: true }),

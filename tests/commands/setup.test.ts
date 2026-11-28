@@ -324,10 +324,10 @@ describe("the line that closes the wizard", () => {
   };
 
   it("claims only the half of the setup that this machine is", () => {
-    // It said "TraceRoot setup complete." one line below a block asking the
+    // It said "traceroot setup complete." one line below a block asking the
     // user to go and put the key in their production environment — the frame
     // signing off on a job of which the run had done one half.
-    expect(closingLine({ ...base, ok: true, trace })).toBe("TraceRoot local setup complete.");
+    expect(closingLine({ ...base, ok: true, trace })).toBe("traceroot local setup complete.");
   });
 
   it("says paused, not complete, when the run stopped short of a trace", () => {
@@ -450,7 +450,7 @@ describe("runSetup", () => {
     expect(said.split("production").length - 1).toBe(1);
     expect(said).toContain("◇  Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env");
     // Below the frame, only where to get help: no sentence repeating it.
-    const after = said.split("└  TraceRoot local setup complete.\n")[1] ?? "";
+    const after = said.split("└  traceroot local setup complete.\n")[1] ?? "";
     expect(after.split("\n").filter((line) => line !== "")).toEqual([
       "If you ran into anything during setup, please open an issue at https://github.com/traceroot-ai/traceroot-cli/issues/new",
       "- Contact support: https://discord.gg/TM2m3CtKuC",
@@ -640,7 +640,7 @@ describe("runSetup", () => {
     });
 
     expect(plain(err.data)).toContain(`┌  ${WIZARD_TITLE}`);
-    expect(plain(err.data)).toContain("└  TraceRoot local setup complete.");
+    expect(plain(err.data)).toContain("└  traceroot local setup complete.");
     // Where to go next, on the way out — the moment it is most likely to be read.
     expect(plain(err.data)).toContain("https://traceroot.ai/docs/cli/get-started");
     expect(err.data).toContain("https://github.com/traceroot-ai/traceroot-cli/issues");
@@ -845,7 +845,7 @@ describe("runSetup", () => {
     // Both closing blocks are still there, and the frame still closes.
     expect(said).toContain("◇  Your first trace:");
     expect(said).toContain("◇  Add TRACEROOT_API_KEY and TRACEROOT_HOST_URL from .env");
-    expect(said).toContain("└  TraceRoot local setup complete.");
+    expect(said).toContain("└  traceroot local setup complete.");
   });
 
   it("notes when there is no checkpoint to resume", async () => {
@@ -1125,7 +1125,7 @@ describe("a hand-over nothing has acted on yet", () => {
     expect(result.ok).toBe(true);
     expect(setupFailureExit(result, false)).toEqual({ kind: "none" });
     expect(said).toContain(
-      "│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Run .traceroot/prompts/setup-instrument.md in Claude Code.\n",
+      "│  No trace yet: setup changed no code, so the service has no traceroot in it. Run .traceroot/prompts/setup-instrument.md in Claude Code.\n",
     );
     expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
     expect(said).not.toContain("Setup stopped at");
@@ -1156,7 +1156,7 @@ describe("a hand-over nothing has acted on yet", () => {
     const task = join("..", ".traceroot", "prompts", "setup-instrument.md");
     expect(said).toContain(`Open Claude Code in api/ and run ${task} there, then rerun`);
     expect(said).toContain(
-      `│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Open Claude Code in api/ and run ${task} there.\n`,
+      `│  No trace yet: setup changed no code, so the service has no traceroot in it. Open Claude Code in api/ and run ${task} there.\n`,
     );
     expect(existsSync(join(dir, "api", task))).toBe(true);
   });
@@ -1167,7 +1167,7 @@ describe("a hand-over nothing has acted on yet", () => {
 
     expect(result.ok).toBe(true);
     expect(said).toContain(
-      "│  No trace yet: setup changed no code, so the service has no TraceRoot in it. Apply the steps above.\n",
+      "│  No trace yet: setup changed no code, so the service has no traceroot in it. Apply the steps above.\n",
     );
     expect(said).not.toContain(".traceroot/prompts");
     expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
@@ -1215,12 +1215,12 @@ describe("a hand-over nothing has acted on yet", () => {
       "│  No trace yet, and setup cannot tell whether the manual steps were applied. Apply them if not, or run your application once if so.\n",
     ],
   ] as const)(
-    "does not say the service has no TraceRoot on a resume after %s",
+    "does not say the service has no traceroot on a resume after %s",
     async (_, flags, line) => {
       // Detection reads only the entry point, and the task done in the user's
       // own agent may put `initialize()` in a module the entry point imports.
       // The resume's one look finds no trace yet, and "setup changed no code,
-      // so the service has no TraceRoot in it" over that is false.
+      // so the service has no traceroot in it" over that is false.
       await handover(flags);
       writeFileSync(join(dir, "tracing.py"), "import traceroot\n\ntraceroot.initialize()\n");
       writeFileSync(join(dir, "main.py"), "import tracing\n\nprint('hi')\n");
@@ -1237,7 +1237,7 @@ describe("a hand-over nothing has acted on yet", () => {
 
       expect(result.ok).toBe(true);
       expect(said).toContain(line);
-      expect(said).not.toContain("has no TraceRoot in it");
+      expect(said).not.toContain("has no traceroot in it");
       expect(said).toContain("└  Setup paused — rerun `traceroot setup --resume` to finish.");
     },
   );
@@ -1495,7 +1495,7 @@ describe("doctor on a run that ended without a trace", () => {
       { agent: "claude", traceTimeoutSec: 120 },
       { canPrompt: true, skipTraceWait: true },
     );
-    expect(said).toContain("└  TraceRoot local setup complete — no trace seen yet.");
+    expect(said).toContain("└  traceroot local setup complete — no trace seen yet.");
 
     const checks = await setupChecks();
     const completed = checks.find((c) => c.name === "setup_completed");
@@ -1554,7 +1554,7 @@ describe("doctor on a run that ended without a trace", () => {
       pythonService();
       const flags = await before();
       const said = await setupRun(dir, flags, { canPrompt: true, skipTraceWait: true });
-      expect(said).toContain("└  TraceRoot local setup complete — no trace seen yet.");
+      expect(said).toContain("└  traceroot local setup complete — no trace seen yet.");
 
       const completed = (await setupChecks()).find((c) => c.name === "setup_completed");
       expect(completed?.status).toBe("pass");
@@ -2208,7 +2208,7 @@ describe("the production block that closes a run", () => {
     expect(asked.map(plain).filter((q) => q.includes("production"))).toEqual([]);
     expect(err.data).not.toContain("I have added");
     expect(setupFailureExit(result, false)).toEqual({ kind: "none" });
-    expect(plain(err.data)).toContain("└  TraceRoot local setup complete.");
+    expect(plain(err.data)).toContain("└  traceroot local setup complete.");
   });
 
   it("prints the instruction without blocking when there is nobody to ask", async () => {

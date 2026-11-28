@@ -102,14 +102,14 @@ describe("what the report says about the trace it found", () => {
   function verdict(text: string): string {
     const lines = text.split("\n");
     // The title, the blank line that ends it, then the verdict.
-    return lines[lines.indexOf("# TraceRoot setup report") + 2] as string;
+    return lines[lines.indexOf("# traceroot setup report") + 2] as string;
   }
 
   function firstTrace(text: string): string {
     return text.split("\n").find((l) => l.startsWith("**First trace.")) as string;
   }
 
-  const RECEIVED = "TraceRoot is connected and a trace has been received.";
+  const RECEIVED = "traceroot is connected and a trace has been received.";
 
   it("reports a one-span trace's size without passing judgement on it", () => {
     // The verdict used to be qualified over a single span, and the one run that
@@ -163,7 +163,7 @@ describe("what the report says about the trace it found", () => {
   it("still says plainly that no trace has arrived", () => {
     const text = renderSetupReport(ctx(), NOW, NO_FILE);
 
-    expect(verdict(text)).toBe("TraceRoot is configured, but no trace has been seen yet.");
+    expect(verdict(text)).toBe("traceroot is configured, but no trace has been seen yet.");
     expect(firstTrace(text)).toBe(
       "**First trace.** None yet. Run the application, then `traceroot setup --resume`.",
     );
@@ -284,7 +284,7 @@ describe("the report as Markdown", () => {
   // Both ends of what the report can hold, because each optional entry is a
   // place a blank line can be lost or doubled.
   describe.each([
-    ["with nothing optional", ctx(), "TraceRoot is configured, but no trace has been seen yet."],
+    ["with nothing optional", ctx(), "traceroot is configured, but no trace has been seen yet."],
     [
       "with every optional entry",
       ctx({
@@ -292,7 +292,7 @@ describe("the report as Markdown", () => {
         agent: { id: "claude" },
         trace: { traceId: "t_1", traceUrl: "https://app.example.test/trace/t_1" },
       }),
-      "TraceRoot is connected and a trace has been received.",
+      "traceroot is connected and a trace has been received.",
     ],
   ])("%s", (_name, context, verdict) => {
     it("keeps every table whole", () => {
@@ -318,7 +318,7 @@ describe("the report as Markdown", () => {
       const paragraphs = blocks(text).filter((block) => !block[0]?.startsWith("|"));
 
       expect(paragraphs.slice(0, 3)).toEqual([
-        ["# TraceRoot setup report"],
+        ["# traceroot setup report"],
         [verdict],
         ["Generated 2026-07-26T12:00:00.000Z by traceroot-cli 0.6.0."],
       ]);

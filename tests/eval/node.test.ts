@@ -4,10 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TSX_FLOOR, TS_SDK_FLOOR, findNodeRunner } from "../../src/eval/node.js";
+import { NODE_FLOOR, TSX_FLOOR, TS_SDK_FLOOR, findNodeRunner } from "../../src/eval/node.js";
+import { meetsNodeFloor } from "../../src/util/index.js";
 
 const NODE = "/usr/local/bin/node";
 const SDK = "@traceroot-ai/traceroot";
+
+/** For a test that runs the evaluation under this Node, which the lookup refuses below its floor. */
+const onThisNode = it.skipIf(!meetsNodeFloor(process.versions.node, NODE_FLOOR));
 
 let dir: string;
 
@@ -104,7 +108,7 @@ describe("finding the runner for a TypeScript or JavaScript evaluation file", ()
     expect(found.ok && found.runner.sdkVersion).toBe("0.8.0");
   });
 
-  it("runs from a monorepo root when tsx is installed only beside the evaluation", () => {
+  onThisNode("runs from a monorepo root when tsx is installed only beside the evaluation", () => {
     // Node resolves a bare `--import tsx` from the working directory, so from
     // the root this tsx is not found; its file URL is found from anywhere. The
     // space in the folder name is there for the URL to encode.
