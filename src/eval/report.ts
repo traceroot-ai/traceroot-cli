@@ -350,7 +350,7 @@ function scoreLines(cases: CaseLine[], caseCount: number, view: View): string[] 
       return [
         clean(score.name),
         formatMean(score.mean),
-        `${score.mean_count} of ${caseCount}`,
+        `${scoredCases(cases, score.name)} of ${caseCount}`,
         judged ? String(score.passed) : "—",
         judged ? String(score.failed) : "—",
       ];
@@ -364,6 +364,20 @@ function scoreLines(cases: CaseLine[], caseCount: number, view: View): string[] 
       view.width,
     ),
   ];
+}
+
+/**
+ * How many cases gave a score a value its mean is over, a finite number or a boolean. Each case
+ * counts once: a case can give one score name twice, and `mean_count` counts values.
+ */
+function scoredCases(cases: CaseLine[], name: string): number {
+  return cases.filter((item) =>
+    item.scores.some(
+      ({ scorer_name, value }) =>
+        scorer_name === name &&
+        (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))),
+    ),
+  ).length;
 }
 
 function scoreNotes(score: ScoreMean, cases: CaseLine[]): string[] {

@@ -16,8 +16,9 @@ function makeFinding(over: Partial<FindingDetail> = {}): FindingDetail {
     timestamp: "2026-06-05T12:00:00Z",
     detectors: ["hallucination"],
     results: [],
-    rca: { status: "done", result: "root cause text" },
+    rca: { inherited: false, status: "done", result: "root cause text" },
     run_ids: [],
+    signals: [],
     ...over,
   };
 }
@@ -43,6 +44,7 @@ function makeResponse(): TraceExport {
       {
         cost: null,
         cost_details: {},
+        error_type: "",
         input: null,
         input_tokens: null,
         metadata: null,

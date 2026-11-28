@@ -42,7 +42,7 @@ describe("runSkillsInstall (human)", () => {
     expect(
       existsSync(join(cwd, ".claude", "skills", "traceroot-instrument-repo", "SKILL.md")),
     ).toBe(true);
-    expect(out.data).toContain("Installed TraceRoot skill");
+    expect(out.data).toContain("Installed traceroot skill");
     expect(out.data).toContain(".claude/skills/traceroot-instrument-repo");
   });
 

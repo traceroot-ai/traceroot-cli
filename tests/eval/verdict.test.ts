@@ -331,6 +331,27 @@ describe("compareRuns: whether two runs can be compared", () => {
     );
   });
 
+  it("refuses a run with a score and a scorer error of one name on a case", () => {
+    const run = recorded("python-0.5.1", "scorer-error-unversioned");
+    // exact_match raised on beta, so a score of that name there came from another scorer.
+    const both = changed(run, (copy) => {
+      const beta = copy.cases.find((item) => item.case_id === BETA) as CaseLine;
+      beta.scores.push({
+        scorer_name: "exact_match",
+        scorer_version: null,
+        value: true,
+        passed: true,
+      });
+    });
+
+    expect(compareRuns(both, run).not_comparable_reason).toBe(
+      `the baseline run has a score and a scorer error both named "exact_match" on case "${BETA}", so its scores can't be paired by scorer`,
+    );
+    expect(compareRuns(recorded("python-0.5.1", "all-pass"), both).not_comparable_reason).toBe(
+      `the new run has a score and a scorer error both named "exact_match" on case "${BETA}", so its scores can't be paired by scorer`,
+    );
+  });
+
   it("names the case ids only one run has", () => {
     const baseline = recorded("python-0.5.1", "all-pass");
     const current = changed(baseline, (run) => {

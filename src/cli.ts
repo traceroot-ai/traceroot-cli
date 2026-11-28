@@ -10,7 +10,7 @@ export interface BuildOverrides {
 
 export function buildProgram(overrides: BuildOverrides = {}): Command {
   const program = new Command();
-  program.name("traceroot").description("TraceRoot command line interface").version(getVersion());
+  program.name("traceroot").description("traceroot command line interface").version(getVersion());
   // Drop the implicit `help [command]` subcommand; `-h, --help` already covers it.
   program.helpCommand(false);
   // Make commander throw a CommanderError instead of calling process.exit, so

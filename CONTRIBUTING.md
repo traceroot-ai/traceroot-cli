@@ -1,4 +1,4 @@
-# Contributing to TraceRoot CLI
+# Contributing to traceroot CLI
 
 Thanks for your interest in contributing!
 
@@ -88,4 +88,4 @@ Guidelines:
 
 This project is licensed under [Apache 2.0](LICENSE).
 
-When contributing to the TraceRoot codebase, you need to agree to the [Contributor License Agreement](https://cla-assistant.io/traceroot-ai/traceroot-cli). You only need to do this once.
+When contributing to the traceroot codebase, you need to agree to the [Contributor License Agreement](https://cla-assistant.io/traceroot-ai/traceroot-cli). You only need to do this once.

@@ -61,7 +61,7 @@ function painterFor(sink: Sink): Painter {
  */
 
 /** The name on the box. */
-export const WIZARD_TITLE = "TraceRoot Setup Wizard";
+export const WIZARD_TITLE = "traceroot Setup Wizard";
 
 /**
  * The documentation's host, the same one the web app links to. Every

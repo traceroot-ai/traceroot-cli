@@ -1,6 +1,6 @@
-# TraceRoot CLI
+# traceroot CLI
 
-Set up [TraceRoot](https://traceroot.ai) in your repository, then work with your
+Set up [traceroot](https://traceroot.ai) in your repository, then work with your
 traces, findings, detectors and evaluations from the terminal.
 
 ## Set up a repository
@@ -12,7 +12,7 @@ npx -y traceroot-cli@latest setup
 ```
 
 Setup signs you in, picks or creates a project, writes a project API key into your
-application's env file, has Claude Code or Codex add the TraceRoot SDK, and waits for
+application's env file, has Claude Code or Codex add the traceroot SDK, and waits for
 the first trace. It needs Node.js 20.12 or later; every other command runs on 20.3.
 
 - Using another coding agent? Pass `--no-instrument` and setup writes the change out
@@ -102,7 +102,7 @@ traceroot traces list
 ### Project scoping
 
 A browser login identifies *you*, not a project, so project-scoped reads
-(traces, detectors, findings, datasets, evals) need a project id: `--project <id>` >
+(traces, detectors, findings, signals, datasets, evals) need a project id: `--project <id>` >
 `TRACEROOT_PROJECT_ID` > `project_id` in the config file. Run
 `traceroot projects list` to find one. On a browser login, `traceroot setup`
 saves the project it sets up as `project_id` there. API keys are already
@@ -112,7 +112,7 @@ project-scoped and need none of this.
 
 | Command | Description |
 | :-- | :-- |
-| `setup` | Connect this repository to TraceRoot and see your first trace. `--project <name-or-id>`, `--agent <agent>`, `--no-instrument`, `--manual`, `--language <language>`, `--service <path>`, `--no-browser`, `--resume`, `--no-input`, `--trace-timeout <seconds>` |
+| `setup` | Connect this repository to traceroot and see your first trace. `--project <name-or-id>`, `--agent <agent>`, `--no-instrument`, `--manual`, `--language <language>`, `--service <path>`, `--no-browser`, `--resume`, `--no-input`, `--trace-timeout <seconds>` |
 | `setup doctor` | Diagnose a setup run that did not complete: the `doctor` checks, plus how far the run got and what stopped it. `--service <path>` |
 | `login` | Sign in with the browser (device flow) and store the session credential; with `--api-key`, validate and save the key instead. |
 | `logout` | Revoke the session server-side (best-effort) and remove the local credential. |
@@ -126,6 +126,8 @@ project-scoped and need none of this.
 | `detectors get <id>` | Show one detector. |
 | `findings list` | List detector findings for your project, newest first. `--limit <n>`, `--since <dur>`, `--from`/`--to`, `--detector <id>`, `--trace <id>` |
 | `findings get [id]` | Show one finding: per-detector results and its free-text RCA. Look it up by finding id or with `--trace <id>` (exactly one). |
+| `signals list` | List the project's signals, the recurring problems findings are grouped into, newest created first: status, hits, when each was last seen, detector and title. Merged signals are left out. `--status <open\|resolved\|dismissed>`, `--detector-id <id>` (an id from `detectors list`, not a name), `--limit <n>`, `--page <n>` |
+| `signals get <id>` | Show one signal: its status (with when it was resolved and how often it reopened), detector, hit count, first and last seen, the state of its analysis, and up to 20 recent traces with their finding ids. Ends by naming `traces get` and `findings get` for the newest; a merged signal names the one it moved to. |
 | `alerts list` | List the project's threshold alerts with their status, severity and rule. `--limit <n>`, `--page <n>`, `--search <q>` |
 | `alerts get <id>` | Show one alert's full rule, filters, renotify and evaluation state. |
 | `alerts create` | Create a threshold alert. Takes the rule as JSON: `--from-file <path>` (or `-` for stdin), with flags overriding single fields. |
@@ -161,9 +163,9 @@ project-scoped and need none of this.
 | `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--cursor <cursor>`, `--evaluation-id <id>`, `--status <status>` |
 | `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, and a link to open it. |
 | `evals run <file>` | Run an evaluation file on this machine with the project's own SDK, save the run, and print each evaluation's run id and score means. With `--baseline`, compare the new run with an earlier one and exit 18 if a case regressed. With `--upload`, also send the run and its traces to TraceRoot. `--baseline <run id or path>`, `--upload` |
-| `skills list` | List first-party TraceRoot skills and install status across supported agents. |
+| `skills list` | List first-party traceroot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
-| `instrument` | Generate an agent-ready prompt to add TraceRoot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
+| `instrument` | Generate an agent-ready prompt to add traceroot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
 | `doctor` | Diagnose credentials, repo shape, runtime env, installed skills, and any setup run (`pass`/`warn`/`fail`). `--service <path>` |
 
 Add `--json` to any command for a single machine-readable document on stdout;
@@ -360,9 +362,9 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   out of a total only where the SDK's count is the number of cases it runs,
   which traceroot's is; @traceroot-ai/traceroot counts cases an evaluation's
   `select` leaves out, so for TypeScript and JavaScript files the line shows the
-  cases done alone. There's no progress line under `--json`, `NO_COLOR`,
-  `TERM=dumb` or `CI`, or when stderr isn't a terminal: stderr then carries the
-  runner's output as it's written.
+  cases done alone. There's no progress line under `--json`, a non-empty
+  `NO_COLOR`, `TERM=dumb` or `CI`, or when stderr isn't a terminal: stderr then
+  carries the runner's output as it's written.
 - **The runner's output prints as the evaluation writes it**, logs and
   tracebacks included, with two exceptions. An uploaded run's API key prints as
   `<redacted>` wherever it appears. And the SDK's own notice that it found no
@@ -401,10 +403,11 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   the evaluation locally.
 - **The evaluations that finished before a failure keep their runs.** In a file
   with several evaluations, a later one failing doesn't undo an earlier one: its
-  run stays saved here and uploaded. The summary prints each as for a completed
-  run, with the command that opens it, and the `--json` document carries its
-  `uploaded_run_id`. The error names it too when what failed was the later
-  evaluation's upload, but not after a crash or any other failure.
+  run stays saved here, and uploaded unless it finished without a TraceRoot run
+  id (see the next point). The summary prints each as for a completed run, with
+  the command that opens it when it was uploaded, and the `--json` document
+  carries its `uploaded_run_id`. The error names it too when what failed was the
+  later evaluation's upload, but not after a crash or any other failure.
 - **An evaluation that finishes without a TraceRoot run id**, such as one defined
   with `local=True` (`local: true` in TypeScript), is named and exits `17`, unless
   a case regressed, which exits `18`.
@@ -437,7 +440,9 @@ TraceRoot gave none), the baseline, a `verdict` with `newly_failing`
 evaluations finished; then it holds the failure's `kind` (the runner's own, or
 `crashed`) and `message`, the text of the `error:` line human mode prints, and
 `outcome` is `failed`, or `regressed` when one of the evaluations that finished
-regressed. Case ids, scorer names and the runner's messages print with control
+regressed. When `outcome` is `interrupted`, the document also has `signal`:
+`SIGINT`, `SIGTERM` or `SIGHUP`, or null when only the runner saw the interrupt.
+Case ids, scorer names and the runner's messages print with control
 characters escaped, as the evaluation reads' text does.
 
 ### Exit codes
@@ -461,7 +466,8 @@ On failure the human-readable message goes to stderr as `error: <message>`. Unde
 `{"error":{"code":"<class>","message":"<text>"}}` — while stdout stays empty, so a
 `jq` pipeline over stdout is never corrupted by an error. `evals run` is the one
 exception: once its runner has run, its document goes to stdout even when it
-exits `2`, `17` or `18`, because the caller needs the new run's id either way.
+exits `2`, `17` or `18`, or `130`, `143` or `129` after an interrupt, because the
+caller needs the new run's id either way.
 When it stops before the runner starts, or the runner fails before any evaluation
 finishes, it uses the envelope like any other command.
 
@@ -478,8 +484,8 @@ those from `10` up rather than overloading one of the shared classes:
 | `11` | The repository's language or framework is not one `setup` can instrument. |
 | `12` | The coding agent ran and exited non-zero. |
 | `13` | Reserved. No run returns it, and no other outcome will be given it. |
-| `14` | Instrumentation landed, but no trace reached TraceRoot before the deadline. |
-| `15` | This TraceRoot deployment is missing an endpoint the step needs; the message names a manual fallback. |
+| `14` | Instrumentation landed, but no trace reached traceroot before the deadline. |
+| `15` | This traceroot deployment is missing an endpoint the step needs; the message names a manual fallback. |
 | `16` | Writing would have overwritten something `setup` was not told it could replace. |
 | `130` | Ctrl+C or Escape at a prompt. The shell's own status for a run ended by `SIGINT`, not a number this table assigns, and the reason it cannot share the `0` above: `traceroot setup && <next step>` must not run the next step over an abandoned run. |
 
@@ -507,7 +513,7 @@ envelope:
 
 ## Skills & agents
 
-Make your coding agent TraceRoot-aware without touching your application source. The
+Make your coding agent traceroot-aware without touching your application source. The
 CLI ships two first-party skills. Installing a skill copies bundled files from this
 package; the install step does not fetch from the network or run install scripts.
 Install targets depend on the agent:

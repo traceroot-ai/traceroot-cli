@@ -144,6 +144,17 @@ describe("renderSummary", () => {
     );
   });
 
+  it("counts a case once among the scored cases when it gives a score twice", () => {
+    const cases = [
+      item("a", { scores: [score("judge", true, true), score("judge", false, false)] }),
+      item("b", { scores: [score("exact", true, true)] }),
+    ];
+
+    const text = summary(report([evaluation("agent", "run_a", cases)]));
+
+    expect(text).toMatch(/\n {2}judge +0\.5 +1 of 2 +1 +1\n/);
+  });
+
   it("names a score missing from a case that raised nothing", () => {
     const cases = [
       item("a", { scores: [score("judge", true, true), score("exact", true, true)] }),
