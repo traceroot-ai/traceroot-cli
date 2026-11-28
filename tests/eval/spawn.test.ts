@@ -152,13 +152,15 @@ describe("runnerEnv", () => {
     });
   });
 
-  it("gives an uploaded run the key and host it is given, with reporting and tracing on", () => {
+  it("gives an uploaded run the key and host it is given, no session token, and reporting and tracing on", () => {
     const parent = {
       PATH: "/usr/bin",
       TRACEROOT_HOST_URL: "https://elsewhere.example",
       Traceroot_Host_Url: "https://elsewhere.example",
       TRACEROOT_API_KEY: "tr-test-0000",
       Traceroot_Api_Key: "tr-test-0001",
+      TRACEROOT_TOKEN: "session-test-0000",
+      Traceroot_Token: "session-test-0001",
       TRACEROOT_ENABLED: "false",
       TRACEROOT_EVAL_OPTIONS: "{}",
     };

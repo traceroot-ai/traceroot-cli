@@ -360,10 +360,11 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   the evaluation locally.
 - **The evaluations that finished before a failure keep their runs.** In a file
   with several evaluations, a later one failing doesn't undo an earlier one: its
-  run stays saved here and uploaded. The summary prints each as for a completed
-  run, with the command that opens it, and the `--json` document carries its
-  `uploaded_run_id`. The error names it too when what failed was the later
-  evaluation's upload, but not after a crash or any other failure.
+  run stays saved here, and uploaded unless it finished without a TraceRoot run
+  id (see the next point). The summary prints each as for a completed run, with
+  the command that opens it when it was uploaded, and the `--json` document
+  carries its `uploaded_run_id`. The error names it too when what failed was the
+  later evaluation's upload, but not after a crash or any other failure.
 - **An evaluation that finishes without a TraceRoot run id**, such as one defined
   with `local=True` (`local: true` in TypeScript), is named and exits `17`, unless
   a case regressed, which exits `18`.

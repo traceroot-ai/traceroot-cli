@@ -53,11 +53,13 @@ export interface UploadTarget {
 
 /**
  * What an uploaded run sets instead: the project API key and its host, reporting on, and tracing
- * on, so a TRACEROOT_ENABLED=false left in the environment can't drop the cases' traces.
+ * on, so a TRACEROOT_ENABLED=false left in the environment can't drop the cases' traces. The
+ * project API key is the one credential it gets: the CLI's session token is still removed.
  */
-function uploadedRun(target: UploadTarget): Record<string, string> {
+function uploadedRun(target: UploadTarget): Record<string, string | undefined> {
   return {
     TRACEROOT_API_KEY: target.apiKey.reveal(),
+    TRACEROOT_TOKEN: undefined,
     TRACEROOT_HOST_URL: target.host,
     TRACEROOT_ENABLED: "true",
     TRACEROOT_EVAL_OPTIONS: JSON.stringify({ reporting: true }),
