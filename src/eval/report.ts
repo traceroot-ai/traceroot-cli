@@ -733,9 +733,10 @@ function pricedLines(
         : "Once TraceRoot has processed the runs' traces, those commands show the cost it derives from them.",
     );
   }
+  // Each run's cost lines: a line of cost, then any notes, such as cases without a trace.
   const costs = uploaded.map(({ event }) => {
     const usage = priced.get(event.run_id ?? "") ?? null;
-    return usage !== null && isPriced(usage) ? pricedCostLines(usage).map(clean).join(" ") : null;
+    return usage !== null && isPriced(usage) ? pricedCostLines(usage).map(clean) : null;
   });
   if (costs.every((cost) => cost === null)) {
     return prose(
@@ -745,12 +746,19 @@ function pricedLines(
     );
   }
   if (one) {
-    return prose(`TraceRoot priced the run's LLM calls: ${costs[0]}`);
+    const [cost = "", ...notes] = costs[0] ?? [];
+    return [
+      ...prose(`TraceRoot priced the run's LLM calls: ${cost}.`),
+      ...wrapLines(notes, view.width),
+    ];
   }
   return [
     ...prose("TraceRoot priced the runs' LLM calls:"),
     ...wrapLines(
-      uploaded.map(({ event }, i) => `  ${clean(event.name)}: ${costs[i] ?? "still being priced"}`),
+      uploaded.flatMap(({ event }, i) => {
+        const [cost = "still being priced", ...notes] = costs[i] ?? [];
+        return [`  ${clean(event.name)}: ${cost}`, ...notes.map((note) => `    ${note}`)];
+      }),
       view.width,
     ),
   ];

@@ -1868,7 +1868,7 @@ describe("evals run --upload", () => {
 
     expect(human.status).toBe(0);
     expect(human.stdout).toContain(
-      `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\nTraceRoot priced the run's LLM calls: task $0.0035, scorers $0.0012, total $0.0047\n`,
+      `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\nTraceRoot priced the run's LLM calls: task $0.0035, scorers $0.0012, total $0.0047.\n`,
     );
     expect(machine.status).toBe(0);
     expect(json(machine.stdout)).toMatchObject({
@@ -1983,6 +1983,53 @@ describe("evals run --upload", () => {
       runs: [{ uploaded_run_id: "evr_stub_2", priced_usage: null }],
     });
     expect(asked()).toEqual([WHOAMI, read("evr_stub_2"), WHOAMI, read("evr_stub_2")]);
+  });
+
+  it("lets a signal during the read skip it, and still prints the summary and exits with the run's code", async () => {
+    await restartStub({ holdRunReads: true });
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first");
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/one-fails`,
+      run_id: "run_second",
+      replace: uploadedAs("evr_stub_2"),
+    });
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const listeners = () => signals.map((signal) => process.listenerCount(signal));
+    const before = listeners();
+    const out = new StringSink(false);
+
+    const done = runEvalsRun({
+      file: "x_eval.py",
+      baseline: "run_first",
+      json: false,
+      upload: { apiKey: STUB_API_KEY, host: stub.url, timeoutMs: 10_000, readFlags: [] },
+      cwd: project,
+      env: { ...uploadEnv(), CI: "true" },
+      writers: { out, err: new StringSink(false) },
+    });
+    // The host never answers the read, so it is in flight once the stub has the request.
+    const deadline = Date.now() + 10_000;
+    while (!asked().includes(read("evr_stub_2")) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const during = listeners();
+    const emitted = Date.now();
+    process.emit("SIGINT", "SIGINT");
+    const status = await done;
+    const waited = Date.now() - emitted;
+
+    expect(during).toEqual(before.map((count) => count + 1));
+    expect(waited).toBeLessThan(1000);
+    expect(status).toBe(18);
+    const text = stripVTControlCharacters(out.data);
+    expect(text).toContain(
+      "Regression check: failed against baseline run_first. 1 case and scorer pair newly fails.",
+    );
+    expect(text).toContain(
+      "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has.\n",
+    );
+    expect(listeners()).toEqual(before);
   });
 
   it("exits 18 for a regression and still says where the run was uploaded", async () => {

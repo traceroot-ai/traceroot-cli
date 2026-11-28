@@ -81,13 +81,14 @@ export const PRICED_READ_TIMEOUT_MS = 3000;
  * retry. The read goes through the same client the registry reads a run with, under the upload key.
  *
  * `timeoutMs` bounds the whole call, not each request: when it is up, every read still in flight is
- * aborted and its run maps to null, and the timer is never what keeps the process alive. A run whose
- * read fails, answers with an error status, or has no `usage` maps to null too. Never throws.
+ * aborted and its run maps to null, and the timer is never what keeps the process alive. `signal`
+ * ends the call the same way, at once. A run whose read fails, answers with an error status, or has
+ * no `usage` maps to null too. Never throws.
  */
 export async function readPricedUsage(
   target: UploadTarget,
   runIds: string[],
-  opts: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+  opts: { timeoutMs?: number; fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<Map<string, PricedUsage | null>> {
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(), opts.timeoutMs ?? PRICED_READ_TIMEOUT_MS);
@@ -96,6 +97,11 @@ export async function readPricedUsage(
   const expired = new Promise<null>((resolve) => {
     deadline.signal.addEventListener("abort", () => resolve(null), { once: true });
   });
+  const stop = (): void => deadline.abort();
+  opts.signal?.addEventListener("abort", stop, { once: true });
+  if (opts.signal?.aborted) {
+    stop();
+  }
   try {
     const client = new ApiClient({
       baseUrl: normalizeBaseUrl(target.host),
@@ -120,6 +126,7 @@ export async function readPricedUsage(
     return new Map(runIds.map((id) => [id, null]));
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", stop);
   }
 }
 

@@ -15,7 +15,8 @@
  * 4. the lookup and the run;
  * 5. the comparison;
  * 6. for an uploaded run, one read of the cost TraceRoot priced it at, after the runner has exited
- *    and the report is built, bounded at 3 seconds (see {@link readPriced}).
+ *    and the report is built, bounded at 3 seconds, and cut short by Ctrl+C (see
+ *    {@link readPriced}).
  *
  * Everything that comes from the run or the lookup is printed through `clean()`, so an escape
  * sequence in an evaluation name, a case id or a runner's message can't act on the terminal.
@@ -52,7 +53,7 @@ import {
   renderSummary,
   toDocument,
 } from "../eval/report.js";
-import { runEvalRunner, runnerEnv } from "../eval/spawn.js";
+import { INTERRUPT_SIGNALS, runEvalRunner, runnerEnv } from "../eval/spawn.js";
 import {
   type SavedRun,
   type Verdict,
@@ -699,6 +700,11 @@ function noNewRunReason(name: string, runs: ReadEvaluation[], stopped: boolean):
  * save deadlines are over: the read is bounded on its own, by `PRICED_READ_TIMEOUT_MS` in
  * eval/priced-cost.ts, and it never throws, so it can't change the outcome or the exit code.
  *
+ * SIGINT, SIGTERM or SIGHUP during the read ends it at once. The run has already finished, so the
+ * signal only skips the wait: the runs it hadn't read print as still being priced, and the exit
+ * code stays the run's. The listeners are there only while the read is, so a signal after it acts
+ * as it always has.
+ *
  * A run is read only when it was uploaded, has a TraceRoot run id, and its saved file doesn't say
  * TraceRoot never confirmed closing it; nothing is read for an interrupted run. null when no run is
  * read.
@@ -711,7 +717,21 @@ async function readPriced(report: Report): Promise<Map<string, PricedUsage | nul
   const ids = report.runs.flatMap(({ event, run }) =>
     event.run_id !== null && run?.file.close_confirmed !== false ? [event.run_id] : [],
   );
-  return ids.length === 0 ? null : readPricedUsage(upload.target, ids);
+  if (ids.length === 0) {
+    return null;
+  }
+  const skip = new AbortController();
+  const onSignal = (): void => skip.abort();
+  for (const signal of INTERRUPT_SIGNALS) {
+    process.on(signal, onSignal);
+  }
+  try {
+    return await readPricedUsage(upload.target, ids, { signal: skip.signal });
+  } finally {
+    for (const signal of INTERRUPT_SIGNALS) {
+      process.off(signal, onSignal);
+    }
+  }
 }
 
 function print(report: Report, options: EvalsRunOptions): void {

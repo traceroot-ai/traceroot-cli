@@ -444,7 +444,8 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   which it processes after the upload, so a run it hasn't priced by then says
   TraceRoot is still pricing it, and the command above shows the cost once it
   has. An interrupted run isn't read; its summary says where the cost will show.
-  The read never changes the regression check or the exit code.
+  Ctrl+C during the wait skips it, since the run has already finished. The read
+  never changes the regression check or the exit code.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,

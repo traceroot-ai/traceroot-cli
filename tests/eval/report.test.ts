@@ -647,19 +647,39 @@ describe("renderSummary's priced cost for an uploaded run", () => {
     const text = summary(uploadedRuns(["agent"], new Map([["evr_1", usage()]])));
 
     expect(text).toContain(
-      `${READ_ONE}TraceRoot priced the run's LLM calls: task $0.0035, scorers $0.0012, total $0.0047\n`,
+      `${READ_ONE}TraceRoot priced the run's LLM calls: task $0.0035, scorers $0.0012, total $0.0047.\n`,
     );
     expect(text).not.toContain("Once TraceRoot");
   });
 
+  it("prints each further line of the cost as a sentence of its own", () => {
+    const text = summary(
+      uploadedRuns(["agent"], new Map([["evr_1", usage({ results_without_trace: 1 })]])),
+    );
+
+    expect(text).toContain(
+      [
+        "TraceRoot priced the run's LLM calls: task $0.0035, scorers $0.0012, total $0.0047.",
+        "1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("wraps the priced cost to the terminal as the other prose", () => {
-    const text = summary(uploadedRuns(["agent"], new Map([["evr_1", usage()]])), CWD, 40);
+    const text = summary(
+      uploadedRuns(["agent"], new Map([["evr_1", usage({ results_without_trace: 1 })]])),
+      CWD,
+      40,
+    );
 
     expect(text).toContain(
       [
         "TraceRoot priced the run's LLM calls:",
         "  task $0.0035, scorers $0.0012, total",
-        "  $0.0047",
+        "  $0.0047.",
+        "1 of 7 cases has no trace in TraceRoot,",
+        "  so its calls aren't counted.",
         "",
       ].join("\n"),
     );
@@ -696,6 +716,28 @@ describe("renderSummary's priced cost for an uploaded run", () => {
         "  agent: task $0.0035, scorers $0.0012, total $0.0047",
         "  judge\\u001b[2J: still being priced",
         "  triage: still being priced",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("indents a run's further lines under it when several were uploaded", () => {
+    const text = summary(
+      uploadedRuns(
+        ["agent", "judge"],
+        new Map([
+          ["evr_1", usage({ results_without_trace: 1 })],
+          ["evr_2", usage()],
+        ]),
+      ),
+    );
+
+    expect(text).toContain(
+      [
+        "TraceRoot priced the runs' LLM calls:",
+        "  agent: task $0.0035, scorers $0.0012, total $0.0047",
+        "    1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+        "  judge: task $0.0035, scorers $0.0012, total $0.0047",
         "",
       ].join("\n"),
     );

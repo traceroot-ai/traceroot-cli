@@ -234,6 +234,53 @@ describe("readPricedUsage", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("gives null at once for the reads still in flight when the caller's signal aborts", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeFetch((call) =>
+      idOf(call) === "evr_ok" ? runRead("evr_ok") : new Promise<Response>(() => {}),
+    );
+    const skip = new AbortController();
+    let priced: Map<string, PricedUsage | null> | undefined;
+
+    void readPricedUsage(target, ["evr_ok", "evr_slow"], {
+      fetchImpl: fake.fetchImpl,
+      signal: skip.signal,
+    }).then((result) => {
+      priced = result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(priced).toBeUndefined();
+    skip.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(priced).toEqual(
+      new Map([
+        ["evr_ok", usage()],
+        ["evr_slow", null],
+      ]),
+    );
+    const slow = fake.calls.find((call) => idOf(call) === "evr_slow");
+    expect(slow?.init.signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("gives null at once when the caller's signal has already aborted", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeFetch(() => new Promise<Response>(() => {}));
+    let priced: Map<string, PricedUsage | null> | undefined;
+
+    void readPricedUsage(target, ["evr_1"], {
+      fetchImpl: fake.fetchImpl,
+      signal: AbortSignal.abort(),
+    }).then((result) => {
+      priced = result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(priced).toEqual(new Map([["evr_1", null]]));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("leaves no timer behind when every read answers before the timeout", async () => {
     vi.useFakeTimers();
     const fake = createFakeFetch((call) => runRead(idOf(call)));
