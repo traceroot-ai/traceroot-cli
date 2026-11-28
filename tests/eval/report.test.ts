@@ -710,6 +710,27 @@ describe("renderSummary's priced cost for an uploaded run", () => {
     expect(text).not.toContain("TraceRoot priced");
   });
 
+  it("says TraceRoot couldn't price a run whose calls none were priced, never that it priced them", () => {
+    const unpriced = bucket({ cost: null, priced_llm_calls: 0, state: "unpriced" });
+    const read = usage({
+      results_without_trace: 1,
+      task: unpriced,
+      scorers: bucket({ cost: null, llm_calls: 0, priced_llm_calls: 0, state: "no_calls" }),
+      combined: unpriced,
+    });
+
+    const text = summary(uploadedRuns(["agent"], new Map([["evr_1", read]])));
+
+    expect(text).toContain(
+      [
+        "TraceRoot couldn't price the run's LLM calls: task unknown (0 of 20 calls priced), scorers no LLM calls recorded, total unknown (0 of 20 calls priced).",
+        "1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+        "",
+      ].join("\n"),
+    );
+    expect(text).not.toContain("TraceRoot priced");
+  });
+
   it("says TraceRoot can't price a run it has no trace for", () => {
     const text = summary(uploadedRuns(["agent"], new Map([["evr_1", noTrace]])));
 
@@ -748,9 +769,9 @@ describe("renderSummary's priced cost for an uploaded run", () => {
         "TraceRoot priced the runs' LLM calls:",
         "  agent: task $0.0035, scorers $0.0012, total $0.0047",
         "  judge\\u001b[2J: still being priced",
-        "  lookup: no trace, so no cost",
-        "  triage: not read; its evals runs get command shows the cost",
-        "  router: not read; its evals runs get command shows the cost",
+        "  lookup: no trace, so it can't be priced",
+        "  triage: cost not read; its command above shows it",
+        "  router: cost not read; its command above shows it",
         "",
       ].join("\n"),
     );
@@ -785,7 +806,10 @@ describe("renderSummary's priced cost for an uploaded run", () => {
         ["evr_1", noTrace],
         ["evr_2", noTrace],
       ]),
-      lines: ["  agent: no trace, so no cost", "  judge: no trace, so no cost"],
+      lines: [
+        "  agent: no trace, so it can't be priced",
+        "  judge: no trace, so it can't be priced",
+      ],
     },
     {
       found: "one still being priced and one not read",
@@ -793,9 +817,24 @@ describe("renderSummary's priced cost for an uploaded run", () => {
         ["evr_1", pricing],
         ["evr_2", null],
       ]),
+      lines: ["  agent: still being priced", "  judge: cost not read; its command above shows it"],
+    },
+    {
+      found: "one whose calls none were priced and one still being priced",
+      priced: new Map([
+        [
+          "evr_1",
+          usage({
+            task: bucket({ cost: null, priced_llm_calls: 0, state: "unpriced" }),
+            scorers: bucket({ cost: null, llm_calls: 6, priced_llm_calls: 0, state: "unpriced" }),
+            combined: bucket({ cost: null, llm_calls: 26, priced_llm_calls: 0, state: "unpriced" }),
+          }),
+        ],
+        ["evr_2", pricing],
+      ]),
       lines: [
-        "  agent: still being priced",
-        "  judge: not read; its evals runs get command shows the cost",
+        "  agent: task unknown (0 of 20 calls priced), scorers unknown (0 of 6 calls priced), total unknown (0 of 26 calls priced)",
+        "  judge: still being priced",
       ],
     },
   ])(

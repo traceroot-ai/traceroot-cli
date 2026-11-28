@@ -1941,7 +1941,7 @@ describe("evals run --upload", () => {
       [
         "TraceRoot priced the runs' LLM calls:",
         "  uppercase: task $0.0035, scorers $0.0012, total $0.0047",
-        "  second: not read; its evals runs get command shows the cost",
+        "  second: cost not read; its command above shows it",
         "",
       ].join("\n"),
     );
