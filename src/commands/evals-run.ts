@@ -701,7 +701,7 @@ function noNewRunReason(name: string, runs: ReadEvaluation[], stopped: boolean):
  * eval/priced-cost.ts, and it never throws, so it can't change the outcome or the exit code.
  *
  * SIGINT, SIGTERM or SIGHUP during the read ends it at once. The run has already finished, so the
- * signal only skips the wait: the runs it hadn't read print as still being priced, and the exit
+ * signal only skips the wait: the runs it hadn't read print as not read, and the exit
  * code stays the run's. The listeners are there only while the read is, so a signal after it acts
  * as it always has.
  *
