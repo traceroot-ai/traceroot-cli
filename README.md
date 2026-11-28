@@ -308,7 +308,7 @@ no API key and runs with tracing off, so the run stays on the machine. Run it on
 change the code, and run it again against the first run:
 
 ```sh
-traceroot evals run evals/triage_eval.py                       # prints the run id
+traceroot evals run evals/triage_eval.py                       # prints the run id and the command to compare with it
 traceroot evals run evals/triage_eval.py --baseline <run-id>   # exits 18 if a case regressed
 traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdict.newly_failing'
 ```
@@ -331,7 +331,22 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
 - **`--baseline`** takes a run id, read from `.traceroot/eval/runs` under the
   current directory, or the path of a run file.
 - **The summary** gives each evaluation's run id, its case and error counts, the
-  mean time a case took (its task and its scorers), and each score's mean.
+  mean time a case took (its task and its scorers), each score's mean, and the
+  run file and case file it saved. Without `--baseline` it says that regressions
+  weren't checked, so an exit `0` there isn't a claim that every case passed, and
+  prints the command that compares the next run with this one, unless the run
+  can't be a baseline, as a sampled or interrupted run can't.
+- **Each score's mean says what it is a mean of.** `SCORED` counts the cases that
+  gave the score a number or true/false, out of the run's cases: a case whose task
+  or scorer raised has none, and any other value is left out of the mean rather
+  than read as 0, with a note naming it. A true/false score's mean is the share of
+  cases that were true. `PASSED` and `FAILED` come from each value's own verdict,
+  and read `—` for a score nothing passes or fails, such as a number from a
+  scorer with no threshold: its mean is a measurement in the scorer's units.
+- **The cases that raised are listed** with what their task or scorer raised,
+  with or without a baseline: the first ten, then a count of the rest, whose
+  errors are in the case file. A case the verdict lists as newly errored isn't
+  listed twice.
 
 `--upload` also sends the run and each case's trace to TraceRoot, where the rest
 of the team can see it. The run is still saved under `.traceroot/eval/runs`, and
@@ -376,14 +391,19 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   `--env-file` when the host or the key came from them, and when the key came
   from `--api-key` it adds `--api-key <key>`, never the key itself. Like the hint
   for a missing key, it's spelled the way the CLI was started: under npx, as
-  `npx -y traceroot-cli@<version> …`.
+  `npx -y traceroot-cli@<version> …`. Cost and token use come from the run's
+  traces, which TraceRoot processes after the upload, so they show there rather
+  than in the summary.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,
 `outcome` (`ok`, `regressed`, `not_comparable`, `not_uploaded`, `interrupted` or
 `failed`), the file, the SDK, `project_id` (the key's project under `--upload`,
-otherwise null), each run with its counts, `duration_ms` (the mean time a case
-took, and how many cases were timed), score means, `uploaded_run_id` and
+otherwise null), each run with its `path` and `cases_path` (its run file and
+case file), its counts, `duration_ms` (the mean time a case took, and how many
+cases were timed), its `scores` (each with its `mean`, how many cases produced
+it as `count`, how many values the mean is over as `mean_count`, and how many
+`passed`, `failed` and neither as `unjudged`), `uploaded_run_id` and
 `uploaded_run_url` (null unless it was uploaded, and the link null too when
 TraceRoot gave none), the baseline, a `verdict` with `newly_failing`
 (each with its `reason`), `newly_errored`, `changed`, `not_comparable_reason` and

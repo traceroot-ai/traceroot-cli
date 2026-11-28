@@ -47,3 +47,8 @@ export function cliCommand(
   }
   return `traceroot ${subcommand}`;
 }
+
+/** A value as one POSIX shell word: as it is when a shell reads it that way, otherwise quoted. */
+export function shellWord(text: string): string {
+  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
+}

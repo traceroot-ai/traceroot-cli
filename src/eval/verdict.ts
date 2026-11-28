@@ -65,7 +65,7 @@ export function loadRun(path: string): RunLoad {
   if (runText === null) {
     return { ok: false, reason: "missing", message: `no saved run at ${path}` };
   }
-  const casesPath = `${path.slice(0, -RUN_FILE_SUFFIX.length)}${CASES_FILE_SUFFIX}`;
+  const casesPath = casesPathOf(path);
   let casesText: string | null;
   try {
     casesText = readIfPresent(casesPath);
@@ -89,6 +89,11 @@ export function loadRun(path: string): RunLoad {
     return failure(casesPath, error);
   }
   return { ok: true, run: { file, cases } };
+}
+
+/** Where a run's case lines are saved: beside its run file, as `<run id>.cases.jsonl`. */
+export function casesPathOf(runPath: string): string {
+  return `${runPath.slice(0, -RUN_FILE_SUFFIX.length)}${CASES_FILE_SUFFIX}`;
 }
 
 function invalid(message: string): RunLoad {

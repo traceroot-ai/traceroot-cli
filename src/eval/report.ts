@@ -4,22 +4,24 @@
  * sequence in an evaluation name, a case id or a runner's message can't act on the terminal.
  */
 
+import { isAbsolute, relative } from "node:path";
 import type { Writers } from "../output.js";
 import { clean, compact, formatMean, plural } from "../registry/enhancers/eval-reads.js";
 import { createStyler } from "../render/style.js";
 import { renderTable } from "../render/table.js";
-import { cliCommand } from "../setup/invocation.js";
+import { cliCommand, shellWord } from "../setup/invocation.js";
 import type { StackLanguage } from "../setup/types.js";
 import type { InterruptSignal } from "./events.js";
 import type { EvalRunner } from "./lookup.js";
 import type { CaseLine, EvaluationCompletedEvent } from "./protocol.js";
 import type { UploadTarget } from "./spawn.js";
-import type {
-  ChangedPair,
-  NewlyErroredCase,
-  NewlyFailingPair,
-  SavedRun,
-  Verdict,
+import {
+  type ChangedPair,
+  type NewlyFailingPair,
+  type SavedRun,
+  type Verdict,
+  casesPathOf,
+  partialRunReason,
 } from "./verdict.js";
 
 /** The package each language's runner comes from. */
@@ -35,6 +37,13 @@ const SCHEMA_VERSION = 1;
 /** How wide a score value or an error message may print in the summary. */
 const VALUE_WIDTH = 60;
 const ERROR_WIDTH = 100;
+
+/**
+ * How many of a run's errored cases the summary lists. A run whose every case raised, as when a
+ * model provider rejects the key, would otherwise bury the rest of the summary; the case file has
+ * them all.
+ */
+const LISTED_ERRORS = 10;
 
 /** An upload whose key TraceRoot accepted. */
 export interface Upload {
@@ -53,13 +62,24 @@ export interface Baseline {
   run: SavedRun;
 }
 
-/** One score's mean over a run. */
+/** One score's mean over a run, and what it is a mean of. */
 export interface ScoreMean {
   name: string;
   /** null when no case gave the score a number or a boolean. */
   mean: number | null;
   /** How many cases produced the score. */
   count: number;
+  /**
+   * How many of those values the mean is over: the finite numbers and the booleans. A string, a
+   * NaN or any other value is left out of the mean, never read as 0.
+   */
+  mean_count: number;
+  /** How many of the values passed, as each value's `passed` says. */
+  passed: number;
+  /** How many of the values failed. */
+  failed: number;
+  /** How many of the values neither passed nor failed, such as a number with no threshold. */
+  unjudged: number;
 }
 
 /** How long a run's cases took on average, each case its task and its scorers. */
@@ -118,27 +138,43 @@ export function notUploaded(runs: SavedEvaluation[]): SavedEvaluation[] {
 
 /**
  * Each score's mean over a run's cases, computed the way both SDKs compute the means they report:
- * a number or a boolean counts toward the mean, a boolean as 1 or 0, and any other value only
- * toward how many cases produced the score. In the order the scores first appear.
+ * a finite number or a boolean counts toward the mean, a boolean as 1 or 0, and any other value
+ * only toward how many cases produced the score. Whether a value passed is read from its `passed`,
+ * never from the value, so a number from a scorer with no threshold neither passes nor fails. In
+ * the order the scores first appear.
  */
 export function scoreMeans(cases: CaseLine[]): ScoreMean[] {
-  const totals = new Map<string, { sum: number; numbers: number; count: number }>();
+  const totals = new Map<string, { sum: number } & Omit<ScoreMean, "name" | "mean">>();
   for (const item of cases) {
     for (const score of item.scores) {
-      const total = totals.get(score.scorer_name) ?? { sum: 0, numbers: 0, count: 0 };
+      const total = totals.get(score.scorer_name) ?? {
+        sum: 0,
+        count: 0,
+        mean_count: 0,
+        passed: 0,
+        failed: 0,
+        unjudged: 0,
+      };
       totals.set(score.scorer_name, total);
       total.count += 1;
       const value = typeof score.value === "boolean" ? Number(score.value) : score.value;
       if (typeof value === "number" && Number.isFinite(value)) {
         total.sum += value;
-        total.numbers += 1;
+        total.mean_count += 1;
+      }
+      if (score.passed === true) {
+        total.passed += 1;
+      } else if (score.passed === false) {
+        total.failed += 1;
+      } else {
+        total.unjudged += 1;
       }
     }
   }
-  return [...totals].map(([name, { sum, numbers, count }]) => ({
+  return [...totals].map(([name, { sum, ...total }]) => ({
     name,
-    mean: numbers === 0 ? null : sum / numbers,
-    count,
+    mean: total.mean_count === 0 ? null : sum / total.mean_count,
+    ...total,
   }));
 }
 
@@ -177,6 +213,7 @@ export function toDocument(report: Report): Record<string, unknown> {
       uploaded_run_url: uploadedRunUrl(event, run),
       status: event.status,
       path,
+      cases_path: casesPathOf(path),
       counts: event.counts,
       duration_ms: run === null ? null : meanDuration(run.cases),
       scores: run === null ? null : scoreMeans(run.cases),
@@ -204,19 +241,25 @@ export function toDocument(report: Report): Record<string, unknown> {
   };
 }
 
+/** Where the summary is printed from, which the paths and the commands it prints depend on. */
+export interface SummaryContext {
+  /** The CLI's environment, which says how to spell a command the summary prints. */
+  env: NodeJS.ProcessEnv;
+  /** The directory the CLI ran in, which the paths the summary prints are relative to. */
+  cwd: string;
+}
+
 /**
- * The summary on stdout: each evaluation with its run id, the mean time a case took and the score
- * means, the verdict, then where an uploaded run went.
- *
- * @param env the CLI's environment, which says how to spell the command that opens an uploaded
- * run.
+ * The summary on stdout: each evaluation with its run id, the mean time a case took, each score's
+ * mean and what it is a mean of, the cases that raised, and where the run was saved. Then the
+ * verdict, or that no baseline was given, then where an uploaded run went.
  */
-export function renderSummary(report: Report, writers: Writers, env: NodeJS.ProcessEnv): void {
+export function renderSummary(report: Report, writers: Writers, context: SummaryContext): void {
   const styler = createStyler(writers.out);
   const blocks = [
-    ...report.runs.map((saved) => evaluationLines(saved, styler.bold)),
-    verdictLines(report, styler.bold),
-    uploadLines(report, env),
+    ...report.runs.map((saved) => evaluationLines(saved, report, context, styler.bold)),
+    verdictLines(report, context, styler.bold),
+    uploadLines(report, context.env),
   ].filter((block) => block.length > 0);
   if (blocks.length === 0) {
     return;
@@ -225,9 +268,12 @@ export function renderSummary(report: Report, writers: Writers, env: NodeJS.Proc
 }
 
 function evaluationLines(
-  { event, run }: SavedEvaluation,
+  saved: SavedEvaluation,
+  report: Report,
+  context: SummaryContext,
   bold: (text: string) => string,
 ): string[] {
+  const { event, path, run } = saved;
   const { counts } = event;
   const errors =
     counts.errored === 0
@@ -241,22 +287,152 @@ function evaluationLines(
   ];
   if (run === null) {
     lines.push("  the saved run can't be read, so its scores are unknown");
-    return lines;
+  } else {
+    lines.push(
+      ...scoreLines(run.cases, counts.cases, bold),
+      ...errorLines(run.cases, shownAsNewlyErrored(saved, report), bold),
+    );
   }
-  const means = scoreMeans(run.cases);
-  if (means.length === 0) {
-    lines.push("  no scores");
-    return lines;
-  }
-  const table = renderTable(
-    ["SCORE", "MEAN", "CASES"],
-    means.map((score) => [clean(score.name), formatMean(score.mean), String(score.count)]),
-    { headerStyle: bold },
+  lines.push(
+    `  Run file   ${clean(displayPath(path, context.cwd))}`,
+    `  Case file  ${clean(displayPath(casesPathOf(path), context.cwd))}`,
   );
-  return [...lines, ...indent(table)];
+  return lines;
 }
 
-function verdictLines(report: Report, bold: (text: string) => string): string[] {
+/**
+ * Each score's mean, and what it is a mean of. `SCORED` says how many of the run's cases gave the
+ * score a value the mean is over, so a mean of 1 over 2 of 3 cases doesn't read as every case
+ * passing. `PASSED` and `FAILED` come from each value's `passed`, and are `—` for a score nothing
+ * passes or fails, such as a number from a scorer with no threshold: its mean is a measurement in
+ * the scorer's own units, not a share of cases that passed. A note under the table names a score
+ * whose values the mean leaves out, or that is missing from a case without an error saying why.
+ */
+function scoreLines(
+  cases: CaseLine[],
+  caseCount: number,
+  bold: (text: string) => string,
+): string[] {
+  const means = scoreMeans(cases);
+  if (means.length === 0) {
+    return ["  no scores"];
+  }
+  const table = renderTable(
+    ["SCORE", "MEAN", "SCORED", "PASSED", "FAILED"],
+    means.map((score) => {
+      const judged = score.passed + score.failed > 0;
+      return [
+        clean(score.name),
+        formatMean(score.mean),
+        `${scoredCases(cases, score.name)} of ${caseCount}`,
+        judged ? String(score.passed) : "—",
+        judged ? String(score.failed) : "—",
+      ];
+    }),
+    { headerStyle: bold },
+  );
+  return [...indent(table), ...means.flatMap((score) => scoreNotes(score, cases))];
+}
+
+/**
+ * How many cases gave a score a value its mean is over, a finite number or a boolean. Each case
+ * counts once: a case can give one score name twice, and `mean_count` counts values.
+ */
+function scoredCases(cases: CaseLine[], name: string): number {
+  return cases.filter((item) =>
+    item.scores.some(
+      ({ scorer_name, value }) =>
+        scorer_name === name &&
+        (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))),
+    ),
+  ).length;
+}
+
+function scoreNotes(score: ScoreMean, cases: CaseLine[]): string[] {
+  const name = clean(score.name);
+  const notes: string[] = [];
+  const left = score.count - score.mean_count;
+  if (score.mean_count === 0) {
+    notes.push(`  ${name}: no value is a number or true/false, so it has no mean.`);
+  } else if (left > 0) {
+    notes.push(
+      `  ${name}: ${left} ${plural(left, "value")} ${left === 1 ? "isn't" : "aren't"} a number or true/false, so the mean leaves ${left === 1 ? "it" : "them"} out.`,
+    );
+  }
+  if (score.unjudged > 0 && score.passed + score.failed > 0) {
+    notes.push(
+      `  ${name}: ${score.unjudged} ${plural(score.unjudged, "value")} neither ${score.unjudged === 1 ? "passes nor fails" : "pass nor fail"}.`,
+    );
+  }
+  // A case whose task raised has no scores, and one whose scorer raised has none from it; the
+  // errors below say why. A score missing from a case that raised nothing is named here.
+  const unexplained = cases.filter(
+    (item) =>
+      item.task_error === null &&
+      item.scorer_errors.length === 0 &&
+      !item.scores.some((value) => value.scorer_name === score.name),
+  ).length;
+  if (unexplained > 0) {
+    notes.push(
+      `  ${name}: missing from ${unexplained} ${plural(unexplained, "case")} that raised no error.`,
+    );
+  }
+  return notes;
+}
+
+/**
+ * The run's errored cases, each with what raised, so a run with errors says which cases and why
+ * without a baseline. A case that the verdict lists as newly errored is left to that list, and
+ * after {@link LISTED_ERRORS} cases the rest are counted and left to the case file.
+ */
+function errorLines(
+  cases: CaseLine[],
+  newlyErrored: ReadonlySet<string>,
+  bold: (text: string) => string,
+): string[] {
+  const errored = cases.filter(
+    (item) =>
+      (item.task_error !== null || item.scorer_errors.length > 0) &&
+      !newlyErrored.has(item.case_id),
+  );
+  if (errored.length === 0) {
+    return [];
+  }
+  const listed = errored.slice(0, LISTED_ERRORS);
+  const more = errored.length - listed.length;
+  return [
+    `  ${bold("Errors")}`,
+    ...indent(indent(erroredTable(listed, bold)).join("\n")),
+    ...(more === 0
+      ? []
+      : [`    and ${more} more ${plural(more, "case")}; the case file has each one's error.`]),
+  ];
+}
+
+/** The cases the verdict lists as newly errored when it compared this evaluation's run. */
+function shownAsNewlyErrored(saved: SavedEvaluation, report: Report): ReadonlySet<string> {
+  const { baseline, verdict } = report;
+  if (
+    baseline === null ||
+    verdict === null ||
+    baseline.run.file.evaluation_name !== saved.event.name
+  ) {
+    return new Set();
+  }
+  return new Set(verdict.newly_errored.map((item) => item.case_id));
+}
+
+/** A path as the summary prints it: relative to where the CLI ran, when it is under there. */
+function displayPath(path: string, cwd: string): string {
+  const under = relative(cwd, path);
+  return under !== "" && !under.startsWith("..") && !isAbsolute(under) ? under : path;
+}
+
+function verdictLines(
+  report: Report,
+  context: SummaryContext,
+  bold: (text: string) => string,
+): string[] {
   const { baseline, verdict } = report;
   if (report.outcome === "interrupted") {
     const what =
@@ -265,7 +441,10 @@ function verdictLines(report: Report, bold: (text: string) => string): string[] 
     const compared = baseline === null ? "" : ", so nothing was compared";
     return [`${what}${saved}${compared}.`];
   }
-  if (baseline === null || verdict === null) {
+  if (baseline === null) {
+    return noBaselineLines(report, context);
+  }
+  if (verdict === null) {
     return [];
   }
   const against = `baseline ${clean(baseline.id)}`;
@@ -320,6 +499,37 @@ function verdictLines(report: Report, bold: (text: string) => string): string[] 
 }
 
 /**
+ * That no baseline was given, so the exit status says nothing about regressions, and the command
+ * that compares the next run with this one. A run that can't be a baseline, such as a sampled one,
+ * gets no command. A file of several evaluations gets the command with a placeholder, because a
+ * baseline is one evaluation's run: the next run's evaluation of the same name is compared with it.
+ */
+function noBaselineLines(report: Report, { env, cwd }: SummaryContext): string[] {
+  const lines = ["No baseline given, so regressions weren't checked."];
+  const usable = report.runs.filter(
+    ({ run }) => run !== null && partialRunReason(run.file, "baseline") === null,
+  );
+  const [only] = usable;
+  if (only === undefined) {
+    return lines;
+  }
+  const file = clean(shellWord(displayPath(report.file, cwd)));
+  if (report.runs.length === 1) {
+    const id = clean(shellWord(only.event.local_run_id));
+    lines.push(
+      "To compare the next run with this one:",
+      `  ${cliCommand(`evals run ${file} --baseline ${id}`, env)}`,
+    );
+  } else {
+    lines.push(
+      "To compare the next run with one of these, give its run id:",
+      `  ${cliCommand(`evals run ${file} --baseline <run id>`, env)}`,
+    );
+  }
+  return lines;
+}
+
+/**
  * Each uploaded evaluation's TraceRoot run id, with its link and the command that opens it, then
  * the evaluations that weren't uploaded. The link is the one the run file saved, as TraceRoot gave
  * it to the runner; the CLI never builds one from an id and a host, so a run TraceRoot gave none
@@ -346,6 +556,11 @@ function uploadLines({ upload, runs, outcome, runner }: Report, env: NodeJS.Proc
         `  ${cliCommand(read.join(" "), env)}`,
       );
     }
+  }
+  // Cost and token use come from the traces, which TraceRoot processes after the runner ends, so
+  // the summary can't print them and says where they go instead of printing nothing.
+  if (lines.length > 0) {
+    lines.push("TraceRoot adds cost and token use once it has processed the traces.");
   }
   // An interrupted run's evaluations stopped short, which says why they have no TraceRoot run id.
   const missing = outcome === "interrupted" ? [] : notUploaded(runs);
@@ -417,7 +632,10 @@ function failingResult(pair: NewlyFailingPair): string {
   }
 }
 
-function erroredTable(cases: NewlyErroredCase[], bold: (text: string) => string): string {
+/** A case that raised: what its task raised, and what each of its scorers did. */
+type ErroredCase = Pick<CaseLine, "case_id" | "task_error" | "scorer_errors">;
+
+function erroredTable(cases: ErroredCase[], bold: (text: string) => string): string {
   return renderTable(
     ["CASE", "ERROR"],
     cases.map((item) => {

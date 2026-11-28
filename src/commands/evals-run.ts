@@ -58,7 +58,7 @@ import {
 } from "../output.js";
 import { clean } from "../registry/enhancers/eval-reads.js";
 import { onceOption } from "../registry/flags.js";
-import { cliCommand } from "../setup/invocation.js";
+import { cliCommand, shellWord } from "../setup/invocation.js";
 import { makeSecret } from "../setup/secret.js";
 import type { StackLanguage } from "../setup/types.js";
 import { DEFAULT_HOST } from "./constants.js";
@@ -210,11 +210,6 @@ function readFlags(key: AuthSource, host: ResolvedField, envFile: string | undef
     flags.push("--api-key <key>");
   }
   return flags;
-}
-
-/** A value as one POSIX shell word: as it is when a shell reads it that way, otherwise quoted. */
-function shellWord(text: string): string {
-  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
 }
 
 /**
@@ -635,7 +630,7 @@ function print(report: Report, options: EvalsRunOptions): void {
   if (options.json) {
     writeJson(toDocument(report), options.writers);
   } else {
-    renderSummary(report, options.writers, options.env);
+    renderSummary(report, options.writers, { env: options.env, cwd: options.cwd });
   }
 }
 

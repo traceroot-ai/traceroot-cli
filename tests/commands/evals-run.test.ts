@@ -241,7 +241,7 @@ function envelope(stderr: string): { code: string; message: string } {
 }
 
 describe("evals run without a baseline", () => {
-  it("runs the file, prints each evaluation with its run id, mean case duration and score means, and exits 0", () => {
+  it("runs the file, prints each evaluation with its run id, mean case duration, score means and saved files, says no baseline was checked, and exits 0", () => {
     pythonProject();
     evalFile("x_eval.py", { replay: `${PYTHON}/one-fails`, run_id: "run_first" });
 
@@ -252,9 +252,15 @@ describe("evals run without a baseline", () => {
       [
         "uppercase · run_first · completed",
         "  3 cases · 0 errored · mean 1.5 ms per case",
-        "  SCORE        MEAN   CASES",
-        "  exact_match  0.667  3",
-        "  not_empty    1      3",
+        "  SCORE        MEAN   SCORED  PASSED  FAILED",
+        "  exact_match  0.667  3 of 3  2       1",
+        "  not_empty    1      3 of 3  3       0",
+        "  Run file   .traceroot/eval/runs/run_first.json",
+        "  Case file  .traceroot/eval/runs/run_first.cases.jsonl",
+        "",
+        "No baseline given, so regressions weren't checked.",
+        "To compare the next run with this one:",
+        "  traceroot evals run x_eval.py --baseline run_first",
         "",
       ].join("\n"),
     );
@@ -303,18 +309,68 @@ describe("evals run without a baseline", () => {
     expect(document).toMatchObject({ runs: [{ duration_ms: { mean: null, count: 0 } }] });
   });
 
-  it("counts the errors of a run that has some", () => {
+  it("counts the errors of a run that has some, names each errored case, and scores the mean over the cases that gave one", () => {
     pythonProject();
     evalFile("x_eval.py", { replay: `${PYTHON}/task-error`, run_id: "run_first" });
 
     const run = evalsRun("x_eval.py");
 
     expect(run.status).toBe(0);
-    expect(run.stdout).toContain("uppercase · run_first · completed with errors\n");
     expect(run.stdout).toContain(
-      "  3 cases · 1 errored (1 task error, 0 scorer errors) · mean 1.5 ms per case\n",
+      [
+        "uppercase · run_first · completed with errors",
+        "  3 cases · 1 errored (1 task error, 0 scorer errors) · mean 1.5 ms per case",
+        "  SCORE        MEAN  SCORED  PASSED  FAILED",
+        "  exact_match  1     2 of 3  2       0",
+        "  not_empty    1     2 of 3  2       0",
+        "  Errors",
+        "    CASE                     ERROR",
+        `    ${BETA}  task: ValueError: cannot convert 'beta'`,
+        "  Run file   .traceroot/eval/runs/run_first.json",
+        "",
+      ].join("\n"),
     );
-    expect(run.stdout).toContain("  exact_match  1     2\n");
+  });
+
+  it("names a scorer that raised apart from the task, without a baseline", () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/scorer-error-versioned`, run_id: "run_first" });
+
+    const run = evalsRun("x_eval.py");
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain(
+      [
+        "  3 cases · 1 errored (0 task errors, 1 scorer error) · mean 1.5 ms per case",
+        "  SCORE        MEAN  SCORED  PASSED  FAILED",
+        "  exact_match  1     3 of 3  3       0",
+        "  not_empty    1     2 of 3  2       0",
+        "  Errors",
+        "    CASE                     ERROR",
+        `    ${BETA}  not_empty: ValueError: cannot check 'beta'`,
+      ].join("\n"),
+    );
+  });
+
+  it("gives a number from a scorer with no threshold a mean, and neither a pass nor a fail", () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/numeric-no-threshold`, run_id: "run_first" });
+
+    const run = evalsRun("x_eval.py");
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("  output_length  4.67  3 of 3  —       —\n");
+  });
+
+  it("says no baseline was checked, and offers no command, for a run that can't be a baseline", () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/sampled`, run_id: "run_first" });
+
+    const run = evalsRun("x_eval.py");
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("No baseline given, so regressions weren't checked.\n");
+    expect(run.stdout).not.toContain("--baseline");
   });
 
   it("writes one document on stdout under --json", () => {
@@ -338,11 +394,28 @@ describe("evals run without a baseline", () => {
           uploaded_run_url: null,
           status: "completed",
           path: join(project, ".traceroot", "eval", "runs", "run_first.json"),
+          cases_path: join(project, ".traceroot", "eval", "runs", "run_first.cases.jsonl"),
           counts: { cases: 3, errored: 0, task_errors: 0, scorer_errors: 0, not_scored: 3 },
           duration_ms: { mean: 1.5, count: 3 },
           scores: [
-            { name: "exact_match", mean: 2 / 3, count: 3 },
-            { name: "not_empty", mean: 1, count: 3 },
+            {
+              name: "exact_match",
+              mean: 2 / 3,
+              count: 3,
+              mean_count: 3,
+              passed: 2,
+              failed: 1,
+              unjudged: 0,
+            },
+            {
+              name: "not_empty",
+              mean: 1,
+              count: 3,
+              mean_count: 3,
+              passed: 3,
+              failed: 0,
+              unjudged: 0,
+            },
           ],
         },
       ],
@@ -439,6 +512,23 @@ describe("evals run with a baseline", () => {
         `  ${BETA}  task: ValueError: cannot convert 'beta'`,
       ].join("\n"),
     );
+    // Listed once, as newly errored, and not again among the run's errors.
+    expect(run.stdout).not.toContain("  Errors\n");
+    expect(run.stdout).not.toContain("No baseline given");
+  });
+
+  it("still names an errored case that errored in the baseline too, which isn't new", () => {
+    pythonProject();
+    saveRun(`${PYTHON}/task-error`, "run_first");
+    evalFile("x_eval.py", { replay: `${PYTHON}/task-error`, run_id: "run_second" });
+
+    const run = evalsRun("x_eval.py", "--baseline", "run_first");
+
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain(
+      `  Errors\n    CASE                     ERROR\n    ${BETA}  task: ValueError: cannot convert 'beta'\n`,
+    );
+    expect(run.stdout).toContain("No regression against baseline run_first");
   });
 
   it("exits 0 when nothing newly fails, and counts what changed", () => {
@@ -1139,13 +1229,20 @@ describe("evals run --upload", () => {
       [
         "uppercase · run_first · completed",
         "  3 cases · 0 errored · mean 1.5 ms per case",
-        "  SCORE        MEAN  CASES",
-        "  exact_match  1     3",
-        "  not_empty    1     3",
+        "  SCORE        MEAN  SCORED  PASSED  FAILED",
+        "  exact_match  1     3 of 3  3       0",
+        "  not_empty    1     3 of 3  3       0",
+        "  Run file   .traceroot/eval/runs/run_first.json",
+        "  Case file  .traceroot/eval/runs/run_first.cases.jsonl",
+        "",
+        "No baseline given, so regressions weren't checked.",
+        "To compare the next run with this one:",
+        "  traceroot evals run x_eval.py --baseline run_first",
         "",
         'Uploaded "uppercase" to TraceRoot as run evr_stub_1. To open it:',
         `  ${RUN_URL}`,
         `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
+        "TraceRoot adds cost and token use once it has processed the traces.",
         "",
       ].join("\n"),
     );
@@ -1659,7 +1756,14 @@ describe("scoreMeans", () => {
     );
 
     expect(completed).toHaveLength(1);
-    expect(scoreMeans(cases)).toEqual(Object.values(completed[0]?.score_summary ?? {}));
+    const means = scoreMeans(cases);
+    expect(means.map(({ name, mean, count }) => ({ name, mean, count }))).toEqual(
+      Object.values(completed[0]?.score_summary ?? {}),
+    );
+    for (const score of means) {
+      expect(score.passed + score.failed + score.unjudged).toBe(score.count);
+      expect(score.mean_count).toBeLessThanOrEqual(score.count);
+    }
   });
 
   it("averages numbers and booleans, and counts any other value without a mean", () => {
@@ -1675,7 +1779,7 @@ describe("scoreMeans", () => {
         scorer_name,
         scorer_version: null,
         value,
-        passed: null,
+        passed: typeof value === "boolean" ? value : null,
       })),
     });
 
@@ -1691,11 +1795,15 @@ describe("scoreMeans", () => {
           ["passed", false],
           ["length", 6],
         ]),
+        item([
+          ["length", Number.NaN],
+          ["passed", true],
+        ]),
       ]),
     ).toEqual([
-      { name: "label", mean: null, count: 2 },
-      { name: "passed", mean: 0.5, count: 2 },
-      { name: "length", mean: 5, count: 2 },
+      { name: "label", mean: null, count: 2, mean_count: 0, passed: 0, failed: 0, unjudged: 2 },
+      { name: "passed", mean: 2 / 3, count: 3, mean_count: 3, passed: 2, failed: 1, unjudged: 0 },
+      { name: "length", mean: 5, count: 3, mean_count: 2, passed: 0, failed: 0, unjudged: 3 },
     ]);
   });
 });
