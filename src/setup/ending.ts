@@ -6,7 +6,7 @@ import { wizardAside, wizardEmphasis, wizardLink } from "./wizard.js";
  * The first of the two blocks that close a run that received a trace.
  *
  * A wizard's last screen is the one a user acts on, so it is not spent on a
- * single sentence printed *outside* the frame — "TraceRoot is connected, your
+ * single sentence printed *outside* the frame — "traceroot is connected, your
  * application's checks were not run, and your first trace is available here: …"
  * — a claim, a caveat and a URL crammed into one line that visibly does not
  * belong to the box the CLI has just drawn.
@@ -65,7 +65,7 @@ export function tracesNotice(input: TracesNoticeInput, sink: Sink = process.stde
 
 export interface SkippedTraceNoticeInput {
   /**
-   * The TraceRoot UI this session belongs to, when the run got far enough to
+   * The traceroot UI this session belongs to, when the run got far enough to
    * learn it. Null falls back to the terminal, which needs no URL at all.
    */
   uiBaseUrl: string | null;

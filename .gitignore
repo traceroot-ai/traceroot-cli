@@ -142,7 +142,7 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-# TraceRoot CLI
+# traceroot CLI
 # Project-local credentials written by `traceroot login` (contains the API key).
 .traceroot/
 /node_modules

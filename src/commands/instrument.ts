@@ -157,7 +157,7 @@ export async function runInstrument(deps: RunInstrumentDeps): Promise<void> {
 export function registerInstrument(program: Command): void {
   program
     .command("instrument")
-    .description("Generate an agent prompt to instrument this repo with TraceRoot")
+    .description("Generate an agent prompt to instrument this repo with traceroot")
     // No default agent: the prompt's skill path and install command depend on it,
     // so the target must be explicit (prompted when interactive, else an error).
     .option("--agent <agent>", "target agent: claude, codex, or generic")

@@ -179,7 +179,7 @@ describe("the env file the entry point is told to load", () => {
   it("names the env file the credential is actually in, for a Node service", () => {
     // `chooseCredentialEnvFile` writes into an existing `.env.local`, and
     // `dotenv/config` reads `.env` and only `.env` — so the application started
-    // with no TraceRoot credential, which is unrecoverable once the key is no
+    // with no traceroot credential, which is unrecoverable once the key is no
     // longer in the agent's own environment either.
     const text = task({
       service: service({ language: "javascript", entryPoint: "index.js" }),
@@ -405,7 +405,7 @@ describe("running a server so it sends its trace", () => {
     "Instrumenting the code does not emit anything; **running** it does. Execute the application, or the",
     "narrowest thing that exercises an instrumented path — an entry point that calls it, one function",
     "call with the real client — so the SDK sends a trace before you finish. The project's test suite is",
-    "not one of those things: it runs with TraceRoot switched off, and the trace `traceroot setup` looks",
+    "not one of those things: it runs with traceroot switched off, and the trace `traceroot setup` looks",
     "for is the one the application sends when it runs.",
   ].join("\n");
   const SCRIPT_DONE =
@@ -764,7 +764,7 @@ describe("the span coverage the task asks for", () => {
 });
 
 describe("how the task has the agent run the project's tests", () => {
-  it("runs the suite with TraceRoot switched off, in the command itself", () => {
+  it("runs the suite with traceroot switched off, in the command itself", () => {
     // A plain `pytest` sends a trace per test whenever a key is within reach —
     // the agent's own environment, or an entry point that loads its `.env` at
     // module scope — and those traces land beside the application's. The
@@ -787,7 +787,7 @@ describe("how the task has the agent run the project's tests", () => {
 
   it("asks for no report of a run without credentials", () => {
     // The task tells the agent not to make that run, and setup makes its own
-    // check with TraceRoot off. A field asking for its result invites the run.
+    // check with traceroot off. A field asking for its result invites the run.
     expect(task()).not.toContain("tests_passed_without_credentials");
   });
 });
@@ -814,7 +814,7 @@ describe("where the task puts initialization", () => {
     // it is not.
     const text = task({ envFiles: ["./.env"] });
     expect(text).not.toContain("must come after initialize()");
-    expect(text).not.toContain("Initialize TraceRoot before the LLM/agent libraries are imported");
+    expect(text).not.toContain("Initialize traceroot before the LLM/agent libraries are imported");
     expect(text).not.toMatch(/after those imports will silently\ncapture nothing/);
     expect(text).toContain("The order that matters is not the import order");
     expect(text).toContain("whether or not that library has already been imported");
@@ -852,13 +852,13 @@ describe("where the task puts initialization", () => {
 
   it("stops offering the test suite as the thing that emits the trace", () => {
     // Step 6 listed "a test" among the ways to produce one. The suite runs with
-    // TraceRoot switched off now, and the trace setup looks for is the one the
+    // traceroot switched off now, and the trace setup looks for is the one the
     // application sends — so that route would have the agent prove the trace
     // with the one path that is meant to send nothing.
     const text = task({ envFiles: ["./.env"] });
     expect(text).not.toContain("a test, a script, one function call");
     expect(text).toContain(
-      "test suite is\nnot one of those things: it runs with TraceRoot switched off",
+      "test suite is\nnot one of those things: it runs with traceroot switched off",
     );
   });
 

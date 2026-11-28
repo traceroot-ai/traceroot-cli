@@ -99,14 +99,14 @@ describe("lines inside the frame", () => {
     wizardLine(t, "Signed in — workspace acme.");
     wizardProgress(t, "Service: . (python)");
     wizardWarn(t, "no test or health command was detected");
-    wizardOutro(t.writers, "TraceRoot setup complete.");
+    wizardOutro(t.writers, "traceroot setup complete.");
 
     const framed = plain(t.err.data).slice(0, plain(t.err.data).indexOf("└"));
     for (const line of framed.split("\n").filter((l) => l !== "")) {
       expect(line).toMatch(IN_FRAME);
     }
     expect(plain(t.err.data)).toContain(`┌  ${WIZARD_TITLE}`);
-    expect(plain(t.err.data)).toContain("└  TraceRoot setup complete.");
+    expect(plain(t.err.data)).toContain("└  traceroot setup complete.");
   });
 });
 
@@ -179,9 +179,9 @@ describe("what is said after the frame closes", () => {
     // box that just closed makes them read as one more step of a flow that is
     // over — which is exactly what they are not.
     const t = target();
-    wizardOutro(t.writers, "TraceRoot setup complete.");
+    wizardOutro(t.writers, "traceroot setup complete.");
 
-    const after = plain(t.err.data).split("└  TraceRoot setup complete.\n")[1] ?? "";
+    const after = plain(t.err.data).split("└  traceroot setup complete.\n")[1] ?? "";
     expect(after.split("\n").filter((l) => l !== "")).toEqual([
       "If you ran into anything during setup, please open an issue at https://github.com/traceroot-ai/traceroot-cli/issues/new",
       "- Contact support: https://discord.gg/TM2m3CtKuC",
@@ -194,7 +194,7 @@ describe("what is said after the frame closes", () => {
     // wizard's output, and the run's last word ends up looking like an argument
     // somebody typed.
     const t = target();
-    wizardOutro(t.writers, "TraceRoot setup complete.");
+    wizardOutro(t.writers, "traceroot setup complete.");
 
     expect(plain(t.err.data).endsWith("\n\n")).toBe(true);
     expect(plain(t.err.data).endsWith("\n\n\n")).toBe(false);
