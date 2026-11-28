@@ -16,6 +16,8 @@
  * string as null.
  */
 
+import { type CaseUsage, type Unreadable, readCaseUsage } from "./usage.js";
+
 /** The protocol version the CLI reads. A runner announces its own in its `hello` event. */
 export const EVAL_API_VERSION = 1;
 
@@ -199,6 +201,12 @@ export interface CaseLine {
   scores: CaseScore[];
   /** How long the case took, its task and its scorers, in milliseconds. */
   duration_ms: number | null;
+  /**
+   * The case's LLM use, read leniently (see usage.ts): undefined from an SDK that doesn't record
+   * it, null when the SDK captured none, as when the evaluation instrumented no LLM client, and
+   * `unreadable` for a value that can't be read.
+   */
+  usage?: CaseUsage | Unreadable | null;
 }
 
 /** Something a runner wrote that the CLI can't read. The message says what and where. */
@@ -287,7 +295,8 @@ export function parseCaseLines(text: string): CaseLine[] {
       continue;
     }
     const where = `case line ${index + 1}`;
-    const item = new Fields(parseObject(line, where), where);
+    const raw = parseObject(line, where);
+    const item = new Fields(raw, where);
     cases.push({
       case_id: item.string("case_id"),
       status: item.oneOf("status", CASE_STATUSES),
@@ -306,6 +315,7 @@ export function parseCaseLines(text: string): CaseLine[] {
         passed: score.nullableBoolean("passed"),
       })),
       duration_ms: item.nullableNumber("duration_ms"),
+      usage: readCaseUsage(raw),
     });
   }
   return cases;
