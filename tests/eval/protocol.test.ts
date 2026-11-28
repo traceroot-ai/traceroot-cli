@@ -167,7 +167,20 @@ describe("parseRunFile", () => {
       artifact: { payloads: "complete" },
       dashboard_url: null,
       upload_results: { failed: 0, unconfirmed: 0 },
+      close_confirmed: true,
     });
+  });
+
+  it("reads close_confirmed as false only when the upload block says false", () => {
+    const read = (upload: unknown) =>
+      parseRunFile(JSON.stringify({ ...runFile, upload })).close_confirmed;
+    const { upload: _upload, ...withoutUpload } = runFile;
+
+    expect(read({ ...runFile.upload, close_confirmed: false })).toBe(false);
+    expect(read({ ...runFile.upload, close_confirmed: true })).toBe(true);
+    expect(read({ ...runFile.upload, close_confirmed: "false" })).toBe(true);
+    expect(read(runFile.upload)).toBe(true);
+    expect(parseRunFile(JSON.stringify(withoutUpload)).close_confirmed).toBe(true);
   });
 
   it("reads the counts of results TraceRoot may be missing, 0 when absent or not a count", () => {

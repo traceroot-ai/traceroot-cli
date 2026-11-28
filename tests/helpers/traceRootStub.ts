@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
  *   publishes one before every uploaded run;
  * - the evaluation run routes: registering a run, which it answers with a run id and the run's
  *   link, as TraceRoot does, a result per case, completing the run, and reading one, which it
- *   answers as a completed run of `uppercase` whatever the id;
+ *   answers as a completed run of `uppercase` whatever the id, with the `usage` it was given;
  * - `POST /api/v1/public/traces`, where the SDKs export spans.
  *
  * Every other request gets a 404. A request without the accepted key as its bearer gets a 401.
@@ -34,6 +34,10 @@ export interface TraceRootStubOptions {
   rejectUploads?: boolean;
   /** Accept a run and its results, then answer its completion with a 500. */
   failCompletion?: boolean;
+  /** The `usage` a run read answers with. Without it the answer has none, as an older host's. */
+  runUsage?: unknown;
+  /** Never answer a run read, as a host that stalls: the request stays open until the stub closes. */
+  holdRunReads?: boolean;
 }
 
 export interface TraceRootStub {
@@ -93,11 +97,15 @@ export async function startTraceRootStub(
         versions += 1;
         send(res, 200, { dataset_version_id: `dsv_stub_${versions}`, version_number: versions });
       } else if (/^GET \/api\/v1\/public\/evaluation-runs\/[^/]+$/.test(route)) {
+        if (options.holdRunReads) {
+          return;
+        }
         const id = decodeURIComponent(route.slice(route.lastIndexOf("/") + 1));
         send(res, 200, {
           evaluation_run_id: id,
           evaluation_name: "uppercase",
           status: "completed",
+          ...(options.runUsage === undefined ? {} : { usage: options.runUsage }),
         });
       } else if (route === `POST ${PUBLIC}/evaluation-runs`) {
         runs += 1;

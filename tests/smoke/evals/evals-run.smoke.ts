@@ -46,9 +46,13 @@ const FIXTURES = fileURLToPath(new URL(".", import.meta.url));
 /** The case the regressed variant breaks. Every release derives the same id from its content. */
 const BETA = "tc_7d6e5d505f6ca7767380";
 
-/** What an uploaded run sends, in each release. `whoami` is the CLI's key check. */
+/**
+ * What an uploaded run sends, in each release. `whoami` is the CLI's key check, and the run read the
+ * CLI's one read of the cost TraceRoot priced the run at, once the runner has exited.
+ */
 const UPLOAD_ROUTES = [
   "GET /api/v1/public/whoami",
+  "GET /api/v1/public/evaluation-runs/{id}",
   "GET /api/v1/public/datasets/{id}",
   "POST /api/v1/public/datasets",
   "POST /api/v1/public/datasets/{id}/versions",

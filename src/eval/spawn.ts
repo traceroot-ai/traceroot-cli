@@ -35,7 +35,7 @@ const OUTPUT_TAIL_LINES = 20;
  * The signals that cancel a run: Ctrl+C, a request to stop, and a closed terminal. `runProcess`
  * forwards each of the three to the runner's process group.
  */
-const INTERRUPT_SIGNALS: readonly InterruptSignal[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+export const INTERRUPT_SIGNALS: readonly InterruptSignal[] = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 /**
  * What a local run sets in the runner's environment, whatever the CLI's own holds. `undefined`
