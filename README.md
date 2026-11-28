@@ -340,7 +340,9 @@ with `newly_failing` (each with its `reason`), `newly_errored`, `changed`,
 the runner failed after some evaluations finished; then it holds the failure's
 `kind` (the runner's own, or `crashed`) and `message`, the text of the `error:`
 line human mode prints, and `outcome` is `failed`, or `regressed` when one of the
-evaluations that finished regressed. Case ids, scorer names and the runner's
+evaluations that finished regressed. When `outcome` is `interrupted`, the document
+also has `signal`: `SIGINT`, `SIGTERM` or `SIGHUP`, or null when only the runner
+saw the interrupt. Case ids, scorer names and the runner's
 messages print with control characters escaped, as the evaluation reads' text
 does.
 
@@ -365,7 +367,8 @@ On failure the human-readable message goes to stderr as `error: <message>`. Unde
 `{"error":{"code":"<class>","message":"<text>"}}` — while stdout stays empty, so a
 `jq` pipeline over stdout is never corrupted by an error. `evals run` is the one
 exception: once its runner has run, its document goes to stdout even when it
-exits `2`, `17` or `18`, because the caller needs the new run's id either way.
+exits `2`, `17` or `18`, or `130`, `143` or `129` after an interrupt, because the
+caller needs the new run's id either way.
 When it stops before the runner starts, or the runner fails before any evaluation
 finishes, it uses the envelope like any other command.
 

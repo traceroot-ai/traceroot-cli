@@ -671,7 +671,28 @@ describe("evals run when the evaluation can't run", () => {
 
     expect(run.status).toBe(17);
     expect(run.stderr).toContain(
-      "error: the eval runner exited with status 1 before it reported the end of the run; its output is above",
+      "error: the eval runner exited with status 1; its output is above",
+    );
+  });
+
+  it("says a runner stopped early only when it exited 0, not after a run it reported the end of", () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      events: [{ type: "hello", eval_api_version: 1 }, { type: "evaluation_started" }],
+      exit: 0,
+    });
+    const early = evalsRun("x_eval.py");
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, exit: 1 });
+    const late = evalsRun("x_eval.py");
+
+    expect(early.status).toBe(17);
+    expect(early.stderr).toContain(
+      "error: the eval runner exited with status 0 before it reported the end of the run; its output is above",
+    );
+    expect(late.status).toBe(17);
+    expect(late.stdout).toContain(`uppercase · ${RECORDED_RUN_ID} · completed\n`);
+    expect(late.stderr).toContain(
+      "error: the eval runner exited with status 1; its output is above\n",
     );
   });
 
@@ -735,8 +756,7 @@ describe("evals run when the runner fails after an evaluation finished", () => {
     message: "TypeError: EvalCase.__init__() got an unexpected keyword argument 'expectd'",
   };
   const FATAL_ERROR = `the eval runner failed with harness_error: ${FATAL.message}`;
-  const CRASH =
-    "the eval runner exited with status 1 before it reported the end of the run; its output is above";
+  const CRASH = "the eval runner exited with status 1; its output is above";
 
   it("exits 18 when an evaluation that finished regressed, and still reports the failure", () => {
     pythonProject();

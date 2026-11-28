@@ -13,7 +13,8 @@
  * - `replay`: a folder of tests/fixtures/eval. Its events go to the event file, its run is saved
  *   under `.traceroot/eval/runs`, and the runner exits with its recorded status;
  * - `run_id`: the id the replayed run is saved under, in place of the recorded one;
- * - `replace`: `[from, to]` pairs applied to every replayed file;
+ * - `replace`: `[from, to]` pairs applied to the replayed events and run files, not to its exit
+ *   status, which `exit` replaces;
  * - `unfinished`: leave the replay's `suite_completed` event out, as a runner that stops after the
  *   replayed evaluation does;
  * - `events`: events written instead of a replay, or after it;
