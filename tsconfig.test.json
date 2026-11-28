@@ -5,5 +5,5 @@
     "rootDir": "."
   },
   "include": ["src", "tests", "vitest.config.ts"],
-  "exclude": ["dist", "node_modules"]
+  "exclude": ["dist", "node_modules", "tests/smoke/evals/typescript"]
 }

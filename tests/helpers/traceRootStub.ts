@@ -8,8 +8,9 @@ import type { AddressInfo } from "node:net";
  * - `GET /api/v1/public/whoami`, the key check;
  * - the dataset routes an SDK publishes a `Dataset` through: it knows no dataset, so a runner
  *   publishes one before every uploaded run;
- * - the evaluation run routes: registering a run, a result per case, completing the run, and
- *   reading one, which it answers as a completed run of `uppercase` whatever the id;
+ * - the evaluation run routes: registering a run, which it answers with a run id and the run's
+ *   link, as TraceRoot does, a result per case, completing the run, and reading one, which it
+ *   answers as a completed run of `uppercase` whatever the id;
  * - `POST /api/v1/public/traces`, where the SDKs export spans.
  *
  * Every other request gets a 404. A request without the accepted key as its bearer gets a 401.
@@ -100,7 +101,8 @@ export async function startTraceRootStub(
         });
       } else if (route === `POST ${PUBLIC}/evaluation-runs`) {
         runs += 1;
-        send(res, 200, { evaluation_run_id: `evr_stub_${runs}` });
+        const id = `evr_stub_${runs}`;
+        send(res, 200, { evaluation_run_id: id, run_url: stubRunUrl(url, id) });
       } else if (/^POST \/api\/v1\/public\/evaluation-runs\/[^/]+\/results$/.test(route)) {
         send(res, 200, {});
       } else if (/^POST \/api\/v1\/public\/evaluation-runs\/[^/]+\/complete$/.test(route)) {
@@ -128,6 +130,11 @@ export async function startTraceRootStub(
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       }),
   };
+}
+
+/** The link the stub at `host` gives the run `id`, where TraceRoot shows a run. */
+export function stubRunUrl(host: string, id: string): string {
+  return `${host}/projects/${STUB_PROJECT_ID}/evaluations/${id}`;
 }
 
 /** The key check's answer for the stub's project. */
