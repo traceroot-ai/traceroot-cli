@@ -334,7 +334,8 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   mean time a case took (its task and its scorers), each score's mean, and the
   run file and case file it saved. Without `--baseline` it says that regressions
   weren't checked, so an exit `0` there isn't a claim that every case passed, and
-  prints the command that compares the next run with this one.
+  prints the command that compares the next run with this one, unless the run
+  can't be a baseline, as a sampled or interrupted run can't.
 - **Each score's mean says what it is a mean of.** `SCORED` counts the cases that
   gave the score a number or true/false, out of the run's cases: a case whose task
   or scorer raised has none, and any other value is left out of the mean rather
