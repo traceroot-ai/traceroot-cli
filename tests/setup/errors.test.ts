@@ -110,7 +110,7 @@ describe("publishing the statuses a script is told it can rely on", () => {
     expect(status).toBe(0);
     expect(SHARED.size).toBe(6);
     for (const [code, name] of SHARED) {
-      expect(published).toMatch(new RegExp(`^  ${code}  ${name} `, "m"));
+      expect(published).toMatch(new RegExp(`^  ${code} +${name} `, "m"));
     }
     expect(published).toContain("Those six belong to every command");
     expect(published).toContain("setup");

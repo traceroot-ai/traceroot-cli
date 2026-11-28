@@ -136,6 +136,20 @@ describe("runnerEnv", () => {
     });
     expect(parent).toEqual(before);
   });
+
+  it("names no event file when given none, for a process started before the runner", () => {
+    const parent = {
+      PATH: "/usr/bin",
+      TRACEROOT_API_KEY: "tr-test-0000",
+      TRACEROOT_EVAL_EVENT_FILE: "/somewhere/else.jsonl",
+    };
+
+    expect(runnerEnv(parent)).toEqual({
+      PATH: "/usr/bin",
+      TRACEROOT_ENABLED: "false",
+      TRACEROOT_EVAL_OPTIONS: "{}",
+    });
+  });
 });
 
 describe("runEvalRunner", () => {

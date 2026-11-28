@@ -162,6 +162,7 @@ project-scoped and need none of this.
 | `evals list` | List the project's evaluations, newest first: how many runs each has and how its latest one ended. The `EVALUATION ID` column is what `evals runs list --evaluation-id` takes. `--limit <n>`, `--cursor <cursor>`, `--name <substring>` |
 | `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--cursor <cursor>`, `--evaluation-id <id>`, `--status <status>` |
 | `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, and a link to open it. |
+| `evals run <file>` | Run an evaluation file on this machine with the project's own SDK, save the run, and print each evaluation's run id and score means. With `--baseline`, compare the new run with an earlier one and exit 18 if a case regressed. `--baseline <run id or path>` |
 | `skills list` | List first-party traceroot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
 | `instrument` | Generate an agent-ready prompt to add traceroot tracing to this repo. Prompts for missing agent/output path in an interactive terminal. `--agent <agent>`, `--print`, `--output <path>`, `--force` |
@@ -298,6 +299,53 @@ Dataset names, case inputs and run URLs are whatever an SDK or a captured trace
 stored, so they print with control characters escaped: nothing read back out of
 your own data can move the cursor or repaint the terminal.
 
+### Running an evaluation locally
+
+`traceroot evals run` runs one evaluation file on this machine, through the eval
+runner of the SDK the project already has, and saves each evaluation's run under
+`.traceroot/eval/runs/<run id>.json`. The runner gets no API key and runs with
+tracing off, so the run stays on the machine. Run it once, change the code, and
+run it again against the first run:
+
+```sh
+traceroot evals run evals/triage_eval.py                       # prints the run id
+traceroot evals run evals/triage_eval.py --baseline <run-id>   # exits 18 if a case regressed
+traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdict.newly_failing'
+```
+
+- **`.py` files** run under the project's virtual environment (`.venv`, `venv` or
+  `env` beside the file or at the repository root), then `$VIRTUAL_ENV`, then
+  `python3`, with traceroot 0.3.0 or later installed.
+- **`.ts`, `.js` and `.mjs` files** run through the project's tsx (4.10.4 or
+  later) on Node 20.6 or later, with @traceroot-ai/traceroot 0.8.0 or later.
+- **A regression** is a case and scorer pair that passed in the baseline run and
+  doesn't pass now, or a case that ran cleanly there and errors now. The summary
+  names each one. A score from a new version of its scorer is never a regression:
+  it's listed under `changed`, and the summary names each one that passed in the
+  baseline run and doesn't now.
+- **Two runs are compared only when the comparison means something:** the same
+  evaluation over the same dataset, every case run in both, each case id naming
+  the same input and expected in both, and no case repeating a score name.
+  Otherwise the command exits `2` and says why. A sampled or interrupted baseline
+  is refused before the runner starts, so a wrong `--baseline` doesn't cost a run.
+- **`--baseline`** takes a run id, read from `.traceroot/eval/runs` under the
+  current directory, or the path of a run file.
+
+The summary goes to stdout and the runner's own output to stderr. Under `--json`,
+stdout holds one document whenever the evaluation ran: `schema_version`,
+`outcome` (`ok`, `regressed`, `not_comparable`, `interrupted` or `failed`), the
+file, the SDK, each run with its counts and score means, the baseline, a `verdict`
+with `newly_failing` (each with its `reason`), `newly_errored`, `changed`,
+`not_comparable_reason` and `payloads`, and `failure`. `failure` is null unless
+the runner failed after some evaluations finished; then it holds the failure's
+`kind` (the runner's own, or `crashed`) and `message`, the text of the `error:`
+line human mode prints, and `outcome` is `failed`, or `regressed` when one of the
+evaluations that finished regressed. When `outcome` is `interrupted`, the document
+also has `signal`: `SIGINT`, `SIGTERM` or `SIGHUP`, or null when only the runner
+saw the interrupt. Case ids, scorer names and the runner's
+messages print with control characters escaped, as the evaluation reads' text
+does.
+
 ### Exit codes
 
 Every command exits with a class-specific code so scripts can branch on the kind
@@ -317,7 +365,12 @@ resource — without parsing prose.
 On failure the human-readable message goes to stderr as `error: <message>`. Under
 `--json` the failure is written to stderr instead as exactly one line —
 `{"error":{"code":"<class>","message":"<text>"}}` — while stdout stays empty, so a
-`jq` pipeline over stdout is never corrupted by an error.
+`jq` pipeline over stdout is never corrupted by an error. `evals run` is the one
+exception: once its runner has run, its document goes to stdout even when it
+exits `2`, `17` or `18`, or `130`, `143` or `129` after an interrupt, because the
+caller needs the new run's id either way.
+When it stops before the runner starts, or the runner fails before any evaluation
+finishes, it uses the envelope like any other command.
 
 The six classes above belong to the whole CLI and mean the same thing whichever
 command handed them back, which is why every number below `10` stays reserved for
@@ -342,6 +395,20 @@ numbers `setup` does take from the shared table it takes unchanged: an
 unexpected failure is `1`, and a run with no usable credentials is the same `3`
 every other command reports, so a caller re-authenticating in response is right
 whichever one it came from.
+
+`evals run` numbers its own two outcomes from `17`, after setup's, so a number of
+`10` or more means one outcome across the whole CLI. Everything else it returns
+is a shared code with its shared meaning, and `17` reads `harness` in the `--json`
+envelope:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Nothing newly fails or newly errors, or no baseline was given. |
+| `2` | Invalid arguments, or a baseline the new run can't be compared with: sampled, interrupted, of another evaluation or dataset, or with a case that repeats a score name. The reason is printed. |
+| `4` | The baseline run doesn't exist. |
+| `17` | The evaluation couldn't run: no interpreter or tsx, an SDK too old to run it, a failure the runner reported, no evaluation in the file, a runner that crashed, or a reader that closed the CLI's output while the runner ran. The message carries the fix, or the runner's own kind and message. The evaluations that finished before the failure are still compared and reported, and a regression among them exits `18`. |
+| `18` | A case and scorer pair newly fails, or a case newly errors. |
+| `130` | Ctrl+C. A `SIGTERM` exits `143` and a `SIGHUP` `129`, the shell's status for each. The summary names any run the runner saved before it stopped, with that run's own status. |
 
 ## Skills & agents
 
