@@ -46,13 +46,16 @@ export function pricedCostLines(usage: PricedUsage): string[] {
   if (processed === 0) {
     return ["unknown: TraceRoot has no trace for this run's cases."];
   }
-  const lines = [
-    [
-      describeBucket("task", usage.task),
-      describeBucket("scorers", usage.scorers),
-      describeBucket("total", usage.combined),
-    ].join(", "),
-  ];
+  const lines =
+    usage.combined?.state === "no_calls"
+      ? ["no LLM calls recorded"]
+      : [
+          [
+            describeBucket("task", usage.task),
+            describeBucket("scorers", usage.scorers),
+            describeBucket("total", usage.combined),
+          ].join(", "),
+        ];
   if (withoutTrace > 0) {
     const total = processed + withoutTrace;
     lines.push(
