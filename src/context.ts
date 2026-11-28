@@ -3,7 +3,7 @@ import { DEFAULT_TIMEOUT_MS } from "./api/client.js";
 import type { CredentialEntry } from "./auth/credentials.js";
 import { loadEnvFileFromDisk, loadOptionalEnvFileFromDisk } from "./config/envFile.js";
 import { loadConfigOrThrow } from "./config/manager.js";
-import { type ResolvedAuth, resolveAuth } from "./config/resolve.js";
+import { type ResolveAuthOptions, type ResolvedAuth, resolveAuth } from "./config/resolve.js";
 import type { Config } from "./config/schema.js";
 import { CliError, ExitCode } from "./output.js";
 
@@ -69,18 +69,17 @@ function resolveTimeoutMs(flag: string | undefined, env: NodeJS.ProcessEnv): num
 }
 
 /**
- * Builds the shared context from the parsed global options. Commands obtain
- * theirs once via, e.g., `buildContext(command.optsWithGlobals())`.
+ * What {@link resolveAuth} resolves from for the parsed global options: the
+ * injected sources, or the real files and the process environment.
  */
-export function buildContext(globalOpts: GlobalOptions, deps: ContextDeps = {}): Context {
-  const env = deps.env ?? process.env;
-  const loadEnvFile = deps.loadEnvFile ?? loadEnvFileFromDisk;
+export function resolveAuthOptions(
+  globalOpts: GlobalOptions,
+  deps: ContextDeps = {},
+): ResolveAuthOptions {
   // Auto-discover a `.env` in the working directory (lowest-precedence source).
   const loadAutoEnvFile =
     deps.loadAutoEnvFile ?? (() => loadOptionalEnvFileFromDisk(join(process.cwd(), ".env")));
-  const readConfigAdapter = deps.readConfig ?? (() => loadConfigOrThrow());
-
-  const auth = resolveAuth({
+  return {
     flags: {
       apiKey: globalOpts.apiKey,
       host: globalOpts.host,
@@ -88,14 +87,20 @@ export function buildContext(globalOpts: GlobalOptions, deps: ContextDeps = {}):
       project: globalOpts.project,
       envFile: globalOpts.envFile,
     },
-    env,
-    readConfig: readConfigAdapter,
-    loadEnvFile,
+    env: deps.env ?? process.env,
+    readConfig: deps.readConfig ?? (() => loadConfigOrThrow()),
+    loadEnvFile: deps.loadEnvFile ?? loadEnvFileFromDisk,
     autoEnvFile: loadAutoEnvFile(),
     readCredential: deps.readCredential,
-  });
+  };
+}
 
-  const timeoutMs = resolveTimeoutMs(globalOpts.timeout, env);
-
+/**
+ * Builds the shared context from the parsed global options. Commands obtain
+ * theirs once via, e.g., `buildContext(command.optsWithGlobals())`.
+ */
+export function buildContext(globalOpts: GlobalOptions, deps: ContextDeps = {}): Context {
+  const auth = resolveAuth(resolveAuthOptions(globalOpts, deps));
+  const timeoutMs = resolveTimeoutMs(globalOpts.timeout, deps.env ?? process.env);
   return { auth, json: globalOpts.json ?? false, timeoutMs };
 }

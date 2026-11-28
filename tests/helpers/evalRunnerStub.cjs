@@ -49,6 +49,7 @@ if (args[0] === "python") {
 function seen(env) {
   return {
     api_key: env.TRACEROOT_API_KEY ?? null,
+    host: env.TRACEROOT_HOST_URL ?? null,
     enabled: env.TRACEROOT_ENABLED ?? null,
     options: env.TRACEROOT_EVAL_OPTIONS ?? null,
     event_file: env.TRACEROOT_EVAL_EVENT_FILE ?? null,

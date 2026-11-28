@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CredentialEntry } from "../src/auth/credentials.js";
 import { DEFAULT_HOST } from "../src/commands/constants.js";
 import { EnvFileNotFoundError } from "../src/config/envFile.js";
-import { type ResolveAuthOptions, resolveAuth } from "../src/config/resolve.js";
+import { type ResolveAuthOptions, resolveApiKey, resolveAuth } from "../src/config/resolve.js";
 
 function withCredential(
   host: string,
@@ -299,5 +299,60 @@ describe("resolveAuth env-file loading", () => {
       readConfig: () => ({ api_key: "tr_config", host_url: "https://h" }),
     });
     expect(auth.credential).toEqual({ kind: "api-key", value: "tr_config", source: "config" });
+  });
+});
+
+describe("resolveApiKey", () => {
+  it("returns the API key behind every session source", () => {
+    const options: ResolveAuthOptions = {
+      flags: { envFile: "/tmp/x.env" },
+      loadEnvFile: () => ({ TRACEROOT_TOKEN: "sess_envfile" }),
+      env: { TRACEROOT_TOKEN: "sess_env", TRACEROOT_API_KEY: "tr_env" },
+      readCredential: withCredential(DEFAULT_HOST, { session_token: "sess_file" }),
+    };
+
+    expect(resolve(options).credential.kind).toBe("session");
+    expect(resolveApiKey(options)).toEqual({ value: "tr_env", source: "env" });
+  });
+
+  it("ranks the key sources as resolveAuth does: flag, env-file, env, config, then .env", () => {
+    const every: ResolveAuthOptions = {
+      flags: { apiKey: "tr_flag", envFile: "/tmp/x.env" },
+      loadEnvFile: () => ({ TRACEROOT_API_KEY: "tr_envfile" }),
+      env: { TRACEROOT_API_KEY: "tr_env" },
+      readConfig: () => ({ api_key: "tr_config", host_url: "https://h" }),
+      autoEnvFile: { TRACEROOT_API_KEY: "tr_auto" },
+    };
+    // Each step takes the winning source away.
+    const steps: ResolveAuthOptions[] = [
+      every,
+      { ...every, flags: { envFile: "/tmp/x.env" } },
+      { ...every, flags: {} },
+      { ...every, flags: {}, env: {} },
+      { ...every, flags: {}, env: {}, readConfig: () => null },
+    ];
+
+    expect(steps.map((options) => resolveApiKey(options))).toEqual([
+      { value: "tr_flag", source: "flag" },
+      { value: "tr_envfile", source: "env-file" },
+      { value: "tr_env", source: "env" },
+      { value: "tr_config", source: "config" },
+      { value: "tr_auto", source: "auto-env-file" },
+    ]);
+  });
+
+  it("strips a pasted TRACEROOT_API_KEY= assignment", () => {
+    expect(
+      resolveApiKey({ env: { TRACEROOT_API_KEY: 'export TRACEROOT_API_KEY="tr_abc"' } }),
+    ).toEqual({ value: "tr_abc", source: "env" });
+  });
+
+  it("finds nothing when only sessions are set, a tr_-shaped TRACEROOT_TOKEN included", () => {
+    expect(
+      resolveApiKey({
+        env: { TRACEROOT_TOKEN: "tr_looks_like_a_key" },
+        readCredential: withCredential(DEFAULT_HOST, { session_token: "sess_file" }),
+      }),
+    ).toEqual({ value: undefined, source: "none" });
   });
 });

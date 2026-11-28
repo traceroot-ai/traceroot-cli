@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sink } from "../output.js";
 import { runProcess } from "../setup/exec.js";
+import { type Secret, redact } from "../setup/secret.js";
 import { type InterruptSignal, type RunOutcome, outcomeOf } from "./events.js";
 
 /** How long the runner has after the first Ctrl+C before its process group is killed. */
@@ -43,6 +44,28 @@ const LOCAL_RUN: Readonly<Record<string, string | undefined>> = {
   TRACEROOT_EVAL_OPTIONS: "{}",
 };
 
+/** Where a run that is uploaded goes: a TraceRoot host, and a project API key for it. */
+export interface UploadTarget {
+  /** The host, as the CLI resolved it. */
+  host: string;
+  apiKey: Secret;
+}
+
+/**
+ * What an uploaded run sets instead: the project API key and its host, reporting on, and tracing
+ * on, so a TRACEROOT_ENABLED=false left in the environment can't drop the cases' traces. The
+ * project API key is the one credential it gets: the CLI's session token is still removed.
+ */
+function uploadedRun(target: UploadTarget): Record<string, string | undefined> {
+  return {
+    TRACEROOT_API_KEY: target.apiKey.reveal(),
+    TRACEROOT_TOKEN: undefined,
+    TRACEROOT_HOST_URL: target.host,
+    TRACEROOT_ENABLED: "true",
+    TRACEROOT_EVAL_OPTIONS: JSON.stringify({ reporting: true }),
+  };
+}
+
 /**
  * The runner's environment: the CLI's own, with the variables that decide what the run may reach
  * replaced, and the event file named.
@@ -51,9 +74,15 @@ const LOCAL_RUN: Readonly<Record<string, string | undefined>> = {
  * such as the lookup's Python version probe: the same replacements, and no event file.
  *
  * @param parent the CLI's environment, which is not modified.
+ * @param upload where the run is uploaded to; without it, the run stays on this machine.
  */
-export function runnerEnv(parent: NodeJS.ProcessEnv, eventFile?: string): NodeJS.ProcessEnv {
-  return withVariables(parent, { ...LOCAL_RUN, TRACEROOT_EVAL_EVENT_FILE: eventFile });
+export function runnerEnv(
+  parent: NodeJS.ProcessEnv,
+  eventFile?: string,
+  upload?: UploadTarget,
+): NodeJS.ProcessEnv {
+  const run = upload === undefined ? LOCAL_RUN : uploadedRun(upload);
+  return withVariables(parent, { ...run, TRACEROOT_EVAL_EVENT_FILE: eventFile });
 }
 
 export interface RunEvalRunnerOptions {
@@ -66,6 +95,12 @@ export interface RunEvalRunnerOptions {
   cwd?: string;
   /** The CLI's environment, which the runner's is built from (see {@link runnerEnv}). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Where the run is uploaded to. Without it the run stays on this machine. With it, the API key is
+   * scrubbed from everything the runner writes before the CLI passes it on, a key split across two
+   * chunks of its output included.
+   */
+  upload?: UploadTarget;
   /** Where the runner's stdout and stderr both go. Defaults to the CLI's stderr. */
   output?: Sink;
   /** How long the runner has after the first Ctrl+C. Defaults to {@link INTERRUPT_GRACE_MS}. */
@@ -110,6 +145,8 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
     throw new Error("runEvalRunner needs a runner command");
   }
   const output = options.output ?? process.stderr;
+  const secrets = options.upload === undefined ? [] : [options.upload.apiKey];
+  const scrubbed = redactAcrossChunks((text) => output.write(text), secrets);
   const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS);
   let folder: string | undefined;
   let signalRunner: ((name: NodeJS.Signals) => void) | undefined;
@@ -126,17 +163,18 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
       program,
       args,
       cwd: options.cwd ?? process.cwd(),
-      env: runnerEnv(options.env ?? process.env, eventFile),
+      env: runnerEnv(options.env ?? process.env, eventFile, options.upload),
       stdio: "capture",
-      onData: (chunk) => {
-        output.write(chunk);
-      },
+      onData: (chunk) => scrubbed.write(chunk),
       signal: interrupts.signal,
       onSpawn: (signal) => {
         signalRunner = signal;
       },
+      secrets,
     });
-    return outcomeOf(readEvents(eventFile), {
+    scrubbed.flush();
+    // A runner's `fatal` message is printed too, so it is scrubbed like its output.
+    return outcomeOf(redact(readEvents(eventFile), secrets), {
       status: result.exitCode,
       signal: interrupts.received(),
       outputTail: lastLines(result.output, OUTPUT_TAIL_LINES),
@@ -228,6 +266,74 @@ function listenForExit(cleanUp: () => void, earlyExitCode: number | undefined): 
   process.on("exit", onExit);
   process.on("SIGQUIT", onQuit);
   return { stop };
+}
+
+/** Where the runner's output goes once its secrets are scrubbed. */
+interface ScrubbedOutput {
+  /** Takes the next chunk of the runner's output. */
+  write(chunk: string): void;
+  /** Passes on what is held back, once the runner has ended. */
+  flush(): void;
+}
+
+/**
+ * Passes the runner's output to `write` with every secret redacted, a secret that two chunks split
+ * between them included. `runProcess` redacts each chunk on its own, which misses a secret that
+ * crosses a read boundary. So the end of each chunk that a secret could start at, the longest such
+ * end (see {@link secretStartAtEnd}), is held back until the next chunk or
+ * {@link ScrubbedOutput.flush} shows whether the rest of the secret follows. Any other text passes
+ * on at once, so the last line the runner wrote shows while it works. The text and its order are
+ * otherwise unchanged: a character written as two UTF-16 units is never cut between them, so a sink
+ * that encodes each write gets whole characters.
+ */
+function redactAcrossChunks(
+  write: (text: string) => void,
+  secrets: readonly Secret[],
+): ScrubbedOutput {
+  let held = "";
+  return {
+    write: (chunk) => {
+      const text = redact(held + chunk, secrets);
+      let cut = text.length - secretStartAtEnd(text, secrets);
+      if (cut > 0 && isHighSurrogate(text.charCodeAt(cut - 1))) {
+        cut -= 1;
+      }
+      held = text.slice(cut);
+      if (cut > 0) {
+        write(text.slice(0, cut));
+      }
+    },
+    flush: () => {
+      if (held !== "") {
+        write(held);
+      }
+      held = "";
+    },
+  };
+}
+
+/**
+ * How many characters at the end of `text` a secret could start at: the length of the longest end
+ * of it that is the start of one of `secrets`, short of the whole secret, or 0 when none is. A
+ * secret that crosses into the next chunk always leaves such an end behind.
+ */
+function secretStartAtEnd(text: string, secrets: readonly Secret[]): number {
+  let longest = 0;
+  for (const secret of secrets) {
+    const value = secret.reveal();
+    for (let length = Math.min(text.length, value.length - 1); length > longest; length -= 1) {
+      if (text.endsWith(value.slice(0, length))) {
+        longest = length;
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
+/** Whether a UTF-16 unit is the first of the two a character outside the BMP is written as. */
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
 }
 
 /**
