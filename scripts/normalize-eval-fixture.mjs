@@ -24,7 +24,7 @@ const DURATION = /("duration_ms": ?)-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
 const placeholders = pairs
   .map((pair) => {
     const at = pair.indexOf("=");
-    if (at <= 0) fail(`not a placeholder=path pair: ${pair}`);
+    if (at <= 0 || at === pair.length - 1) fail(`not a placeholder=path pair: ${pair}`);
     return { placeholder: pair.slice(0, at), path: pair.slice(at + 1) };
   })
   .sort((a, b) => b.path.length - a.path.length);
@@ -94,7 +94,7 @@ function checkForLeaks(relative, text) {
     [/file:\/\//, "a file URL"],
     [/\b[A-Za-z]:\\/, "a Windows path"],
     [/127\.0\.0\.1|localhost/, "a hostname"],
-    [/\btr-[\w-]{4,}/, "an API key"],
+    [/\btr[_-][\w-]{4,}/, "an API key"],
   ];
   for (const name of new Set([host, host.split(".")[0]])) {
     if (name.length >= 3) leaks.push([name, "this machine's hostname"]);

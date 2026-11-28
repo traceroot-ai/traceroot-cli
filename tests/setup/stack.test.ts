@@ -263,7 +263,7 @@ describe("reading whether a service is wired up now", () => {
 
   it("refuses an absolute path outside the repository", () => {
     // `alsoRead` carries the agent's own JSON, read as given. An installed copy
-    // of the SDK initializes TraceRoot in its own tests and examples, and it is
+    // of the SDK initializes traceroot in its own tests and examples, and it is
     // not this service's instrumentation.
     const root = repo({
       "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
@@ -339,7 +339,7 @@ describe("reading whether a service is wired up now", () => {
   it("does not walk the agent's own skill directory", () => {
     // Git reports `.claude/` when setup has installed the skill there. It is
     // not the service's source, and walking it found its `references/` past
-    // the depth limit, so a service with no TraceRoot read as unknown.
+    // the depth limit, so a service with no traceroot read as unknown.
     const root = repo({
       "pyproject.toml": '[project]\ndependencies = ["fastapi"]\n',
       "main.py": "print('hi')\n",
@@ -351,7 +351,7 @@ describe("reading whether a service is wired up now", () => {
     });
   });
 
-  it("answers unknown for a file that imports TraceRoot and starts it with arguments", () => {
+  it("answers unknown for a file that imports traceroot and starts it with arguments", () => {
     // The TypeScript SDK takes its options in the call, and an agent writes
     // them there. The bare-call pattern only matches empty parentheses, so this
     // read as absent and the post-agent check failed a service that was

@@ -108,9 +108,9 @@ export function backendUnsupported(
 ): SetupError {
   // Naming the host is the whole point of this message. "Not available on this
   // deployment" is unactionable when the reader cannot see WHICH deployment was
-  // asked — and the commonest cause is the default (TraceRoot Cloud) being used
+  // asked — and the commonest cause is the default (traceroot Cloud) being used
   // when the developer meant a local or self-hosted one.
-  const where = host === undefined || host === "" ? "this TraceRoot deployment" : host;
+  const where = host === undefined || host === "" ? "this traceroot deployment" : host;
   return new SetupError({
     stage,
     code: "BACKEND_UNSUPPORTED",

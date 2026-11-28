@@ -185,7 +185,7 @@ describe("which variables it tells you to carry", () => {
     );
     // The caveat about this machine carries the identical gap, and bites first.
     // Space-separated, because this half of the sentence is a command: `export
-    // A and B` exports a variable named `and` and leaves both of TraceRoot's
+    // A and B` exports a variable named `and` and leaves both of traceroot's
     // unset, which is the very misrouting the notice is warning about. The
     // prose above it keeps "and" because a reader is not pasting that.
     expect(text).toContain("export TRACEROOT_API_KEY TRACEROOT_HOST_URL in your shell");

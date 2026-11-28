@@ -42,7 +42,8 @@ function detail(over: Partial<FindingDetail> = {}): FindingDetail {
     timestamp: "2024-01-01T00:00:00Z",
     detectors: ["hallucination"],
     results: [resultItem()],
-    rca: { status: "done", result: "the root cause" },
+    rca: { inherited: false, status: "done", result: "the root cause" },
+    signals: [],
     ...over,
   };
 }
@@ -86,14 +87,19 @@ describe("renderFinding", () => {
 
   it("keeps the RCA status when it is still in progress (no result yet)", () => {
     const { writers: w } = writers();
-    const out = renderFinding(detail({ rca: { status: "processing", result: null } }), w);
+    const out = renderFinding(
+      detail({ rca: { inherited: false, status: "processing", result: null } }),
+      w,
+    );
     expect(out).toContain("RCA: processing");
   });
 
   it("prints an RCA result that is already a list without doubling the bullets", () => {
     const { writers: w } = writers();
     const out = renderFinding(
-      detail({ rca: { status: "done", result: "- root cause one\n- root cause two" } }),
+      detail({
+        rca: { inherited: false, status: "done", result: "- root cause one\n- root cause two" },
+      }),
       w,
     );
     expect(out).toContain("- root cause one");

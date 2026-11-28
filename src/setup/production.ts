@@ -198,7 +198,7 @@ function localCaveat(
 ): string {
   // Space-separated rather than through `nameList`: this list is pasted into a
   // shell, and `export A and B` exports a variable named `and` while leaving
-  // both of TraceRoot's unset — the precise failure the sentence exists to
+  // both of traceroot's unset — the precise failure the sentence exists to
   // prevent. `export A B` is what a shell accepts. `nameList` stays for the
   // prose elsewhere in this file, where "A and B" is what a reader wants.
   const exports = keys.join(" ");

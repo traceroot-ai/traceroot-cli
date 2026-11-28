@@ -3,7 +3,7 @@ import { CliError, ExitCode } from "../output.js";
 /** The first-party skills the CLI knows how to install. This is the allowlist. */
 export type BuiltinSkillName = "traceroot-instrument-repo" | "traceroot-quickstart";
 
-/** A first-party TraceRoot skill bundled with the CLI. */
+/** A first-party traceroot skill bundled with the CLI. */
 export interface BuiltinSkill {
   name: BuiltinSkillName;
   /** One-line summary shown by `skills list`. */
@@ -20,13 +20,13 @@ export interface BuiltinSkill {
 export const BUILTIN_SKILLS: readonly BuiltinSkill[] = [
   {
     name: "traceroot-instrument-repo",
-    description: "Add TraceRoot tracing to an existing Python or TypeScript/Node.js app.",
+    description: "Add traceroot tracing to an existing Python or TypeScript/Node.js app.",
     bestFor: ["production apps", "agents", "tools", "LLM calls", "retrieval", "external APIs"],
   },
   {
     name: "traceroot-quickstart",
-    description: "Minimal runnable demo that produces one TraceRoot trace.",
-    bestFor: ["verifying API keys", "seeing TraceRoot quickly"],
+    description: "Minimal runnable demo that produces one traceroot trace.",
+    bestFor: ["verifying API keys", "seeing traceroot quickly"],
   },
 ] as const;
 

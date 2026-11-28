@@ -130,7 +130,7 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
   // the same line, aligned. Next-step hint goes to stderr like `login`.
   if (dryRun) {
     const lines = [
-      "Dry run: would install TraceRoot skill",
+      "Dry run: would install traceroot skill",
       "",
       `${label("Skill:")}  ${skill.name}`,
       `${label("Agent:")}  ${agent.displayName}`,
@@ -144,7 +144,7 @@ export async function runSkillsInstall(deps: RunSkillsInstallDeps): Promise<void
   }
 
   const lines = [
-    "Installed TraceRoot skill",
+    "Installed traceroot skill",
     "",
     `${label("Skill:")}  ${skill.name}`,
     `${label("Agent:")}  ${agent.displayName}`,
@@ -168,7 +168,7 @@ export function registerSkillsInstall(skills: Command): void {
     .option("--agent <agent>", "target agent: claude, codex, or generic")
     .option("--force", "overwrite an existing skill directory")
     .option("--dry-run", "show what would happen without writing files")
-    .description("Install a TraceRoot skill into an agent's skill directory")
+    .description("Install a traceroot skill into an agent's skill directory")
     .action(async (skillName: string | undefined, _opts, command: Command) => {
       const opts = command.optsWithGlobals();
       await runSkillsInstall({

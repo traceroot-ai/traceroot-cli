@@ -111,13 +111,15 @@ afterEach(() => {
 });
 
 describe("runnerEnv", () => {
-  it("removes the API key under any spelling, and turns tracing and reporting off", () => {
+  it("removes the API key and the session token under any spelling, and turns tracing and reporting off", () => {
     const parent = {
       PATH: "/usr/bin",
       HOME: "/home/someone",
       TRACEROOT_HOST_URL: "https://traceroot.example",
       TRACEROOT_API_KEY: "tr-test-0000",
       Traceroot_Api_Key: "tr-test-0001",
+      TRACEROOT_TOKEN: "session-test-0000",
+      Traceroot_Token: "session-test-0001",
       TRACEROOT_ENABLED: "true",
       TRACEROOT_EVAL_OPTIONS: '{"reporting":true}',
       TRACEROOT_EVAL_EVENT_FILE: "/somewhere/else.jsonl",
@@ -137,12 +139,13 @@ describe("runnerEnv", () => {
 });
 
 describe("runEvalRunner", () => {
-  it("never hands the runner the CLI's API key, and always turns tracing off", async () => {
+  it("never hands the runner the CLI's API key or session token, and always turns tracing off", async () => {
     const show = (name: string) => `${name}=\${process.env.${name} ?? "(unset)"}`;
     const { output } = await run(
       stub(
         "ready();",
         `say(\`${show("TRACEROOT_API_KEY")}\`);`,
+        `say(\`${show("TRACEROOT_TOKEN")}\`);`,
         `say(\`${show("TRACEROOT_ENABLED")}\`);`,
         `say(\`${show("TRACEROOT_EVAL_OPTIONS")}\`);`,
         `say(\`${show("KEPT")}\`);`,
@@ -154,6 +157,7 @@ describe("runEvalRunner", () => {
           ...BASE_ENV,
           KEPT: "yes",
           TRACEROOT_API_KEY: "tr-test-0000",
+          TRACEROOT_TOKEN: "session-test-0000",
           TRACEROOT_ENABLED: "true",
           TRACEROOT_EVAL_OPTIONS: '{"reporting":true}',
         },
@@ -161,10 +165,12 @@ describe("runEvalRunner", () => {
     );
 
     expect(output).toContain("TRACEROOT_API_KEY=(unset)");
+    expect(output).toContain("TRACEROOT_TOKEN=(unset)");
     expect(output).toContain("TRACEROOT_ENABLED=false");
     expect(output).toContain("TRACEROOT_EVAL_OPTIONS={}");
     expect(output).toContain("KEPT=yes");
     expect(output).not.toContain("tr-test-0000");
+    expect(output).not.toContain("session-test-0000");
   });
 
   it("runs the runner in the CLI's directory unless told otherwise", async () => {

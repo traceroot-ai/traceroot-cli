@@ -211,7 +211,7 @@ export interface SetupCheckpoint {
    * hand-over leaves the repository exactly as it found it, so `--resume`
    * restores the stage rather than re-running it — and a restored result that
    * claimed an agent had edited the code is what sent a resumed run off to wait
-   * for a trace from an application with no TraceRoot in it.
+   * for a trace from an application with no traceroot in it.
    *
    * Every route writes its own value, `"agent"` included, so a completed stage
    * without one is a file something other than setup has edited. That is not
@@ -406,10 +406,10 @@ export interface SetupContext {
    *
    * The difference is whether anyone has had the chance to act on it. Straight
    * after a hand-over nobody has, and the code is exactly as detection read it,
-   * so a run with no trace can say the service has no TraceRoot in it yet. A
+   * so a run with no trace can say the service has no traceroot in it yet. A
    * resumed hand-over may be the user back from the task, and detection reads
    * only the entry point: an `initialize()` the task put in an imported module
-   * is not there to see, and saying "no TraceRoot" over it is false.
+   * is not there to see, and saying "no traceroot" over it is false.
    *
    * Not on the checkpoint, for the reason {@link SetupContext.traceWaitSkipped}
    * is not restored from it.

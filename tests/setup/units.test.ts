@@ -431,7 +431,7 @@ describe("stack detection", () => {
 
   it("does not call a declared dependency 'already instrumented'", () => {
     // This told the coding agent the work was done, and it wrote nothing —
-    // which is what happens in any repository that depends on TraceRoot for
+    // which is what happens in any repository that depends on traceroot for
     // other reasons, or one named after it. The dependency is still reported
     // as context; it just is not proof.
     write("package.json", JSON.stringify({ dependencies: { "@traceroot-ai/traceroot": "^1" } }));
@@ -845,7 +845,7 @@ describe("setup report", () => {
     const md = renderSetupReport(baseCtx(), new Date(), { kind: "environment" });
 
     expect(md).not.toContain("Your checks");
-    expect(md).not.toContain("TraceRoot switched off");
+    expect(md).not.toContain("traceroot switched off");
   });
 
   it("says what to do next when no trace arrived", () => {
@@ -1158,7 +1158,7 @@ describe("getting the credential setup wrote into the application", () => {
     // `import "dotenv/config"` reads `.env` and only `.env`, resolved against
     // `process.cwd()` — so a service whose credential went into `.env.local`,
     // or whose entry point is not at the service root, started with no
-    // TraceRoot key and nothing printed. `initialize()` reads `process.env`
+    // traceroot key and nothing printed. `initialize()` reads `process.env`
     // when it is called, so the explicit load has to sit above that call.
     const rendered = task({ language: "typescript", envFiles: ["./.env"] });
     const snippet = rendered.slice(rendered.indexOf("### 3."), rendered.indexOf("### 4."));
