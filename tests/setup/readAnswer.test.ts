@@ -91,8 +91,8 @@ describe("a typed answer", () => {
 
   it("still keeps a masked answer off the screen", async () => {
     const t = terminal();
-    const answer = readAnswer(t, "TraceRoot API key: ", { stage: "authenticate", masked: true });
-    await asked(t, "TraceRoot API key: ");
+    const answer = readAnswer(t, "traceroot API key: ", { stage: "authenticate", masked: true });
+    await asked(t, "traceroot API key: ");
 
     t.input.write("tr-secret-value\r");
 
@@ -123,8 +123,8 @@ describe("a typed answer", () => {
     try {
       const deps = defaultSetupDeps(authEmpty());
 
-      const key = deps.promptHidden("TraceRoot API key: ", "authenticate");
-      await asked(t, "TraceRoot API key: ");
+      const key = deps.promptHidden("traceroot API key: ", "authenticate");
+      await asked(t, "traceroot API key: ");
       t.input.write("\x03");
       await expect(key).rejects.toSatisfy(isInterruptAt("authenticate"));
 
