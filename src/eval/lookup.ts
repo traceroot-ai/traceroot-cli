@@ -20,6 +20,16 @@ export interface EvalRunner {
   sdkVersion: string;
   /** The runner command, program first, spawned as given and never through a shell. */
   argv: string[];
+  /** The interpreter the runner runs under. */
+  runtime: Runtime;
+}
+
+/** An interpreter: which one, which version, and where it is. */
+export interface Runtime {
+  name: "Python" | "Node.js";
+  version: string;
+  /** The interpreter's absolute path, as the runner is spawned with it. */
+  executable: string;
 }
 
 export type LookupFailureKind =

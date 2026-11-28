@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Sink } from "../../src/output.js";
 import type { CaseLine, CaseScore, EvaluationCompletedEvent } from "../../src/eval/protocol.js";
 import { type Report, type SavedEvaluation, renderSummary } from "../../src/eval/report.js";
+import { displayWidth } from "../../src/render/wrap.js";
 
 /**
  * The summary's edge cases, from runs built here rather than recorded: what the recorded runs
@@ -11,9 +12,12 @@ import { type Report, type SavedEvaluation, renderSummary } from "../../src/eval
 
 const CWD = "/work/project";
 
-function sink(): Sink & { text: string } {
+/** A sink that keeps what is written: a terminal `columns` wide when given, else a pipe. */
+function sink(columns?: number): Sink & { text: string; columns?: number } {
   return {
     text: "",
+    isTTY: columns !== undefined,
+    columns,
     write(chunk: string) {
       this.text += chunk;
       return true;
@@ -78,7 +82,12 @@ function report(runs: SavedEvaluation[], file = `${CWD}/evals/x_eval.py`): Repor
   return {
     outcome: "ok",
     file,
-    runner: { language: "python", sdkVersion: "0.5.1", argv: ["python"] },
+    runner: {
+      language: "python",
+      sdkVersion: "0.5.1",
+      argv: ["python"],
+      runtime: { name: "Python", version: "3.12.13", executable: "/work/project/.venv/bin/python" },
+    },
     runs,
     baseline: null,
     upload: null,
@@ -88,16 +97,16 @@ function report(runs: SavedEvaluation[], file = `${CWD}/evals/x_eval.py`): Repor
   };
 }
 
-/** The summary as written, styled when FORCE_COLOR is set. */
-function rawSummary(of: Report, cwd = CWD): string {
-  const out = sink();
+/** The summary as written, styled when FORCE_COLOR is set, to a terminal `columns` wide if given. */
+function rawSummary(of: Report, cwd = CWD, columns?: number): string {
+  const out = sink(columns);
   renderSummary(of, { out, err: sink() }, { env: {}, cwd });
   return out.text;
 }
 
 /** The summary without its styling. */
-function summary(of: Report, cwd = CWD): string {
-  return stripVTControlCharacters(rawSummary(of, cwd));
+function summary(of: Report, cwd = CWD, columns?: number): string {
+  return stripVTControlCharacters(rawSummary(of, cwd, columns));
 }
 
 describe("renderSummary", () => {
@@ -111,7 +120,7 @@ describe("renderSummary", () => {
     expect(text).toContain("    case-9  task: RuntimeError: provider rejected the key (9)\n");
     expect(text).not.toContain("case-10 ");
     expect(text).toContain("    and 3 more cases; the case file has each one's error.\n");
-    expect(text).toContain("  Case file  .traceroot/eval/runs/run_a.cases.jsonl\n");
+    expect(text).toContain("\nCase file  .traceroot/eval/runs/run_a.cases.jsonl\n");
   });
 
   it("says which values the mean leaves out, and never reads them as 0", () => {
@@ -184,7 +193,7 @@ describe("renderSummary", () => {
       "  traceroot evals run '/elsewhere/my evals/x_eval.py' --baseline run_a\n",
     );
     expect(summary(report([evaluation("agent", "run_a", [item("a")])]), "/other")).toContain(
-      "  Run file   /work/project/.traceroot/eval/runs/run_a.json\n",
+      "\nRun file   /work/project/.traceroot/eval/runs/run_a.json\n",
     );
   });
 
@@ -196,12 +205,135 @@ describe("renderSummary", () => {
       ]),
     );
 
-    expect(text).toContain(
+    expect(text).toBe(
       [
-        "No baseline given, so regressions weren't checked.",
+        "first · run_a · completed",
+        "  1 case · 0 errored",
+        "  no scores",
+        "",
+        "second · run_b · completed",
+        "  1 case · 0 errored",
+        "  no scores",
+        "",
+        "Regression check: skipped, because no baseline was given.",
+        "",
+        "first",
+        "  Run file   .traceroot/eval/runs/run_a.json",
+        "  Case file  .traceroot/eval/runs/run_a.cases.jsonl",
+        "second",
+        "  Run file   .traceroot/eval/runs/run_b.json",
+        "  Case file  .traceroot/eval/runs/run_b.cases.jsonl",
+        "",
         "To compare the next run with one of these, give its run id:",
         "  traceroot evals run evals/x_eval.py --baseline <run id>",
+        "",
       ].join("\n"),
+    );
+  });
+});
+
+describe("renderSummary on a narrow terminal", () => {
+  const cases = [
+    item("tc_d2682fce6e8c00532e62", {
+      scores: [score("exact_match", true, true)],
+      scorer_errors: [
+        {
+          scorer_name: "judge",
+          scorer_version: null,
+          message: "KeyError: 'rubric' was missing from the judge's template variables",
+        },
+      ],
+    }),
+    item("tc_c9ee6cb242cade5547b7", { scores: [score("exact_match", false, false)] }),
+  ];
+  const run = evaluation("uppercase", "run_01M7S5GKT91KS2B33EGQHDK7PJ", cases);
+  const id = "run_01M7S5GKT91KS2B33EGQHDK7PJ";
+
+  it("stacks a score table that doesn't fit, wraps prose with a hanging indent, and keeps the command whole", () => {
+    const text = summary(report([run]), CWD, 40);
+
+    expect(text).toBe(
+      [
+        "uppercase",
+        `  ${id}`,
+        "  completed with errors",
+        "  2 cases",
+        "    1 errored (0 task errors, 1 scorer",
+        "    error)",
+        "  exact_match",
+        "    mean 0.5 · scored 2 of 2 · passed 1",
+        "      failed 1",
+        "  Errors",
+        "    tc_d2682fce6e8c00532e62",
+        "      judge: KeyError: 'rubric' was",
+        "        missing from the judge's",
+        "        template variables",
+        "",
+        "Regression check: skipped, because no",
+        "  baseline was given.",
+        "",
+        "Run file",
+        `  .traceroot/eval/runs/${id}.json`,
+        "Case file",
+        `  .traceroot/eval/runs/${id}.cases.jsonl`,
+        "",
+        "To compare the next run with this one:",
+        `  traceroot evals run evals/x_eval.py --baseline ${id}`,
+        "",
+      ].join("\n"),
+    );
+    // Only a command or a path that is wider than the terminal on its own runs past it.
+    const over = text.split("\n").filter((line) => displayWidth(line) > 40);
+    expect(over).toEqual([
+      `  .traceroot/eval/runs/${id}.json`,
+      `  .traceroot/eval/runs/${id}.cases.jsonl`,
+      `  traceroot evals run evals/x_eval.py --baseline ${id}`,
+    ]);
+  });
+
+  it("keeps the table and wraps only the error column when the other columns fit", () => {
+    const text = summary(report([run]), CWD, 60);
+
+    expect(text).toContain(
+      [
+        "  SCORE        MEAN  SCORED  PASSED  FAILED",
+        "  exact_match  0.5   2 of 2  1       1",
+        "  Errors",
+        "    CASE                     ERROR",
+        "    tc_d2682fce6e8c00532e62  judge: KeyError: 'rubric' was",
+        "                             missing from the judge's",
+        "                             template variables",
+      ].join("\n"),
+    );
+    const over = text.split("\n").filter((line) => displayWidth(line) > 60);
+    expect(over).toEqual([
+      `  .traceroot/eval/runs/${id}.cases.jsonl`,
+      `  traceroot evals run evals/x_eval.py --baseline ${id}`,
+    ]);
+  });
+
+  it("prints every line whole to a pipe, however long", () => {
+    const text = summary(report([run]));
+
+    expect(text).toContain(
+      "    tc_d2682fce6e8c00532e62  judge: KeyError: 'rubric' was missing from the judge's template variables\n",
+    );
+    expect(text).toContain(`\nCase file  .traceroot/eval/runs/${id}.cases.jsonl\n`);
+  });
+
+  it("lines up a table on display width when a name has wide characters", () => {
+    const text = summary(
+      report([
+        evaluation("agent", "run_a", [
+          item("a", { scores: [score("正确性", true, true), score("tone", 0.5, null)] }),
+        ]),
+      ]),
+      CWD,
+      80,
+    );
+
+    expect(text).toContain(
+      ["  SCORE   MEAN  SCORED  PASSED  FAILED", "  正确性  1     1 of 1  1       0"].join("\n"),
     );
   });
 });

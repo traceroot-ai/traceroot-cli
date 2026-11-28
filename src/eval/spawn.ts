@@ -17,9 +17,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sink } from "../output.js";
+import { terminalColumns } from "../render/wrap.js";
 import { runProcess } from "../setup/exec.js";
 import { type Secret, redact } from "../setup/secret.js";
 import { type InterruptSignal, type RunOutcome, outcomeOf } from "./events.js";
+import { filterNotices } from "./notices.js";
 import { type ProgressLine, type ProgressLineOptions, startProgressLine } from "./progress-line.js";
 import { type EventWatch, watchEventFile } from "./tail.js";
 
@@ -107,12 +109,16 @@ export interface RunEvalRunnerOptions {
    * chunks of its output included.
    */
   upload?: UploadTarget;
-  /** Where the runner's stdout and stderr both go. Defaults to the CLI's stderr. */
+  /**
+   * Where the runner's stdout and stderr both go. Defaults to the CLI's stderr. The output passes on
+   * as the runner wrote it, but for the SDK's own Git notice, which is reworded for an uploaded run
+   * and left out of a local one (see notices.ts).
+   */
   output?: Sink;
   /**
    * Shows a progress line at the bottom of `output` while the runner runs. Give it only when
-   * `output` is a terminal that can redraw: without it, the runner's output passes on exactly as
-   * the runner wrote it, and the event file isn't read until the runner has exited.
+   * `output` is a terminal that can redraw: without it, the runner's output passes straight on, and
+   * the event file isn't read until the runner has exited.
    */
   progress?: RunProgressOptions;
   /** How long the runner has after the first Ctrl+C. Defaults to {@link INTERRUPT_GRACE_MS}. */
@@ -171,13 +177,18 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
   let line: ProgressLine | undefined;
   let watch: EventWatch | undefined;
   // Through the progress line while there is one, which writes whole lines above itself.
-  const scrubbed = redactAcrossChunks((text) => {
-    if (line === undefined) {
-      output.write(text);
-    } else {
-      line.write(text);
-    }
-  }, secrets);
+  const notices = filterNotices(
+    (text) => {
+      if (line === undefined) {
+        output.write(text);
+      } else {
+        line.write(text);
+      }
+    },
+    () => terminalColumns(output),
+    options.upload !== undefined,
+  );
+  const scrubbed = redactAcrossChunks((text) => notices.write(text), secrets);
   const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS, () =>
     line?.stopping(),
   );
@@ -214,6 +225,7 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
       secrets,
     });
     scrubbed.flush();
+    notices.flush();
     // A runner's `fatal` message is printed too, so it is scrubbed like its output.
     return outcomeOf(redact(readEvents(eventFile), secrets), {
       status: result.exitCode,

@@ -330,12 +330,20 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   is refused before the runner starts, so a wrong `--baseline` doesn't cost a run.
 - **`--baseline`** takes a run id, read from `.traceroot/eval/runs` under the
   current directory, or the path of a run file.
-- **The summary** gives each evaluation's run id, its case and error counts, the
-  mean time a case took (its task and its scorers), each score's mean, and the
-  run file and case file it saved. Without `--baseline` it says that regressions
-  weren't checked, so an exit `0` there isn't a claim that every case passed, and
-  prints the command that compares the next run with this one, unless the run
-  can't be a baseline, as a sampled or interrupted run can't.
+- **The summary** puts the results first: each evaluation's run id, its case and
+  error counts, the mean time a case took (its task and its scorers), and each
+  score's mean. Then the regression check, then the run file and case file each
+  evaluation saved, then the commands to run next. Without `--baseline` the
+  regression check says it was skipped, so an exit `0` there isn't a claim that
+  every case passed, and the commands to run next start with the one that
+  compares the next run with this one, unless the run can't be a baseline, as a
+  sampled or interrupted run can't.
+- **On a terminal, the summary fits its width.** Prose wraps at word boundaries
+  with a hanging indent. A table too wide for the terminal wraps its last column
+  within the cell when that column is prose, such as an error, and there's room
+  for it; otherwise it's stacked, each row's values under its first cell. A
+  command, a link, a path or an id is never broken or shortened, so each copies
+  whole. Piped or redirected output keeps every line whole.
 - **Each score's mean says what it is a mean of.** `SCORED` counts the cases that
   gave the score a number or true/false, out of the run's cases: a case whose task
   or scorer raised has none, and any other value is left out of the mean rather
@@ -356,7 +364,17 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   `select` leaves out, so for TypeScript and JavaScript files the line shows the
   cases done alone. There's no progress line under `--json`, a non-empty
   `NO_COLOR`, `TERM=dumb` or `CI`, or when stderr isn't a terminal: stderr then
-  carries the runner's output exactly as it's written.
+  carries the runner's output as it's written.
+- **The runner's output prints as the evaluation writes it**, logs and
+  tracebacks included, with two exceptions. An uploaded run's API key prints as
+  `<redacted>` wherever it appears. And the SDK's own notice that it found no
+  Git repository or commit to link traces to prints as a short warning naming
+  what to set on an uploaded run, and is left out of a local run, which sends no
+  traces.
+- **The line saying what runs** names the file, the SDK and the interpreter's
+  version, and for a `.py` file the interpreter it runs under, relative to the
+  current directory. `--json` has the interpreter's full path as
+  `runtime.executable`.
 
 `--upload` also sends the run and each case's trace to TraceRoot, where the rest
 of the team can see it. The run is still saved under `.traceroot/eval/runs`, and
@@ -393,9 +411,9 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
 - **An evaluation that finishes without a TraceRoot run id**, such as one defined
   with `local=True` (`local: true` in TypeScript), is named and exits `17`, unless
   a case regressed, which exits `18`.
-- **The summary ends with each uploaded run's link and the command that opens
-  it.** The link is the one TraceRoot gave the run; a host that gives none gets
-  the command alone. The command is
+- **The summary gives each uploaded run's TraceRoot id and link** beside the
+  files it saved, and ends with the command that reads it. The link is the one
+  TraceRoot gave the run; a host that gives none gets the id alone. The command is
   `traceroot evals runs get <id> --project <project id>`. It names the key's
   project, so it works under a browser login too. It repeats `--host` and
   `--env-file` when the host or the key came from them, and when the key came
@@ -408,7 +426,8 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,
 `outcome` (`ok`, `regressed`, `not_comparable`, `not_uploaded`, `interrupted` or
-`failed`), the file, the SDK, `project_id` (the key's project under `--upload`,
+`failed`), the file, the SDK, the `runtime` it ran under (`name`, `version` and
+the interpreter's full path as `executable`), `project_id` (the key's project under `--upload`,
 otherwise null), each run with its `path` and `cases_path` (its run file and
 case file), its counts, `duration_ms` (the mean time a case took, and how many
 cases were timed), its `scores` (each with its `mean`, how many cases produced

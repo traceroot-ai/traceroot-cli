@@ -21,7 +21,8 @@
  * - `exit`: the exit status, in place of the recorded one;
  * - `wait`: write `events` and wait for SIGINT, SIGTERM or SIGHUP, then do the `replay` and exit
  *   130, the way both runners end a cancelled run;
- * - `chatty`: while it waits, write a line to stderr every 50 ms.
+ * - `chatty`: while it waits, write a line to stderr every 50 ms;
+ * - `stderr`: text written to stderr after its first line, as an SDK's own notice would be.
  *
  * Whichever way it starts, it records the environment it was given and its pid in the folder it
  * runs in, so a test can check what reached it.
@@ -74,6 +75,9 @@ function run(file) {
   fs.writeFileSync("runner.pid", String(process.pid));
   process.stdout.write("runner stdout\n");
   process.stderr.write("runner stderr\n");
+  if (spec.stderr !== undefined) {
+    process.stderr.write(spec.stderr);
+  }
   if (spec.wait) {
     writeEvents(spec.events ?? []);
     const stop = () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderTable } from "../../src/render/table.js";
+import { fitTable, renderTable } from "../../src/render/table.js";
 
 describe("renderTable", () => {
   it("includes the header row", () => {
@@ -53,5 +53,63 @@ describe("renderTable", () => {
     const out = renderTable(["A"], [["1"]]);
     // biome-ignore lint/suspicious/noControlCharactersInRegex: testing for ESC
     expect(out).not.toMatch(/\x1b\[/);
+  });
+});
+
+describe("fitTable", () => {
+  const headers = ["SCORE", "MEAN", "SCORED"];
+  const rows = [
+    ["exact_match", "0.667", "3 of 4"],
+    ["正确性", "1", "4 of 4"],
+  ];
+
+  it("prints whole, lined up on display width, when it fits", () => {
+    expect(fitTable(headers, rows, { width: 80, indent: "  " })).toEqual([
+      "  SCORE        MEAN   SCORED",
+      "  exact_match  0.667  3 of 4",
+      "  正确性       1      4 of 4",
+    ]);
+    expect(fitTable(headers, rows, { width: undefined })).toEqual(
+      fitTable(headers, rows, { width: 80 }),
+    );
+  });
+
+  it("stacks rows that don't fit, labelling each value with its header", () => {
+    expect(fitTable(headers, rows, { width: 20, indent: "  " })).toEqual([
+      "  exact_match",
+      "    mean 0.667",
+      "      scored 3 of 4",
+      "  正确性",
+      "    mean 1",
+      "      scored 4 of 4",
+    ]);
+  });
+
+  it("wraps only the last column when it is prose and the other columns fit", () => {
+    expect(
+      fitTable(["CASE", "ERROR"], [["case-1", "ValueError: cannot convert the value delta"]], {
+        width: 32,
+        wrapLast: true,
+      }),
+    ).toEqual(["CASE    ERROR", "case-1  ValueError: cannot", "        convert the value delta"]);
+  });
+
+  it("stacks instead when wrapping would leave the last column too narrow, unlabelled if asked", () => {
+    expect(
+      fitTable(["CASE", "ERROR"], [["tc_d2682fce6e8c00532e62", "KeyError: 'rubric'"]], {
+        width: 30,
+        wrapLast: true,
+        labels: [false, false],
+      }),
+    ).toEqual(["tc_d2682fce6e8c00532e62", "  KeyError: 'rubric'"]);
+  });
+
+  it("leaves an empty value out of a stacked row, labelled or not", () => {
+    expect(
+      fitTable(["CASE", "SCORER", "RESULT"], [["tc_d2682fce6e8c00532e62", "", "0 (was 1)"]], {
+        width: 20,
+        labels: [false, true, false],
+      }),
+    ).toEqual(["tc_d2682fce6e8c00532e62", "  0 (was 1)"]);
   });
 });
