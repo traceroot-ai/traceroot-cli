@@ -80,7 +80,7 @@ export function installBundledSkill(input: InstallBundledSkillInput): InstallBun
 
   if (overwritten && !force) {
     throw new CliError(
-      `TraceRoot skill already exists at ${relative(process.cwd(), targetDir) || targetDir}\n\nUse --force to overwrite it.`,
+      `traceroot skill already exists at ${relative(process.cwd(), targetDir) || targetDir}\n\nUse --force to overwrite it.`,
     );
   }
 

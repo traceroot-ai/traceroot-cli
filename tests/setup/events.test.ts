@@ -54,7 +54,7 @@ describe("the human stage renderer", () => {
 
   it("stays quiet for a step that heads its own section", () => {
     // Signing in opens with a sentence naming which of its four routes is
-    // happening and what the user has to do — "Sign in to TraceRoot" directly
+    // happening and what the user has to do — "Sign in to traceroot" directly
     // above that is a second heading for one section.
     const { writers: w, err } = writers();
     const emit = stageLineEmitter(w);
@@ -73,7 +73,7 @@ describe("the human stage renderer", () => {
 
     emit(settled("authenticate", "skipped"));
 
-    expect(lines(err)).toEqual(["◇  Sign in to TraceRoot — already done"]);
+    expect(lines(err)).toEqual(["◇  Sign in to traceroot — already done"]);
   });
 
   it("marks the point a run broke, even in a step that stays quiet", () => {

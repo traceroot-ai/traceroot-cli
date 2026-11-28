@@ -36,7 +36,7 @@ function evaluateAgents(cwd: string, skillName: string): AgentStatus[] {
 }
 
 /**
- * Lists the built-in TraceRoot skills and, for each, whether it is installed for
+ * Lists the built-in traceroot skills and, for each, whether it is installed for
  * any supported agent (Claude Code, Codex, generic). Human output is compact —
  * the top marker is ✓ when installed for at least one agent, and only the agents
  * where it is actually installed are listed. `--json` includes the full per-agent
@@ -99,7 +99,7 @@ export function runSkillsList(deps: RunSkillsListDeps): void {
 export function registerSkillsList(skills: Command): void {
   skills
     .command("list")
-    .description("List available TraceRoot skills and their install status")
+    .description("List available traceroot skills and their install status")
     .action((_opts, command: Command) => {
       const opts = command.optsWithGlobals();
       runSkillsList({

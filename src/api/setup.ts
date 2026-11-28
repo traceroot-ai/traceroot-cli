@@ -62,7 +62,7 @@ export interface WorkspaceSummary {
   name: string;
   role: string;
   /**
-   * The public TraceRoot demo, which every account joins as a viewer. A server
+   * The public traceroot demo, which every account joins as a viewer. A server
    * that predates it sends nothing, which reads as no.
    */
   is_demo?: boolean;
@@ -276,7 +276,7 @@ export function createSetupApi(opts: SetupApiOptions): SetupApi {
       }
       // Read the body, then classify. Declaring every 404 a missing endpoint
       // before this point reported a project id that does not resolve as a
-      // TraceRoot feature the deployment lacks, and offered a manual workaround
+      // traceroot feature the deployment lacks, and offered a manual workaround
       // for a server-side gap that was not there, while the server's own
       // explanation sat unread in the response.
       if (res.status === 404 && !describesMissingResource(detail)) {

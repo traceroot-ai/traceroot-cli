@@ -92,7 +92,7 @@ export function detectPythonEnvironment(
  * Returned relative to the agent's working directory, which is the service, so
  * the path can be pasted straight into a command.
  *
- * One of them now holds the TraceRoot key as well: `configure_repository` runs
+ * One of them now holds the traceroot key as well: `configure_repository` runs
  * before the stage that builds the agent's task and writes into a file from
  * {@link PROJECT_ENV_FILES}, so a file it created is found here like any other.
  * That is the point of writing there — the credential is not a separate thing

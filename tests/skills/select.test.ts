@@ -80,7 +80,7 @@ describe("resolveSkillOrPrompt (interactive)", () => {
     expect(err.data).toContain("Available skills:");
     expect(err.data).toContain("traceroot-instrument-repo");
     expect(err.data).toContain("traceroot-quickstart");
-    expect(err.data).toContain("Add TraceRoot tracing"); // a description snippet
+    expect(err.data).toContain("Add traceroot tracing"); // a description snippet
     // The list is rendered BEFORE the compact prompt is shown.
     expect(listShownBeforePrompt).toBe(true);
     // ANSI-stripped so the assertion holds whether or not the default is dimmed.
