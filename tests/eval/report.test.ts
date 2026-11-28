@@ -553,6 +553,7 @@ describe("renderSummary's LLM use", () => {
 
     expect(text).toContain("cost           —     $0.000351\n");
     expect(text).not.toContain("A cost is unknown");
+    expect(text).not.toContain("No task call reported token counts.");
   });
 
   it("says when no call of a role reported token counts", () => {
@@ -1210,6 +1211,31 @@ describe.each(LANGUAGES)(
       expect(text.endsWith(READ_ONE)).toBe(true);
     });
 
+    it("says which cases have no trace while TraceRoot is still pricing the rest", () => {
+      const processing = (b: Bucket): Bucket => ({ ...b, state: "processing" });
+      const pricing = read({
+        results_processed: 4,
+        results_pending: 2,
+        results_without_trace: 1,
+        task: processing(TASK),
+        scorers: processing(SCORERS),
+        combined: processing(COMBINED),
+      });
+
+      const text = summary(uploaded(["agent"], new Map([["evr_1", pricing]])));
+
+      expect(text).toContain(
+        [
+          "estimated cost  pending  pending",
+          "  estimated total: pending",
+          "  Pending costs show in evals runs get once TraceRoot has priced the run.",
+          "  1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+          "",
+        ].join("\n"),
+      );
+      expect(text.endsWith(READ_ONE)).toBe(true);
+    });
+
     it("says no trace for a run TraceRoot has no trace for, with no note repeating it", () => {
       const unavailable: Bucket = {
         cost: null,
@@ -1356,15 +1382,16 @@ describe.each(LANGUAGES)(
       );
     });
 
-    it("calls a role's cost unknown when TraceRoot recorded none of the calls the SDK counted", () => {
+    it("calls a role's cost and the total unknown when TraceRoot recorded none of the calls the SDK counted", () => {
       const noCalls: Bucket = { cost: null, llm_calls: 0, priced_llm_calls: 0, state: "no_calls" };
       const text = summary(
         uploaded(["agent"], new Map([["evr_1", read({ scorers: noCalls, combined: TASK })]])),
       );
 
       expect(text).toContain(
-        ["estimated cost  $0.00351  unknown", "  estimated total: $0.00351", ""].join("\n"),
+        ["estimated cost  $0.00351  unknown", "  estimated total: unknown", ""].join("\n"),
       );
+      expect(text).not.toContain("estimated total: $");
     });
 
     it("prints no total when the table has only a TASK column, and $0 only for calls that cost 0", () => {

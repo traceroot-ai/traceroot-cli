@@ -6,7 +6,8 @@ import type { UploadTarget } from "./spawn.js";
 
 /** The run read's `usage` block, as the CLI types it. */
 export type PricedUsage = NonNullable<Wire<EvaluationRun>["usage"]>;
-type Bucket = PricedUsage["task"];
+/** One bucket of a run read's `usage`: the task's, the scorers' or the combined calls. */
+export type Bucket = PricedUsage["task"];
 
 /** A money amount. Keeps significant digits, so a small cost never rounds to $0. */
 export function money(value: number): string {

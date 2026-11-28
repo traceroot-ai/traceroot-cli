@@ -15,6 +15,7 @@ import type { StackLanguage } from "../setup/types.js";
 import type { InterruptSignal } from "./events.js";
 import type { EvalRunner } from "./lookup.js";
 import {
+  type Bucket,
   type PricedUsage,
   isPriced,
   isProcessing,
@@ -322,12 +323,13 @@ export function renderSummary(report: Report, writers: Writers, context: Summary
     width: terminalColumns(writers.out),
     bold: createStyler(writers.out).bold,
   };
+  const usages = runUsages(report.runs);
   const blocks = [
     ...report.runs.map((saved) => evaluationLines(saved, report, view)),
     verdictLines(report, view),
-    usageLines(report, view),
+    usageLines(report, usages, view),
     savedLines(report, view),
-    nextLines(report, view),
+    nextLines(report, usages, view),
   ].filter((block) => block.length > 0);
   if (blocks.length === 0) {
     return;
@@ -674,7 +676,11 @@ function labelled(
  *   a browser login; the key check said which project the run went to. It repeats the flags that
  *   gave the key or the host, so it reads from the same host with the same key.
  */
-function nextLines(report: Report, view: View): string[] {
+function nextLines(
+  report: Report,
+  usages: ReadonlyMap<SavedEvaluation, RunUsage>,
+  view: View,
+): string[] {
   const { env, cwd } = view;
   const prose = (text: string): string[] => wrapLine(text, view.width);
   const lines: string[] = [];
@@ -716,7 +722,7 @@ function nextLines(report: Report, view: View): string[] {
         ];
         return `  ${cliCommand(read.join(" "), env)}`;
       }),
-      ...pricedLines(uploaded, report, view),
+      ...pricedLines(uploaded, report, usages, view),
     );
   }
   return lines;
@@ -760,10 +766,17 @@ function runPricing(usage: PricedUsage | null): RunPricing {
  * says so rather than print a cost of $0. A run that wasn't read, or whose read failed or found no
  * `usage`, gets only where its cost will show.
  */
-function pricedLines(uploaded: SavedEvaluation[], report: Report, view: View): string[] {
+function pricedLines(
+  uploaded: SavedEvaluation[],
+  report: Report,
+  usages: ReadonlyMap<SavedEvaluation, RunUsage>,
+  view: View,
+): string[] {
   const prose = (text: string): string[] => wrapLine(text, view.width);
   const one = uploaded.length === 1;
-  const listed = uploaded.filter((saved) => estimateOf(saved, report) === null);
+  const listed = uploaded.filter(
+    (saved) => estimateOf(saved, usages.get(saved) ?? null, report) === null,
+  );
   if (listed.length === 0) {
     return [];
   }
@@ -944,23 +957,21 @@ export function formatDuration(ms: number): string {
  * TraceRoot priced its run's calls at (see {@link estimateOf}). A run whose SDK records no usage
  * says so.
  */
-function usageLines(report: Report, view: View): string[] {
+function usageLines(
+  report: Report,
+  runUsages: ReadonlyMap<SavedEvaluation, RunUsage>,
+  view: View,
+): string[] {
   const prose = (text: string): string[] => wrapLine(text, view.width);
   const lines: string[] = [];
   if (report.elapsedMs !== null) {
     lines.push(...prose(`The run took ${formatDuration(report.elapsedMs)} in all.`));
   }
-  const usages = report.runs.flatMap((saved) =>
-    saved.run === null
-      ? []
-      : [
-          {
-            name: saved.event.name,
-            usage: runUsage(saved.run.cases.map((item) => item.usage)),
-            estimate: estimateOf(saved, report),
-          },
-        ],
-  );
+  const usages = [...runUsages].map(([saved, usage]) => ({
+    name: saved.event.name,
+    usage,
+    estimate: estimateOf(saved, usage, report),
+  }));
   // Every evaluation of a file runs under the same SDK, so a run that records no usage, or
   // captured none, says so once rather than once per evaluation.
   const [first] = usages;
@@ -992,29 +1003,10 @@ function evaluationUsage(
   runner: EvalRunner,
   view: View,
 ): string[] {
-  const prose = (text: string): string[] => wrapLine(text, view.width);
-  const sdk = `${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)}`;
-  if (usage.status === "not_recorded") {
-    return prose(`LLM use: not recorded; ${sdk} doesn't count a run's LLM calls.`);
-  }
-  if (usage.status === "unreadable") {
-    return prose(
-      "LLM use: unknown, because the case file records it in a form this CLI can't read.",
-    );
-  }
-  if (usage.status === "not_captured" || usage.task === null || usage.scorers === null) {
-    const setup =
-      runner.language === "python"
-        ? "traceroot.initialize(integrations=[...])"
-        : "initialize({ instrumentModules })";
-    return prose(
-      `LLM use: not captured, because the evaluation instrumented no LLM client. Call ${setup} with the evaluation's LLM clients to count their calls.`,
-    );
+  if (!printsTable(usage)) {
+    return usageSentence(usage, runner, view);
   }
   const { task, scorers } = usage;
-  if (task.llm_calls + scorers.llm_calls === 0) {
-    return prose("LLM use: no call through an instrumented LLM client.");
-  }
   // A role's SDK figures are null when the SDK counted none of its calls and the column shows for
   // the calls TraceRoot counted; each of those cells reads `—`.
   const roles: Role[] = [{ name: "TASK", counted: task, priced: estimate?.task }];
@@ -1043,17 +1035,14 @@ function evaluationUsage(
   if (reportedCost) {
     rows.push(row("cost", (bucket) => partial(bucket, "cost", cost(bucket))));
   }
-  const total = estimate !== null && roles.length > 1 ? [estimate.combined] : [];
-  const estimates = estimate === null ? [] : [...roles.map(({ priced }) => priced), ...total];
-  const cells =
-    estimate === null
-      ? []
-      : roles.map(({ counted, priced }) =>
-          // TraceRoot recorded none of the calls the SDK counted, so their cost is unknown, not none.
-          priced?.state === "no_calls" && (counted?.llm_calls ?? 0) > 0
-            ? "unknown"
-            : estimatedCost(priced),
-        );
+  // Each estimated cell's bucket. A role TraceRoot recorded none of the SDK's calls for gets null,
+  // which reads unknown, not none, and so does the total, which would leave that role out.
+  const unseen = roles.some(isUnseen);
+  const priced =
+    estimate === null ? [] : roles.map((role) => (isUnseen(role) ? null : role.priced));
+  const total = estimate !== null && roles.length > 1 ? [unseen ? null : estimate.combined] : [];
+  const estimates = [...priced, ...total];
+  const cells = priced.map(estimatedCost);
   const totalCells = total.map(estimatedCost);
   if (estimate !== null) {
     rows.push(["estimated cost", ...cells]);
@@ -1068,7 +1057,11 @@ function evaluationUsage(
     );
   }
   for (const { name, counted } of roles) {
-    if (counted !== null && CORE_TOKEN_FIELDS.every((field) => counted[field] === null)) {
+    if (
+      counted !== null &&
+      counted.llm_calls > 0 &&
+      CORE_TOKEN_FIELDS.every((field) => counted[field] === null)
+    ) {
       notes.push(`  No ${name === "TASK" ? "task" : "scorer"} call reported token counts.`);
     }
   }
@@ -1102,20 +1095,61 @@ function evaluationUsage(
 interface Role {
   name: "TASK" | "SCORERS";
   counted: UsageBucket | null;
-  priced: PricedBucket;
+  priced: Bucket;
 }
 
-/** One bucket of a run read's `usage`: the task's, the scorers' or the combined calls. */
-type PricedBucket = PricedUsage["task"];
+/** Whether TraceRoot recorded none of the calls the SDK counted for a role. */
+function isUnseen({ counted, priced }: Role): boolean {
+  return priced?.state === "no_calls" && (counted?.llm_calls ?? 0) > 0;
+}
 
-/** Whether an evaluation's LLM use prints as a table: the SDK counted at least one call. */
-function printsTable(usage: RunUsage): boolean {
+/** Each saved run's LLM use, summed from its cases. A run that can't be read has none. */
+function runUsages(runs: SavedEvaluation[]): ReadonlyMap<SavedEvaluation, RunUsage> {
+  const usages = new Map<SavedEvaluation, RunUsage>();
+  for (const saved of runs) {
+    if (saved.run !== null) {
+      usages.set(saved, runUsage(saved.run.cases.map((item) => item.usage)));
+    }
+  }
+  return usages;
+}
+
+/**
+ * Whether an evaluation's LLM use prints as a table: the SDK counted at least one call. Otherwise
+ * {@link usageSentence} says why there is none.
+ */
+function printsTable(
+  usage: RunUsage,
+): usage is RunUsage & { task: UsageBucket; scorers: UsageBucket } {
   return (
-    usage.status === "reported" &&
     usage.task !== null &&
     usage.scorers !== null &&
     usage.task.llm_calls + usage.scorers.llm_calls > 0
   );
+}
+
+/** Why an evaluation's LLM use has no table: what the SDK records, or that it counted no call. */
+function usageSentence(usage: RunUsage, runner: EvalRunner, view: View): string[] {
+  const prose = (text: string): string[] => wrapLine(text, view.width);
+  const sdk = `${SDK_NAMES[runner.language]} ${clean(runner.sdkVersion)}`;
+  if (usage.status === "not_recorded") {
+    return prose(`LLM use: not recorded; ${sdk} doesn't count a run's LLM calls.`);
+  }
+  if (usage.status === "unreadable") {
+    return prose(
+      "LLM use: unknown, because the case file records it in a form this CLI can't read.",
+    );
+  }
+  if (usage.status === "not_captured" || usage.task === null || usage.scorers === null) {
+    const setup =
+      runner.language === "python"
+        ? "traceroot.initialize(integrations=[...])"
+        : "initialize({ instrumentModules })";
+    return prose(
+      `LLM use: not captured, because the evaluation instrumented no LLM client. Call ${setup} with the evaluation's LLM clients to count their calls.`,
+    );
+  }
+  return prose("LLM use: no call through an instrumented LLM client.");
 }
 
 /**
@@ -1124,15 +1158,16 @@ function printsTable(usage: RunUsage): boolean {
  * Otherwise null, and {@link pricedLines} says what the read came to after the command that reads
  * the run.
  */
-function estimateOf(saved: SavedEvaluation, report: Report): PricedUsage | null {
-  const { event, run } = saved;
-  if (report.upload === null || event.run_id === null || run === null) {
+function estimateOf(
+  saved: SavedEvaluation,
+  usage: RunUsage | null,
+  report: Report,
+): PricedUsage | null {
+  const { event } = saved;
+  if (report.upload === null || event.run_id === null || usage === null || !printsTable(usage)) {
     return null;
   }
-  const estimate = report.priced?.get(event.run_id) ?? null;
-  return estimate !== null && printsTable(runUsage(run.cases.map((item) => item.usage)))
-    ? estimate
-    : null;
+  return report.priced?.get(event.run_id) ?? null;
 }
 
 /**
@@ -1141,7 +1176,7 @@ function estimateOf(saved: SavedEvaluation, report: Report): PricedUsage | null 
  * pending, and a run it has no trace for says so. A cost that covers only some of the calls is
  * followed by how many.
  */
-function estimatedCost(bucket: PricedBucket): string {
+function estimatedCost(bucket: Bucket): string {
   if (bucket === null || bucket === undefined) {
     return "unknown";
   }
@@ -1173,7 +1208,7 @@ function estimatedCost(bucket: PricedBucket): string {
  * Whether a bucket's cost covers some of its calls but not all of them. A bucket that is partial
  * only because some cases have no trace priced every call it recorded, so its cost carries no count.
  */
-function isPartlyPriced(bucket: PricedBucket): boolean {
+function isPartlyPriced(bucket: Bucket): boolean {
   return (
     bucket?.state === "partial" &&
     bucket.cost !== null &&
