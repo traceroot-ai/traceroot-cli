@@ -354,9 +354,9 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   out of a total only where the SDK's count is the number of cases it runs,
   which traceroot's is; @traceroot-ai/traceroot counts cases an evaluation's
   `select` leaves out, so for TypeScript and JavaScript files the line shows the
-  cases done alone. There's no progress line under `--json`, `NO_COLOR`,
-  `TERM=dumb` or `CI`, or when stderr isn't a terminal: stderr then carries the
-  runner's output exactly as it's written.
+  cases done alone. There's no progress line under `--json`, a non-empty
+  `NO_COLOR`, `TERM=dumb` or `CI`, or when stderr isn't a terminal: stderr then
+  carries the runner's output exactly as it's written.
 
 `--upload` also sends the run and each case's trace to TraceRoot, where the rest
 of the team can see it. The run is still saved under `.traceroot/eval/runs`, and

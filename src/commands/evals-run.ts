@@ -325,9 +325,9 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
 
 /**
  * Whether the run shows a progress line: only on a stderr that is a terminal that can redraw, so
- * not under `NO_COLOR` or `TERM=dumb`, and not in CI, where a terminal is read as a log afterwards.
- * Under `--json` stderr can still be a terminal, but whatever reads that output reads it as text,
- * so it gets none either.
+ * not under a non-empty `NO_COLOR` or `TERM=dumb`, and not in CI, where a terminal is read as a
+ * log afterwards. Under `--json` stderr can still be a terminal, but whatever reads that output
+ * reads it as text, so it gets none either.
  */
 function showsProgress(options: EvalsRunOptions): boolean {
   const { CI } = options.env;
