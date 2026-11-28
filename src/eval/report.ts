@@ -780,8 +780,12 @@ function pricedLines(
       ...wrapLines(notes, view.width),
     ];
   }
+  // Said as priced only when at least one of the runs under it was.
+  const header = runs.some(({ state }) => state === "priced")
+    ? "TraceRoot priced the runs' LLM calls:"
+    : "The runs' LLM cost:";
   return [
-    ...prose("TraceRoot priced the runs' LLM calls:"),
+    ...prose(header),
     ...wrapLines(
       uploaded.flatMap(({ event }, i) => {
         const name = `  ${clean(event.name)}:`;

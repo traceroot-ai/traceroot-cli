@@ -778,6 +778,43 @@ describe("renderSummary's priced cost for an uploaded run", () => {
     );
   });
 
+  it.each([
+    {
+      found: "no trace for any",
+      priced: new Map([
+        ["evr_1", noTrace],
+        ["evr_2", noTrace],
+      ]),
+      lines: ["  agent: no trace, so no cost", "  judge: no trace, so no cost"],
+    },
+    {
+      found: "one still being priced and one not read",
+      priced: new Map([
+        ["evr_1", pricing],
+        ["evr_2", null],
+      ]),
+      lines: [
+        "  agent: still being priced",
+        "  judge: not read; its evals runs get command shows the cost",
+      ],
+    },
+  ])(
+    "heads the runs' lines neutrally when none of them was priced: $found",
+    ({ priced, lines }) => {
+      const text = summary(uploadedRuns(["agent", "judge"], priced));
+
+      expect(text).toContain(
+        [
+          "  traceroot evals runs get evr_2 --project p_1",
+          "The runs' LLM cost:",
+          ...lines,
+          "",
+        ].join("\n"),
+      );
+      expect(text).not.toContain("TraceRoot priced");
+    },
+  );
+
   it("says TraceRoot is still pricing the runs when it is processing every one of several", () => {
     const text = summary(
       uploadedRuns(
