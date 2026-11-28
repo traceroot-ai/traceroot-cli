@@ -3160,6 +3160,7 @@ export interface components {
             status: "running" | "completed" | "completed_with_errors" | "failed" | "incomplete" | "cancelled";
             /** Task Error Count */
             task_error_count: number | null;
+            usage: components["schemas"]["RunUsage"];
         };
         /**
          * RegisterRunRequest
@@ -3245,6 +3246,67 @@ export interface components {
              * @enum {string}
              */
             value_type: "numeric" | "boolean" | "categorical";
+        };
+        /**
+         * RunUsage
+         * @description Totals over the run's results whose traces TraceRoot has processed. The scorers'
+         *     cost is never part of ``metrics`` (cost), which stays the task-only mean.
+         */
+        RunUsage: {
+            /** @description The task plus the scorers. */
+            combined: components["schemas"]["RunUsageBucket"];
+            /**
+             * Currency
+             * @description Currency of every cost.
+             * @constant
+             */
+            currency: "USD";
+            /**
+             * Results Pending
+             * @description Results with a trace TraceRoot has not processed yet.
+             */
+            results_pending: number;
+            /**
+             * Results Processed
+             * @description Results whose trace TraceRoot has processed and found spans for.
+             */
+            results_processed: number;
+            /**
+             * Results Without Trace
+             * @description Results with no trace linked, or whose trace had no spans.
+             */
+            results_without_trace: number;
+            /** @description The scorers (LLM judges). */
+            scorers: components["schemas"]["RunUsageBucket"];
+            /** @description The task under test. */
+            task: components["schemas"]["RunUsageBucket"];
+        };
+        /**
+         * RunUsageBucket
+         * @description LLM spend for one part of a run: the task, the scorers, or both.
+         */
+        RunUsageBucket: {
+            /**
+             * Cost
+             * @description Sum of the priced calls' costs in USD. Null when no call was priced: a missing price is never reported as $0.
+             */
+            cost: number | null;
+            /**
+             * Llm Calls
+             * @description LLM calls made, priced or not.
+             */
+            llm_calls: number;
+            /**
+             * Priced Llm Calls
+             * @description LLM calls that carried a price.
+             */
+            priced_llm_calls: number;
+            /**
+             * State
+             * @description How far the totals can be trusted, first match wins. `processing`: some result's trace is still being processed. `unavailable`: no result was processed. `no_calls`: no LLM call was made. `unpriced`: calls were made and none was priced. `partial`: some calls are unpriced or some results have no usable trace. `complete`: every call was priced.
+             * @enum {string}
+             */
+            state: "processing" | "unavailable" | "no_calls" | "unpriced" | "partial" | "complete";
         };
         /**
          * ScoreInput
