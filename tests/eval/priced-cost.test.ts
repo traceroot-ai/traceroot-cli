@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { type PricedUsage, isPriced, pricedCostLines } from "../../src/eval/priced-cost.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  type PricedUsage,
+  isPriced,
+  pricedCostLines,
+  readPricedUsage,
+} from "../../src/eval/priced-cost.js";
+import type { UploadTarget } from "../../src/eval/spawn.js";
+import { makeSecret } from "../../src/setup/secret.js";
+import {
+  type FetchCall,
+  createFakeFetch,
+  errorResponse,
+  jsonResponse,
+} from "../helpers/fakeFetch.js";
 
 type Bucket = PricedUsage["task"];
 
@@ -107,5 +120,126 @@ describe("isPriced", () => {
   });
   it("is false when no result was processed", () => {
     expect(isPriced(usage({ results_processed: 0 }))).toBe(false);
+  });
+});
+
+describe("readPricedUsage", () => {
+  const KEY = "tr-fake-upload-0000";
+  const target: UploadTarget = { host: "https://api.example/", apiKey: makeSecret(KEY) };
+
+  /** What TraceRoot answers a run read with: the run, its usage among the rest. */
+  const runRead = (id: string, u: unknown = usage()) =>
+    jsonResponse({ evaluation_run_id: id, status: "completed", usage: u });
+
+  const idOf = (call: FetchCall) => new URL(call.url).pathname.split("/").at(-1) ?? "";
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads each run once, at its path, with the upload key as the bearer", async () => {
+    const fake = createFakeFetch((call) => runRead(idOf(call)));
+
+    const priced = await readPricedUsage(target, ["evr_1", "evr_2"], {
+      fetchImpl: fake.fetchImpl,
+    });
+
+    expect(priced).toEqual(
+      new Map([
+        ["evr_1", usage()],
+        ["evr_2", usage()],
+      ]),
+    );
+    expect(fake.calls.map((call) => new URL(call.url).pathname).sort()).toEqual([
+      "/api/v1/public/evaluation-runs/evr_1",
+      "/api/v1/public/evaluation-runs/evr_2",
+    ]);
+    for (const call of fake.calls) {
+      expect(call.init.method).toBe("GET");
+      expect(new Headers(call.init.headers).get("authorization")).toBe(`Bearer ${KEY}`);
+    }
+  });
+
+  it("maps a 500, a run without usage and a failed request each to null, and never throws", async () => {
+    const fake = createFakeFetch((call) => {
+      switch (idOf(call)) {
+        case "evr_500":
+          return errorResponse(500, "boom");
+        case "evr_bare":
+          return jsonResponse({ evaluation_run_id: "evr_bare", status: "completed" });
+        case "evr_null":
+          return runRead("evr_null", null);
+        case "evr_ok":
+          return runRead("evr_ok");
+        default:
+          return Promise.reject(new TypeError(`fetch failed for ${KEY}`));
+      }
+    });
+
+    const priced = await readPricedUsage(
+      target,
+      ["evr_500", "evr_bare", "evr_null", "evr_down", "evr_ok"],
+      { fetchImpl: fake.fetchImpl },
+    );
+
+    expect(priced).toEqual(
+      new Map([
+        ["evr_500", null],
+        ["evr_bare", null],
+        ["evr_null", null],
+        ["evr_down", null],
+        ["evr_ok", usage()],
+      ]),
+    );
+  });
+
+  it("gives null for every run when the host can't be read, without a request", async () => {
+    const fake = createFakeFetch((call) => runRead(idOf(call)));
+
+    const priced = await readPricedUsage({ ...target, host: "not a host" }, ["evr_1"], {
+      fetchImpl: fake.fetchImpl,
+    });
+
+    expect(priced).toEqual(new Map([["evr_1", null]]));
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("gives null for reads that never answer once the timeout, for all of them together, is up", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeFetch((call) =>
+      idOf(call) === "evr_ok" ? runRead("evr_ok") : new Promise<Response>(() => {}),
+    );
+    let priced: Map<string, PricedUsage | null> | undefined;
+
+    void readPricedUsage(target, ["evr_ok", "evr_slow_1", "evr_slow_2"], {
+      fetchImpl: fake.fetchImpl,
+      timeoutMs: 3000,
+    }).then((result) => {
+      priced = result;
+    });
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(priced).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(priced).toEqual(
+      new Map([
+        ["evr_ok", usage()],
+        ["evr_slow_1", null],
+        ["evr_slow_2", null],
+      ]),
+    );
+    // The reads still in flight are aborted, so no socket outlives the deadline.
+    const slow = fake.calls.filter((call) => idOf(call) !== "evr_ok");
+    expect(slow.map((call) => call.init.signal?.aborted)).toEqual([true, true]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("leaves no timer behind when every read answers before the timeout", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeFetch((call) => runRead(idOf(call)));
+
+    await readPricedUsage(target, ["evr_1"], { fetchImpl: fake.fetchImpl });
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

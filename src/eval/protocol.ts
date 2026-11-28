@@ -131,10 +131,10 @@ export interface RunScorer {
 /**
  * A saved run (`<run id>.json`).
  *
- * Of the file's `upload` block, the link is read as `dashboard_url`, and the counts of results that
- * didn't reach TraceRoot as `upload_results`. Its `status` is left out on purpose: a run that never
- * left the machine records `uploaded` too, so it says nothing about whether the run reached
- * TraceRoot.
+ * Of the file's `upload` block, the link is read as `dashboard_url`, the counts of results that
+ * didn't reach TraceRoot as `upload_results`, and whether TraceRoot confirmed closing the run as
+ * `close_confirmed`. Its `status` is left out on purpose: a run that never left the machine records
+ * `uploaded` too, so it says nothing about whether the run reached TraceRoot.
  */
 export interface RunFile {
   evaluation_name: string;
@@ -166,6 +166,12 @@ export interface RunFile {
    * Each is 0 when the SDK doesn't record it, or records something other than a count.
    */
   upload_results: { failed: number; unconfirmed: number };
+  /**
+   * False when the runner saved the run before TraceRoot confirmed closing it, as a cancelled run
+   * may be: TraceRoot may still show it as running. True otherwise, and when the SDK doesn't record
+   * it.
+   */
+  close_confirmed: boolean;
 }
 
 export interface CaseScore {
@@ -294,6 +300,7 @@ export function parseRunFile(text: string): RunFile {
       failed: resultCount(upload?.value("failed_result_count")),
       unconfirmed: resultCount(upload?.value("unconfirmed_result_count")),
     },
+    close_confirmed: upload?.value("close_confirmed") !== false,
   };
 }
 

@@ -13,7 +13,9 @@
  * 3. with `--upload`, the API key, checked with TraceRoot before the runner starts for the same
  *    reason;
  * 4. the lookup and the run;
- * 5. the comparison.
+ * 5. the comparison;
+ * 6. for an uploaded run, one read of the cost TraceRoot priced it at, after the runner has exited
+ *    and the report is built, bounded at 3 seconds (see {@link readPriced}).
  *
  * Everything that comes from the run or the lookup is printed through `clean()`, so an escape
  * sequence in an evaluation name, a case id or a runner's message can't act on the terminal.
@@ -35,6 +37,7 @@ import type { AuthSource, ResolvedField } from "../config/resolve.js";
 import type { RunOutcome } from "../eval/events.js";
 import { EVALS_RUN_EXIT_CODES, INTERRUPTED_EXIT_CODES } from "../eval/exit-codes.js";
 import { type EvalRunner, findEvalRunner } from "../eval/lookup.js";
+import { type PricedUsage, readPricedUsage } from "../eval/priced-cost.js";
 import { countsCasesItRuns } from "../eval/progress.js";
 import type { EvaluationCompletedEvent } from "../eval/protocol.js";
 import {
@@ -276,6 +279,7 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
     signal: null,
     failure: null,
     elapsedMs: now() - started,
+    priced: null,
   };
   let failed: CliError | null = null;
   switch (outcome.outcome) {
@@ -312,6 +316,7 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
       break;
   }
 
+  report.priced = await readPriced(report);
   print(report, options);
   if (failed !== null && !options.json) {
     reportError(failed, {}, writers);
@@ -686,6 +691,27 @@ function noNewRunReason(name: string, runs: ReadEvaluation[], stopped: boolean):
     return `no evaluation named ${JSON.stringify(name)}, which the baseline run is of, finished before the eval runner stopped; it finished ${ran}`;
   }
   return `the file ran no evaluation named ${JSON.stringify(name)}, which the baseline run is of; it ran ${ran === "" ? "none" : ran}`;
+}
+
+/**
+ * Reads the cost TraceRoot priced each uploaded run at, once, for the summary to print. Called only
+ * once the runner has exited and the report is built, so the runner's signal handling, its drain and
+ * save deadlines are over: the read is bounded on its own, by `PRICED_READ_TIMEOUT_MS` in
+ * eval/priced-cost.ts, and it never throws, so it can't change the outcome or the exit code.
+ *
+ * A run is read only when it was uploaded, has a TraceRoot run id, and its saved file doesn't say
+ * TraceRoot never confirmed closing it; nothing is read for an interrupted run. null when no run is
+ * read.
+ */
+async function readPriced(report: Report): Promise<Map<string, PricedUsage | null> | null> {
+  const { upload } = report;
+  if (upload === null || report.outcome === "interrupted" || report.signal !== null) {
+    return null;
+  }
+  const ids = report.runs.flatMap(({ event, run }) =>
+    event.run_id !== null && run?.file.close_confirmed !== false ? [event.run_id] : [],
+  );
+  return ids.length === 0 ? null : readPricedUsage(upload.target, ids);
 }
 
 function print(report: Report, options: EvalsRunOptions): void {

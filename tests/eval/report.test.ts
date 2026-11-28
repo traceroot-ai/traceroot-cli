@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { Sink } from "../../src/output.js";
+import type { PricedUsage } from "../../src/eval/priced-cost.js";
 import type { CaseLine, CaseScore, EvaluationCompletedEvent } from "../../src/eval/protocol.js";
 import {
   type Report,
@@ -81,6 +82,7 @@ function evaluation(name: string, id: string, cases: CaseLine[]): SavedEvaluatio
         artifact: { payloads: "complete" },
         dashboard_url: null,
         upload_results: { failed: 0, unconfirmed: 0 },
+        close_confirmed: true,
       },
       cases,
     },
@@ -104,6 +106,7 @@ function report(runs: SavedEvaluation[], file = `${CWD}/evals/x_eval.py`): Repor
     signal: null,
     failure: null,
     elapsedMs: null,
+    priced: null,
   };
 }
 
@@ -586,6 +589,159 @@ describe("renderSummary for an uploaded run", () => {
       runs: { upload_results: unknown }[];
     };
     expect(local.runs[0]?.upload_results).toBeNull();
+  });
+});
+
+describe("renderSummary's priced cost for an uploaded run", () => {
+  type Bucket = PricedUsage["task"];
+  const bucket = (b: Partial<Bucket> = {}): Bucket => ({
+    cost: 0.0035,
+    llm_calls: 20,
+    priced_llm_calls: 20,
+    state: "complete",
+    ...b,
+  });
+  /** A run read's usage, priced unless a bucket says otherwise. */
+  function usage(over: Partial<PricedUsage> = {}): PricedUsage {
+    return {
+      currency: "USD",
+      results_processed: 6,
+      results_pending: 0,
+      results_without_trace: 0,
+      task: bucket(),
+      scorers: bucket({ cost: 0.0012, llm_calls: 6, priced_llm_calls: 6 }),
+      combined: bucket({ cost: 0.0047, llm_calls: 26, priced_llm_calls: 26 }),
+      ...over,
+    };
+  }
+  const pricing = usage({
+    results_pending: 2,
+    results_processed: 4,
+    task: bucket({ state: "processing" }),
+    scorers: bucket({ state: "processing" }),
+    combined: bucket({ state: "processing" }),
+  });
+
+  /** One uploaded run per name, `evr_<n>` in order, with what the read found for each. */
+  function uploadedRuns(names: string[], priced: Map<string, PricedUsage | null> | null): Report {
+    const runs = names.map((name, n) => {
+      const run = evaluation(name, `run_${n}`, [item("a")]);
+      run.event = { ...run.event, run_id: `evr_${n + 1}` };
+      return run;
+    });
+    return {
+      ...report(runs),
+      upload: {
+        target: { host: "https://api.example", apiKey: makeSecret("tr-test-key") },
+        projectId: "p_1",
+        readFlags: [],
+      },
+      priced,
+    };
+  }
+
+  const READ_ONE =
+    "To read the uploaded run from the terminal:\n  traceroot evals runs get evr_1 --project p_1\n";
+
+  it("prints the cost TraceRoot priced the run's LLM calls at", () => {
+    const text = summary(uploadedRuns(["agent"], new Map([["evr_1", usage()]])));
+
+    expect(text).toContain(
+      `${READ_ONE}TraceRoot priced the run's LLM calls: task $0.0035, scorers $0.0012, total $0.0047\n`,
+    );
+    expect(text).not.toContain("Once TraceRoot");
+  });
+
+  it("wraps the priced cost to the terminal as the other prose", () => {
+    const text = summary(uploadedRuns(["agent"], new Map([["evr_1", usage()]])), CWD, 40);
+
+    expect(text).toContain(
+      [
+        "TraceRoot priced the run's LLM calls:",
+        "  task $0.0035, scorers $0.0012, total",
+        "  $0.0047",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it.each([
+    { found: "a run still being priced", read: pricing },
+    { found: "no answer", read: null },
+  ])("says TraceRoot is still pricing the run for $found", ({ read }) => {
+    const text = summary(uploadedRuns(["agent"], new Map([["evr_1", read]])));
+
+    expect(text).toContain(
+      `${READ_ONE}TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has.\n`,
+    );
+    expect(text).not.toContain("TraceRoot priced");
+  });
+
+  it("prints each run's cost under one line when several were uploaded", () => {
+    const text = summary(
+      uploadedRuns(
+        ["agent", "judge\u001b[2J", "triage"],
+        new Map([
+          ["evr_1", usage()],
+          ["evr_2", pricing],
+          ["evr_3", null],
+        ]),
+      ),
+    );
+
+    expect(text).toContain(
+      [
+        "  traceroot evals runs get evr_3 --project p_1",
+        "TraceRoot priced the runs' LLM calls:",
+        "  agent: task $0.0035, scorers $0.0012, total $0.0047",
+        "  judge\\u001b[2J: still being priced",
+        "  triage: still being priced",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("says TraceRoot is still pricing the runs when none of several is priced", () => {
+    const text = summary(
+      uploadedRuns(
+        ["agent", "judge"],
+        new Map([
+          ["evr_1", pricing],
+          ["evr_2", null],
+        ]),
+      ),
+    );
+
+    expect(text).toContain(
+      "  traceroot evals runs get evr_2 --project p_1\nTraceRoot is still pricing the runs' LLM calls; those commands show the cost once it has.\n",
+    );
+  });
+
+  it("keeps saying where the cost shows when the runs weren't read", () => {
+    const text = summary(uploadedRuns(["agent"], null));
+
+    expect(text).toContain(
+      `${READ_ONE}Once TraceRoot has processed the run's traces, that command shows the cost it derives from them.\n`,
+    );
+  });
+
+  it("puts each run's usage in the --json document as TraceRoot gave it, or null", () => {
+    const doc = (of: Report) =>
+      (toDocument(of) as { runs: { priced_usage: unknown }[] }).runs.map((run) => run.priced_usage);
+
+    expect(
+      doc(
+        uploadedRuns(
+          ["agent", "judge"],
+          new Map([
+            ["evr_1", usage()],
+            ["evr_2", null],
+          ]),
+        ),
+      ),
+    ).toEqual([usage(), null]);
+    expect(doc(uploadedRuns(["agent"], null))).toEqual([null]);
+    expect(doc(report([evaluation("agent", "run_a", [item("a")])]))).toEqual([null]);
   });
 });
 

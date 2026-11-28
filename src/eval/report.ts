@@ -14,6 +14,7 @@ import { cliCommand, shellWord } from "../setup/invocation.js";
 import type { StackLanguage } from "../setup/types.js";
 import type { InterruptSignal } from "./events.js";
 import type { EvalRunner } from "./lookup.js";
+import { type PricedUsage, isPriced, pricedCostLines } from "./priced-cost.js";
 import type { CaseLine, EvaluationCompletedEvent } from "./protocol.js";
 import type { UploadTarget } from "./spawn.js";
 import {
@@ -144,6 +145,12 @@ export interface Report {
    * time a case took. null when it wasn't timed.
    */
   elapsedMs: number | null;
+  /**
+   * What TraceRoot priced each uploaded run's LLM calls at, by TraceRoot run id, read once after the
+   * runner exited: the run read's `usage`, or null for a run whose read failed, timed out or found
+   * none. null when no run was read, as for a local or an interrupted run.
+   */
+  priced: Map<string, PricedUsage | null> | null;
 }
 
 /** The evaluations that finished without a TraceRoot run id. */
@@ -242,6 +249,7 @@ export function toDocument(report: Report): Record<string, unknown> {
         report.upload === null || event.run_id === null || run === null
           ? null
           : run.file.upload_results,
+      priced_usage: event.run_id === null ? null : (report.priced?.get(event.run_id) ?? null),
     })),
     baseline:
       baseline === null
@@ -293,7 +301,7 @@ const LABEL_WIDTH = 11;
  * 3. what the run took: how long it ran, and each evaluation's LLM use (see {@link usageLines});
  * 4. what was saved: each run's run file and case file, and where an uploaded run went;
  * 5. what to do next: the command that compares the next run with this one, and the command that
- *    reads an uploaded run.
+ *    reads an uploaded run, with the cost TraceRoot priced the run at (see {@link pricedLines}).
  *
  * On a terminal it is fitted to the width: prose wraps at word boundaries with a hanging indent, a
  * table that doesn't fit is stacked, and a command, a link or a path is never broken, so each copies
@@ -699,16 +707,53 @@ function nextLines(report: Report, view: View): string[] {
         ];
         return `  ${cliCommand(read.join(" "), env)}`;
       }),
-      // TraceRoot prices the run's LLM calls from its traces, which it processes after the runner
-      // ends, so the summary says where the cost goes rather than printing a partial one.
-      ...prose(
-        uploaded.length === 1
-          ? "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them."
-          : "Once TraceRoot has processed the runs' traces, those commands show the cost it derives from them.",
-      ),
+      ...pricedLines(uploaded, report.priced, view),
     );
   }
   return lines;
+}
+
+/**
+ * What TraceRoot priced the uploaded runs' LLM calls at, from the read made once the runner exited.
+ * TraceRoot prices them from the runs' traces, which it processes after the runner ends, so a run it
+ * hasn't finished pricing is said to be still pricing, never given the cost of the traces processed
+ * so far. Without a read, as for an interrupted run, the summary says where the cost will show.
+ */
+function pricedLines(
+  uploaded: SavedEvaluation[],
+  priced: Map<string, PricedUsage | null> | null,
+  view: View,
+): string[] {
+  const prose = (text: string): string[] => wrapLine(text, view.width);
+  const one = uploaded.length === 1;
+  if (priced === null) {
+    return prose(
+      one
+        ? "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them."
+        : "Once TraceRoot has processed the runs' traces, those commands show the cost it derives from them.",
+    );
+  }
+  const costs = uploaded.map(({ event }) => {
+    const usage = priced.get(event.run_id ?? "") ?? null;
+    return usage !== null && isPriced(usage) ? pricedCostLines(usage).map(clean).join(" ") : null;
+  });
+  if (costs.every((cost) => cost === null)) {
+    return prose(
+      one
+        ? "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has."
+        : "TraceRoot is still pricing the runs' LLM calls; those commands show the cost once it has.",
+    );
+  }
+  if (one) {
+    return prose(`TraceRoot priced the run's LLM calls: ${costs[0]}`);
+  }
+  return [
+    ...prose("TraceRoot priced the runs' LLM calls:"),
+    ...wrapLines(
+      uploaded.map(({ event }, i) => `  ${clean(event.name)}: ${costs[i] ?? "still being priced"}`),
+      view.width,
+    ),
+  ];
 }
 
 /** The link TraceRoot gave an uploaded run, or null for a run it never registered. */

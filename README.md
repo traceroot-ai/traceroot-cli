@@ -436,8 +436,15 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   `--env-file` when the host or the key came from them, and when the key came
   from `--api-key` it adds `--api-key <key>`, never the key itself. Like the hint
   for a missing key, it's spelled the way the CLI was started: under npx, as
-  `npx -y traceroot-cli@<version> …`. The cost TraceRoot derives from the run's
-  traces shows there once it has processed them, after the upload.
+  `npx -y traceroot-cli@<version> …`.
+- **The summary ends with the cost TraceRoot priced the run's LLM calls at:** the
+  task's, the scorers' and the total, as `evals runs get` prints them. The CLI
+  reads each uploaded run once, after the runner has exited, and waits at most 3
+  seconds for all of them. TraceRoot prices the calls from the run's traces,
+  which it processes after the upload, so a run it hasn't priced by then says
+  TraceRoot is still pricing it, and the command above shows the cost once it
+  has. An interrupted run isn't read; its summary says where the cost will show.
+  The read never changes the regression check or the exit code.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,
@@ -457,7 +464,9 @@ covers as `cases_with_usage`), `uploaded_run_id` and
 `uploaded_run_url` (null unless it was uploaded, and the link null too when
 TraceRoot gave none), `upload_results` (null unless it was uploaded: how many
 results `failed` to upload and how many were `unconfirmed`, 0 when the SDK
-doesn't record it), the baseline, a `verdict` with `newly_failing`
+doesn't record it), `priced_usage` (the `usage` TraceRoot priced an uploaded run
+at, as its run read returns it, or null when the run wasn't read or the read
+found none), the baseline, a `verdict` with `newly_failing`
 (each with its `reason`), `newly_errored`, `changed`, `not_comparable_reason` and
 `payloads`, and `failure`. `failure` is null unless the runner failed after some
 evaluations finished; then it holds the failure's `kind` (the runner's own, or

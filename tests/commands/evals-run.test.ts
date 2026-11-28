@@ -25,6 +25,7 @@ import {
   STUB_API_KEY,
   STUB_PROJECT_ID,
   type TraceRootStub,
+  type TraceRootStubOptions,
   startTraceRootStub,
 } from "../helpers/traceRootStub.js";
 
@@ -190,14 +191,20 @@ function interrupt(signal: NodeJS.Signals, ...args: string[]): Promise<Result> {
 }
 
 /** Starts the CLI on a waiting stub, does `act` to it once the runner is running, and waits. */
-async function whileRunning(
+function whileRunning(
   act: (child: ChildProcessWithoutNullStreams) => void,
   ...args: string[]
 ): Promise<Result> {
-  const child = spawn(process.execPath, [BIN, "evals", "run", ...args], {
-    cwd: project,
-    env: cliEnv(),
-  });
+  return whileRunningWith(cliEnv(), act, ...args);
+}
+
+/** {@link whileRunning}, with the CLI given `env`. */
+async function whileRunningWith(
+  env: NodeJS.ProcessEnv,
+  act: (child: ChildProcessWithoutNullStreams) => void,
+  ...args: string[]
+): Promise<Result> {
+  const child = spawn(process.execPath, [BIN, "evals", "run", ...args], { cwd: project, env });
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
@@ -487,6 +494,7 @@ describe("evals run without a baseline", () => {
             cases_with_usage: 0,
           },
           upload_results: null,
+          priced_usage: null,
         },
       ],
       baseline: null,
@@ -1350,6 +1358,26 @@ describe("evals run --upload", () => {
 
   const WHOAMI = `GET /api/v1/public/whoami Bearer ${STUB_API_KEY}`;
 
+  /** What the stub is asked when the CLI reads the cost TraceRoot priced the run `id` at. */
+  const read = (id: string) => `GET /api/v1/public/evaluation-runs/${id} Bearer ${STUB_API_KEY}`;
+
+  /** A run read's `usage`, every call priced. */
+  const PRICED = {
+    currency: "USD",
+    results_processed: 3,
+    results_pending: 0,
+    results_without_trace: 0,
+    task: { cost: 0.0035, llm_calls: 6, priced_llm_calls: 6, state: "complete" },
+    scorers: { cost: 0.0012, llm_calls: 3, priced_llm_calls: 3, state: "complete" },
+    combined: { cost: 0.0047, llm_calls: 9, priced_llm_calls: 9, state: "complete" },
+  };
+
+  /** Starts the stub over with `options`, for a test that needs it to answer otherwise. */
+  async function restartStub(options: TraceRootStubOptions): Promise<void> {
+    await stub.close();
+    stub = await startTraceRootStub(options);
+  }
+
   /** The `fatal` event that ends a recorded run. */
   function recordedFatal(scenario: string): { type: string; kind: string; message: string } {
     const lines = readFileSync(join(FIXTURES, scenario, "events.jsonl"), "utf8")
@@ -1411,7 +1439,7 @@ describe("evals run --upload", () => {
     const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
 
     expect(run.status).toBe(0);
-    expect(asked()).toEqual([WHOAMI]);
+    expect(asked()).toEqual([WHOAMI, read("evr_stub_1")]);
     expect(seen("runner-env.json")).toEqual({
       api_key: STUB_API_KEY,
       host: stub.url,
@@ -1443,7 +1471,7 @@ describe("evals run --upload", () => {
         "  traceroot evals run x_eval.py --baseline run_first",
         "To read the uploaded run from the terminal:",
         `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
-        "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them.",
+        "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has.",
         "",
       ].join("\n"),
     );
@@ -1505,7 +1533,7 @@ describe("evals run --upload", () => {
     const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
 
     expect(run.status).toBe(0);
-    expect(asked()).toEqual([WHOAMI]);
+    expect(asked()).toEqual([WHOAMI, read("evr_stub_1")]);
     expect(seen("runner-env.json").api_key).toBe(STUB_API_KEY);
     // A read under a browser login needs a project, so the command names one.
     expect(run.stdout).toContain(
@@ -1526,7 +1554,7 @@ describe("evals run --upload", () => {
     );
 
     expect(run.status).toBe(0);
-    expect(asked()).toEqual([WHOAMI]);
+    expect(asked()).toEqual([WHOAMI, read("evr_stub_1")]);
   });
 
   it("exits 3 with only a browser login, before the runner starts", async () => {
@@ -1829,6 +1857,133 @@ describe("evals run --upload", () => {
       );
     },
   );
+
+  it("prints the cost TraceRoot priced the uploaded run at, and puts it in the --json document", async () => {
+    await restartStub({ runUsage: PRICED });
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, replace: uploadedAs("evr_stub_1") });
+
+    const human = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+    const machine = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload", "--json");
+
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain(
+      `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\nTraceRoot priced the run's LLM calls: task $0.0035, scorers $0.0012, total $0.0047\n`,
+    );
+    expect(machine.status).toBe(0);
+    expect(json(machine.stdout)).toMatchObject({
+      runs: [{ uploaded_run_id: "evr_stub_1", priced_usage: PRICED }],
+    });
+    expect(`${human.raw.stdout}${human.raw.stderr}${machine.raw.stderr}`).not.toContain(
+      STUB_API_KEY,
+    );
+  });
+
+  it("reads each uploaded evaluation's run once, and prints each one's cost", async () => {
+    await restartStub({ runUsage: PRICED });
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_other");
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      run_id: "run_first",
+      replace: uploadedAs("evr_stub_1"),
+      unfinished: true,
+      events: [
+        {
+          type: "evaluation_completed",
+          name: "second",
+          status: "completed",
+          local_run_id: "run_other",
+          run_id: "evr_stub_2",
+          counts: { cases: 3, errored: 0, task_errors: 0, scorer_errors: 0, not_scored: 3 },
+        },
+        { type: "suite_completed", evaluations: 2, cancelled: false },
+      ],
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(0);
+    expect(asked()[0]).toBe(WHOAMI);
+    expect(asked().slice(1).sort()).toEqual([read("evr_stub_1"), read("evr_stub_2")]);
+    expect(run.stdout).toContain(
+      [
+        "TraceRoot priced the runs' LLM calls:",
+        "  uppercase: task $0.0035, scorers $0.0012, total $0.0047",
+        "  second: task $0.0035, scorers $0.0012, total $0.0047",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("makes no request after an interrupted uploaded run, and still exits 130", async () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      wait: true,
+      replay: `${PYTHON}/interrupted`,
+      replace: uploadedAs("evr_stub_1"),
+    });
+
+    const run = await whileRunningWith(
+      uploadEnv(),
+      (child) => child.kill("SIGINT"),
+      "x_eval.py",
+      "--upload",
+    );
+
+    expect(run.status).toBe(130);
+    expect(run.stdout).toContain("Uploaded   run evr_stub_1\n");
+    expect(asked()).toEqual([WHOAMI]);
+  });
+
+  it("makes no request for a run saved before TraceRoot confirmed closing it", async () => {
+    pythonProject();
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/all-pass`,
+      replace: [
+        ...uploadedAs("evr_stub_1"),
+        ['"failed_result_count": 0', '"failed_result_count": 0, "close_confirmed": false'],
+      ],
+    });
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(0);
+    expect(asked()).toEqual([WHOAMI]);
+    expect(run.stdout).toContain(
+      "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them.\n",
+    );
+  });
+
+  it("keeps the exit code and the verdict when reading the cost times out", async () => {
+    await restartStub({ holdRunReads: true });
+    pythonProject();
+    saveRun(`${PYTHON}/all-pass`, "run_first");
+    evalFile("x_eval.py", {
+      replay: `${PYTHON}/one-fails`,
+      run_id: "run_second",
+      replace: uploadedAs("evr_stub_2"),
+    });
+    const args = ["x_eval.py", "--upload", "--baseline", "run_first"];
+
+    const human = await evalsRunWith(uploadEnv(), ...args);
+    const machine = await evalsRunWith(uploadEnv(), ...args, "--json");
+
+    expect(human.status).toBe(18);
+    expect(human.stdout).toContain(
+      "Regression check: failed against baseline run_first. 1 case and scorer pair newly fails.",
+    );
+    expect(human.stdout).toContain(
+      "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has.\n",
+    );
+    expect(machine.status).toBe(18);
+    expect(json(machine.stdout)).toMatchObject({
+      outcome: "regressed",
+      verdict: { newly_failing: [{ case_id: BETA, scorer_name: "exact_match" }] },
+      runs: [{ uploaded_run_id: "evr_stub_2", priced_usage: null }],
+    });
+    expect(asked()).toEqual([WHOAMI, read("evr_stub_2"), WHOAMI, read("evr_stub_2")]);
+  });
 
   it("exits 18 for a regression and still says where the run was uploaded", async () => {
     pythonProject();
