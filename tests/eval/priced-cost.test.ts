@@ -95,6 +95,16 @@ describe("pricedCostLines", () => {
     expect(pricedCostLines(u)).toEqual(["unknown: TraceRoot has no trace for this run's cases."]);
   });
 
+  it("says once that a run recorded no LLM calls", () => {
+    const none = bucket({ cost: null, llm_calls: 0, priced_llm_calls: 0, state: "no_calls" });
+    const u = usage({ task: none, scorers: none, combined: none });
+    expect(pricedCostLines(u)).toEqual(["no LLM calls recorded"]);
+    expect(pricedCostLines({ ...u, results_without_trace: 1 })).toEqual([
+      "no LLM calls recorded",
+      "1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+    ]);
+  });
+
   it("adds a note for results without a trace, singular and plural", () => {
     expect(pricedCostLines(usage({ results_processed: 6, results_without_trace: 1 }))).toEqual([
       "task $0.0035, scorers $0.0012, total $0.0047",
