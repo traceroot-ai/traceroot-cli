@@ -42,6 +42,11 @@ for tool in uv node npm; do
     exit 1
   fi
 done
+# The TypeScript runner loads eval files through tsx's --import hooks, which need Node 20.6.
+if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 6) ? 0 : 1)'; then
+  printf 'record-eval-fixtures: node 20.6 or later is required, not %s\n' "$(node --version)" >&2
+  exit 1
+fi
 
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
 sources="$repo/scripts/eval-fixtures"
@@ -95,7 +100,8 @@ scenario_options() {
 
 # Starts a runner in the background and sends it SIGINT once the second case has started. By then
 # the first case is recorded, and the second one is waiting for a marker file. Returns the runner's
-# exit status.
+# exit status, which has to be 130: a runner that missed the signal ends the second case on its
+# timeout, as a task error, and would record an ordinary run.
 run_interrupted() {
   local project=$1 pid started=0 status=0
   shift
@@ -118,6 +124,9 @@ run_interrupted() {
   fi
   kill -INT "$pid"
   wait "$pid" || status=$?
+  if [ "$status" -ne 130 ]; then
+    die "$project: the runner exited $status after SIGINT, not 130 (see runner.log)"
+  fi
   return "$status"
 }
 
