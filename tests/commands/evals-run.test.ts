@@ -15,9 +15,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type EvalsRunOptions, runEvalsRun } from "../../src/commands/evals-run.js";
 import { type CaseLine, parseCaseLines } from "../../src/eval/protocol.js";
 import { meanDuration, scoreMeans } from "../../src/eval/report.js";
 import { getVersion } from "../../src/version.js";
+import { CLEAR_LINE, frames, screen } from "../helpers/screen.js";
+import { StringSink } from "../helpers/stringSink.js";
 import {
   STUB_API_KEY,
   STUB_PROJECT_ID,
@@ -1011,6 +1014,108 @@ describe("evals run when the runner fails after an evaluation finished", () => {
     expect(crashed.status).toBe(17);
     expect(crashed.stdout).toBe("");
     expect(envelope(crashed.stderr)).toEqual({ code: "harness", message: CRASH });
+  });
+});
+
+describe("evals run's progress line", () => {
+  /** A terminal 80 columns wide that keeps everything written to it. */
+  class TerminalSink extends StringSink {
+    readonly columns = 80;
+
+    constructor() {
+      super(true);
+    }
+  }
+
+  /** The spinner's frames, none of which a run without the line writes. */
+  const SPINNER = /[◒◐◓◑]/;
+
+  /** Runs the command in this process, with stderr a terminal unless `terminal` is false. */
+  async function runHere(
+    options: Partial<Pick<EvalsRunOptions, "json">> & {
+      env?: NodeJS.ProcessEnv;
+      terminal?: boolean;
+    } = {},
+  ): Promise<{ code: number; out: string; err: string }> {
+    const out = new StringSink(false);
+    const err = options.terminal === false ? new StringSink(false) : new TerminalSink();
+    const code = await runEvalsRun({
+      file: "x_eval.py",
+      json: options.json ?? false,
+      upload: null,
+      cwd: project,
+      env: { ...cliEnv(), ...options.env },
+      writers: { out, err },
+    });
+    return { code, out: out.data, err: err.data };
+  }
+
+  /** What stderr holds without the line: the runner it started, then the runner's output. */
+  function plainStderr(): string[] {
+    const python = join(project, ".venv", "bin", "python");
+    return [
+      `Running x_eval.py with traceroot 0.5.1 (${python})`,
+      "runner stdout",
+      "runner stderr",
+      "",
+    ];
+  }
+
+  it("draws on a terminal's stderr while the runner runs, and is gone before the summary", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass`, run_id: "run_first" });
+
+    const run = await runHere();
+    const plain = await runHere({ terminal: false });
+
+    expect(run.code).toBe(0);
+    expect(frames(run.err).some((frame) => SPINNER.test(frame))).toBe(true);
+    // Every row the line drew on is erased: what is left is what a run without it shows.
+    const rows = screen(run.err);
+    expect(rows.at(-1)).toBe("");
+    expect([...rows].sort()).toEqual([...plainStderr()].sort());
+    expect(run.err.endsWith(CLEAR_LINE)).toBe(true);
+    // The summary on stdout is the same either way.
+    expect(run.out).toBe(plain.out);
+  });
+
+  it("draws in a CI that says it isn't one", async () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass` });
+
+    const run = await runHere({ env: { CI: "false" } });
+
+    expect(run.err).toContain(CLEAR_LINE);
+  });
+
+  it.each([
+    { what: "--json", json: true },
+    { what: "NO_COLOR", env: { NO_COLOR: "1" } },
+    { what: "TERM=dumb", env: { TERM: "dumb" } },
+    { what: "CI", env: { CI: "true" } },
+    { what: "a stderr that isn't a terminal", terminal: false },
+  ])("writes nothing of its own under $what", async ({ json, env, terminal }) => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass` });
+
+    const run = await runHere({ json, env, terminal });
+
+    expect(run.code).toBe(0);
+    expect(run.err).not.toContain("\x1b[2K");
+    expect(run.err).not.toMatch(SPINNER);
+    expect(run.err).not.toContain("Waiting for the runner");
+    expect(stripVTControlCharacters(run.err).split("\n").sort()).toEqual(plainStderr().sort());
+  });
+
+  it("writes nothing of its own from the built CLI, whose stderr here is a pipe", () => {
+    pythonProject();
+    evalFile("x_eval.py", { replay: `${PYTHON}/all-pass` });
+
+    const run = evalsRun("x_eval.py");
+
+    expect(run.status).toBe(0);
+    expect(run.raw.stderr).not.toContain("\x1b[2K");
+    expect(run.raw.stderr).not.toMatch(SPINNER);
   });
 });
 

@@ -17,6 +17,9 @@
  *
  * Everything that comes from the run or the lookup is printed through `clean()`, so an escape
  * sequence in an evaluation name, a case id or a runner's message can't act on the terminal.
+ *
+ * While the runner runs, a terminal gets a progress line at the bottom of stderr (see
+ * {@link showsProgress}). Everything else gets exactly the runner's output, as it always has.
  */
 
 import { existsSync, statSync } from "node:fs";
@@ -27,6 +30,7 @@ import type { AuthSource, ResolvedField } from "../config/resolve.js";
 import type { RunOutcome } from "../eval/events.js";
 import { EVALS_RUN_EXIT_CODES, INTERRUPTED_EXIT_CODES } from "../eval/exit-codes.js";
 import { type EvalRunner, findEvalRunner } from "../eval/lookup.js";
+import { countsCasesItRuns } from "../eval/progress.js";
 import type { EvaluationCompletedEvent } from "../eval/protocol.js";
 import {
   type Baseline,
@@ -60,6 +64,7 @@ import { clean } from "../registry/enhancers/eval-reads.js";
 import { onceOption } from "../registry/flags.js";
 import { cliCommand, shellWord } from "../setup/invocation.js";
 import { makeSecret } from "../setup/secret.js";
+import { canRedraw } from "../setup/tty.js";
 import type { StackLanguage } from "../setup/types.js";
 import { DEFAULT_HOST } from "./constants.js";
 import { apiKeyFromCommand, contextFromCommand } from "./shared.js";
@@ -246,6 +251,9 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
     env,
     upload: upload?.target,
     output: writers.err,
+    progress: showsProgress(options)
+      ? { exactCount: countsCasesItRuns(runner.language) }
+      : undefined,
     // A CLI that exits while the runner runs, as when a reader closes its output, cuts the run short.
     earlyExitCode: EVALS_RUN_EXIT_CODES.harness,
   });
@@ -313,6 +321,18 @@ export async function runEvalsRun(options: EvalsRunOptions): Promise<number> {
     default:
       return 0;
   }
+}
+
+/**
+ * Whether the run shows a progress line: only on a stderr that is a terminal that can redraw, so
+ * not under a non-empty `NO_COLOR` or `TERM=dumb`, and not in CI, where a terminal is read as a
+ * log afterwards. Under `--json` stderr can still be a terminal, but whatever reads that output
+ * reads it as text, so it gets none either.
+ */
+function showsProgress(options: EvalsRunOptions): boolean {
+  const { CI } = options.env;
+  const inCi = CI !== undefined && CI !== "" && CI !== "false";
+  return !options.json && !inCi && canRedraw(options.writers.err, options.env);
 }
 
 /** Rejects an evaluation file that isn't there, before anything else runs. */

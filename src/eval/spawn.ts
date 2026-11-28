@@ -7,6 +7,10 @@
  * the stream, and rather than an inherited descriptor, so nothing differs by platform. The file is
  * read once the runner has exited, because the runner's exit status alone doesn't say whether the
  * run worked (see {@link outcomeOf}).
+ *
+ * On a terminal, the file is also read while the runner runs, for the progress line (see
+ * progress-line.ts). That read only feeds the line: what the run came to is still decided by the
+ * read after the runner has exited, from the whole file.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -16,6 +20,8 @@ import type { Sink } from "../output.js";
 import { runProcess } from "../setup/exec.js";
 import { type Secret, redact } from "../setup/secret.js";
 import { type InterruptSignal, type RunOutcome, outcomeOf } from "./events.js";
+import { type ProgressLine, type ProgressLineOptions, startProgressLine } from "./progress-line.js";
+import { type EventWatch, watchEventFile } from "./tail.js";
 
 /** How long the runner has after the first Ctrl+C before its process group is killed. */
 export const INTERRUPT_GRACE_MS = 10_000;
@@ -103,6 +109,12 @@ export interface RunEvalRunnerOptions {
   upload?: UploadTarget;
   /** Where the runner's stdout and stderr both go. Defaults to the CLI's stderr. */
   output?: Sink;
+  /**
+   * Shows a progress line at the bottom of `output` while the runner runs. Give it only when
+   * `output` is a terminal that can redraw: without it, the runner's output passes on exactly as
+   * the runner wrote it, and the event file isn't read until the runner has exited.
+   */
+  progress?: RunProgressOptions;
   /** How long the runner has after the first Ctrl+C. Defaults to {@link INTERRUPT_GRACE_MS}. */
   interruptGraceMs?: number;
   /**
@@ -111,6 +123,12 @@ export interface RunEvalRunnerOptions {
    * as a run that worked. Without it, the exit code is left as it is.
    */
   earlyExitCode?: number;
+}
+
+/** How the progress line is drawn: everything {@link startProgressLine} takes but the sink. */
+export interface RunProgressOptions extends Omit<ProgressLineOptions, "sink"> {
+  /** How often the event file is read while the runner runs. Defaults to `EVENT_POLL_MS`. */
+  pollMs?: number;
 }
 
 /**
@@ -138,6 +156,10 @@ export interface RunEvalRunnerOptions {
  *
  * The listeners stay until the event file is removed, so no signal can end the CLI between the
  * runner's exit and the removal, and are gone when this returns.
+ *
+ * With {@link RunEvalRunnerOptions.progress}, every one of those ends also stops reading the event
+ * file, before its folder is removed, and erases the progress line. On the first interrupt, the
+ * line says the run is stopping.
  */
 export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunOutcome> {
   const [program, ...args] = options.argv;
@@ -146,19 +168,38 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
   }
   const output = options.output ?? process.stderr;
   const secrets = options.upload === undefined ? [] : [options.upload.apiKey];
-  const scrubbed = redactAcrossChunks((text) => output.write(text), secrets);
-  const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS);
+  let line: ProgressLine | undefined;
+  let watch: EventWatch | undefined;
+  // Through the progress line while there is one, which writes whole lines above itself.
+  const scrubbed = redactAcrossChunks((text) => {
+    if (line === undefined) {
+      output.write(text);
+    } else {
+      line.write(text);
+    }
+  }, secrets);
+  const interrupts = listenForInterrupts(options.interruptGraceMs ?? INTERRUPT_GRACE_MS, () =>
+    line?.stopping(),
+  );
   let folder: string | undefined;
   let signalRunner: ((name: NodeJS.Signals) => void) | undefined;
   const exits = listenForExit(() => {
     signalRunner?.("SIGKILL");
+    watch?.stop();
     if (folder !== undefined) {
       removeFolder(folder);
     }
+    line?.end();
   }, options.earlyExitCode);
   try {
     folder = mkdtempSync(join(tmpdir(), "traceroot-eval-"));
     const eventFile = join(folder, "events.jsonl");
+    if (options.progress !== undefined) {
+      const { pollMs, ...drawing } = options.progress;
+      const shown = startProgressLine({ ...drawing, sink: output });
+      line = shown;
+      watch = watchEventFile(eventFile, (lines) => shown.events(lines), pollMs);
+    }
     const result = await runProcess({
       program,
       args,
@@ -180,6 +221,8 @@ export async function runEvalRunner(options: RunEvalRunnerOptions): Promise<RunO
       outputTail: lastLines(result.output, OUTPUT_TAIL_LINES),
     });
   } finally {
+    watch?.stop();
+    line?.end();
     if (folder !== undefined) {
       removeFolder(folder);
     }
@@ -198,13 +241,14 @@ interface InterruptListener {
 }
 
 /**
- * Listens for {@link INTERRUPT_SIGNALS}. The first one starts the grace period, and the end of the
- * grace period or a second signal, of any of the three, aborts {@link InterruptListener.signal}.
+ * Listens for {@link INTERRUPT_SIGNALS}. The first one starts the grace period and calls `onFirst`,
+ * and the end of the grace period or a second signal, of any of the three, aborts
+ * {@link InterruptListener.signal}.
  *
  * Registered before the runner is spawned, so these listeners are already there when `runProcess`
  * checks whether anything else handles the signal.
  */
-function listenForInterrupts(graceMs: number): InterruptListener {
+function listenForInterrupts(graceMs: number, onFirst: () => void): InterruptListener {
   const controller = new AbortController();
   let received: InterruptSignal | null = null;
   let deadline: NodeJS.Timeout | undefined;
@@ -215,6 +259,7 @@ function listenForInterrupts(graceMs: number): InterruptListener {
     }
     received = signal;
     deadline = setTimeout(() => controller.abort(), graceMs);
+    onFirst();
   };
   // One handler per signal, so each knows which signal it is for.
   const handlers = INTERRUPT_SIGNALS.map((signal) => [signal, () => onSignal(signal)] as const);
