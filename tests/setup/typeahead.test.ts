@@ -17,7 +17,7 @@ const CR = String.fromCharCode(13);
 
 const method = {
   stage: "select_agent",
-  message: "How should TraceRoot be added to this service?",
+  message: "How should traceroot be added to this service?",
   options: [
     { value: "agent:claude", label: "Run Claude Code for me" },
     { value: "task-file", label: "Write the task" },

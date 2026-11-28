@@ -138,7 +138,7 @@ export function requireSetupNode(version: string = process.versions.node): void 
 export function registerSetup(program: Command): void {
   const setup = program
     .command("setup")
-    .description("Connect this repository to TraceRoot and see your first trace")
+    .description("Connect this repository to traceroot and see your first trace")
     // A stray operand is a usage error, not a run. commander 12 allows excess
     // arguments by default, so `traceroot setup doctr` matched no subcommand
     // and reached this action with `doctr` ignored: unattended, a typo of
@@ -152,7 +152,7 @@ export function registerSetup(program: Command): void {
     )
     .option("--language <language>", "language to instrument: python or typescript")
     .option("--service <path>", "path of the service to instrument (disambiguates a monorepo)")
-    .option("--project <name-or-id>", "TraceRoot project to send traces to")
+    .option("--project <name-or-id>", "traceroot project to send traces to")
     // On `setup`, never on the program. Program options are rendered in every
     // subcommand's "Global Options" section, so a one-shot onboarding
     // credential declared there would appear in `traceroot traces list --help`.
@@ -162,7 +162,7 @@ export function registerSetup(program: Command): void {
     .addOption(
       new Option(
         "--handoff <code>",
-        "one-shot sign-in code printed by the TraceRoot web app",
+        "one-shot sign-in code printed by the traceroot web app",
       ).hideHelp(),
     )
     .option("--no-browser", "authenticate by pasting an API key instead of using a browser")

@@ -101,21 +101,21 @@ export function closingLine(result: SetupResult, ending: SetupEnding = {}): stri
       ? "Setup stopped."
       : `Setup stopped at: ${STAGE_LABELS[stage].toLowerCase()}.`;
   }
-  // Scoped, because what finished is scoped. This said "TraceRoot setup
+  // Scoped, because what finished is scoped. This said "traceroot setup
   // complete." one line under a block that had just told the user their
   // production environment still needs the key — a line that claims the whole
   // job is done directly above the half that is not. The run configured this
   // machine; that is the thing to claim, and naming it as local is also what
   // leaves the production block above it legible as the rest.
   if (result.trace !== null) {
-    return "TraceRoot local setup complete.";
+    return "traceroot local setup complete.";
   }
   // Two different endings share "ok, and no trace", and the frame must not
   // describe one as the other. A user who stopped the wait themselves has a
   // finished run; a run that stopped before the wait has work outstanding, and
   // "paused" is the word for that one only.
   return ending.traceWaitSkipped === true
-    ? "TraceRoot local setup complete — no trace seen yet."
+    ? "traceroot local setup complete — no trace seen yet."
     : `Setup paused — rerun \`${setupCommand()} --resume\` to finish.`;
 }
 
@@ -358,7 +358,7 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       // success, and only the half the closing line does not: that line already
       // says to rerun with `--resume`, and a third copy of it is noise.
       //
-      // "No TraceRoot in it" only in the run that made the hand-over. On a
+      // "No traceroot in it" only in the run that made the hand-over. On a
       // resume the user may have done the task, with `initialize()` in a module
       // the entry point imports where detection cannot see it, so that claim
       // would be false — and the steps are no longer "above".
@@ -366,7 +366,7 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       const runTask = task === null ? null : runTaskSentence(ctx, task, false);
       const said =
         ctx.handedOverThisRun === true
-          ? `No trace yet: setup changed no code, so the service has no TraceRoot in it. ${runTask === null ? "Apply the steps above." : `${runTask}.`}`
+          ? `No trace yet: setup changed no code, so the service has no traceroot in it. ${runTask === null ? "Apply the steps above." : `${runTask}.`}`
           : runTask === null
             ? "No trace yet, and setup cannot tell whether the manual steps were applied. Apply them if not, or run your application once if so."
             : `No trace yet, and setup cannot tell whether the task was done. ${runTask} if not, or run your application once if so.`;
@@ -375,7 +375,7 @@ export async function runSetup(deps: RunSetupDeps): Promise<SetupResult> {
       // The other way to end without a trace: the user stopped the wait. The
       // sentence above is the wrong one for it twice over — it tells somebody
       // who just watched an agent instrument their service that it has no
-      // TraceRoot in it, and sends them off to do an instrumentation task that
+      // traceroot in it, and sends them off to do an instrumentation task that
       // is already done.
       wizardNote(
         writers,

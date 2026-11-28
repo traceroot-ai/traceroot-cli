@@ -120,10 +120,10 @@ const HELP = [
   "runs recorded on TraceRoot.",
   "",
   "--upload also sends the run and its traces to TraceRoot. That takes a project",
-  "API key, from --api-key, TRACEROOT_API_KEY or traceroot login --api-key: a",
-  "browser login can't upload. The evaluation's cases have to be a Dataset, which",
-  "the runner publishes first if TraceRoot doesn't have it. --baseline still",
-  "compares the runs saved here.",
+  "API key, from --api-key, --env-file, TRACEROOT_API_KEY, the config file",
+  "traceroot login --api-key writes, or ./.env: a browser login can't upload. The",
+  "evaluation's cases have to be a Dataset, which the runner publishes first if",
+  "TraceRoot doesn't have it. --baseline still compares the runs saved here.",
   "",
   "Exit codes:",
   "  0    nothing newly fails or newly errors, or no baseline was given",
@@ -462,7 +462,7 @@ function failureOf(
       ? { kind: outcome.kind, message: fatalMessage(outcome, file, language, uploading) }
       : {
           kind: "crashed",
-          message: `the eval runner exited with status ${outcome.exitStatus} before it reported the end of the run; its output is above`,
+          message: crashMessage(outcome.exitStatus),
         };
   return { failure, error: harness(cleanLines(failure.message)) };
 }
@@ -534,6 +534,15 @@ function noEvaluations(file: string, language: StackLanguage): string {
     return `${found}\n\nDefine an Evaluation at module level, as in \`evaluation = Evaluation(...)\`, not inside a function or under \`if __name__ == "__main__":\`.`;
   }
   return `${found}\n\nExport an Evaluation at module level, as in \`export const evaluation = new Evaluation({ ... })\`, not inside a function.`;
+}
+
+/**
+ * What a runner that crashed did. Exiting 0 is a crash only when the runner stopped before it
+ * reported the end of the run; a non-zero status is one whether or not it got that far.
+ */
+function crashMessage(status: number): string {
+  const early = status === 0 ? " before it reported the end of the run" : "";
+  return `the eval runner exited with status ${status}${early}; its output is above`;
 }
 
 function runPath(event: EvaluationCompletedEvent, cwd: string): string {

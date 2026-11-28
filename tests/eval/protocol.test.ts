@@ -440,8 +440,9 @@ describe("the recorded runs", () => {
       for (const file of files) {
         const text = readFileSync(file, "utf8");
         expect(text, file).not.toMatch(/(^|["'\s(=])\/[\w.@-]+\//m);
+        expect(text, file).not.toMatch(/\b[A-Za-z]:\\/);
         expect(text, file).not.toMatch(/file:\/\/|127\.0\.0\.1|localhost/);
-        expect(text, file).not.toMatch(/\btr-[\w-]{4,}/);
+        expect(text, file).not.toMatch(/\btr[_-][\w-]{4,}/);
       }
     }
   });
@@ -589,7 +590,7 @@ describe("a bare NaN, Infinity or -Infinity", () => {
     return text.replace(from, to);
   }
 
-  it("reads as null in an event line", () => {
+  it("leaves an event line parsing to the same events as without them", () => {
     const original = read("events.jsonl");
     let text = swap(original, '"value": 5,', '"value": NaN,');
     text = swap(text, '"value": 4,', '"value": Infinity,');
@@ -630,7 +631,7 @@ describe("a bare NaN, Infinity or -Infinity", () => {
     });
   });
 
-  it("reads as null in a run file", () => {
+  it("leaves a run file parsing to the same run as without them", () => {
     const original = read("runs", `${run}.json`);
     let text = swap(original, '"mean": 4.666666666666667', '"mean": NaN');
     text = swap(text, '"value": 4,', '"value": -Infinity,');
