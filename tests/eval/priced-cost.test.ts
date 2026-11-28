@@ -121,6 +121,9 @@ describe("isPriced", () => {
   it("is false when no result was processed", () => {
     expect(isPriced(usage({ results_processed: 0 }))).toBe(false);
   });
+  it("is false while results are pending, even when no bucket says processing", () => {
+    expect(isPriced(usage({ results_pending: 1 }))).toBe(false);
+  });
 });
 
 describe("readPricedUsage", () => {

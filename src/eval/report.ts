@@ -14,7 +14,7 @@ import { cliCommand, shellWord } from "../setup/invocation.js";
 import type { StackLanguage } from "../setup/types.js";
 import type { InterruptSignal } from "./events.js";
 import type { EvalRunner } from "./lookup.js";
-import { type PricedUsage, isPriced, pricedCostLines } from "./priced-cost.js";
+import { type PricedUsage, isPriced, isProcessing, pricedCostLines } from "./priced-cost.js";
 import type { CaseLine, EvaluationCompletedEvent } from "./protocol.js";
 import type { UploadTarget } from "./spawn.js";
 import {
@@ -148,7 +148,8 @@ export interface Report {
   /**
    * What TraceRoot priced each uploaded run's LLM calls at, by TraceRoot run id, read once after the
    * runner exited: the run read's `usage`, or null for a run whose read failed, timed out or found
-   * none. null when no run was read, as for a local or an interrupted run.
+   * none. A run missing from it wasn't read. null when no run was read, as for a local or an
+   * interrupted run.
    */
   priced: Map<string, PricedUsage | null> | null;
 }
@@ -714,10 +715,34 @@ function nextLines(report: Report, view: View): string[] {
 }
 
 /**
+ * What the read of one uploaded run came to:
+ * - `priced`: TraceRoot priced its calls; `lines` are its cost, then any notes, such as cases
+ *   without a trace;
+ * - `processing`: TraceRoot still has results whose trace it hasn't processed;
+ * - `no_trace`: TraceRoot processed none of its results, and has none pending;
+ * - `not_read`: the read failed or found no `usage`, or the run wasn't read.
+ */
+type RunPricing =
+  | { state: "priced"; lines: string[] }
+  | { state: "processing" | "no_trace" | "not_read" };
+
+function runPricing(usage: PricedUsage | null): RunPricing {
+  if (usage === null) {
+    return { state: "not_read" };
+  }
+  if (isPriced(usage)) {
+    return { state: "priced", lines: pricedCostLines(usage).map(clean) };
+  }
+  return { state: isProcessing(usage) ? "processing" : "no_trace" };
+}
+
+/**
  * What TraceRoot priced the uploaded runs' LLM calls at, from the read made once the runner exited.
  * TraceRoot prices them from the runs' traces, which it processes after the runner ends, so a run it
  * hasn't finished pricing is said to be still pricing, never given the cost of the traces processed
- * so far. Without a read, as for an interrupted run, the summary says where the cost will show.
+ * so far. A run TraceRoot has no trace for can't be priced, and the summary says so rather than
+ * print a cost of $0. A run that wasn't read, or whose read failed or found no `usage`, gets only
+ * where its cost will show.
  */
 function pricedLines(
   uploaded: SavedEvaluation[],
@@ -726,27 +751,30 @@ function pricedLines(
 ): string[] {
   const prose = (text: string): string[] => wrapLine(text, view.width);
   const one = uploaded.length === 1;
-  if (priced === null) {
+  const runs = uploaded.map(({ event }) => runPricing(priced?.get(event.run_id ?? "") ?? null));
+  if (runs.every(({ state }) => state === "not_read")) {
     return prose(
       one
         ? "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them."
         : "Once TraceRoot has processed the runs' traces, those commands show the cost it derives from them.",
     );
   }
-  // Each run's cost lines: a line of cost, then any notes, such as cases without a trace.
-  const costs = uploaded.map(({ event }) => {
-    const usage = priced.get(event.run_id ?? "") ?? null;
-    return usage !== null && isPriced(usage) ? pricedCostLines(usage).map(clean) : null;
-  });
-  if (costs.every((cost) => cost === null)) {
+  if (runs.every(({ state }) => state === "processing")) {
     return prose(
       one
         ? "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has."
         : "TraceRoot is still pricing the runs' LLM calls; those commands show the cost once it has.",
     );
   }
-  if (one) {
-    const [cost = "", ...notes] = costs[0] ?? [];
+  const [only] = runs;
+  if (one && only !== undefined) {
+    // Neither unread nor still processing, so either priced or without a trace.
+    if (only.state !== "priced") {
+      return prose(
+        "TraceRoot can't price the run's LLM calls: it has no trace for the run's cases.",
+      );
+    }
+    const [cost = "", ...notes] = only.lines;
     return [
       ...prose(`TraceRoot priced the run's LLM calls: ${cost}.`),
       ...wrapLines(notes, view.width),
@@ -756,8 +784,20 @@ function pricedLines(
     ...prose("TraceRoot priced the runs' LLM calls:"),
     ...wrapLines(
       uploaded.flatMap(({ event }, i) => {
-        const [cost = "still being priced", ...notes] = costs[i] ?? [];
-        return [`  ${clean(event.name)}: ${cost}`, ...notes.map((note) => `    ${note}`)];
+        const name = `  ${clean(event.name)}:`;
+        const run = runs[i] ?? { state: "not_read" };
+        switch (run.state) {
+          case "priced": {
+            const [cost = "", ...notes] = run.lines;
+            return [`${name} ${cost}`, ...notes.map((note) => `    ${note}`)];
+          }
+          case "processing":
+            return [`${name} still being priced`];
+          case "no_trace":
+            return [`${name} no trace, so no cost`];
+          case "not_read":
+            return [`${name} not read; its evals runs get command shows the cost`];
+        }
       }),
       view.width,
     ),

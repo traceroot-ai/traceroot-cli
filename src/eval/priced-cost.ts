@@ -39,9 +39,8 @@ export function pricedCostLines(usage: PricedUsage): string[] {
   const pending = usage.results_pending ?? 0;
   const processed = usage.results_processed ?? 0;
   const withoutTrace = usage.results_without_trace ?? 0;
-  const buckets = [usage.task, usage.scorers, usage.combined];
 
-  if (pending > 0 || buckets.some((b) => b?.state === "processing")) {
+  if (isProcessing(usage)) {
     return [
       `TraceRoot is still processing ${pending} of the run's ${pending + processed} traced cases; run this command again for the full cost.`,
     ];
@@ -67,10 +66,15 @@ export function pricedCostLines(usage: PricedUsage): string[] {
   return lines;
 }
 
+/** True while TraceRoot still has results whose trace it hasn't processed. */
+export function isProcessing(usage: PricedUsage): boolean {
+  const buckets = [usage.task, usage.scorers, usage.combined];
+  return (usage.results_pending ?? 0) > 0 || buckets.some((b) => b?.state === "processing");
+}
+
 /** True when the cost is final and at least one result was priced from a trace. */
 export function isPriced(usage: PricedUsage): boolean {
-  const buckets = [usage.task, usage.scorers, usage.combined];
-  return !buckets.some((b) => b?.state === "processing") && (usage.results_processed ?? 0) > 0;
+  return !isProcessing(usage) && (usage.results_processed ?? 0) > 0;
 }
 
 /** How long the end of an uploaded `evals run` waits for TraceRoot's priced cost, all runs together. */

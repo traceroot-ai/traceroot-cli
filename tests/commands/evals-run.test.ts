@@ -1471,7 +1471,9 @@ describe("evals run --upload", () => {
         "  traceroot evals run x_eval.py --baseline run_first",
         "To read the uploaded run from the terminal:",
         `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}`,
-        "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has.",
+        // The stub's run read has no usage, as an older host's, so the summary says only where the
+        // cost shows.
+        "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them.",
         "",
       ].join("\n"),
     );
@@ -1879,10 +1881,12 @@ describe("evals run --upload", () => {
     );
   });
 
-  it("reads each uploaded evaluation's run once, and prints each one's cost", async () => {
-    await restartStub({ runUsage: PRICED });
-    pythonProject();
-    saveRun(`${PYTHON}/all-pass`, "run_other");
+  /**
+   * A file of two uploaded evaluations: the replayed `uppercase` as run_first (evr_stub_1), then
+   * `second`, whose run is saved as run_other (evr_stub_2) with `replace` applied to its run file.
+   */
+  function twoUploadedEvaluations(replace: [string, string][] = []): void {
+    saveRun(`${PYTHON}/all-pass`, "run_other", replace);
     evalFile("x_eval.py", {
       replay: `${PYTHON}/all-pass`,
       run_id: "run_first",
@@ -1900,6 +1904,12 @@ describe("evals run --upload", () => {
         { type: "suite_completed", evaluations: 2, cancelled: false },
       ],
     });
+  }
+
+  it("reads each uploaded evaluation's run once, and prints each one's cost", async () => {
+    await restartStub({ runUsage: PRICED });
+    pythonProject();
+    twoUploadedEvaluations();
 
     const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
 
@@ -1911,6 +1921,27 @@ describe("evals run --upload", () => {
         "TraceRoot priced the runs' LLM calls:",
         "  uppercase: task $0.0035, scorers $0.0012, total $0.0047",
         "  second: task $0.0035, scorers $0.0012, total $0.0047",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("doesn't read a run TraceRoot never confirmed closing, and says so beside the run it read", async () => {
+    await restartStub({ runUsage: PRICED });
+    pythonProject();
+    twoUploadedEvaluations([
+      ['"failed_result_count": 0', '"failed_result_count": 0, "close_confirmed": false'],
+    ]);
+
+    const run = await evalsRunWith(uploadEnv(), "x_eval.py", "--upload");
+
+    expect(run.status).toBe(0);
+    expect(asked()).toEqual([WHOAMI, read("evr_stub_1")]);
+    expect(run.stdout).toContain(
+      [
+        "TraceRoot priced the runs' LLM calls:",
+        "  uppercase: task $0.0035, scorers $0.0012, total $0.0047",
+        "  second: not read; its evals runs get command shows the cost",
         "",
       ].join("\n"),
     );
@@ -1974,7 +2005,7 @@ describe("evals run --upload", () => {
       "Regression check: failed against baseline run_first. 1 case and scorer pair newly fails.",
     );
     expect(human.stdout).toContain(
-      "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has.\n",
+      "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them.\n",
     );
     expect(machine.status).toBe(18);
     expect(json(machine.stdout)).toMatchObject({
@@ -2027,7 +2058,7 @@ describe("evals run --upload", () => {
       "Regression check: failed against baseline run_first. 1 case and scorer pair newly fails.",
     );
     expect(text).toContain(
-      "TraceRoot is still pricing the run's LLM calls; that command shows the cost once it has.\n",
+      "Once TraceRoot has processed the run's traces, that command shows the cost it derives from them.\n",
     );
     expect(listeners()).toEqual(before);
   });

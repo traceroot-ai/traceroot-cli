@@ -441,9 +441,10 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   task's, the scorers' and the total, as `evals runs get` prints them. The CLI
   reads each uploaded run once, after the runner has exited, and waits at most 3
   seconds for all of them. TraceRoot prices the calls from the run's traces,
-  which it processes after the upload, so a run it hasn't priced by then says
-  TraceRoot is still pricing it, and the command above shows the cost once it
-  has. An interrupted run isn't read; its summary says where the cost will show.
+  which it processes after the upload, so a run it's still processing says
+  TraceRoot is still pricing it, and a run it has no trace for says it can't be
+  priced. A run whose read failed, timed out or found no cost, or that wasn't
+  read, as an interrupted run isn't, says only where the cost will show.
   Ctrl+C during the wait skips it, since the run has already finished. The read
   never changes the regression check or the exit code.
 
