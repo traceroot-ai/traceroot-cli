@@ -342,9 +342,10 @@ traceroot evals run evals/triage_eval.py --baseline <run-id> --json | jq '.verdi
   case took, and each evaluation's LLM use as the SDK's runner counted it from
   the LLM calls its instrumentation saw: the calls, the input, output and total
   tokens, cached input and reasoning tokens when a call reported them, and the
-  cost when the calls reported one. The task's calls are counted apart from the
+  cost when a call reported one. The task's calls are counted apart from the
   scorers', so an LLM judge's tokens are never read as the agent's. A figure no
-  call reported prints `—`, never 0; a cost no call reported is `unknown`; a
+  call reported prints `—`, never 0; the cost row prints only when a call
+  reported a cost, and a role none of whose calls did reads `unknown`; a
   figure only some calls reported is followed by how many, as in
   `8 (1 of 2 calls)`, since it's a lower bound; and a note says when the figures
   cover only some of the cases, as when some cases' usage can't be read. An SDK
@@ -437,18 +438,22 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   from `--api-key` it adds `--api-key <key>`, never the key itself. Like the hint
   for a missing key, it's spelled the way the CLI was started: under npx, as
   `npx -y traceroot-cli@<version> …`.
-- **The summary ends with the cost TraceRoot priced the run's LLM calls at:** the
-  task's, the scorers' and the total, as `evals runs get` prints them. The CLI
-  reads each uploaded run once, after the runner has exited, and waits at most 3
+- **The summary shows the cost TraceRoot priced the run's LLM calls at** in the
+  LLM use table, as an `estimated cost` row with the task's and the scorers'
+  cost, and an `estimated total` under the table when both show. The CLI reads
+  each uploaded run once, after the runner has exited, and waits at most 3
   seconds for all of them. TraceRoot prices the calls from the run's traces,
-  which it processes after the upload, so a run it's still processing says
-  TraceRoot is still pricing it, and a run it has no trace for says it can't be
-  priced. A run whose read failed, timed out or found no `usage` (the server
-  doesn't report the cost), and a run that wasn't read, such as an interrupted
-  one, say only where the cost will show. Ctrl+C, SIGTERM or SIGHUP during the
-  wait skips it, since the run has already finished, and the exit code stays the
-  run's own, not 130, 143 or 129. The read never changes the regression check
-  or the exit code.
+  which it processes after the upload, so a cost it's still pricing reads
+  `pending`, and a run it has no trace for reads `no trace`. Calls it couldn't
+  price read `unknown`, never `$0`, and a cost that covers only some calls is
+  followed by how many, as in `$0.00351 (18 of 20 calls)`. A run with no LLM
+  use table, as when the SDK doesn't record usage, gets the cost after the
+  command that reads it, as `evals runs get` prints it. A run whose read failed,
+  timed out or found no `usage` (the server doesn't report the cost), and a run
+  that wasn't read, such as an interrupted one, say only where the cost will
+  show. Ctrl+C, SIGTERM or SIGHUP during the wait skips it, since the run has
+  already finished, and the exit code stays the run's own, not 130, 143 or 129.
+  The read never changes the regression check or the exit code.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,

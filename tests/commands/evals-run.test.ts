@@ -1881,6 +1881,85 @@ describe("evals run --upload", () => {
     );
   });
 
+  /** Makes each replayed case record the LLM use the SDK counted: 2 task calls and 1 scorer call. */
+  function countedUsage(language: "python" | "typescript"): [string, string][] {
+    const bucket = (calls: number) => ({
+      llm_calls: calls,
+      input_tokens: 100 * calls,
+      llm_calls_with_input_tokens: calls,
+      output_tokens: 10 * calls,
+      llm_calls_with_output_tokens: calls,
+      total_tokens: 110 * calls,
+      llm_calls_with_total_tokens: calls,
+    });
+    const usage = JSON.stringify({ task: bucket(2), scorers: bucket(1) });
+    return language === "python"
+      ? [
+          [
+            '"task_error": null, "trace_id": null',
+            `"task_error": null, "trace_id": null, "usage": ${usage}`,
+          ],
+        ]
+      : [
+          [
+            '"task_error":null,"trace_id":null',
+            `"task_error":null,"trace_id":null,"usage":${usage}`,
+          ],
+        ];
+  }
+
+  it.each([
+    {
+      language: "python" as const,
+      file: "x_eval.py",
+      replay: `${PYTHON}/all-pass`,
+      setUp: pythonProject,
+    },
+    {
+      language: "typescript" as const,
+      file: "x_eval.ts",
+      replay: `${TYPESCRIPT}/all-pass`,
+      setUp: nodeProject,
+    },
+  ])(
+    "puts the cost TraceRoot priced in the $language run's LLM use table, and prints no second cost",
+    async ({ language, file, replay, setUp }) => {
+      await restartStub({ runUsage: PRICED });
+      setUp();
+      evalFile(file, { replay, replace: [...uploadedAs("evr_stub_1"), ...countedUsage(language)] });
+
+      const human = await evalsRunWith(uploadEnv(), file, "--upload");
+      const machine = await evalsRunWith(uploadEnv(), file, "--upload", "--json");
+
+      expect(human.status).toBe(0);
+      expect(human.stdout).toContain(
+        [
+          "LLM USE         TASK     SCORERS",
+          "calls           6        3",
+          "input tokens    600      300",
+          "output tokens   60       30",
+          "total tokens    660      330",
+          "estimated cost  $0.0035  $0.0012",
+          "  estimated total: $0.0047",
+          "",
+        ].join("\n"),
+      );
+      expect(human.stdout).not.toContain("TraceRoot priced");
+      expect(human.stdout).not.toContain("A cost is unknown");
+      expect(
+        human.stdout.endsWith(
+          `  traceroot evals runs get evr_stub_1 --project ${STUB_PROJECT_ID}\n`,
+        ),
+      ).toBe(true);
+      expect(machine.status).toBe(0);
+      expect(json(machine.stdout)).toMatchObject({
+        runs: [
+          { uploaded_run_id: "evr_stub_1", usage: { status: "reported" }, priced_usage: PRICED },
+        ],
+      });
+    },
+  );
+
   /**
    * A file of two uploaded evaluations: the replayed `uppercase` as run_first (evr_stub_1), then
    * `second`, whose run is saved as run_other (evr_stub_2) with `replace` applied to its run file.

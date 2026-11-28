@@ -9,7 +9,7 @@ export type PricedUsage = NonNullable<Wire<EvaluationRun>["usage"]>;
 type Bucket = PricedUsage["task"];
 
 /** A money amount. Keeps significant digits, so a small cost never rounds to $0. */
-function money(value: number): string {
+export function money(value: number): string {
   return `$${formatMean(value)}`;
 }
 
@@ -38,7 +38,6 @@ function describeBucket(label: string, bucket: Bucket | null | undefined): strin
 export function pricedCostLines(usage: PricedUsage): string[] {
   const pending = usage.results_pending ?? 0;
   const processed = usage.results_processed ?? 0;
-  const withoutTrace = usage.results_without_trace ?? 0;
 
   if (isProcessing(usage)) {
     return [
@@ -58,15 +57,23 @@ export function pricedCostLines(usage: PricedUsage): string[] {
             describeBucket("total", usage.combined),
           ].join(", "),
         ];
-  if (withoutTrace > 0) {
-    const total = processed + withoutTrace;
-    lines.push(
-      withoutTrace === 1
-        ? `1 of ${total} cases has no trace in TraceRoot, so its calls aren't counted.`
-        : `${withoutTrace} of ${total} cases have no trace in TraceRoot, so their calls aren't counted.`,
-    );
+  const note = withoutTraceNote(usage);
+  if (note !== null) {
+    lines.push(note);
   }
   return lines;
+}
+
+/** The note for results TraceRoot has no trace for, whose calls no bucket counts, or null for none. */
+export function withoutTraceNote(usage: PricedUsage): string | null {
+  const withoutTrace = usage.results_without_trace ?? 0;
+  if (withoutTrace === 0) {
+    return null;
+  }
+  const total = (usage.results_processed ?? 0) + (usage.results_pending ?? 0) + withoutTrace;
+  return withoutTrace === 1
+    ? `1 of ${total} cases has no trace in TraceRoot, so its calls aren't counted.`
+    : `${withoutTrace} of ${total} cases have no trace in TraceRoot, so their calls aren't counted.`;
 }
 
 /** True while TraceRoot still has results whose trace it hasn't processed. */
