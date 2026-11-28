@@ -445,8 +445,10 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   seconds for all of them. TraceRoot prices the calls from the run's traces,
   which it processes after the upload, so a cost it's still pricing reads
   `pending`, and a run it has no trace for reads `no trace`. Calls it couldn't
-  price read `unknown`, never `$0`, and a cost that covers only some calls is
-  followed by how many, as in `$0.00351 (18 of 20 calls)`. A run with no LLM
+  price read `unknown (0 of N calls)`, never `$0`, and a cost that covers only
+  some calls is followed by how many, as in `$0.00351 (18 of 20 calls)`. A bare
+  `unknown` appears only where no cost is available at all, as when the server
+  reports a priced run without a cost. A run with no LLM
   use table, as when the SDK doesn't record usage, gets the cost after the
   command that reads it, as `evals runs get` prints it. A run whose read failed,
   timed out or found no `usage` (the server doesn't report the cost), and a run

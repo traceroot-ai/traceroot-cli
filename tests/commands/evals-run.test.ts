@@ -1876,9 +1876,9 @@ describe("evals run --upload", () => {
     expect(json(machine.stdout)).toMatchObject({
       runs: [{ uploaded_run_id: "evr_stub_1", priced_usage: PRICED }],
     });
-    expect(`${human.raw.stdout}${human.raw.stderr}${machine.raw.stderr}`).not.toContain(
-      STUB_API_KEY,
-    );
+    expect(
+      `${human.raw.stdout}${human.raw.stderr}${machine.raw.stdout}${machine.raw.stderr}`,
+    ).not.toContain(STUB_API_KEY);
   });
 
   /** Makes each replayed case record the LLM use the SDK counted: 2 task calls and 1 scorer call. */
