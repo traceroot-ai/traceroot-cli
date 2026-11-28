@@ -46,11 +46,27 @@ export function limitBounds(tool: string): { serverDefault: number | undefined; 
 }
 
 /**
- * The `--limit` and `--cursor` flags of a paged read.
- *
- * `--limit` is described with the bound the server actually enforces. `cliDefault`
- * is for a read whose server default is "everything" — the CLI always sends that
- * default, so it is the one the help text names.
+ * The `--limit` flag, described with the bound the server actually enforces.
+ * `cliDefault` is for a read whose server default is "everything" — the CLI
+ * always sends that default, so it is the one the help text names.
+ */
+export function addLimitFlag(
+  cmd: Command,
+  tool: string,
+  noun: string,
+  cliDefault?: number,
+): Command {
+  const { serverDefault, max } = limitBounds(tool);
+  const shown = cliDefault ?? serverDefault;
+  return cmd.option(
+    "--limit <n>",
+    `${noun} to return, 1-${max}${shown === undefined ? "" : ` (default ${shown})`}`,
+    onceOption("--limit"),
+  );
+}
+
+/**
+ * The `--limit` and `--cursor` flags of a cursor-paged read.
  *
  * `--cursor` takes the `next_cursor` a previous page returned, passed back as it
  * came: the server owns what a cursor means and rejects one that names no row in
@@ -62,19 +78,11 @@ export function addPageFlags(
   noun: string,
   cliDefault?: number,
 ): Command {
-  const { serverDefault, max } = limitBounds(tool);
-  const shown = cliDefault ?? serverDefault;
-  return cmd
-    .option(
-      "--limit <n>",
-      `${noun} to return, 1-${max}${shown === undefined ? "" : ` (default ${shown})`}`,
-      onceOption("--limit"),
-    )
-    .option(
-      "--cursor <cursor>",
-      "read the page after a previous one: the next_cursor it returned",
-      onceOption("--cursor"),
-    );
+  return addLimitFlag(cmd, tool, noun, cliDefault).option(
+    "--cursor <cursor>",
+    "read the page after a previous one: the next_cursor it returned",
+    onceOption("--cursor"),
+  );
 }
 
 /**

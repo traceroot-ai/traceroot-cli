@@ -6,7 +6,7 @@
 2. Set `TRACEROOT_API_KEY` in your `.env` file.
 3. Create `quickstart.py` with the code below.
 4. Run `python quickstart.py` — it prints `trace_id=...`.
-5. Open the TraceRoot UI → Traces — find the `quickstart.root` trace (search the printed trace id to locate it immediately).
+5. Open the traceroot UI → Traces — find the `quickstart.root` trace (search the printed trace id to locate it immediately).
 
 ## quickstart.py
 
@@ -27,7 +27,7 @@ def step():
 @observe(name="quickstart.root", type="agent")
 def main():
     result = {"result": step()}
-    print(f"trace_id={get_current_trace_id()}")  # search this in the TraceRoot UI → Traces
+    print(f"trace_id={get_current_trace_id()}")  # search this in the traceroot UI → Traces
     return result
 
 if __name__ == "__main__":

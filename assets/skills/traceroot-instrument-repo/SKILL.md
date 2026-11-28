@@ -1,9 +1,9 @@
 ---
 name: traceroot-instrument-repo
 description: >
-  Add TraceRoot tracing/observability to an existing codebase. Use when the user wants to
+  Add traceroot tracing/observability to an existing codebase. Use when the user wants to
   instrument their app, add tracing, set up LLM observability, add OpenTelemetry-based tracing,
-  capture spans for agents/tools/LLM calls, or "add TraceRoot to my project" — for Python or
+  capture spans for agents/tools/LLM calls, or "add traceroot to my project" — for Python or
   TypeScript/Node.js. Covers auto-instrumentation for many LLM providers and agent frameworks
   (OpenAI, Anthropic, LangChain, and more — see the docs integrations list) plus manual spans
   and user/session context.
@@ -16,15 +16,15 @@ compatibility: >
   environment.
 ---
 
-# TraceRoot Instrument Repo
+# traceroot Instrument Repo
 
-Add TraceRoot tracing to an existing project. Tracing is **additive** — it never changes business logic.
+Add traceroot tracing to an existing project. Tracing is **additive** — it never changes business logic.
 
 ## Rules (read first)
 
 - **Only add tracing code.** Never refactor or change behavior.
 - **One language, one service per run.** If the repo has several candidates (monorepo, multiple services), ask which to instrument before starting.
-- **Don't duplicate.** If TraceRoot is already initialized, extend it — never add a second init.
+- **Don't duplicate.** If traceroot is already initialized, extend it — never add a second init.
 - **Fail open.** The app must still run if `TRACEROOT_API_KEY` is missing — warn, never crash.
 - **Never hardcode secrets.** Read `TRACEROOT_API_KEY` from the environment; never write the literal key into code or echo it back to the user.
 - **Flush only short-lived processes.** Add a flush before exit for scripts/CLIs/serverless; never for long-running servers.
@@ -38,8 +38,8 @@ invoking this, and re-deriving those costs a round trip to reach the same answer
 ## Workflow
 
 ### 1. API key (non-blocking — skip if you were told it is set)
-TraceRoot reads `TRACEROOT_API_KEY` from the environment (or `.env`). Do not grep or print it to
-confirm; if the SDK reports at runtime that it is missing, say so then. If it is **not** set, do not stop: still add the instrumentation (it reads the key from the environment at runtime), and tell the user they must set `TRACEROOT_API_KEY` — found in the TraceRoot UI under project settings — before running the verification step. Never hardcode or print the key. Only stop early if you cannot determine which service/runtime to instrument (see step 3).
+traceroot reads `TRACEROOT_API_KEY` from the environment (or `.env`). Do not grep or print it to
+confirm; if the SDK reports at runtime that it is missing, say so then. If it is **not** set, do not stop: still add the instrumentation (it reads the key from the environment at runtime), and tell the user they must set `TRACEROOT_API_KEY` — found in the traceroot UI under project settings — before running the verification step. Never hardcode or print the key. Only stop early if you cannot determine which service/runtime to instrument (see step 3).
 
 ### 2. Analyze (read-only — do not edit yet)
 - Detect the runtime (Python or TypeScript/Node.js). Read the dependency manifest (`pyproject.toml`/`requirements.txt` or `package.json`) and scan imports to see what is actually used.
@@ -70,7 +70,7 @@ Wrap agent entrypoints, tool functions, and key orchestration steps (`@observe` 
 ### 6. Verify (required — do not stop early)
 Run a representative flow, then confirm the trace landed:
 - If the SDK prints a trace URL, share it as proof.
-- Otherwise log the trace id (`get_current_trace_id()` / `getCurrentTraceId()`) and point the user to the TraceRoot UI → Traces to confirm the span tree appears (entrypoint + child/tool spans with input/output).
+- Otherwise log the trace id (`get_current_trace_id()` / `getCurrentTraceId()`) and point the user to the traceroot UI → Traces to confirm the span tree appears (entrypoint + child/tool spans with input/output).
 - A good trace has: a descriptive name, model + token usage on LLM spans, proper nesting, and no PII/secrets in inputs.
 - If nothing appears → `references/troubleshooting.md`.
 
