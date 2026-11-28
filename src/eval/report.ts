@@ -1045,21 +1045,23 @@ function evaluationUsage(
   }
   const total = estimate !== null && roles.length > 1 ? [estimate.combined] : [];
   const estimates = estimate === null ? [] : [...roles.map(({ priced }) => priced), ...total];
+  const cells =
+    estimate === null
+      ? []
+      : roles.map(({ counted, priced }) =>
+          // TraceRoot recorded none of the calls the SDK counted, so their cost is unknown, not none.
+          priced?.state === "no_calls" && (counted?.llm_calls ?? 0) > 0
+            ? "unknown"
+            : estimatedCost(priced),
+        );
+  const totalCells = total.map(estimatedCost);
   if (estimate !== null) {
-    rows.push([
-      "estimated cost",
-      ...roles.map(({ counted, priced }) =>
-        // TraceRoot recorded none of the calls the SDK counted, so their cost is unknown, not none.
-        priced?.state === "no_calls" && (counted?.llm_calls ?? 0) > 0
-          ? "unknown"
-          : estimatedCost(priced),
-      ),
-    ]);
+    rows.push(["estimated cost", ...cells]);
   }
-  const notes = total.map((bucket) => `  estimated total: ${estimatedCost(bucket)}`);
+  const notes = totalCells.map((cell) => `  estimated total: ${cell}`);
   if (
     counted.some((bucket) => SUM_FIELDS.some((field) => isPartial(bucket, field))) ||
-    estimates.some((bucket) => bucket?.state === "partial")
+    estimates.some(isPartlyPriced)
   ) {
     notes.push(
       "  A figure followed by (n of m calls) counts only those calls, so it's a lower bound.",
@@ -1080,7 +1082,8 @@ function evaluationUsage(
     notes.push("  Pending costs show in evals runs get once TraceRoot has priced the run.");
   }
   const withoutTrace = estimate === null ? null : withoutTraceNote(estimate);
-  if (withoutTrace !== null) {
+  // Cells that all read `no trace` already say it.
+  if (withoutTrace !== null && ![...cells, ...totalCells].every((cell) => cell === "no trace")) {
     notes.push(`  ${clean(withoutTrace)}`);
   }
   return [
@@ -1159,11 +1162,24 @@ function estimatedCost(bucket: PricedBucket): string {
         return "unknown";
       }
       const amount = money(bucket.cost);
-      return bucket.state === "partial" ? `${amount} (${priced} of ${calls} calls)` : amount;
+      return isPartlyPriced(bucket) ? `${amount} (${priced} of ${calls} calls)` : amount;
     }
     default:
       return "unknown";
   }
+}
+
+/**
+ * Whether a bucket's cost covers some of its calls but not all of them. A bucket that is partial
+ * only because some cases have no trace priced every call it recorded, so its cost carries no count.
+ */
+function isPartlyPriced(bucket: PricedBucket): boolean {
+  return (
+    bucket?.state === "partial" &&
+    bucket.cost !== null &&
+    bucket.cost !== undefined &&
+    (bucket.priced_llm_calls ?? 0) < (bucket.llm_calls ?? 0)
+  );
 }
 
 /**

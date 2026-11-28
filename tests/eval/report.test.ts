@@ -1210,7 +1210,7 @@ describe.each(LANGUAGES)(
       expect(text.endsWith(READ_ONE)).toBe(true);
     });
 
-    it("says no trace for a run TraceRoot has no trace for", () => {
+    it("says no trace for a run TraceRoot has no trace for, with no note repeating it", () => {
       const unavailable: Bucket = {
         cost: null,
         llm_calls: 0,
@@ -1228,18 +1228,16 @@ describe.each(LANGUAGES)(
       const text = summary(uploaded(["agent"], new Map([["evr_1", noTrace]])));
 
       expect(text).toContain(
-        [
-          "estimated cost  no trace  no trace",
-          "  estimated total: no trace",
-          "  6 of 6 cases have no trace in TraceRoot, so their calls aren't counted.",
-          "",
-        ].join("\n"),
+        ["estimated cost  no trace  no trace", "  estimated total: no trace", "", "Run file"].join(
+          "\n",
+        ),
       );
+      expect(text).not.toContain("cases have no trace in TraceRoot");
       expect(text).not.toContain("can't price");
       expect(text.endsWith(READ_ONE)).toBe(true);
     });
 
-    it("says when some cases have no trace, so their calls aren't counted", () => {
+    it("prints a cost whose every recorded call was priced without a count, and says which cases have no trace", () => {
       const partial = (b: Bucket): Bucket => ({ ...b, state: "partial" });
       const without = read({
         results_without_trace: 1,
@@ -1251,9 +1249,37 @@ describe.each(LANGUAGES)(
       const text = summary(uploaded(["agent"], new Map([["evr_1", without]])));
 
       expect(text).toContain(
-        "  1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.\n",
+        [
+          "estimated cost  $0.00351  $0.000463",
+          "  estimated total: $0.00398",
+          "  1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+          "",
+        ].join("\n"),
       );
+      expect(text).not.toContain(" calls)");
+      expect(text).not.toContain("lower bound");
       expect(text.endsWith(READ_ONE)).toBe(true);
+    });
+
+    it("counts only the cells with calls left unpriced when some cases also have no trace", () => {
+      const without = read({
+        results_without_trace: 1,
+        task: { ...TASK, priced_llm_calls: 18, state: "partial" },
+        scorers: { ...SCORERS, state: "partial" },
+        combined: { ...COMBINED, priced_llm_calls: 24, state: "partial" },
+      });
+
+      const text = summary(uploaded(["agent"], new Map([["evr_1", without]])));
+
+      expect(text).toContain(
+        [
+          "estimated cost  $0.00351 (18 of 20 calls)  $0.000463",
+          "  estimated total: $0.00398 (24 of 26 calls)",
+          LOWER_BOUND.trimEnd(),
+          "  1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+          "",
+        ].join("\n"),
+      );
     });
 
     it.each([
