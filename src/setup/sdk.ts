@@ -165,7 +165,7 @@ export function importCheck(
   // `import X` alone is not evidence the SDK is installed. `python -c` puts the
   // working directory first on `sys.path`, so a service-local `X.py` or `X/`
   // satisfies the import and the probe passes with no SDK present — and a
-  // repository being instrumented for TraceRoot is exactly where a directory of
+  // repository being instrumented for traceroot is exactly where a directory of
   // that name is plausible. Distribution metadata cannot be shadowed that way:
   // it exists only for something a package manager actually installed. Asking
   // for both keeps the import in the signal and settles installation with it.

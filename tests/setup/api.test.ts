@@ -184,7 +184,7 @@ describe("setup API client", () => {
     expect(calls[0]?.url).toBe("https://api.example.test/api/v1/public/workspaces");
   });
 
-  it("carries the flags that mark the TraceRoot demo workspace and its projects", async () => {
+  it("carries the flags that mark the traceroot demo workspace and its projects", async () => {
     // Read strictly: only `true` marks the demo, so a server that predates it,
     // or sends something else, leaves both lists as they were.
     const { fetchImpl } = stubFetch([

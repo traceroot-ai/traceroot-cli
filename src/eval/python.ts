@@ -95,7 +95,7 @@ export async function findPythonRunner(
       failure: {
         kind: "no_interpreter",
         message: noInterpreterMessage(probed, dir, root),
-        fix: "Create a virtual environment beside the evaluation file (python3 -m venv .venv) and install traceroot into it, or activate the one that has it.",
+        fix: `Create a virtual environment beside the evaluation file (${PATH_PYTHON} -m venv .venv) and install traceroot into it, or activate the one that has it.`,
       },
     };
   }

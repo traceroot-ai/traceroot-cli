@@ -7,7 +7,7 @@ export function registerSkills(program: Command): void {
   // `-h, --help` already covers it (mirrors `traces`).
   const skills = program
     .command("skills")
-    .description("List and install TraceRoot skills")
+    .description("List and install traceroot skills")
     .helpCommand(false);
   registerSkillsList(skills);
   registerSkillsInstall(skills);
