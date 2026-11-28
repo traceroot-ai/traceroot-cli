@@ -166,10 +166,33 @@ describe("parseRunFile", () => {
       ],
       artifact: { payloads: "complete" },
       dashboard_url: null,
+      upload_results: { failed: 0, unconfirmed: 0 },
     });
   });
 
-  it("reads only the link from the upload block, whose status reads uploaded even for a local run", () => {
+  it("reads the counts of results TraceRoot may be missing, 0 when absent or not a count", () => {
+    const withCounts = {
+      ...runFile,
+      upload: { ...runFile.upload, failed_result_count: 2, unconfirmed_result_count: 1 },
+    };
+    const odd = {
+      ...runFile,
+      upload: { ...runFile.upload, failed_result_count: -1, unconfirmed_result_count: "1" },
+    };
+    const { upload: _upload, ...withoutUpload } = runFile;
+
+    expect(parseRunFile(JSON.stringify(withCounts)).upload_results).toEqual({
+      failed: 2,
+      unconfirmed: 1,
+    });
+    expect(parseRunFile(JSON.stringify(odd)).upload_results).toEqual({ failed: 0, unconfirmed: 0 });
+    expect(parseRunFile(JSON.stringify(withoutUpload)).upload_results).toEqual({
+      failed: 0,
+      unconfirmed: 0,
+    });
+  });
+
+  it("reads the link from the upload block, whose status reads uploaded even for a local run", () => {
     const url = "https://app.example/projects/p/evaluations/evr_1";
     const uploaded = { ...runFile, upload: { ...runFile.upload, dashboard_url: url } };
 

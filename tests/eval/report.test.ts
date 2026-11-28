@@ -11,6 +11,7 @@ import {
 } from "../../src/eval/report.js";
 import { type UsageBucket, emptyBucket } from "../../src/eval/usage.js";
 import { displayWidth } from "../../src/render/wrap.js";
+import { makeSecret } from "../../src/setup/secret.js";
 
 /**
  * The summary's edge cases, from runs built here rather than recorded: what the recorded runs
@@ -79,6 +80,7 @@ function evaluation(name: string, id: string, cases: CaseLine[]): SavedEvaluatio
         scorers: [],
         artifact: { payloads: "complete" },
         dashboard_url: null,
+        upload_results: { failed: 0, unconfirmed: 0 },
       },
       cases,
     },
@@ -537,6 +539,53 @@ describe("renderSummary's LLM use", () => {
       cases: 1,
       cases_with_usage: 1,
     });
+  });
+});
+
+describe("renderSummary for an uploaded run", () => {
+  function uploaded(failed: number, unconfirmed: number): Report {
+    const run = evaluation("agent", "run_a", [item("a"), item("b"), item("c"), item("d")]);
+    run.event = { ...run.event, run_id: "evr_1", status: "incomplete" };
+    if (run.run !== null) {
+      run.run.file = { ...run.run.file, upload_results: { failed, unconfirmed } };
+    }
+    return {
+      ...report([run]),
+      outcome: "interrupted",
+      upload: {
+        target: { host: "https://api.example", apiKey: makeSecret("tr-test-key") },
+        projectId: "p_1",
+        readFlags: [],
+      },
+    };
+  }
+
+  it("says when TraceRoot may be missing some of the run's results, and why", () => {
+    const text = summary(uploaded(1, 2));
+
+    expect(text).toContain(
+      [
+        "Uploaded   run evr_1",
+        "  1 result didn't reach TraceRoot, so the uploaded run is missing that case.",
+        "  TraceRoot hadn't confirmed 2 results when the run stopped, so the uploaded run may be missing those cases.",
+      ].join("\n"),
+    );
+    expect(
+      (toDocument(uploaded(1, 2)) as { runs: { upload_results: unknown }[] }).runs[0],
+    ).toMatchObject({
+      upload_results: { failed: 1, unconfirmed: 2 },
+    });
+  });
+
+  it("says nothing more when every result reached TraceRoot, and has no counts for a local run", () => {
+    const text = summary(uploaded(0, 0));
+
+    expect(text).toContain("Uploaded   run evr_1\n\n");
+    expect(text).not.toContain("reach TraceRoot");
+    const local = toDocument(report([evaluation("agent", "run_a", [item("a")])])) as {
+      runs: { upload_results: unknown }[];
+    };
+    expect(local.runs[0]?.upload_results).toBeNull();
   });
 });
 

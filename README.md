@@ -424,6 +424,10 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
 - **An evaluation that finishes without a TraceRoot run id**, such as one defined
   with `local=True` (`local: true` in TypeScript), is named and exits `17`, unless
   a case regressed, which exits `18`.
+- **The summary says when TraceRoot may be missing some of a run's results**,
+  under its id: results whose upload failed, and, for an interrupted run,
+  results it kept although TraceRoot hadn't confirmed them when it stopped.
+  Either way the uploaded run can show fewer cases than the one saved here.
 - **The summary gives each uploaded run's TraceRoot id and link** beside the
   files it saved, and ends with the command that reads it. The link is the one
   TraceRoot gave the run; a host that gives none gets the id alone. The command is
@@ -451,7 +455,9 @@ it covers, as `llm_calls_with_input_tokens` and so on through
 `llm_calls_with_cost`, and `currency`; and how many of the run's `cases` it
 covers as `cases_with_usage`), `uploaded_run_id` and
 `uploaded_run_url` (null unless it was uploaded, and the link null too when
-TraceRoot gave none), the baseline, a `verdict` with `newly_failing`
+TraceRoot gave none), `upload_results` (null unless it was uploaded: how many
+results `failed` to upload and how many were `unconfirmed`, 0 when the SDK
+doesn't record it), the baseline, a `verdict` with `newly_failing`
 (each with its `reason`), `newly_errored`, `changed`, `not_comparable_reason` and
 `payloads`, and `failure`. `failure` is null unless the runner failed after some
 evaluations finished; then it holds the failure's `kind` (the runner's own, or
