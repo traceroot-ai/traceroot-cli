@@ -29,14 +29,14 @@ export interface BuildSetupTaskInput {
    * that is true, so those claims are made only when this is false.
    */
   interactive: boolean;
-  /** Evidence that TraceRoot is already present, so the agent extends rather than duplicates. */
+  /** Evidence that traceroot is already present, so the agent extends rather than duplicates. */
   existingInstrumentation: string[];
   /** Virtualenv interpreter to install into and run with, when one was found. */
   pythonInterpreter?: string | null;
   /** Env files near the service, named so the agent does not go hunting. */
   envFiles?: readonly string[];
   /**
-   * Every file the application can read the TraceRoot credential out of — the
+   * Every file the application can read the traceroot credential out of — the
    * same list `buildAgentEnv` is given, settled once by the caller so the two
    * cannot come to disagree.
    *
@@ -52,7 +52,7 @@ export interface BuildSetupTaskInput {
    */
   credentialFiles: readonly string[];
   /**
-   * Which of {@link envFiles} holds the TraceRoot key, relative to the agent's
+   * Which of {@link envFiles} holds the traceroot key, relative to the agent's
    * working directory. Null when no credential file was written — a tracked env
    * file is refused, and a key that already resolved from the user's own
    * environment is never written to one at all.
@@ -141,7 +141,7 @@ function loadDotenvCall(envFile: string, entryPoint: string | null): string {
  * and it reads `.env` and only `.env`, while the credential goes wherever
  * `chooseCredentialEnvFile` put it, which is an existing `.env.local` where the
  * project has one. A Node service whose key went there, told to load
- * `dotenv/config`, starts with no TraceRoot credential and nothing printed.
+ * `dotenv/config`, starts with no traceroot credential and nothing printed.
  *
  * `new URL(..., import.meta.url)` is the ESM counterpart of Python's `__file__`
  * anchor, and dotenv accepts a URL for `path`. The CommonJS form is named
@@ -391,7 +391,7 @@ function mastraInitialization(
 The load's path is a placeholder. Setup does not know which file constructs the instance, so it
 cannot measure the path for you: replace it with the path from that file out to \`${envFile}\`. A
 load that resolves to nothing raises nothing — the application starts and emits no trace.`;
-  return `In the service at \`${service.path}\`, TraceRoot is an exporter on the application's own
+  return `In the service at \`${service.path}\`, traceroot is an exporter on the application's own
 \`Mastra\` instance, and there is no \`initialize()\` to call. Add it to the \`new Mastra({ ... })\`
 this application already constructs, wherever that is. \`TraceRootExporter\` reads
 \`TRACEROOT_API_KEY\` when it is constructed, and one constructed without it stays off, so anything
@@ -877,7 +877,7 @@ export function buildSetupTask(input: BuildSetupTaskInput): string {
     input.existingInstrumentation.length > 0
       ? [
           "",
-          "## TraceRoot is already partly present",
+          "## traceroot is already partly present",
           "",
           "The following signals were found before you started:",
           "",
@@ -922,7 +922,7 @@ is the stop and not a failure. If the application exits on its own before it ans
 server after all: that run is the one this step asks for. The command then prints the application's
 exit code instead of a status and exits 0 only if that code is 0, so done means it exited 0.
 
-The project's test suite is not a way to send that request: it runs with TraceRoot switched off, and
+The project's test suite is not a way to send that request: it runs with traceroot switched off, and
 the trace \`traceroot setup\` looks for is the one the application sends when it serves a request.`;
 
   // One run each, and the credentials-absent pass is deliberately absent.
@@ -942,7 +942,7 @@ the trace \`traceroot setup\` looks for is the one the application sends when it
   // — which is the only trace this step is for, and the one setup looks for.
   const disabled = "TRACEROOT_ENABLED=false";
   const fromTheApp =
-    "2. Exercise the instrumented path once with TraceRoot enabled, by running the application itself as step 6 says, so at least one trace is actually emitted. The trace `traceroot setup` looks for is the application's own; the tests are not a way to produce it.";
+    "2. Exercise the instrumented path once with traceroot enabled, by running the application itself as step 6 says, so at least one trace is actually emitted. The trace `traceroot setup` looks for is the application's own; the tests are not a way to produce it.";
   const verifySteps =
     verifyCommand !== null
       ? [
@@ -954,7 +954,7 @@ the trace \`traceroot setup\` looks for is the one the application sends when it
           fromTheApp,
         ].join("\n");
 
-  return `# Instrument this service with TraceRoot
+  return `# Instrument this service with traceroot
 
 ${runMode}
 
@@ -1039,14 +1039,14 @@ ${bullet([
           "`.claude/hooks/` to work out what you may run, and do not probe with throwaway commands. " +
           "If a command is genuinely refused, name it in your report and carry on with what you can do.",
       ]),
-  "Do not create additional files for this setup run. The TraceRoot skill directory and the " +
+  "Do not create additional files for this setup run. The traceroot skill directory and the " +
     "task file were installed by `traceroot setup` on purpose — leave them alone. Do not add " +
     "your own scratch files, notes or task directories.",
 ])}
 
 ## Steps
 
-### 1. Read the TraceRoot skill
+### 1. Read the traceroot skill
 
 \`${skillPath}/SKILL.md\` is installed and is the source of truth for SDK APIs, initialization
 order and framework integrations. Read it before writing code. ${missingSkill}
@@ -1298,7 +1298,7 @@ ${
     : `Instrumenting the code does not emit anything; **running** it does. Execute the application, or the
 narrowest thing that exercises an instrumented path — an entry point that calls it, one function
 call with the real client — so the SDK sends a trace before you finish. The project's test suite is
-not one of those things: it runs with TraceRoot switched off, and the trace \`traceroot setup\` looks
+not one of those things: it runs with traceroot switched off, and the trace \`traceroot setup\` looks
 for is the one the application sends when it runs.`
 }
 
@@ -1509,7 +1509,7 @@ export function manualInstructions(input: {
           ];
 
   return [
-    `Add TraceRoot to ${service.path} by hand:`,
+    `Add traceroot to ${service.path} by hand:`,
     "",
     dotenv === null
       ? "  1. Install the SDK, pinned:"
@@ -1544,7 +1544,7 @@ export function manualInstructions(input: {
     ...python,
     ...node,
     "",
-    "  3. Run your tests with TraceRoot switched off. The SDK starts itself",
+    "  3. Run your tests with traceroot switched off. The SDK starts itself",
     "     whenever TRACEROOT_API_KEY is set, guard or no guard, so a plain run",
     "     sends every test's trace to your project:",
     `       ${testRun}`,

@@ -144,7 +144,7 @@ export async function runGet(trace: TraceDetail, deps: RunGetDeps): Promise<void
   // Print the backend-provided URL verbatim; never construct a frontend URL.
   // Rendered as an OSC 8 hyperlink so it is clickable in supporting terminals;
   // falls back to the bare URL when color is disabled (piped/`NO_COLOR`).
-  lines.push(`${label("View in TraceRoot:")} ${styler.link(trace.trace_url)}`);
+  lines.push(`${label("View in traceroot:")} ${styler.link(trace.trace_url)}`);
 
   writers.out.write(`${lines.join("\n")}\n`);
 }

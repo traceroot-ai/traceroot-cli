@@ -301,10 +301,10 @@ async function hadEarlierTraffic(client: TraceLister, before: Date): Promise<boo
  * The first trace is the earliest one since setup started, and nothing
  * narrower. That reads as the application's own trace because setup runs
  * nothing of its own that can send one, and the agent is told to run the suite
- * with TraceRoot switched off. What arrives is the application being run — by
+ * with traceroot switched off. What arrives is the application being run — by
  * the agent, or by the user before a `--resume`.
  *
- * Switching TraceRoot off is what keeps the suite out of this frame: even a
+ * Switching traceroot off is what keeps the suite out of this frame: even a
  * suite that never reaches `initialize()` exports when the key is in its
  * environment, because `@observe` starts the SDK on its own.
  *

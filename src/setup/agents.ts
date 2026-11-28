@@ -158,7 +158,7 @@ export function detectAgents(options: DetectAgentsOptions): DetectedAgent[] {
       evidence.push(`${adapter.displayName} configuration directory found`);
     }
     if (existsSync(join(detection.skillsDir, "traceroot-instrument-repo", "SKILL.md"))) {
-      evidence.push("TraceRoot instrumentation skill already installed");
+      evidence.push("traceroot instrumentation skill already installed");
     }
 
     let runnable = false;

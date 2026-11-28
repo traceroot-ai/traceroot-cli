@@ -18,7 +18,7 @@ import { contextFromCommand } from "./shared.js";
 /** Ordered category → human heading. */
 const CATEGORY_HEADINGS: ReadonlyArray<[DoctorCheck["category"], string]> = [
   ["credentials", "Credentials"],
-  ["traceroot_files", "TraceRoot files"],
+  ["traceroot_files", "traceroot files"],
   ["agent_skills", "Agent skills"],
   ["repo", "Repo"],
   ["runtime_env", "Runtime env"],

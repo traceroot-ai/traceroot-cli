@@ -17,7 +17,7 @@ const CTRL_C = String.fromCharCode(3);
 
 const question = {
   stage: "select_agent",
-  message: "How should TraceRoot be added to this service?",
+  message: "How should traceroot be added to this service?",
   options: [
     { value: "task-file", label: "Write the task — I'll run my own agent" },
     { value: "manual", label: "Show me manual instructions" },
