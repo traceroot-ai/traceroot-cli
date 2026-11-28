@@ -385,7 +385,9 @@ function indexCases(cases: CaseLine[], side: RunSide): Map<string, CaseLine> | s
 
 /**
  * Why a run's scores can't be paired by scorer name, or null when they can: a case, taken in case
- * id order, lists one name twice among its scores, or among its scorer errors.
+ * id order, lists one name twice among its scores, or among its scorer errors, or once in each. A
+ * scorer that raised gave no score, so a score of its name came from another scorer, and the error
+ * would be read as the reason for the wrong pair.
  */
 function repeatedNameReason(cases: CaseLine[], side: RunSide): string | null {
   for (const item of [...cases].sort((a, b) => byCodeUnit(a.case_id, b.case_id))) {
@@ -396,6 +398,11 @@ function repeatedNameReason(cases: CaseLine[], side: RunSide): string | null {
     const error = repeatedName(item.scorer_errors);
     if (error !== null) {
       return `the ${side} run has more than one scorer error named ${quote(error)} on case ${quote(item.case_id)}, so its scorer errors can't be paired by scorer`;
+    }
+    // Neither list repeats a name by now, so a name repeated across the two is in both.
+    const both = repeatedName([...item.scores, ...item.scorer_errors]);
+    if (both !== null) {
+      return `the ${side} run has a score and a scorer error both named ${quote(both)} on case ${quote(item.case_id)}, so its scores can't be paired by scorer`;
     }
   }
   return null;

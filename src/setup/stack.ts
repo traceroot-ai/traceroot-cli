@@ -170,7 +170,7 @@ function initializesTraceRoot(source: string): boolean {
   );
 }
 
-/** Substrings that mean a manifest already depends on a TraceRoot SDK. */
+/** Substrings that mean a manifest already depends on a traceroot SDK. */
 const TRACEROOT_DEPS = ["@traceroot-ai/traceroot", "@traceroot-ai/mastra", "traceroot"];
 
 function readIfPresent(path: string): string | null {
@@ -503,7 +503,7 @@ function subdirectories(parent: string, entries: readonly string[]): string[] {
   return dirs;
 }
 
-/** Repo-level evidence that TraceRoot is already wired in. */
+/** Repo-level evidence that traceroot is already wired in. */
 function detectExistingInstrumentation(
   root: string,
   services: DetectedService[],
@@ -548,7 +548,7 @@ function detectExistingInstrumentation(
   //
   // Treating one as "already present" told the coding agent the work was done
   // and it wrote nothing — which is exactly what happens in a repository that
-  // depends on TraceRoot for other reasons, or one named after it. Only an
+  // depends on traceroot for other reasons, or one named after it. Only an
   // actual initialization call means there is nothing to do.
   return { present: wired, evidence };
 }
@@ -563,7 +563,7 @@ export function serviceEntryPath(service: DetectedService): string | null {
 }
 
 /**
- * Reads whether a service is wired up to TraceRoot *now*, naming the file that
+ * Reads whether a service is wired up to traceroot *now*, naming the file that
  * proves it.
  *
  * {@link detectStack} asks this once, before anything has been edited, and
@@ -591,7 +591,7 @@ export function serviceEntryPath(service: DetectedService): string | null {
  * whatever the model wrote, and a file outside the repository says nothing
  * about this service however instrumented it is.
  *
- * Returns the first file found to start TraceRoot, spelled as it was given.
+ * Returns the first file found to start traceroot, spelled as it was given.
  * When none does, the answer is `absent` only if the reading saw everything it
  * was pointed at — see {@link TraceRootInitialization}.
  */
@@ -639,7 +639,7 @@ export function findTraceRootInitialization(
     const source = readIfPresent(candidate.path);
     if (source === null) {
       // A file that is there and could not be read is not a file without
-      // TraceRoot in it. A path that is missing, or a directory that was not
+      // traceroot in it. A path that is missing, or a directory that was not
       // walked, says nothing either way.
       unread ||= isFile(candidate.path);
       continue;
@@ -659,9 +659,9 @@ export function findTraceRootInitialization(
  *
  * Three answers, because "no call found" is two different facts. `absent` is a
  * finding: every file the reading was pointed at was read, and none of them so
- * much as imports TraceRoot. `unknown` is the reading's own limit: a directory
+ * much as imports traceroot. `unknown` is the reading's own limit: a directory
  * walk the budget stopped before the end, a file it could not read, or a file
- * that imports TraceRoot but starts it in a form the patterns here do not
+ * that imports traceroot but starts it in a form the patterns here do not
  * match — `initialize({ serviceName: "api" })`, or a call through an alias. A
  * caller that fails a run on the answer must fail it on `absent` alone.
  */
@@ -942,7 +942,7 @@ export function detectStack(root: string, options: DetectStackOptions = {}): Det
 
   // Scoped to what is about to be instrumented, not to the repository.
   //
-  // Asking "does anything here use TraceRoot?" is the wrong question: one
+  // Asking "does anything here use traceroot?" is the wrong question: one
   // instrumented service made every *other* service look already done, so the
   // agent was told the work was finished and wrote nothing. The question is
   // whether the chosen target is wired up.

@@ -33,11 +33,13 @@ const INTERRUPT_SIGNALS: readonly InterruptSignal[] = ["SIGINT", "SIGTERM", "SIG
  * What a local run sets in the runner's environment, whatever the CLI's own holds. `undefined`
  * removes a variable.
  *
- * No API key, tracing off and reporting off, so neither the runner nor the evaluation's own code
- * has a credential to reach TraceRoot with.
+ * No API key, no session token, tracing off and reporting off, so neither the runner nor the
+ * evaluation's own code has a credential to reach TraceRoot with. `TRACEROOT_TOKEN` is the CLI's
+ * own sign-in, which can mint access tokens.
  */
 const LOCAL_RUN: Readonly<Record<string, string | undefined>> = {
   TRACEROOT_API_KEY: undefined,
+  TRACEROOT_TOKEN: undefined,
   TRACEROOT_ENABLED: "false",
   TRACEROOT_EVAL_OPTIONS: "{}",
 };

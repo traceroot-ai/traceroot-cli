@@ -138,8 +138,8 @@ export function renderSetupReport(
 
   const verdict =
     trace !== undefined
-      ? "TraceRoot is connected and a trace has been received."
-      : "TraceRoot is configured, but no trace has been seen yet.";
+      ? "traceroot is connected and a trace has been received."
+      : "traceroot is configured, but no trace has been seen yet.";
 
   // One entry per line, and `""` is a blank line: Markdown ends a paragraph or
   // a table only at one, so they are the report's structure. An optional entry
@@ -147,7 +147,7 @@ export function renderSetupReport(
   // that filter took every blank line with it — the verdict ran into the line
   // below it, and the closing note was read as a row of the last table.
   const sections = [
-    "# TraceRoot setup report",
+    "# traceroot setup report",
     "",
     verdict,
     "",
@@ -252,7 +252,7 @@ export function renderSetupReport(
 /**
  * Writes the report, returning its path.
  *
- * Best-effort by design: a run that connected TraceRoot, instrumented an
+ * Best-effort by design: a run that connected traceroot, instrumented an
  * application and saw a trace has succeeded, and failing it at the last step
  * over a file nobody has read yet would be absurd.
  */
