@@ -1,0 +1,2 @@
+{"type":"hello","sdk_version":"0.8.1","eval_api_version":1,"capabilities":{"snapshot":true,"run_session":true,"compare":true,"dataset_push":true,"sampling":true,"cancellation":true}}
+{"type":"fatal","kind":"import_error","message":"Error: Cannot find module './helpers'\nRequire stack:\n- <project>/eval.ts\n- <node_modules>/@traceroot-ai/traceroot/dist/eval/runner.js"}
