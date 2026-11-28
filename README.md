@@ -161,7 +161,7 @@ project-scoped and need none of this.
 | `datasets versions get <version-id>` | Show one immutable version and one page of its test cases (input, expected, and the trace a case was captured from) — 200 by default, up to 1000. `--limit <n>`, `--cursor <cursor>` |
 | `evals list` | List the project's evaluations, newest first: how many runs each has and how its latest one ended. The `EVALUATION ID` column is what `evals runs list --evaluation-id` takes. `--limit <n>`, `--cursor <cursor>`, `--name <substring>` |
 | `evals runs list` | List evaluation runs, newest first, with the id each is read by. The row is identity and outcome only — counts and scores come from `evals runs get`. `--limit <n>`, `--cursor <cursor>`, `--evaluation-id <id>`, `--status <status>` |
-| `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, and a link to open it. |
+| `evals runs get <run-id>` | Show one run: the dataset version it pinned, how its cases came out, its per-scorer means and per-case cost and duration, the run's task, scorer and total cost, and a link to open it. |
 | `evals run <file>` | Run an evaluation file on this machine with the project's own SDK, save the run, and print each evaluation's run id and score means. With `--baseline`, compare the new run with an earlier one and exit 18 if a case regressed. With `--upload`, also send the run and its traces to TraceRoot. `--baseline <run id or path>`, `--upload` |
 | `skills list` | List first-party traceroot skills and install status across supported agents. |
 | `skills install [skill]` | Copy a bundled skill into an agent's skill directory. Prompts for missing skill/agent in an interactive terminal. `--agent <agent>`, `--force`, `--dry-run` |
@@ -261,7 +261,7 @@ the versions of them you published, and the runs that scored them. Start at
 ```sh
 traceroot evals list                           # what exists, and how each one's latest run ended
 traceroot evals runs list --evaluation-id <id> # that evaluation's runs, newest first
-traceroot evals runs get <run-id>              # one run: counts, per-scorer means, cost and duration
+traceroot evals runs get <run-id>              # one run: counts, per-scorer means, cost and duration, task + scorer + total cost
 traceroot evals runs list --status failed --limit 5
 ```
 

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { EvaluationRun } from "../../api/client.js";
+import { pricedCostLines } from "../../eval/priced-cost.js";
 import { type Writers, logProgress, writeJson } from "../../output.js";
 import { createStyler } from "../../render/style.js";
 import { renderTable } from "../../render/table.js";
@@ -59,6 +60,13 @@ export function renderRun(run: Run, writers: Writers): void {
   w("");
 
   w(`results    ${resultsLine(run)}`);
+  // Absent on an older server, which has no cost to report: print nothing then,
+  // never a cost of zero.
+  if (run.usage !== null && run.usage !== undefined) {
+    pricedCostLines(run.usage).forEach((line, i) => {
+      w(`${i === 0 ? "cost       " : "           "}${clean(line)}`);
+    });
+  }
   w("");
 
   renderMetrics(run, writers);
@@ -131,7 +139,7 @@ export const evalRunsGet: Enhancer = {
   description:
     "Read one evaluation run's summary: the dataset version it used, whether it is complete, " +
     "partial or still running, how many cases scored and how many errored or went unscored, " +
-    "its scores and per-case cost and duration, and its URL.",
+    "its scores and per-case cost and duration, the run's task, scorer and total cost, and its URL.",
   // Deliberately no flags. Without this override the factory derives flags from
   // the tool's input schema, and a contract that still carries `baseline` would
   // put `--baseline` back. Comparison is a separate operation, not a read option.

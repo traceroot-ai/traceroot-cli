@@ -309,6 +309,38 @@ describe("evals runs get", () => {
     not_scored_count: 0,
   };
 
+  it("prints the priced cost right after the results line", () => {
+    const { w, out } = sinks();
+    const done = { cost: 0.0035, llm_calls: 20, priced_llm_calls: 20, state: "complete" as const };
+    renderRun(
+      {
+        ...base,
+        usage: {
+          currency: "USD",
+          results_processed: 6,
+          results_pending: 0,
+          results_without_trace: 1,
+          task: done,
+          scorers: { ...done, cost: 0.0012 },
+          combined: { ...done, cost: 0.0047 },
+        },
+      },
+      w,
+    );
+    const lines = out.data.split("\n");
+    const at = lines.findIndex((l) => l.startsWith("results"));
+    expect(lines[at + 1]).toBe("cost       task $0.0035, scorers $0.0012, total $0.0047");
+    expect(lines[at + 2]).toBe(
+      "           1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+    );
+  });
+
+  it("prints no cost line for a run without usage (an older server)", () => {
+    const { w, out } = sinks();
+    renderRun(base, w);
+    expect(out.data).not.toMatch(/^cost {7}/m);
+  });
+
   it("labels derived metrics as per-case means", () => {
     const { w, out } = sinks();
     renderRun(
