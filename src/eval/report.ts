@@ -959,7 +959,7 @@ export function formatDuration(ms: number): string {
  */
 function usageLines(
   report: Report,
-  runUsages: ReadonlyMap<SavedEvaluation, RunUsage>,
+  usages: ReadonlyMap<SavedEvaluation, RunUsage>,
   view: View,
 ): string[] {
   const prose = (text: string): string[] => wrapLine(text, view.width);
@@ -967,21 +967,21 @@ function usageLines(
   if (report.elapsedMs !== null) {
     lines.push(...prose(`The run took ${formatDuration(report.elapsedMs)} in all.`));
   }
-  const usages = [...runUsages].map(([saved, usage]) => ({
+  const evaluations = [...usages].map(([saved, usage]) => ({
     name: saved.event.name,
     usage,
     estimate: estimateOf(saved, usage, report),
   }));
   // Every evaluation of a file runs under the same SDK, so a run that records no usage, or
   // captured none, says so once rather than once per evaluation.
-  const [first] = usages;
+  const [first] = evaluations;
   if (first !== undefined && first.usage.status !== "reported") {
-    if (usages.every(({ usage }) => usage.status === first.usage.status)) {
+    if (evaluations.every(({ usage }) => usage.status === first.usage.status)) {
       return [...lines, ...evaluationUsage(first.usage, null, report.runner, view)];
     }
   }
-  const many = usages.length > 1;
-  for (const { name, usage, estimate } of usages) {
+  const many = evaluations.length > 1;
+  for (const { name, usage, estimate } of evaluations) {
     const block = evaluationUsage(usage, estimate, report.runner, view);
     if (many) {
       lines.push(view.bold(clean(name)), ...block.map((line) => `  ${line}`));
