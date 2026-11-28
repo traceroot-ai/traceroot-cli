@@ -1,6 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
-import type { Sink } from "../../src/output.js";
 import type { PricedUsage } from "../../src/eval/priced-cost.js";
 import type { CaseLine, CaseScore, EvaluationCompletedEvent } from "../../src/eval/protocol.js";
 import {
@@ -11,6 +10,7 @@ import {
   toDocument,
 } from "../../src/eval/report.js";
 import { type UsageBucket, emptyBucket } from "../../src/eval/usage.js";
+import type { Sink } from "../../src/output.js";
 import { displayWidth } from "../../src/render/wrap.js";
 import { makeSecret } from "../../src/setup/secret.js";
 
@@ -710,7 +710,7 @@ describe("renderSummary's priced cost for an uploaded run", () => {
     expect(text).not.toContain("TraceRoot priced");
   });
 
-  it("says TraceRoot couldn't price a run whose calls none were priced, never that it priced them", () => {
+  it("says TraceRoot couldn't price a run with no priced call, never that it priced them", () => {
     const unpriced = bucket({ cost: null, priced_llm_calls: 0, state: "unpriced" });
     const read = usage({
       results_without_trace: 1,
@@ -729,6 +729,60 @@ describe("renderSummary's priced cost for an uploaded run", () => {
       ].join("\n"),
     );
     expect(text).not.toContain("TraceRoot priced");
+  });
+
+  it("says TraceRoot recorded no LLM calls for a run that made none, not that it couldn't price them", () => {
+    const none = bucket({ cost: null, llm_calls: 0, priced_llm_calls: 0, state: "no_calls" });
+    const read = usage({ results_without_trace: 1, task: none, scorers: none, combined: none });
+
+    const text = summary(uploadedRuns(["agent"], new Map([["evr_1", read]])));
+
+    expect(text).toContain(
+      [
+        "TraceRoot recorded no LLM calls for the run.",
+        "1 of 7 cases has no trace in TraceRoot, so its calls aren't counted.",
+        "",
+      ].join("\n"),
+    );
+    expect(text).not.toContain("couldn't price");
+    expect(text).not.toContain("TraceRoot priced");
+  });
+
+  it("says a run recorded no LLM calls among several, and doesn't count it as priced", () => {
+    const none = bucket({ cost: null, llm_calls: 0, priced_llm_calls: 0, state: "no_calls" });
+    const read = usage({ task: none, scorers: none, combined: none });
+
+    const only = summary(
+      uploadedRuns(
+        ["agent", "judge"],
+        new Map([
+          ["evr_1", read],
+          ["evr_2", noTrace],
+        ]),
+      ),
+    );
+    expect(only).toContain(
+      [
+        "The runs' LLM cost:",
+        "  agent: no LLM calls recorded",
+        "  judge: no trace, so it can't be priced",
+        "",
+      ].join("\n"),
+    );
+
+    const mixed = summary(
+      uploadedRuns(
+        ["agent", "judge"],
+        new Map([
+          ["evr_1", read],
+          ["evr_2", usage()],
+        ]),
+      ),
+    );
+    expect(mixed).toContain(
+      "TraceRoot priced the runs' LLM calls:\n  agent: no LLM calls recorded\n",
+    );
+    expect(mixed).not.toContain("couldn't price");
   });
 
   it("says TraceRoot can't price a run it has no trace for", () => {
@@ -820,7 +874,7 @@ describe("renderSummary's priced cost for an uploaded run", () => {
       lines: ["  agent: still being priced", "  judge: cost not read; its command above shows it"],
     },
     {
-      found: "one whose calls none were priced and one still being priced",
+      found: "a run with no priced call and one still being priced",
       priced: new Map([
         [
           "evr_1",

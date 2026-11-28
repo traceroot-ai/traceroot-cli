@@ -443,10 +443,12 @@ traceroot evals run evals/triage_eval.py --upload   # prints the run's link and 
   seconds for all of them. TraceRoot prices the calls from the run's traces,
   which it processes after the upload, so a run it's still processing says
   TraceRoot is still pricing it, and a run it has no trace for says it can't be
-  priced. A run whose read failed, timed out or found no cost, and a run that
-  wasn't read, such as an interrupted one, say only where the cost will show.
-  Ctrl+C during the wait skips it, since the run has already finished. The read
-  never changes the regression check or the exit code.
+  priced. A run whose read failed, timed out or found no `usage` (the server
+  doesn't report the cost), and a run that wasn't read, such as an interrupted
+  one, say only where the cost will show. Ctrl+C, SIGTERM or SIGHUP during the
+  wait skips it, since the run has already finished, and the exit code stays the
+  run's own, not 130, 143 or 129. The read never changes the regression check
+  or the exit code.
 
 The summary goes to stdout and the runner's own output to stderr. Under `--json`,
 stdout holds one document whenever the evaluation ran: `schema_version`,
